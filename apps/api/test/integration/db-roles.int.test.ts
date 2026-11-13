@@ -304,16 +304,20 @@ describe("the API's role (dp_app) cannot change the schema or the guards", () =>
 
   it("still reads and writes application data and appends audit events", async () => {
     expect(await app.role.count()).toBeGreaterThan(0);
-    const e = await app.auditEvent.create({
-      data: {
-        actorType: "SYSTEM",
-        action: "test.db_roles",
-        resourceType: "test",
-        scopeType: "PLATFORM",
-        outcome: "SUCCESS",
-      },
+    // DP-125: audit rows are appended without RETURNING (writeAudit uses createMany); outside a
+    // staff context dp_app cannot read them back (row-level security).
+    const e = await app.auditEvent.createMany({
+      data: [
+        {
+          actorType: "SYSTEM",
+          action: "test.db_roles",
+          resourceType: "test",
+          scopeType: "PLATFORM",
+          outcome: "SUCCESS",
+        },
+      ],
     });
-    expect(e.id).toBeTruthy();
+    expect(e.count).toBe(1);
     const email = `dbroles.${run}@example.test`;
     const u = await app.user.create({ data: { email, emailNormalized: email, kind: "STAFF" } });
     await app.user.update({ where: { id: u.id }, data: { displayName: "x" } });
@@ -481,12 +485,35 @@ describe("DP-103: what can step around row-level security", () => {
     );
     expect(rows).toEqual([
       { f: "iam_audit_event_protected_stream", owner: "dp_owner", lead: false },
+      // DP-125 (ADR-012B part 2): the legacy sweep (K3), /enrol by raw token, the guards that
+      // need every assignment (B1), the operator CLI (K1), the session-bound IAM readers.
+      { f: "iam_customer_data_approval_has_assignment", owner: "dp_owner", lead: false },
+      { f: "iam_customer_data_sweep", owner: "dp_owner", lead: false },
+      { f: "iam_enrol_activate_memberships", owner: "dp_owner", lead: false },
+      { f: "iam_enrol_password_verified", owner: "dp_owner", lead: false },
+      { f: "iam_last_platform_admin_assignment_guard", owner: "dp_owner", lead: false },
+      { f: "iam_last_platform_admin_expiry_guard", owner: "dp_owner", lead: false },
+      { f: "iam_last_platform_admin_user_guard", owner: "dp_owner", lead: false },
+      { f: "iam_operator_admin_state", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_confirm", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_start", owner: "dp_owner", lead: false },
       { f: "iam_owner_recover", owner: "dp_owner", lead: false },
+      { f: "iam_reciprocal_grant_guard", owner: "dp_owner", lead: false },
+      { f: "iam_rls_admin_target", owner: "dp_owner", lead: false },
+      { f: "iam_rls_my_grant_ancestry", owner: "dp_owner", lead: false },
+      { f: "iam_rls_platform_admin_count", owner: "dp_owner", lead: false },
+      { f: "iam_rls_qualified_admin_count", owner: "dp_owner", lead: false },
+      { f: "iam_rls_staff_is_owner", owner: "dp_owner", lead: false },
+      { f: "iam_rls_staff_platform", owner: "dp_owner", lead: false },
+      { f: "iam_rls_staff_sites", owner: "dp_owner", lead: false },
+      { f: "iam_rls_user_open_rows", owner: "dp_owner", lead: false },
+      { f: "iam_rls_user_platform", owner: "dp_owner", lead: false },
+      { f: "iam_rls_user_sites", owner: "dp_owner", lead: false },
       { f: "iam_system_owner_id", owner: "dp_owner", lead: false },
       // Counts only (DP-096 dry-run report); sites only (the staff context).
       { f: "leads_retention_plan", owner: "dp_owner", lead: true },
+      // DP-125: (site, user) ids of possible lead assignees.
+      { f: "leads_rls_assignable_staff", owner: "dp_owner", lead: false },
       // DP-041: assignability of one staff user, the session's user, sites with lead:manage.
       { f: "leads_rls_assignee_ok", owner: "dp_owner", lead: false },
       { f: "leads_rls_staff_manage_site_ids", owner: "dp_owner", lead: false },
@@ -517,6 +544,7 @@ describe("DP-103: what can step around row-level security", () => {
     const app = "dp_app";
     expect(rows).toEqual([
       { f: "leads_retention_plan", who: "dp_app,dp_lead_retention" },
+      { f: "leads_rls_assignable_staff", who: app },
       { f: "leads_rls_assignee_ok", who: app },
       { f: "leads_rls_context_live", who: app },
       { f: "leads_rls_public_email", who: app },
@@ -530,5 +558,65 @@ describe("DP-103: what can step around row-level security", () => {
       // Internal (DP-041): only the SECURITY DEFINER functions above call it.
       { f: "leads_rls_user_lead_sites", who: null },
     ]);
+  });
+  it("DP-125: grants EXECUTE on the IAM row-level security functions to no one but their callers", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND (p.proname ~ '^iam_(rls_|operator_|enrol_|customer_data_sweep|audit_time_ok)'
+              OR p.proname IN ('iam_customer_data_approval_has_assignment',
+                               'iam_last_platform_admin_assignment_guard',
+                               'iam_last_platform_admin_user_guard',
+                               'iam_last_platform_admin_expiry_guard', 'iam_reciprocal_grant_guard'))
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention',
+                           'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    const app = "dp_app";
+    expect(rows).toEqual([
+      { f: "iam_audit_time_ok", who: "dp_app,dp_iam_bootstrap,dp_lead_retention" },
+      { f: "iam_customer_data_approval_has_assignment", who: null },
+      { f: "iam_customer_data_sweep", who: app },
+      { f: "iam_enrol_activate_memberships", who: app },
+      { f: "iam_enrol_password_verified", who: app },
+      // Trigger functions: never called directly, by anyone.
+      { f: "iam_last_platform_admin_assignment_guard", who: null },
+      { f: "iam_last_platform_admin_expiry_guard", who: null },
+      { f: "iam_last_platform_admin_user_guard", who: null },
+      { f: "iam_operator_admin_state", who: app },
+      { f: "iam_reciprocal_grant_guard", who: null },
+      { f: "iam_rls_admin_target", who: app },
+      { f: "iam_rls_my_grant_ancestry", who: app },
+      // Internal: only the SECURITY DEFINER functions call them.
+      { f: "iam_rls_permission_set", who: null },
+      { f: "iam_rls_platform_admin_count", who: app },
+      { f: "iam_rls_qualified_admin_count", who: app },
+      { f: "iam_rls_staff_is_owner", who: app },
+      { f: "iam_rls_staff_platform", who: app },
+      { f: "iam_rls_staff_sites", who: app },
+      { f: "iam_rls_user_open_rows", who: app },
+      { f: "iam_rls_user_platform", who: null },
+      { f: "iam_rls_user_sites", who: null },
+    ]);
+  });
+
+  it("DP-125: keeps row-level security on the five IAM tables, without FORCE", async () => {
+    const rows = await su.$queryRawUnsafe<{ t: string; rls: boolean; force: boolean }[]>(
+      `SELECT relname::text AS t, relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relname IN ('Membership', 'RoleAssignment',
+         'ModuleConfiguration', 'AuditEvent', 'CustomerDataAccessRequest') ORDER BY 1`,
+    );
+    expect(rows).toEqual(
+      [
+        "AuditEvent",
+        "CustomerDataAccessRequest",
+        "Membership",
+        "ModuleConfiguration",
+        "RoleAssignment",
+      ].map((t) => ({ t, rls: true, force: false })),
+    );
   });
 });

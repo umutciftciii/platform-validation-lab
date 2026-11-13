@@ -17,6 +17,7 @@
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
+  ADMIN_SESSION_COOKIE,
   OwnerDesignationConfirmRequestSchema,
   OwnerModuleChangeRequestSchema,
   type OwnerChainStatus,
@@ -37,6 +38,7 @@ import { ApiError, parseBody } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
 import type { RequestContext } from "../http/request-context.js";
 import { moduleChangeProblem } from "../modules.js";
+import { inStaffContext } from "../iam-context.js";
 import { loadAuthorizationSnapshot } from "../repository.js";
 import { writeAudit } from "../staff/audit-writer.js";
 import { StaffSessionService, isStepUpFresh, type ActiveSession } from "../staff/sessions.js";
@@ -51,6 +53,8 @@ interface OwnerContext {
   session: ActiveSession;
   snapshot: AuthorizationSnapshot;
   now: Date;
+  /** The raw admin session token: the database context of the owner's reads and writes (DP-125). */
+  token: string;
 }
 
 interface ChainRow {
@@ -79,9 +83,12 @@ export class OwnerService {
   private async owner(ctx: RequestContext, area: string): Promise<OwnerContext> {
     const session = await this.sessions.require(ctx);
     const now = this.clock.now();
-    const snapshot = await loadAuthorizationSnapshot(this.prisma, session.userId, {
-      mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
-    });
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    const snapshot = await inStaffContext(this.prisma, token, (tx) =>
+      loadAuthorizationSnapshot(tx, session.userId, {
+        mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
+      }),
+    );
     if (!snapshot?.isSystemOwner || snapshot.principal.status !== "ACTIVE") {
       await writeAudit(this.prisma, {
         actorType: "USER",
@@ -96,7 +103,7 @@ export class OwnerService {
       });
       throw new ApiError("NOT_FOUND");
     }
-    return { session, snapshot, now };
+    return { session, snapshot, now, token };
   }
 
   /** `decide` for a platform permission; the step-up refusal is distinguishable for the UI. */
@@ -131,8 +138,8 @@ export class OwnerService {
         },
       }),
       this.sites(),
-      this.modules(),
-      this.chain(owner.now),
+      this.modules(owner.token),
+      this.chain(owner.token, owner.now),
     ]);
     return {
       owner: { ...record.user, designatedAt: record.designatedAt.toISOString() },
@@ -149,18 +156,21 @@ export class OwnerService {
     });
   }
 
-  private async modules(only?: string): Promise<OwnerModule[]> {
+  /** Module states (DP-125: read in the owner's database context, row-level security). */
+  private async modules(token: string, only?: string): Promise<OwnerModule[]> {
     const sites = await this.sites();
-    const configs = await this.prisma.moduleConfiguration.findMany({
-      where: only ? { module: { key: only } } : {},
-      select: {
-        siteId: true,
-        enabled: true,
-        reason: true,
-        updatedAt: true,
-        module: { select: { key: true } },
-      },
-    });
+    const configs = await inStaffContext(this.prisma, token, (tx) =>
+      tx.moduleConfiguration.findMany({
+        where: only ? { module: { key: only } } : {},
+        select: {
+          siteId: true,
+          enabled: true,
+          reason: true,
+          updatedAt: true,
+          module: { select: { key: true } },
+        },
+      }),
+    );
     return MODULES.filter((m) => !only || m.key === only).map((m) => ({
       key: m.key,
       name: m.name,
@@ -201,37 +211,43 @@ export class OwnerService {
       reason: req.reason,
     });
     if (problem) {
-      await writeAudit(this.prisma, {
-        actorType: "USER",
-        actorUserId: owner.session.userId,
-        action: "owner.module_changed",
-        resourceType: "feature_module",
-        resourceId: mod.key,
-        scopeType: "SITE",
-        siteId: site.id,
-        outcome: "DENIED",
-        reason: problem,
-        metadata: { permission: "module:manage", enabled: req.enabled },
-        requestId: ctx.requestId,
-      });
+      // owner.* events come only from the owner's own database context (DP-125, K2).
+      await inStaffContext(this.prisma, owner.token, (tx) =>
+        writeAudit(tx, {
+          actorType: "USER",
+          actorUserId: owner.session.userId,
+          action: "owner.module_changed",
+          resourceType: "feature_module",
+          resourceId: mod.key,
+          scopeType: "SITE",
+          siteId: site.id,
+          outcome: "DENIED",
+          reason: problem,
+          metadata: { permission: "module:manage", enabled: req.enabled },
+          requestId: ctx.requestId,
+        }),
+      );
       throw new ApiError("VALIDATION_FAILED", [{ path: "enabled", rule: problem }]);
     }
     if (mod.isCore) {
       // Enabling a core module changes nothing: it is always on.
-      return { module: (await this.modules(mod.key))[0]!, changed: false };
+      return { module: (await this.modules(owner.token, mod.key))[0]!, changed: false };
     }
     const moduleRow = await this.prisma.featureModule.findUniqueOrThrow({
       where: { key: mod.key },
       select: { id: true },
     });
-    const current = await this.prisma.moduleConfiguration.findUnique({
-      where: { moduleId_siteId: { moduleId: moduleRow.id, siteId: site.id } },
-      select: { enabled: true },
-    });
+    const current = await inStaffContext(this.prisma, owner.token, (tx) =>
+      tx.moduleConfiguration.findUnique({
+        where: { moduleId_siteId: { moduleId: moduleRow.id, siteId: site.id } },
+        select: { enabled: true },
+      }),
+    );
     const previous = current?.enabled ?? false;
     const changed = previous !== req.enabled;
     if (changed) {
-      await this.prisma.$transaction(async (tx) => {
+      // K4: the database lets only the system owner's context write module states.
+      await inStaffContext(this.prisma, owner.token, async (tx) => {
         await tx.moduleConfiguration.upsert({
           where: { moduleId_siteId: { moduleId: moduleRow.id, siteId: site.id } },
           create: {
@@ -258,7 +274,7 @@ export class OwnerService {
         });
       });
     }
-    return { module: (await this.modules(mod.key))[0]!, changed };
+    return { module: (await this.modules(owner.token, mod.key))[0]!, changed };
   }
 
   // --- protected audit stream ---------------------------------------------------------------
@@ -277,31 +293,34 @@ export class OwnerService {
     if (before !== null && (!Number.isInteger(before) || before < 1)) {
       throw new ApiError("VALIDATION_FAILED", [{ path: "before", rule: "range" }]);
     }
-    const rows = await this.prisma.auditEvent.findMany({
-      where: {
-        stream: "PROTECTED",
-        ...(before !== null ? { chainSeq: { lt: BigInt(before) } } : {}),
-      },
-      orderBy: { chainSeq: "desc" },
-      take: limit + 1,
-      select: {
-        id: true,
-        chainSeq: true,
-        occurredAt: true,
-        actorType: true,
-        actorUserId: true,
-        action: true,
-        resourceType: true,
-        resourceId: true,
-        scopeType: true,
-        siteId: true,
-        outcome: true,
-        reason: true,
-        metadata: true,
-        rowHash: true,
-        actor: { select: { displayName: true, email: true } },
-      },
-    });
+    // DP-125: PROTECTED events are visible only in the owner's own database context.
+    const rows = await inStaffContext(this.prisma, owner.token, (tx) =>
+      tx.auditEvent.findMany({
+        where: {
+          stream: "PROTECTED",
+          ...(before !== null ? { chainSeq: { lt: BigInt(before) } } : {}),
+        },
+        orderBy: { chainSeq: "desc" },
+        take: limit + 1,
+        select: {
+          id: true,
+          chainSeq: true,
+          occurredAt: true,
+          actorType: true,
+          actorUserId: true,
+          action: true,
+          resourceType: true,
+          resourceId: true,
+          scopeType: true,
+          siteId: true,
+          outcome: true,
+          reason: true,
+          metadata: true,
+          rowHash: true,
+          actor: { select: { displayName: true, email: true } },
+        },
+      }),
+    );
     const page = rows.slice(0, limit);
     const ownerId = owner.session.userId;
     return {
@@ -338,29 +357,40 @@ export class OwnerService {
   async verify(ctx: RequestContext): Promise<OwnerChainStatus> {
     const owner = await this.owner(ctx, "audit_verify");
     await this.require(ctx, owner, "owner_audit:read");
-    const status = await this.chain(owner.now);
-    await writeAudit(this.prisma, {
-      actorType: "USER",
-      actorUserId: owner.session.userId,
-      action: "owner.audit_chain_verified",
-      resourceType: "audit_chain",
-      scopeType: "PLATFORM",
-      outcome: status.intact ? "SUCCESS" : "FAILURE",
-      ...(status.intact ? {} : { reason: "chain_broken" }),
-      metadata: {
-        events: status.events,
-        headSeq: status.headSeq,
-        headHash: status.headHash,
-        firstBrokenSeq: status.firstBrokenSeq,
-      },
-      requestId: ctx.requestId,
-    });
+    const status = await this.chain(owner.token, owner.now);
+    await inStaffContext(this.prisma, owner.token, (tx) =>
+      writeAudit(tx, {
+        actorType: "USER",
+        actorUserId: owner.session.userId,
+        action: "owner.audit_chain_verified",
+        resourceType: "audit_chain",
+        scopeType: "PLATFORM",
+        outcome: status.intact ? "SUCCESS" : "FAILURE",
+        ...(status.intact ? {} : { reason: "chain_broken" }),
+        metadata: {
+          events: status.events,
+          headSeq: status.headSeq,
+          headHash: status.headHash,
+          firstBrokenSeq: status.firstBrokenSeq,
+        },
+        requestId: ctx.requestId,
+      }),
+    );
     return status;
   }
 
-  private async chain(now: Date): Promise<OwnerChainStatus> {
-    const rows = await this.prisma.$queryRaw<ChainRow[]>`
-      SELECT "events", "firstBrokenSeq", "headSeq", "headHash" FROM iam_verify_protected_audit_chain()`;
+  /**
+   * The chain check (SECURITY INVOKER): it sees the PROTECTED stream only in the owner's own
+   * database context (DP-125), so nobody else can run it on a partial view.
+   */
+  private async chain(token: string, now: Date): Promise<OwnerChainStatus> {
+    const rows = await inStaffContext(
+      this.prisma,
+      token,
+      (tx) => tx.$queryRaw<ChainRow[]>`
+      SELECT "events", "firstBrokenSeq", "headSeq", "headHash" FROM iam_verify_protected_audit_chain()`,
+      { timeout: 30_000 },
+    );
     const r = rows[0];
     if (!r) throw new Error("iam_verify_protected_audit_chain returned no row");
     return {

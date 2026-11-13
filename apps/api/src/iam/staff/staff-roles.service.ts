@@ -15,6 +15,7 @@
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
+  ADMIN_SESSION_COOKIE,
   AssignRoleRequestSchema,
   RevokeRoleRequestSchema,
   type AssignRoleResponse,
@@ -47,6 +48,7 @@ import {
   loadGrantAncestry,
   loadSystemOwnerId,
 } from "../repository.js";
+import { inStaffContext, platformAdminCount } from "../iam-context.js";
 import { writeAudit } from "./audit-writer.js";
 import { StaffSessionService, isStepUpFresh } from "./sessions.js";
 import { isLastAdminDbError } from "./user-admin.service.js";
@@ -76,6 +78,8 @@ function isIamDbRefusal(error: unknown): boolean {
 interface Actor {
   userId: string;
   snapshot: AuthorizationSnapshot;
+  /** The raw admin session token: the database context of every IAM read and write (DP-125). */
+  token: string;
 }
 
 type Refusal =
@@ -117,12 +121,16 @@ export class StaffRolesService {
   private async actor(ctx: RequestContext): Promise<Actor> {
     const session = await this.sessions.require(ctx);
     const now = this.clock.now();
-    const snapshot = await loadAuthorizationSnapshot(this.prisma, session.userId, {
-      mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    const snapshot = await inStaffContext(this.prisma, token, async (tx) => {
+      const snap = await loadAuthorizationSnapshot(tx, session.userId, {
+        mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
+      });
+      if (snap) snap.grantAncestry = await loadGrantAncestry(tx);
+      return snap;
     });
     if (!snapshot) throw new ApiError("AUTH_SESSION_REQUIRED");
-    snapshot.grantAncestry = await loadGrantAncestry(this.prisma, session.userId, now);
-    return { userId: session.userId, snapshot };
+    return { userId: session.userId, snapshot, token };
   }
 
   private async refuse(
@@ -185,51 +193,55 @@ export class StaffRolesService {
       await this.refuse(ctx, actor, "list", "not_allowed", null, null);
     }
     const ownerId = await loadSystemOwnerId(this.prisma);
-    const users = await this.prisma.user.findMany({
-      where: {
-        kind: "STAFF",
-        ...(ownerId ? { id: { not: ownerId } } : {}),
-        ...(platformView
-          ? {}
-          : { memberships: { some: { siteId: { in: siteIds }, status: { not: "REVOKED" } } } }),
-      },
-      orderBy: [{ status: "asc" }, { email: "asc" }],
-      take: 1000,
-      select: {
-        id: true,
-        email: true,
-        displayName: true,
-        status: true,
-        mfaEnrolledAt: true,
-        memberships: { select: { siteId: true, status: true } },
-        roleAssignments: {
-          where: { revokedAt: null },
-          orderBy: { grantedAt: "asc" },
-          select: {
-            id: true,
-            scopeType: true,
-            siteId: true,
-            grantedAt: true,
-            expiresAt: true,
-            revokedAt: true,
-            role: { select: { key: true, name: true } },
-            grantedBy: { select: { id: true, email: true, displayName: true } },
+    // DP-125: one staff-context transaction; row-level security shows the viewer only the
+    // memberships and assignments of the sites it administers (and the platform for platform
+    // administrators), the same rows the filters below keep.
+    const { users, adminCount } = await inStaffContext(this.prisma, actor.token, async (tx) => ({
+      users: await tx.user.findMany({
+        where: {
+          kind: "STAFF",
+          ...(ownerId ? { id: { not: ownerId } } : {}),
+          ...(platformView
+            ? {}
+            : { memberships: { some: { siteId: { in: siteIds }, status: { not: "REVOKED" } } } }),
+        },
+        orderBy: [{ status: "asc" }, { email: "asc" }],
+        take: 1000,
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+          status: true,
+          mfaEnrolledAt: true,
+          memberships: { select: { siteId: true, status: true } },
+          roleAssignments: {
+            where: { revokedAt: null },
+            orderBy: { grantedAt: "asc" },
+            select: {
+              id: true,
+              scopeType: true,
+              siteId: true,
+              grantedAt: true,
+              expiresAt: true,
+              revokedAt: true,
+              role: { select: { key: true, name: true } },
+              grantedBy: { select: { id: true, email: true, displayName: true } },
+            },
           },
         },
-      },
-    });
-    const admins = await this.prisma.roleAssignment.findMany({
-      where: {
-        role: { key: PLATFORM_SUPER_ADMIN },
-        scopeType: "PLATFORM",
-        revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-        user: { status: { in: ["ACTIVE", "PENDING"] } },
-      },
-      select: { userId: true },
-      distinct: ["userId"],
-    });
-    const adminIds = new Set(admins.map((a) => a.userId));
+      }),
+      // Every platform administrator, counted by the database (platform viewers only; a site
+      // viewer cannot revoke a platform role anyway, canRevokeRole refuses it first).
+      adminCount: (await platformAdminCount(tx, null)) ?? 0,
+    }));
+    const isActivePlatformAdmin = (u: (typeof users)[number]) =>
+      u.roleAssignments.some(
+        (a) =>
+          a.role.key === PLATFORM_SUPER_ADMIN &&
+          a.scopeType === "PLATFORM" &&
+          (!a.expiresAt || a.expiresAt > now) &&
+          (u.status === "ACTIVE" || u.status === "PENDING"),
+      );
     const staff: StaffMember[] = users.map((u) => ({
       id: u.id,
       email: u.email,
@@ -255,7 +267,7 @@ export class StaffRolesService {
         .filter((a) => platformView || a.siteId === null || siteIds.includes(a.siteId))
         .map((a): StaffRoleAssignment => {
           const target: Target = a.siteId ? { scope: "site", siteId: a.siteId } : PLATFORM;
-          const others = [...adminIds].filter((id) => id !== u.id).length;
+          const others = Math.max(0, adminCount - (isActivePlatformAdmin(u) ? 1 : 0));
           return {
             id: a.id,
             roleKey: a.role.key,
@@ -372,10 +384,12 @@ export class StaffRolesService {
       });
     }
     const membership = siteId
-      ? await this.prisma.membership.findUnique({
-          where: { userId_siteId: { userId: user.id, siteId } },
-          select: { id: true, status: true },
-        })
+      ? await inStaffContext(this.prisma, actor.token, (tx) =>
+          tx.membership.findUnique({
+            where: { userId_siteId: { userId: user.id, siteId } },
+            select: { id: true, status: true },
+          }),
+        )
       : null;
     if (membership && (membership.status === "SUSPENDED" || membership.status === "REVOKED")) {
       return this.refuse(ctx, actor, "assign", "membership_inactive", null, siteId, {
@@ -383,10 +397,12 @@ export class StaffRolesService {
         assigneeUserId: user.id,
       });
     }
-    const current = await this.prisma.roleAssignment.findMany({
-      where: { userId: user.id, role: { key: role.key }, siteId, revokedAt: null },
-      select: { id: true, expiresAt: true },
-    });
+    const current = await inStaffContext(this.prisma, actor.token, (tx) =>
+      tx.roleAssignment.findMany({
+        where: { userId: user.id, role: { key: role.key }, siteId, revokedAt: null },
+        select: { id: true, expiresAt: true },
+      }),
+    );
     const active = current.filter((a) => !a.expiresAt || a.expiresAt > now);
     if (active.some((a) => a.expiresAt === null)) {
       return this.refuse(ctx, actor, "assign", "already_assigned", null, siteId, {
@@ -400,7 +416,7 @@ export class StaffRolesService {
       select: { id: true },
     });
     try {
-      const created = await this.prisma.$transaction(async (tx) => {
+      const created = await inStaffContext(this.prisma, actor.token, async (tx) => {
         if (siteId) {
           // A site role works only with an ACTIVE membership; a pending invitee stays INVITED
           // until enrolment activates it.
@@ -493,18 +509,20 @@ export class StaffRolesService {
     const now = this.clock.now();
     const { reason } = parseBody(RevokeRoleRequestSchema, body);
     const row = UUID.test(rawId)
-      ? await this.prisma.roleAssignment.findUnique({
-          where: { id: rawId.toLowerCase() },
-          select: {
-            id: true,
-            userId: true,
-            siteId: true,
-            expiresAt: true,
-            revokedAt: true,
-            role: { select: { key: true } },
-            user: { select: { kind: true } },
-          },
-        })
+      ? await inStaffContext(this.prisma, actor.token, (tx) =>
+          tx.roleAssignment.findUnique({
+            where: { id: rawId.toLowerCase() },
+            select: {
+              id: true,
+              userId: true,
+              siteId: true,
+              expiresAt: true,
+              revokedAt: true,
+              role: { select: { key: true } },
+              user: { select: { kind: true } },
+            },
+          }),
+        )
       : null;
     if (!row || row.user.kind !== "STAFF") {
       return this.refuse(ctx, actor, "revoke", "not_found", row?.id ?? null, null);
@@ -516,7 +534,9 @@ export class StaffRolesService {
       });
     }
     const target: Target = row.siteId ? { scope: "site", siteId: row.siteId } : PLATFORM;
-    const others = await countOtherPlatformAdmins(this.prisma, row.userId, now);
+    const others = await inStaffContext(this.prisma, actor.token, (tx) =>
+      countOtherPlatformAdmins(tx, row.userId),
+    );
     const decision = canRevokeRole(actor.snapshot, row.role.key, target, now, others);
     if (!decision.allowed) {
       return this.refuse(ctx, actor, "revoke", decision.reason, row.id, row.siteId, {
@@ -529,7 +549,7 @@ export class StaffRolesService {
       });
     }
     try {
-      await this.prisma.$transaction(async (tx) => {
+      await inStaffContext(this.prisma, actor.token, async (tx) => {
         const updated = await tx.roleAssignment.updateMany({
           where: { id: row.id, revokedAt: null },
           data: {

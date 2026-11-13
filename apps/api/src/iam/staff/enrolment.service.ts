@@ -44,6 +44,7 @@ import { ApiError, parseBody } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
 import type { RequestContext } from "../http/request-context.js";
 import { AUTH_RETENTION } from "../auth/cleanup.js";
+import { enrolActivateMemberships, enrolPasswordVerified } from "../iam-context.js";
 import { writeAudit } from "./audit-writer.js";
 import {
   ENROLMENT_PURPOSES,
@@ -79,18 +80,11 @@ export class EnrolmentService {
     return token;
   }
 
-  private async passwordStepDone(token: LiveToken): Promise<boolean> {
+  private async passwordStepDone(token: LiveToken, raw: string): Promise<boolean> {
     if (token.purpose === "MFA_REENROLMENT") {
-      const proof = await this.prisma.auditEvent.findFirst({
-        where: {
-          action: PASSWORD_VERIFIED,
-          resourceType: "credential_token",
-          resourceId: token.id,
-          outcome: "SUCCESS",
-        },
-        select: { id: true },
-      });
-      return proof !== null;
+      // DP-125: the audit trail is under row-level security; the database answers for this live
+      // link only, from the raw token (iam_enrol_password_verified).
+      return enrolPasswordVerified(this.prisma, raw);
     }
     return (
       token.user.passwordHash !== null &&
@@ -116,7 +110,7 @@ export class EnrolmentService {
   async inspect(body: unknown): Promise<EnrolInspectResponse> {
     const req = parseBody(EnrolTokenRequestSchema, body);
     const token = await this.token(req.token, this.clock.now());
-    const passwordDone = await this.passwordStepDone(token);
+    const passwordDone = await this.passwordStepDone(token, req.token);
     return {
       kind: KIND[token.purpose] ?? "activation",
       emailMasked: maskEmail(token.user.email),
@@ -197,7 +191,7 @@ export class EnrolmentService {
     const req = parseBody(EnrolTokenRequestSchema, body);
     const now = this.clock.now();
     const token = await this.token(req.token, now);
-    if (!(await this.passwordStepDone(token))) throw new ApiError("CONFLICT_STATE");
+    if (!(await this.passwordStepDone(token, req.token))) throw new ApiError("CONFLICT_STATE");
     const userId = token.user.id;
     const secret = generateTotpSecret();
     const factorId = randomUUID();
@@ -232,7 +226,7 @@ export class EnrolmentService {
     const now = this.clock.now();
     const token = await this.token(req.token, now);
     const userId = token.user.id;
-    if (!(await this.passwordStepDone(token))) throw new ApiError("CONFLICT_STATE");
+    if (!(await this.passwordStepDone(token, req.token))) throw new ApiError("CONFLICT_STATE");
     const oldest = new Date(now.getTime() - AUTH_RETENTION.unconfirmedFactorMinutes * 60_000);
     const factor = await this.prisma.mfaFactor.findFirst({
       where: {
@@ -286,10 +280,9 @@ export class EnrolmentService {
         },
       });
       if (count !== 1) throw new ApiError("AUTH_TOKEN_INVALID");
-      const memberships = await tx.membership.updateMany({
-        where: { userId, status: "INVITED" },
-        data: { status: "ACTIVE" },
-      });
+      // DP-125: the user has no session yet; the database activates the INVITED memberships
+      // itself once this transaction consumed the link (iam_enrol_activate_memberships).
+      const membershipsActivated = await enrolActivateMemberships(tx, req.token);
       for (const action of ["iam.enrol_mfa_confirmed", "iam.user_activated"]) {
         await writeAudit(tx, {
           actorType: "USER",
@@ -299,7 +292,7 @@ export class EnrolmentService {
           resourceId: userId,
           scopeType: "PLATFORM",
           outcome: "SUCCESS",
-          metadata: { purpose: token.purpose, membershipsActivated: memberships.count },
+          metadata: { purpose: token.purpose, membershipsActivated },
           requestId: ctx.requestId,
         });
       }

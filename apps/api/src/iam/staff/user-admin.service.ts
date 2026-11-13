@@ -14,6 +14,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import {
+  ADMIN_SESSION_COOKIE,
   DeactivateRequestSchema,
   InviteUserRequestSchema,
   MfaResetRequestSchema,
@@ -45,6 +46,7 @@ import {
   loadAuthorizationSnapshot,
   loadGrantAncestry,
 } from "../repository.js";
+import { inStaffContext, userOpenRows } from "../iam-context.js";
 import { writeAudit } from "./audit-writer.js";
 import { enrolmentLink, invalidateUserTokens, issueCredentialToken } from "./credentials.js";
 import { StaffSessionService, isStepUpFresh, type ActiveSession } from "./sessions.js";
@@ -80,6 +82,8 @@ export function isLastAdminDbError(error: unknown): boolean {
 interface Actor {
   session: ActiveSession;
   snapshot: AuthorizationSnapshot;
+  /** The raw admin session token: the database context of every IAM read and write (DP-125). */
+  token: string;
 }
 
 interface Denial {
@@ -108,16 +112,18 @@ export class UserAdminService {
     const session = await this.sessions.require(ctx);
     const now = this.clock.now();
     const fresh = isStepUpFresh(session.mfaVerifiedAt, now);
-    const snapshot = await loadAuthorizationSnapshot(this.prisma, session.userId, {
-      mfaVerified: fresh,
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    const snapshot = await inStaffContext(this.prisma, token, async (tx) => {
+      const snap = await loadAuthorizationSnapshot(tx, session.userId, { mfaVerified: fresh });
+      if (snap && fresh) snap.grantAncestry = await loadGrantAncestry(tx);
+      return snap;
     });
     if (!snapshot) throw new ApiError("AUTH_SESSION_REQUIRED");
     if (!fresh) {
       await this.audit(ctx, session.userId, permission, null, null, "DENIED", "step_up_required");
       throw new ApiError("AUTH_STEP_UP_REQUIRED");
     }
-    snapshot.grantAncestry = await loadGrantAncestry(this.prisma, session.userId, now);
-    return { session, snapshot };
+    return { session, snapshot, token };
   }
 
   private audit(
@@ -211,7 +217,17 @@ export class UserAdminService {
     siteId?: string,
   ): Promise<{ actor: Actor; target: ActTarget; requestTarget: Target }> {
     const actor = await this.actor(ctx, permission);
-    const target = UUID.test(targetId) ? await loadActTarget(this.prisma, targetId) : null;
+    // DP-125: the target and the administrator count come from the database in this session's
+    // context (row-level security; the superiority rule needs the target's roles everywhere).
+    const loaded = UUID.test(targetId)
+      ? await inStaffContext(this.prisma, actor.token, async (tx) => {
+          const t = await loadActTarget(tx, targetId);
+          return t
+            ? { target: t, remaining: await countQualifiedPlatformAdmins(tx, [t.userId]) }
+            : null;
+        })
+      : null;
+    const target = loaded?.target ?? null;
     if (!target) {
       return this.deny(ctx, actor, permission, null, null, {
         reason: "not_found",
@@ -231,7 +247,7 @@ export class UserAdminService {
         });
       }
     }
-    const remaining = await countQualifiedPlatformAdmins(this.prisma, [target.userId]);
+    const remaining = loaded?.remaining;
     const decision = canActOnUser(actor.snapshot, target, permission, requestTarget, {
       now: this.clock.now(),
       remainingQualifiedPlatformAdmins: remaining,
@@ -328,7 +344,7 @@ export class UserAdminService {
         error: new ApiError("CONFLICT_STATE"),
       });
     }
-    const token = await this.prisma.$transaction(async (tx) => {
+    const token = await inStaffContext(this.prisma, actor.token, async (tx) => {
       await tx.user.create({
         data: {
           id: newUserId,
@@ -491,7 +507,7 @@ export class UserAdminService {
     );
     const now = this.clock.now();
     await this.guarded(ctx, actor, "user:suspend", target.userId, requestTarget, () =>
-      this.prisma.$transaction(async (tx) => {
+      inStaffContext(this.prisma, actor.token, async (tx) => {
         if (requestTarget.scope === "site") {
           const { count } = await tx.membership.updateMany({
             where: {
@@ -561,53 +577,51 @@ export class UserAdminService {
       targetId,
       req.siteId,
     );
-    await this.prisma
-      .$transaction(async (tx) => {
-        if (requestTarget.scope === "site") {
-          const { count } = await tx.membership.updateMany({
-            where: { userId: target.userId, siteId: requestTarget.siteId, status: "SUSPENDED" },
-            data: { status: "ACTIVE" },
-          });
-          if (count !== 1) throw new ApiError("CONFLICT_STATE");
-        } else {
-          const user = await tx.user.findUniqueOrThrow({
-            where: { id: target.userId },
-            select: { passwordHash: true, mfaEnrolledAt: true, emailVerifiedAt: true },
-          });
-          // An account suspended before it finished enrolment goes back to PENDING.
-          const enrolled = user.passwordHash && user.mfaEnrolledAt && user.emailVerifiedAt;
-          const { count } = await tx.user.updateMany({
-            where: { id: target.userId, status: "SUSPENDED" },
-            data: { status: enrolled ? "ACTIVE" : "PENDING" },
-          });
-          if (count !== 1) throw new ApiError("CONFLICT_STATE");
-        }
+    await inStaffContext(this.prisma, actor.token, async (tx) => {
+      if (requestTarget.scope === "site") {
+        const { count } = await tx.membership.updateMany({
+          where: { userId: target.userId, siteId: requestTarget.siteId, status: "SUSPENDED" },
+          data: { status: "ACTIVE" },
+        });
+        if (count !== 1) throw new ApiError("CONFLICT_STATE");
+      } else {
+        const user = await tx.user.findUniqueOrThrow({
+          where: { id: target.userId },
+          select: { passwordHash: true, mfaEnrolledAt: true, emailVerifiedAt: true },
+        });
+        // An account suspended before it finished enrolment goes back to PENDING.
+        const enrolled = user.passwordHash && user.mfaEnrolledAt && user.emailVerifiedAt;
+        const { count } = await tx.user.updateMany({
+          where: { id: target.userId, status: "SUSPENDED" },
+          data: { status: enrolled ? "ACTIVE" : "PENDING" },
+        });
+        if (count !== 1) throw new ApiError("CONFLICT_STATE");
+      }
+      await this.audit(
+        ctx,
+        actor.session.userId,
+        "user:reactivate",
+        target.userId,
+        requestTarget,
+        "SUCCESS",
+        req.reason,
+        {},
+        tx,
+      );
+    }).catch(async (error: unknown) => {
+      if (error instanceof ApiError && error.code === "CONFLICT_STATE") {
         await this.audit(
           ctx,
           actor.session.userId,
           "user:reactivate",
           target.userId,
           requestTarget,
-          "SUCCESS",
-          req.reason,
-          {},
-          tx,
+          "DENIED",
+          "invalid_state",
         );
-      })
-      .catch(async (error: unknown) => {
-        if (error instanceof ApiError && error.code === "CONFLICT_STATE") {
-          await this.audit(
-            ctx,
-            actor.session.userId,
-            "user:reactivate",
-            target.userId,
-            requestTarget,
-            "DENIED",
-            "invalid_state",
-          );
-        }
-        throw error;
-      });
+      }
+      throw error;
+    });
   }
 
   // --- unlock and session revocation ----------------------------------------------------------
@@ -689,7 +703,7 @@ export class UserAdminService {
       ? Math.round((now.getTime() - actor.session.mfaVerifiedAt.getTime()) / 1000)
       : null;
     await this.guarded(ctx, actor, "user:deactivate", target.userId, requestTarget, () =>
-      this.prisma.$transaction(async (tx) => {
+      inStaffContext(this.prisma, actor.token, async (tx) => {
         // Assignments first: the last-administrator trigger judges them before the user row.
         const roles = await tx.roleAssignment.findMany({
           where: { userId: target.userId, revokedAt: null },
@@ -706,6 +720,12 @@ export class UserAdminService {
           where: { userId: target.userId, status: { not: "REVOKED" } },
           data: { status: "REVOKED" },
         });
+        // DP-125 (condition 4): row-level security must not have hidden a row from the bulk
+        // updates above; any open row left behind aborts the whole deactivation.
+        const open = await userOpenRows(tx, target.userId);
+        if (open.roles !== 0 || open.memberships !== 0) {
+          throw new ApiError("CONFLICT_STATE");
+        }
         this.faults.check("deactivate:before-user");
         await tx.user.update({
           where: { id: target.userId },

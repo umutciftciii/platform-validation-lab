@@ -1243,9 +1243,19 @@ describe("DP-103 row-level security on lead data", () => {
   });
 
   it("switches RLS on for exactly the four lead tables, policies for dp_app and retention only", async () => {
+    // DP-125 put the IAM tables under RLS as well (db-roles.int.test.ts, owner.int.test.ts); this
+    // test keeps to the lead data.
+    const LEAD_TABLES = [
+      "Lead",
+      "LeadActivity",
+      "LeadDocumentRequest",
+      "DocumentDownloadGrant",
+      "LeadDocumentDownload",
+    ];
     const tables = await owner.$queryRaw<{ t: string; force: boolean }[]>`
       SELECT relname::text AS t, relforcerowsecurity AS force FROM pg_class
-      WHERE relnamespace = 'public'::regnamespace AND relrowsecurity ORDER BY 1`;
+      WHERE relnamespace = 'public'::regnamespace AND relrowsecurity
+        AND relname = ANY (${LEAD_TABLES}::text[]) ORDER BY 1`;
     expect(tables).toEqual([
       { t: "DocumentDownloadGrant", force: false },
       { t: "Lead", force: false },
@@ -1256,7 +1266,8 @@ describe("DP-103 row-level security on lead data", () => {
     ]);
     const policies = await owner.$queryRaw<{ t: string; cmd: string; roles: string }[]>`
       SELECT tablename::text AS t, cmd::text AS cmd, array_to_string(roles, ',') AS roles
-      FROM pg_policies WHERE schemaname = 'public' ORDER BY 1, 2, 3`;
+      FROM pg_policies WHERE schemaname = 'public' AND tablename = ANY (${LEAD_TABLES}::text[])
+      ORDER BY 1, 2, 3`;
     expect(new Set(policies.map((p) => p.roles))).toEqual(new Set(["dp_app", "dp_lead_retention"]));
     // dp_app never deletes lead data; only retention deletes (grants, under the DP-096 guard).
     expect(policies.filter((p) => p.cmd === "DELETE")).toEqual([
