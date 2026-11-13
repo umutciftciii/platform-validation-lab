@@ -1,34 +1,56 @@
 /**
- * CMS pages of the two public sites (S1: DP-015, ADR-020). Drafts only: publication, revisions
- * and preview come in S2, so nothing written here reaches a public site.
+ * CMS pages of the two public sites (S1/S2: DP-015, DP-017, DP-134; ADR-020).
  *
  * Authorization (existing IAM permissions of the `cms` module, no new ones):
- *  - read the site context, the page list and a page: `content:read` of that site;
- *  - create a page and save its draft: `content:edit` of that site;
- *  - a page of a site the caller may not read or edit is simply not found (404, IDOR), and the
- *    attempt is audited (StaffAccess.denied).
+ *  - read the site context, the page list and a page, issue a preview link: `content:read`;
+ *  - create a page, import a designed page from code, save a draft: `content:edit`;
+ *  - publish, unpublish, republish: `content:publish` of the page's site;
+ *  - a page of a site the caller may not act on is simply not found (404, IDOR), and the attempt
+ *    is audited (StaffAccess.denied).
  *
  * Every change and its audit event are written in one transaction; audit metadata names the
- * changed fields, never their values. Saves name the version they were based on (409 when stale).
- * S1 edits TEMPLATE pages; DESIGN pages and fragments are imported and edited from S2 on.
+ * changed fields, never their values. Saves and publications name the version they were based on
+ * (409 when stale). Publishing copies the draft into an immutable revision (ADR-020 D6); the
+ * public sites read only that revision (public-cms.service.ts).
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
   CMS_STANDARD_TEMPLATE,
+  CmsFixedDraftRequestSchema,
+  CmsImportRequestSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
+  CmsPublishRequestSchema,
+  CmsUnpublishRequestSchema,
+  cmsDesignTemplate,
   cmsPathForSlug,
   type CmsContextResponse,
-  type CmsPage,
+  type CmsImportResponse,
   type CmsPageListResponse,
   type CmsPageResponse,
-  type CmsPageSummary,
+  type CmsPreviewResponse,
   type CmsSite,
 } from "@dream/contracts";
+import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
+import { Clock } from "../iam/http/clock.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
+import {
+  PAGE_SELECT,
+  attachPublications,
+  issuePreviewToken,
+  liveRows,
+  partCount,
+  stableJson,
+  toPage,
+  toSummary,
+  validateContent,
+  type PageBase,
+  type PageRow,
+} from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
+import { CMS_SEEDS } from "./seed/bv.js";
 
 const READ = "content:read";
 const EDIT = "content:edit";
@@ -36,92 +58,8 @@ const PUBLISH = "content:publish";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_SITE = "00000000-0000-0000-0000-000000000000";
 const RESOURCE = "cms_page";
-
-const USER = { select: { id: true, displayName: true } } as const;
-const PAGE_SELECT = {
-  id: true,
-  siteId: true,
-  kind: true,
-  templateKey: true,
-  path: true,
-  locale: true,
-  title: true,
-  seoTitle: true,
-  seoDescription: true,
-  noindex: true,
-  content: true,
-  version: true,
-  createdAt: true,
-  updatedAt: true,
-  createdBy: USER,
-  updatedBy: USER,
-} as const;
-
-interface UserRow {
-  id: string;
-  displayName: string | null;
-}
-interface PageRow {
-  id: string;
-  siteId: string;
-  kind: CmsPage["kind"];
-  templateKey: string;
-  path: string | null;
-  locale: string;
-  title: string;
-  seoTitle: string | null;
-  seoDescription: string | null;
-  noindex: boolean;
-  content: unknown;
-  version: number;
-  createdAt: Date;
-  updatedAt: Date;
-  createdBy: UserRow;
-  updatedBy: UserRow;
-}
-
-const userRef = (u: UserRow) => ({ id: u.id, name: u.displayName ?? "Staff user" });
-
-function sections(content: unknown): CmsPage["content"]["sections"] {
-  const list = (content as { sections?: unknown } | null)?.sections;
-  return Array.isArray(list) ? (list as CmsPage["content"]["sections"]) : [];
-}
-
-function toSummary(row: PageRow): CmsPageSummary {
-  return {
-    id: row.id,
-    siteId: row.siteId,
-    kind: row.kind,
-    templateKey: row.templateKey,
-    path: row.path,
-    title: row.title,
-    locale: row.locale,
-    sectionCount: sections(row.content).length,
-    version: row.version,
-    updatedAt: row.updatedAt.toISOString(),
-    updatedBy: userRef(row.updatedBy),
-  };
-}
-
-function toPage(row: PageRow): CmsPage {
-  return {
-    ...toSummary(row),
-    slug: row.kind === "TEMPLATE" && row.path ? row.path.slice(1) : null,
-    seo: { title: row.seoTitle, description: row.seoDescription, noindex: row.noindex },
-    content: { sections: sections(row.content) },
-    createdAt: row.createdAt.toISOString(),
-    createdBy: userRef(row.createdBy),
-  };
-}
-
-/** JSON with sorted keys: jsonb does not keep the key order of the request. */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1)))
-      : v,
-  );
-}
+/** Version of the content schemas; raised when a template's fields change. */
+const SCHEMA_VERSION = 1;
 
 /** Field names whose value differs (audit metadata: names only, never values). */
 function changedFields(before: PageRow, after: Record<string, unknown>): string[] {
@@ -138,7 +76,11 @@ function changedFields(before: PageRow, after: Record<string, unknown>): string[
 
 @Injectable()
 export class CmsService {
-  constructor(@Inject(StaffAccessService) private readonly access: StaffAccessService) {}
+  constructor(
+    @Inject(StaffAccessService) private readonly access: StaffAccessService,
+    @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(Clock) private readonly clock: Clock,
+  ) {}
 
   /** The sites the caller may read, with the site's locale and the caller's abilities. */
   private static async sites(a: StaffAccess): Promise<CmsSite[]> {
@@ -187,16 +129,27 @@ export class CmsService {
     const id = UUID.test(rawId) ? rawId.toLowerCase() : null;
     const sites = a.sitesWith(permission);
     const db = a.db({ siteIds: sites, includePlatform: false });
-    const row =
+    const base =
       id && sites.length
-        ? ((await db.cmsPage.findUnique({ where: { id }, select: PAGE_SELECT })) as PageRow | null)
+        ? ((await db.cmsPage.findUnique({ where: { id }, select: PAGE_SELECT })) as PageBase | null)
         : null;
+    const row = base ? (await attachPublications(db, [base]))[0] : undefined;
     if (!row) {
       // Out of scope and unknown look the same (IDOR). The attempt is audited.
       await a.denied(permission, { type: RESOURCE, id }, "not_found_in_scope");
       throw new ApiError("NOT_FOUND");
     }
     return { row, db: a.db({ siteIds: [row.siteId], includePlatform: false }) };
+  }
+
+  private async response(a: StaffAccess, db: unknown, id: string): Promise<CmsPageResponse> {
+    const scoped = db as StaffDb;
+    const base = (await scoped.cmsPage.findUnique({
+      where: { id },
+      select: PAGE_SELECT,
+    })) as PageBase;
+    const [row] = (await attachPublications(scoped, [base])) as [PageRow];
+    return { page: toPage(row), site: await CmsService.site(a, row.siteId) };
   }
 
   // --- reads ---------------------------------------------------------------------------------
@@ -210,11 +163,14 @@ export class CmsService {
     const a = await this.access.begin(ctx);
     const siteId = await CmsService.requireSite(a, READ, rawSiteId);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
-    const rows = (await db.cmsPage.findMany({
-      where: { siteId },
-      select: PAGE_SELECT,
-      orderBy: [{ kind: "asc" }, { path: "asc" }, { title: "asc" }],
-    })) as PageRow[];
+    const rows = await attachPublications(
+      db,
+      (await db.cmsPage.findMany({
+        where: { siteId },
+        select: PAGE_SELECT,
+        orderBy: [{ kind: "asc" }, { path: "asc" }, { title: "asc" }],
+      })) as PageBase[],
+    );
     return { site: await CmsService.site(a, siteId), items: rows.map(toSummary) };
   }
 
@@ -224,7 +180,7 @@ export class CmsService {
     return { page: toPage(row), site: await CmsService.site(a, row.siteId) };
   }
 
-  // --- changes -------------------------------------------------------------------------------
+  // --- drafts --------------------------------------------------------------------------------
 
   async createPage(
     ctx: RequestContext,
@@ -237,8 +193,8 @@ export class CmsService {
     const site = await CmsService.site(a, siteId);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     try {
-      const row = await db.$transaction(async (tx) => {
-        const created = (await tx.cmsPage.create({
+      const id = await db.$transaction(async (tx) => {
+        const created = await tx.cmsPage.create({
           data: {
             siteId,
             kind: "TEMPLATE",
@@ -250,8 +206,8 @@ export class CmsService {
             createdById: a.userId,
             updatedById: a.userId,
           },
-          select: PAGE_SELECT,
-        })) as PageRow;
+          select: { id: true, kind: true, path: true },
+        });
         await a.audit(tx, {
           action: "cms.page_created",
           resourceType: RESOURCE,
@@ -260,40 +216,62 @@ export class CmsService {
           permission: EDIT,
           metadata: { kind: created.kind, path: created.path },
         });
-        return created;
+        return created.id;
       });
-      return { page: toPage(row), site };
+      return this.response(a, db, id);
     } catch (e) {
       return mapCmsDbError(e);
     }
   }
 
+  /**
+   * Saves the whole draft. TEMPLATE pages: title, slug, SEO and sections. DESIGN pages and
+   * fragments: title, SEO and their template's fields (their path is fixed by the registry).
+   */
   async saveDraft(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
     const { row: before, db } = await CmsService.pageIn(a, EDIT, rawId);
-    if (before.kind !== "TEMPLATE") {
-      // DESIGN pages and fragments get their own forms with the S2 import.
-      throw new ApiError("CONFLICT_STATE", [{ path: "kind", rule: "not_editable_yet" }]);
-    }
-    const input = parseBody(CmsPageDraftRequestSchema, body);
-    const data = {
-      title: input.title,
-      path: cmsPathForSlug(input.slug),
-      seoTitle: input.seo.title,
-      seoDescription: input.seo.description,
-      noindex: input.seo.noindex,
-      content: stableJson(input.content),
+    let version: number;
+    let data: {
+      title: string;
+      path: string | null;
+      seoTitle: string | null;
+      seoDescription: string | null;
+      noindex: boolean;
+      content: Record<string, unknown>;
     };
+    if (before.kind === "TEMPLATE") {
+      const input = parseBody(CmsPageDraftRequestSchema, body);
+      version = input.version;
+      data = {
+        title: input.title,
+        path: cmsPathForSlug(input.slug),
+        seoTitle: input.seo.title,
+        seoDescription: input.seo.description,
+        noindex: input.seo.noindex,
+        content: input.content as Record<string, unknown>,
+      };
+    } else {
+      if (!cmsDesignTemplate(before.templateKey)) {
+        // A designed page without a template yet (e.g. bv.products-index) stays managed in code.
+        throw new ApiError("CONFLICT_STATE", [{ path: "kind", rule: "not_editable_yet" }]);
+      }
+      const input = parseBody(CmsFixedDraftRequestSchema, body);
+      version = input.version;
+      data = {
+        title: input.title,
+        path: before.path,
+        seoTitle: input.seo.title,
+        seoDescription: input.seo.description,
+        noindex: input.seo.noindex,
+        content: validateContent(before.kind, before.templateKey, input.content),
+      };
+    }
     try {
-      const row = await db.$transaction(async (tx) => {
+      await db.$transaction(async (tx) => {
         const res = await tx.cmsPage.updateMany({
-          where: { id: before.id, version: input.version },
-          data: {
-            ...data,
-            content: input.content,
-            updatedById: a.userId,
-            version: { increment: 1 },
-          },
+          where: { id: before.id, version },
+          data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,
         });
         if (res.count !== 1) throw staleVersion();
         await a.audit(tx, {
@@ -303,19 +281,227 @@ export class CmsService {
           siteId: before.siteId,
           permission: EDIT,
           metadata: {
-            changed: changedFields(before, data),
-            sectionCount: input.content.sections.length,
-            version: input.version + 1,
+            changed: changedFields(before, { ...data, content: stableJson(data.content) }),
+            sectionCount: partCount(before.kind, data.content),
+            version: version + 1,
           },
         });
-        return (await tx.cmsPage.findUnique({
-          where: { id: before.id },
-          select: PAGE_SELECT,
-        })) as PageRow;
       });
-      return { page: toPage(row), site: await CmsService.site(a, row.siteId) };
+      return this.response(a, db, before.id);
+    } catch (e) {
+      return mapCmsDbError(e);
+    }
+  }
+
+  /**
+   * Creates a designed page or fragment from the content that was in code (ADR-020 D7). A dry run
+   * only validates and summarises. Never overwrites: an existing page is 409 (idempotent).
+   */
+  async importPage(
+    ctx: RequestContext,
+    rawSiteId: unknown,
+    body: unknown,
+  ): Promise<CmsImportResponse> {
+    const a = await this.access.begin(ctx);
+    const siteId = await CmsService.requireSite(a, EDIT, rawSiteId);
+    const input = parseBody(CmsImportRequestSchema, body);
+    const site = await CmsService.site(a, siteId);
+    const template = cmsDesignTemplate(input.key);
+    const seed = CMS_SEEDS[input.key];
+    if (!template || !seed || template.site !== site.key) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "key", rule: "unknown_template" }]);
+    }
+    const content = validateContent(template.kind, template.key, seed.content);
+    const summary = Object.entries(content).map(([field, value]) => ({
+      field,
+      items: Array.isArray(value) ? value.length : null,
+    }));
+    const db = a.db({ siteIds: [siteId], includePlatform: false });
+    const existing = await db.cmsPage.findFirst({
+      where: { siteId, templateKey: template.key },
+      select: { id: true },
+    });
+    if (existing) throw new ApiError("CONFLICT_STATE", [{ path: "key", rule: "already_imported" }]);
+    if (input.dryRun) return { key: template.key, dryRun: true, summary, pageId: null };
+    try {
+      const id = await db.$transaction(async (tx) => {
+        const created = await tx.cmsPage.create({
+          data: {
+            siteId,
+            kind: template.kind,
+            templateKey: template.key,
+            path: template.path,
+            locale: site.locale,
+            title: seed.title,
+            content: content as never,
+            schemaVersion: SCHEMA_VERSION,
+            createdById: a.userId,
+            updatedById: a.userId,
+          },
+          select: { id: true },
+        });
+        await a.audit(tx, {
+          action: "cms.page_imported",
+          resourceType: RESOURCE,
+          resourceId: created.id,
+          siteId,
+          permission: EDIT,
+          metadata: { templateKey: template.key, fields: summary.length },
+        });
+        return created.id;
+      });
+      return { key: template.key, dryRun: false, summary, pageId: id };
+    } catch (e) {
+      // A concurrent import of the same key: the registry unique index answers.
+      return mapCmsDbError(e);
+    }
+  }
+
+  // --- preview and publication ---------------------------------------------------------------
+
+  /** A short-lived link that shows the current draft on the page's site (noindex, no cache). */
+  async preview(ctx: RequestContext, rawId: string): Promise<CmsPreviewResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, READ, rawId);
+    const site = await CmsService.site(a, row.siteId);
+    const app = site.key === "BV" ? "WEB_BV" : "WEB_CORPORATE";
+    const origin = [...this.config.allowedOrigins[app]][0];
+    if (!origin) throw new ApiError("CONFLICT_STATE", [{ path: "site", rule: "no_public_origin" }]);
+    const { token, expiresAt } = issuePreviewToken(
+      this.config.secrets.hmacKey,
+      row.id,
+      site.key,
+      this.clock.now(),
+    );
+    await a.audit(db, {
+      action: "cms.preview_issued",
+      resourceType: RESOURCE,
+      resourceId: row.id,
+      siteId: row.siteId,
+      permission: READ,
+      metadata: { pageVersion: row.version, expiresAt: expiresAt.toISOString() },
+    });
+    return { url: `${origin}/preview/${token}`, expiresAt: expiresAt.toISOString() };
+  }
+
+  /**
+   * Publishes the draft version the publisher saw: a new immutable revision, and the page's
+   * publication points at it (PUBLISHED). Also republishes after an edit or an unpublish.
+   */
+  async publish(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, PUBLISH, rawId);
+    const input = parseBody(CmsPublishRequestSchema, body);
+    if (input.version !== row.version) throw staleVersion();
+    let content: Record<string, unknown>;
+    try {
+      content = validateContent(row.kind, row.templateKey, row.content);
+    } catch {
+      throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "invalid" }]);
+    }
+    try {
+      await db.$transaction(async (tx) => {
+        // The revision copies the draft exactly as checked above (version `row.version`); a save
+        // that lands meanwhile becomes a newer draft, shown as "changes not published".
+        if (row.path) {
+          const live = await liveRows(tx, row.siteId);
+          if (live.some((l) => l.pageId !== row.id && l.revision.path === row.path)) {
+            throw new ApiError("CONFLICT_STATE", [{ path: "slug", rule: "live_elsewhere" }]);
+          }
+        }
+        const last = await tx.cmsPageRevision.findFirst({
+          where: { pageId: row.id },
+          orderBy: { revisionNumber: "desc" },
+          select: { revisionNumber: true },
+        });
+        const revisionNumber = (last?.revisionNumber ?? 0) + 1;
+        const revision = await tx.cmsPageRevision.create({
+          data: {
+            pageId: row.id,
+            siteId: row.siteId,
+            revisionNumber,
+            pageVersion: row.version,
+            title: row.title,
+            path: row.path,
+            seoTitle: row.seoTitle,
+            seoDescription: row.seoDescription,
+            noindex: row.noindex,
+            content: content as never,
+            schemaVersion: row.schemaVersion,
+            createdById: a.userId,
+          },
+          select: { id: true },
+        });
+        const now = this.clock.now();
+        const published = {
+          revisionId: revision.id,
+          status: "PUBLISHED" as const,
+          publishedAt: now,
+          publishedById: a.userId,
+          unpublishedAt: null,
+          unpublishedById: null,
+        };
+        if (row.publication) {
+          await tx.cmsPagePublication.update({
+            where: { pageId: row.id },
+            data: { ...published, version: { increment: 1 } },
+          });
+        } else {
+          await tx.cmsPagePublication.create({
+            data: { pageId: row.id, siteId: row.siteId, ...published },
+          });
+        }
+        await a.audit(tx, {
+          action: "cms.page_published",
+          resourceType: RESOURCE,
+          resourceId: row.id,
+          siteId: row.siteId,
+          permission: PUBLISH,
+          metadata: { revisionNumber, pageVersion: row.version, path: row.path },
+        });
+      });
+      return this.response(a, db, row.id);
+    } catch (e) {
+      return mapCmsDbError(e);
+    }
+  }
+
+  /** Takes the page off the site. Its revisions stay; publishing again brings the draft back. */
+  async unpublish(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, PUBLISH, rawId);
+    const input = parseBody(CmsUnpublishRequestSchema, body);
+    if (row.publication?.status !== "PUBLISHED") {
+      throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "not_published" }]);
+    }
+    try {
+      await db.$transaction(async (tx) => {
+        const res = await tx.cmsPagePublication.updateMany({
+          where: { pageId: row.id, status: "PUBLISHED", version: input.publicationVersion },
+          data: {
+            status: "UNPUBLISHED",
+            unpublishedAt: this.clock.now(),
+            unpublishedById: a.userId,
+            version: { increment: 1 },
+          },
+        });
+        if (res.count !== 1) {
+          throw new ApiError("CONFLICT_STATE", [{ path: "publicationVersion", rule: "stale" }]);
+        }
+        await a.audit(tx, {
+          action: "cms.page_unpublished",
+          resourceType: RESOURCE,
+          resourceId: row.id,
+          siteId: row.siteId,
+          permission: PUBLISH,
+          metadata: { revisionNumber: row.publication?.revision.revisionNumber ?? null },
+        });
+      });
+      return this.response(a, db, row.id);
     } catch (e) {
       return mapCmsDbError(e);
     }
   }
 }
+
+type StaffDb = ReturnType<StaffAccess["db"]>;

@@ -1,7 +1,8 @@
 // HTTP smoke test for the running Compose stack.
 //   node tools/smoke/smoke.mjs [--report tools/smoke/output/smoke.json]
-// Checks: health endpoints, BV demo routes and redirect, every file in apps/web-bv/public
-// (status + SHA-256 against the repo copy), media referenced by the rendered BV pages,
+// Checks: health endpoints, the BV CMS home page, demo redirects and preview headers, every file
+// in apps/web-bv/public (status + SHA-256 against the repo copy), media referenced by the
+// rendered BV pages,
 // the web-corporate skeleton home page, the admin console's sign-in gate and the clickjacking
 // headers of the admin console and the API (DP-014), the privacy pages and lead form texts
 // (DP-095), and in DEV the HTTPS proxy (DP-119).
@@ -102,34 +103,77 @@ for (const [name, url, init, status, code] of boundary) {
   }
 }
 
-// 2. BV routes (the prototype demo routes, unchanged)
-const bvRoutes = [
+const pages = {};
+// 2. BV routes (CMS S2, DP-134): "/" renders the CMS home page (or its unavailable state when
+// nothing is published; never content from code); the former demo routes redirect to "/".
+for (const route of [
   "/demo/iccsyn-hero",
   "/demo/iccsyn-hero-compact",
   "/demo/iccsyn-hero-nav",
   "/demo/iccsyn-hero-products",
-];
-const pages = {};
-for (const route of bvRoutes) {
+]) {
   try {
     const res = await get(base("web-bv") + route);
-    pages[route] = await res.text();
-    record("bv-route", route, res.status === 200, `HTTP ${res.status} ${pages[route].length} B`);
+    const loc = new URL(res.headers.get("location") ?? "x:", base("web-bv")).pathname;
+    record(
+      "bv-route",
+      `${route} -> /`,
+      [307, 308].includes(res.status) && loc === "/",
+      `HTTP ${res.status} ${loc}`,
+    );
   } catch (e) {
     record("bv-route", route, false, String(e));
   }
 }
 try {
   const res = await get(base("web-bv") + "/");
-  const loc = res.headers.get("location") ?? "";
+  const html = await res.text();
+  pages["/"] = html;
+  const known = /ICCSYN|This page is not available|cannot be shown right now/.test(html);
   record(
     "bv-route",
-    "/ -> /demo/iccsyn-hero-products",
-    [307, 308].includes(res.status) && loc.endsWith("/demo/iccsyn-hero-products"),
-    `HTTP ${res.status} ${loc}`,
+    "/ (CMS home)",
+    res.status === 200 && known,
+    `HTTP ${res.status} ${html.length} B`,
   );
 } catch (e) {
-  record("bv-route", "/ redirect", false, String(e));
+  record("bv-route", "/ (CMS home)", false, String(e));
+}
+// Preview links: never cached or indexed; an invalid token shows nothing.
+try {
+  const res = await get(base("web-bv") + "/preview/not-a-token");
+  const html = await res.text();
+  record(
+    "bv-route",
+    "/preview/<invalid> no-store, noindex",
+    (res.headers.get("cache-control") ?? "").includes("no-store") &&
+      (res.headers.get("x-robots-tag") ?? "").includes("noindex") &&
+      /This page is not available/.test(html),
+    `HTTP ${res.status} ${res.headers.get("cache-control")} ${res.headers.get("x-robots-tag")}`,
+  );
+} catch (e) {
+  record("bv-route", "/preview/<invalid>", false, String(e));
+}
+// CMS S3: an unknown or unpublished /<slug> renders the not-found page with noindex (Next streams
+// it with status 200, as /products/<unknown>), never a draft.
+try {
+  const res = await get(base("web-bv") + "/cms-smoke-no-such-page");
+  const html = await res.text();
+  record(
+    "bv-route",
+    "/<unknown slug> not found, noindex",
+    /This page could not be found/.test(html) && /<meta name="robots" content="noindex"/.test(html),
+    `HTTP ${res.status}`,
+  );
+} catch (e) {
+  record("bv-route", "/<unknown slug>", false, String(e));
+}
+// The public CMS API answers only with a site proxy key.
+try {
+  const res = await get(base("api") + "/api/v1/public/cms/page?path=/");
+  record("bv-route", "api public cms without key -> 404", res.status === 404, `HTTP ${res.status}`);
+} catch (e) {
+  record("bv-route", "api public cms without key", false, String(e));
 }
 
 // 3. Every public file, byte-identical to the repo copy

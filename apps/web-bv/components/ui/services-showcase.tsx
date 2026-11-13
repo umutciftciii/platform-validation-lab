@@ -11,7 +11,7 @@ import {
   type PointerEvent,
 } from "react";
 
-import { SERVICES, SERVICES_COPY as COPY, type ServiceItem } from "@/content/services-showcase";
+import { type ServiceItem, type ServicesCopy } from "@/content/services-showcase";
 
 /** Mouse travel before a press counts as a drag rather than a click on a card. */
 const DRAG_START_PX = 6;
@@ -97,7 +97,14 @@ function Arrow({ direction, size }: { direction: "left" | "right"; size: number 
   );
 }
 
-export default function ServicesShowcase() {
+/** CMS S2: services and copy come from the published `bv.home` page (lib/cms-home.ts). */
+export default function ServicesShowcase({
+  services: SERVICES,
+  copy: COPY,
+}: {
+  services: ServiceItem[];
+  copy: ServicesCopy;
+}) {
   const sectionRef = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLUListElement>(null);
   const dragRef = useRef<{

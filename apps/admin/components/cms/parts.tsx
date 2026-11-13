@@ -1,4 +1,4 @@
-import type { CmsPageKind, CmsRegistryEntry, CmsSite } from "@dream/contracts";
+import type { CmsPage, CmsPageKind, CmsRegistryEntry, CmsSite } from "@dream/contracts";
 import { StatusPill, type PillTone } from "../ui";
 
 const KIND: Readonly<Record<CmsPageKind, { tone: PillTone; label: string }>> = {
@@ -32,4 +32,20 @@ export function RegistryPill({ entry }: { entry: CmsRegistryEntry }) {
 export function pickCmsSite(sites: readonly CmsSite[], param: string | undefined): CmsSite {
   const wanted = param?.toUpperCase();
   return sites.find((s) => s.key === wanted) ?? (sites[0] as CmsSite);
+}
+
+/**
+ * The page's publication state in one line, for the list, the editor header and the publication
+ * panel. A plain function in a module without "use client", so server components may call it.
+ */
+export function publicationState(page: { version: number; publication: CmsPage["publication"] }): {
+  tone: "success" | "amber" | "neutral";
+  label: string;
+} {
+  const p = page.publication;
+  if (!p) return { tone: "amber", label: "Draft, not published" };
+  if (p.status === "UNPUBLISHED") return { tone: "neutral", label: "Unpublished" };
+  if (p.pageVersion !== page.version)
+    return { tone: "amber", label: "Live, changes not published" };
+  return { tone: "success", label: "Live" };
 }

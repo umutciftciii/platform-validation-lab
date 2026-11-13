@@ -1,20 +1,17 @@
 import Image from "next/image";
 
-import {
-  SITE_FOOTER,
-  type FooterLink,
-  type SiteFooterContent,
-} from "@/content/site-footer";
+import { type FooterLink, type SiteFooterContent } from "@/content/site-footer";
 import { PRIVACY_PATH, privacyHref } from "@/lib/privacy";
 
 /**
  * Page footer. A server component with no client script: every link works with
- * JavaScript off, and the entrance is CSS only (see `.site-footer` in globals.css).
+ * JavaScript off, and the entrance is CSS only (see `.site-footer` in globals.css). CMS S2: the
+ * content comes from the published `bv.site-footer` fragment (lib/cms-home.ts).
  */
 export default function SiteFooter({
-  content = SITE_FOOTER,
+  content,
 }: {
-  content?: SiteFooterContent;
+  content: SiteFooterContent;
 }) {
   const { contact } = content;
 
