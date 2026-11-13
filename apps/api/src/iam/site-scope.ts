@@ -66,6 +66,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   CustomerDataAccessRequest: { nullable: true },
   // CMS S1 (DP-015, ADR-020): a site's pages and fragments; there are no platform-level pages.
   CmsPage: { nullable: false },
+  // CMS S2 (DP-017): revisions and publications of a site's pages.
+  CmsPageRevision: { nullable: false },
+  CmsPagePublication: { nullable: false },
 };
 
 export interface RelationDef {
@@ -109,6 +112,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leadAssignmentsTo: { model: "LeadActivity", list: true },
     cmsPagesCreated: { model: "CmsPage", list: true },
     cmsPagesUpdated: { model: "CmsPage", list: true },
+    cmsRevisionsCreated: { model: "CmsPageRevision", list: true },
+    cmsPublicationsPublished: { model: "CmsPagePublication", list: true },
+    cmsPublicationsUnpublished: { model: "CmsPagePublication", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -139,6 +145,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leadActivities: { model: "LeadActivity", list: true },
     customerDataAccessRequests: { model: "CustomerDataAccessRequest", list: true },
     cmsPages: { model: "CmsPage", list: true },
+    cmsPageRevisions: { model: "CmsPageRevision", list: true },
+    cmsPagePublications: { model: "CmsPagePublication", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -341,6 +349,21 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     site: { model: "Site", list: false },
     createdBy: { model: "User", list: false },
     updatedBy: { model: "User", list: false },
+    revisions: { model: "CmsPageRevision", list: true },
+    publication: { model: "CmsPagePublication", list: false },
+  },
+  CmsPageRevision: {
+    page: { model: "CmsPage", list: false },
+    site: { model: "Site", list: false },
+    createdBy: { model: "User", list: false },
+    publications: { model: "CmsPagePublication", list: true },
+  },
+  CmsPagePublication: {
+    page: { model: "CmsPage", list: false },
+    revision: { model: "CmsPageRevision", list: false },
+    site: { model: "Site", list: false },
+    publishedBy: { model: "User", list: false },
+    unpublishedBy: { model: "User", list: false },
   },
 };
 
@@ -350,6 +373,7 @@ const JSON_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ProductImage: ["variants"],
   ProductPublication: ["snapshot"],
   CmsPage: ["content"],
+  CmsPageRevision: ["content"],
 };
 
 export const RAW_METHODS = [
