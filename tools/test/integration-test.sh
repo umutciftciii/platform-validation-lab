@@ -90,6 +90,11 @@ docker exec dream-test-postgres createdb -U dream_platform_test dream_platform_o
 DP_APP_PASSWORD=test-only-dp-app-password DP_MIGRATOR_PASSWORD=test-only-dp-migrator-pw \
   DP_IAM_BOOTSTRAP_PASSWORD=test-only-dp-bootstrap-pw \
   "$ROOT/infra/docker/postgres/apply-roles.sh" dream-test-postgres test dream_platform_owner_test >/dev/null
+# CMS S1 (DP-015): the CMS pages suite starts from an EMPTY database of its own too.
+docker exec dream-test-postgres createdb -U dream_platform_test dream_platform_cms_test
+DP_APP_PASSWORD=test-only-dp-app-password DP_MIGRATOR_PASSWORD=test-only-dp-migrator-pw \
+  DP_IAM_BOOTSTRAP_PASSWORD=test-only-dp-bootstrap-pw \
+  "$ROOT/infra/docker/postgres/apply-roles.sh" dream-test-postgres test dream_platform_cms_test >/dev/null
 
 # Names of the application databases, so the guard refuses them even if a URL were mistyped.
 app_db() { awk -F= -v k="$1" '$1==k {v=$2} END {print v}' "$ROOT/.env" 2>/dev/null; }
@@ -114,6 +119,8 @@ app_db() { awk -F= -v k="$1" '$1==k {v=$2} END {print v}' "$ROOT/.env" 2>/dev/nu
   echo "LEADS_MIGRATE_DATABASE_URL=${MIGRATE_URL/dream_platform_test/dream_platform_leads_test}"
   echo "OWNER_DATABASE_URL=${TEST_URL/dream_platform_test/dream_platform_owner_test}"
   echo "OWNER_MIGRATE_DATABASE_URL=${MIGRATE_URL/dream_platform_test/dream_platform_owner_test}"
+  echo "CMS_DATABASE_URL=${TEST_URL/dream_platform_test/dream_platform_cms_test}"
+  echo "CMS_MIGRATE_DATABASE_URL=${MIGRATE_URL/dream_platform_test/dream_platform_cms_test}"
   echo "POSTGRES_DB=$(app_db POSTGRES_DB)"
   echo "DEV_POSTGRES_DB=$(app_db DEV_POSTGRES_DB)"
   echo "PRISMA_HIDE_UPDATE_MESSAGE=1"
