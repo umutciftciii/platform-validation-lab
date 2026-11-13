@@ -401,6 +401,26 @@ export const CMS_SECTION_TYPES: readonly CmsSectionType[] = [
       { type: "text", key: "source", label: "Source", max: 120 },
     ],
   },
+  {
+    type: "contact",
+    label: "Contact details and form",
+    description:
+      "Phone, e-mail and address from the published footer, next to the contact form. The form does not send until it is connected (DP-151); the note says so.",
+    fields: [
+      { type: "text", key: "title", label: "Heading", max: 120, required: true },
+      { type: "text", key: "intro", label: "Introduction", max: 400, multiline: true },
+      { type: "text", key: "formTitle", label: "Form heading", max: 120, required: true },
+      {
+        type: "text",
+        key: "formNote",
+        label: "Note on the form",
+        max: 300,
+        required: true,
+        multiline: true,
+        hint: "Shown above the form while it cannot send messages.",
+      },
+    ],
+  },
 ];
 
 export const CMS_SECTION_TYPE_KEYS = CMS_SECTION_TYPES.map((s) => s.type);
@@ -551,6 +571,17 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     managedBy: "cms_pending",
     stage: "content",
     note: "From the live site (DP-135).",
+    importable: true,
+  },
+  {
+    key: "bv.contact",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Contact Us",
+    path: "/contact",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "DP-150. Contact details come from the published footer; the form sends nothing until DP-151.",
     importable: true,
   },
   {

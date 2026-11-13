@@ -63,12 +63,7 @@ describe("BV import seeds", () => {
   it("keeps the official contact details and pending pages as plain text", () => {
     expect(BV_FOOTER_SEED.contact.phone.href).toBe("tel:+31202101350");
     expect(BV_FOOTER_SEED.contact.email.href).toBe("mailto:info@dreampetroleumbv.com");
-    expect(BV_NAV_SEED.items.filter((i) => i.href === null).map((i) => i.label)).toEqual([
-      "Services",
-      "Company",
-      "Blogs",
-      "Contact Us",
-    ]);
+    expect(BV_NAV_SEED.items.filter((i) => i.href === null).map((i) => i.label)).toEqual(["Blogs"]);
     expect(
       BV_NAV_SEED.noScriptLinks.every((l) => l.href?.startsWith("/") || l.href === "#top"),
     ).toBe(true);
@@ -118,6 +113,11 @@ describe("BV content page seeds (DP-135)", () => {
     expect(text).not.toContain("Dream Chemicals");
     expect(text).not.toContain("+12%");
     expect(text).not.toContain("contact-us.html");
+    // Contact buttons go to the contact page here (DP-150), not to the live site.
+    expect(text).not.toContain("dreampetroleumbv.com/en/contact");
+    expect(JSON.stringify([BV_HOME_SEED, BV_NAV_SEED, BV_FOOTER_SEED])).not.toContain(
+      "dreampetroleumbv.com/en/contact",
+    );
     for (const [key, seed] of seeds) {
       for (const s of seed.content.sections.filter((x) => x.type === "split")) {
         expect(s["imageNote"], key).toMatch(/^Illustrative CGI image\./);

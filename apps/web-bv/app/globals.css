@@ -11,6 +11,22 @@
   --font-sans: var(--font-archivo);
 }
 
+/*
+ * Type scale (DP-150). The sizes the BV pages already use, named once so new parts use the same
+ * steps instead of new values: display = template page H1 (smaller step), title = section H2,
+ * subtitle = card and panel headings, lead = opening paragraph, body, small (labels, notes),
+ * caption (eyebrow). Existing components keep their own values; these are for new work.
+ */
+:root {
+  --type-display: clamp(2.5rem, 4.4vw, 4rem);
+  --type-title: clamp(1.75rem, min(3vw, 5svh), 2.75rem);
+  --type-subtitle: clamp(1.25rem, 1.6vw, 1.5rem);
+  --type-lead: clamp(1.05rem, 1.4vw, 1.25rem);
+  --type-body: 1rem;
+  --type-small: 0.9375rem;
+  --type-caption: 0.875rem;
+}
+
 html {
   background: var(--color-ink);
 }
@@ -2245,7 +2261,8 @@ body {
   /* Pulls the L's side bearing back onto the page edge. */
   margin-left: -0.045em;
   color: var(--color-glass);
-  font-size: min(11.4vw, 5.25rem);
+  /* Below every page H1: the closing call, not a second hero (DP-150). */
+  font-size: min(9vw, 2.5rem);
   font-stretch: 125%;
   font-weight: 500;
   line-height: 1.03;
@@ -2429,7 +2446,7 @@ body {
   }
 
   .site-footer-headline {
-    font-size: clamp(3.5rem, 6.6vw, 7.5rem);
+    font-size: clamp(2.25rem, 3.4vw, 3.25rem);
   }
 
   .site-footer-cta {
@@ -2843,4 +2860,178 @@ body {
   margin-top: 0.9rem;
   color: var(--color-steel);
   font-size: 0.95rem;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Contact (DP-150): the channels as data-sheet rows, the form beside them.    */
+/* The form is disabled until DP-151 connects it; the note above it says so.   */
+/* -------------------------------------------------------------------------- */
+
+/* The contact page opens shorter than a service page: a smaller H1, less space under the hero. */
+.tp-contact-page .tp-hero {
+  padding-block: clamp(3.5rem, 11svh, 7rem) clamp(1rem, 3svh, 2rem);
+}
+
+.tp-contact-page .tp-display {
+  font-size: var(--type-display);
+}
+
+.tp-contact {
+  padding-block: clamp(2rem, 5svh, 3.5rem) clamp(3rem, 9svh, 6rem);
+}
+
+.tp-contact-grid {
+  display: grid;
+  gap: clamp(2.5rem, 5vw, 5rem);
+  align-items: start;
+}
+
+@media (min-width: 960px) {
+  .tp-contact-grid {
+    grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  }
+}
+
+.tp-contact-rows {
+  margin-top: 2rem;
+}
+
+/* Label, then the channel: the value is what a visitor came for, so it gets the size. */
+@media (min-width: 640px) {
+  .tp-contact-row {
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+  }
+}
+
+.tp-contact-label {
+  color: var(--color-steel);
+  font-size: var(--type-small);
+  line-height: 1.5;
+}
+
+.tp-contact-value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.tp-contact-link {
+  align-self: flex-start;
+  color: var(--color-glass);
+  font-size: var(--type-subtitle);
+  font-stretch: 108%;
+  font-weight: 500;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color 160ms ease-out;
+}
+
+.tp-contact-link:hover,
+.tp-contact-link:focus-visible {
+  text-decoration-color: var(--color-amber);
+}
+
+.tp-contact-note {
+  color: var(--color-steel);
+  font-size: var(--type-small);
+  line-height: 1.45;
+}
+
+.tp-contact-address {
+  color: var(--color-glass);
+  font-size: var(--type-lead);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.tp-contact-form {
+  padding: clamp(1.5rem, 3vw, 2.25rem);
+  border-radius: 14px;
+  background: rgb(237 243 247 / 0.03);
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.12);
+}
+
+.tp-contact-form-title {
+  font-size: var(--type-subtitle);
+  font-stretch: 108%;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.tp-contact-form-note {
+  margin-top: 0.9rem;
+  padding: 0.75rem 0 0.75rem 1rem;
+  border-left: 2px solid var(--color-amber);
+  color: var(--color-glass);
+  font-size: var(--type-body);
+  line-height: 1.5;
+}
+
+.tp-contact-fieldset {
+  display: grid;
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+@media (min-width: 560px) {
+  .tp-contact-fieldset {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tp-contact-field-wide,
+  .tp-contact-submit {
+    grid-column: 1 / -1;
+  }
+}
+
+.tp-contact-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tp-contact-field-label {
+  color: var(--color-steel);
+  font-size: var(--type-small);
+  line-height: 1.4;
+}
+
+.tp-contact-input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: rgb(237 243 247 / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.16);
+  color: var(--color-glass);
+  font: inherit;
+  resize: vertical;
+}
+
+/* Disabled until DP-151: visibly inert, never mistaken for a broken form. */
+.tp-contact-fieldset:disabled .tp-contact-input {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tp-contact-fieldset:disabled .tp-contact-field-label {
+  opacity: 0.7;
+}
+
+.tp-contact-submit {
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.tp-contact-submit:disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.2);
+  color: var(--color-steel);
+  cursor: not-allowed;
 }
