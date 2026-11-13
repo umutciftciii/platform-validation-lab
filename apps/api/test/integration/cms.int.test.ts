@@ -994,7 +994,9 @@ describe("9. preview links", () => {
     expect((await lastAudit("cms.preview_issued"))?.actorUserId).toBe(bvReader.userId);
     // Another site's key, a forged, an expired or a too-long token: nothing.
     expectError(await pub(`/preview/${token}`, TEST_KEYS.webCorporate), 404, "NOT_FOUND");
-    expectError(await pub(`/preview/${token.slice(0, -1)}0`), 404, "NOT_FOUND");
+    // Change the last signature character; a fixed "0" left the token unchanged when it ended in 0.
+    const tampered = `${token.slice(0, -1)}${token.endsWith("0") ? "1" : "0"}`;
+    expectError(await pub(`/preview/${tampered}`), 404, "NOT_FOUND");
     expectError(await pub(`/preview/${forge(homeId, "BV", Date.now() - 1000)}`), 404, "NOT_FOUND");
     expectError(
       await pub(`/preview/${forge(homeId, "BV", Date.now() + 86_400_000)}`),

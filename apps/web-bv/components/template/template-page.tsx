@@ -5,6 +5,7 @@ import { cmsAsset } from "@dream/contracts";
 import type { ReactNode } from "react";
 
 import { PreviewBanner } from "@/components/home/home-page";
+import { HashScroll } from "@/components/hash-scroll";
 import SiteFooter from "@/components/ui/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
@@ -12,7 +13,7 @@ import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
 /**
  * A CMS template page of the BV site (CMS S3, DP-017): the four ready-made section types in the
  * site's design language (ink background, glass text, amber accents, Archivo at 108% width), with
- * the published navigation and footer around them. Server component; no client script.
+ * the published navigation and footer around them. Server component; the only client script is the fragment scroll.
  */
 export function TemplatePage({ view }: { view: TemplatePageView }) {
   return (
@@ -25,6 +26,7 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
         ))}
       </main>
       {view.footer ? <SiteFooter content={view.footer} /> : null}
+      <HashScroll />
     </>
   );
 }
