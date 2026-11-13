@@ -11,7 +11,7 @@ import {
   type MouseEvent,
 } from "react";
 
-import { SITE_NAV as NAV, type SiteNavItem } from "@/content/site-nav";
+import { SITE_NAV_UI, type SiteNavContent, type SiteNavItem } from "@/content/site-nav";
 
 const SCROLLED_AFTER_PX = 8;
 const NOTICE_MS = 2600;
@@ -44,11 +44,13 @@ function NavLink({
   className,
   onNavigate,
   onPending,
+  pendingNote,
 }: {
   item: SiteNavItem;
   className: string;
   onNavigate?: () => void;
   onPending: () => void;
+  pendingNote: string;
 }) {
   const current = "current" in item && item.current ? "page" : undefined;
 
@@ -67,7 +69,7 @@ function NavLink({
         role="link"
         aria-disabled="true"
         tabIndex={0}
-        title={NAV.pendingNote}
+        title={pendingNote}
         className={className}
         onClick={onClick}
         onKeyDown={onKeyDown}
@@ -99,14 +101,14 @@ function NavLink({
   );
 }
 
-function Logo({ onNavigate }: { onNavigate?: () => void }) {
+function Logo({ href, onNavigate }: { href: string; onNavigate?: () => void }) {
   return (
-    <a href={NAV.homeHref} className="site-nav-logo" onClick={onNavigate}>
+    <a href={href} className="site-nav-logo" onClick={onNavigate}>
       <Image
-        src={NAV.logo.src}
-        alt={NAV.logo.alt}
-        width={NAV.logo.width}
-        height={NAV.logo.height}
+        src={SITE_NAV_UI.logo.src}
+        alt={SITE_NAV_UI.logo.alt}
+        width={SITE_NAV_UI.logo.width}
+        height={SITE_NAV_UI.logo.height}
         loading="eager"
         draggable={false}
       />
@@ -114,7 +116,8 @@ function Logo({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-export default function SiteNav() {
+/** CMS S2: items and links come from the published `bv.site-nav` fragment (lib/cms-home.ts). */
+export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
   const scrolled = useScrolled();
   const menuRef = useRef<HTMLDialogElement>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -176,19 +179,25 @@ export default function SiteNav() {
       </noscript>
 
       <div className="site-nav-inner">
-        <Logo />
+        <Logo href={NAV.homeHref} />
 
         <nav aria-label={NAV.mainLabel} className="site-nav-links">
           <ul>
             {NAV.items.map((item) => (
               <li key={item.label}>
-                <NavLink item={item} className="site-nav-link" onPending={showNotice} />
+                <NavLink
+                  item={item}
+                  className="site-nav-link"
+                  onPending={showNotice}
+                  pendingNote={NAV.pendingNote}
+                />
               </li>
             ))}
           </ul>
         </nav>
 
         <NavLink
+          pendingNote={NAV.pendingNote}
           item={NAV.contact}
           className="site-nav-contact"
           onPending={showNotice}
@@ -238,7 +247,7 @@ export default function SiteNav() {
         onKeyDown={onMenuKeyDown}
       >
         <div className="site-menu-bar">
-          <Logo onNavigate={closeMenu} />
+          <Logo href={NAV.homeHref} onNavigate={closeMenu} />
           <button
             type="button"
             autoFocus
@@ -255,6 +264,7 @@ export default function SiteNav() {
             {NAV.items.map((item) => (
               <li key={item.label}>
                 <NavLink
+                  pendingNote={NAV.pendingNote}
                   item={item}
                   className="site-menu-link"
                   onNavigate={closeMenu}
@@ -270,6 +280,7 @@ export default function SiteNav() {
             {notice && menuOpen ? NAV.pendingNote : ""}
           </p>
           <NavLink
+          pendingNote={NAV.pendingNote}
             item={NAV.contact}
             className="site-nav-contact site-nav-contact-wide"
             onPending={showNotice}

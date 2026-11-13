@@ -147,6 +147,10 @@ model User {
   /// CMS S1 (DP-015, ADR-020): pages this user created and last saved.
   cmsPagesCreated             CmsPage[]                    @relation("CmsPageCreatedBy")
   cmsPagesUpdated             CmsPage[]                    @relation("CmsPageUpdatedBy")
+  /// CMS S2 (DP-017, ADR-020 D6): revisions this user published, publications and withdrawals.
+  cmsRevisionsCreated         CmsPageRevision[]
+  cmsPublicationsPublished    CmsPagePublication[]         @relation("CmsPublicationPublishedBy")
+  cmsPublicationsUnpublished  CmsPagePublication[]         @relation("CmsPublicationUnpublishedBy")
 
   @@index([kind, status])
 }
@@ -188,6 +192,9 @@ model Site {
   customerDataAccessRequests CustomerDataAccessRequest[]
   // CMS S1 (DP-015, ADR-020): the site's pages and site-wide fragments.
   cmsPages                   CmsPage[]
+  // CMS S2 (DP-017): published revisions and the current publication of each page.
+  cmsPageRevisions           CmsPageRevision[]
+  cmsPagePublications        CmsPagePublication[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1163,40 +1170,40 @@ model ProductCrossReferenceSite {
 
 /// One person per site and normalised e-mail, with the latest details they gave.
 model Lead {
-  id                 String    @id @default(uuid(7)) @db.Uuid
-  siteId             String    @db.Uuid
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  siteId             String             @db.Uuid
   /// Normalised (trimmed, lower case); unique per site.
-  email              String    @db.VarChar(254)
-  fullName           String    @db.VarChar(120)
-  company            String    @db.VarChar(160)
+  email              String             @db.VarChar(254)
+  fullName           String             @db.VarChar(120)
+  company            String             @db.VarChar(160)
   /// ISO 3166-1 alpha-2.
-  country            String    @db.Char(2)
+  country            String             @db.Char(2)
   /// The e-mail domain is a known free-mail provider (flag for sales; accepted, ADR-016 D1).
-  freeMailDomain     Boolean   @default(false)
+  freeMailDomain     Boolean            @default(false)
   /// When marketing consent was last given; a later unticked form never clears it (D2).
-  marketingConsentAt DateTime? @db.Timestamptz(3)
-  requestCount       Int       @default(0)
-  firstRequestAt     DateTime  @default(now()) @db.Timestamptz(3)
-  lastRequestAt      DateTime  @default(now()) @db.Timestamptz(3)
-  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+  marketingConsentAt DateTime?          @db.Timestamptz(3)
+  requestCount       Int                @default(0)
+  firstRequestAt     DateTime           @default(now()) @db.Timestamptz(3)
+  lastRequestAt      DateTime           @default(now()) @db.Timestamptz(3)
+  createdAt          DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
   /// DP-096: when the identity fields were cleared (retention or an erasure request). An
   /// anonymised lead never changes again; written only by dp_lead_retention (trigger, CHECK).
-  anonymisedAt       DateTime? @db.Timestamptz(3)
+  anonymisedAt       DateTime?          @db.Timestamptz(3)
   /// DP-096 (D-R1): customer, open sales opportunity or legal hold. A held lead is never
   /// anonymised automatically (the CRM retention policy decides); set by the operator only.
   retentionHold      LeadRetentionHold?
-  retentionHoldAt    DateTime? @db.Timestamptz(3)
+  retentionHoldAt    DateTime?          @db.Timestamptz(3)
   /// DP-041 (ADR-019): the sales workflow. Only staff with lead:manage on the lead's site change
   /// these columns (RLS policy + guard trigger); every change is logged as a LeadActivity by the
   /// database itself. QUALIFIED and CONVERTED keep the lead out of automatic anonymisation.
-  status             LeadStatus @default(NEW)
-  statusChangedAt    DateTime?  @db.Timestamptz(3)
+  status             LeadStatus         @default(NEW)
+  statusChangedAt    DateTime?          @db.Timestamptz(3)
   /// A staff user who holds lead:manage on the lead's site when assigned (checked by the database).
-  assignedToId       String?    @db.Uuid
-  assignedAt         DateTime?  @db.Timestamptz(3)
+  assignedToId       String?            @db.Uuid
+  assignedAt         DateTime?          @db.Timestamptz(3)
   /// Optimistic concurrency of the workflow columns: +1 on every staff change.
-  workflowVersion    Int        @default(0)
+  workflowVersion    Int                @default(0)
 
   site       Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
   requests   LeadDocumentRequest[]
@@ -1461,12 +1468,80 @@ model CmsPage {
   createdAt      DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime    @updatedAt @db.Timestamptz(3)
 
-  site      Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  createdBy User @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy User @relation("CmsPageUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  site        Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy   User                @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy   User                @relation("CmsPageUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  revisions   CmsPageRevision[]
+  publication CmsPagePublication?
 
   @@unique([siteId, path])
+  /// Target of the composite keys of revisions and the publication (same site as the page).
+  @@unique([id, siteId])
   /// One DESIGN page or fragment per registry key and site.
   @@unique([siteId, templateKey], map: "CmsPage_registry_siteId_templateKey_key", where: raw("(kind <> 'TEMPLATE'::\"CmsPageKind\")"))
   @@index([siteId, kind])
+}
+
+// ===========================================================================================
+// CMS S2 (DP-017, ADR-020 D6): publication. Publishing copies the draft into an immutable
+// revision and points the page's one publication at it; the public sites read only that revision.
+// Rules (immutable revisions, revision of the same page and site, status consistency) are in
+// migration 20261127090000_cms_s2_publication and tested in test/integration/cms.int.test.ts.
+// ===========================================================================================
+
+/// An immutable copy of a page's draft, made when it was published (no UPDATE or DELETE).
+model CmsPageRevision {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  pageId         String   @db.Uuid
+  siteId         String   @db.Uuid
+  /// 1, 2, 3 … per page.
+  revisionNumber Int
+  /// The draft version that was published.
+  pageVersion    Int
+  title          String   @db.VarChar(200)
+  path           String?  @db.VarChar(120)
+  seoTitle       String?  @db.VarChar(120)
+  seoDescription String?  @db.VarChar(320)
+  noindex        Boolean
+  content        Json
+  schemaVersion  Int
+  createdById    String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  page         CmsPage              @relation(fields: [pageId, siteId], references: [id, siteId], onDelete: Restrict)
+  site         Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy    User                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  publications CmsPagePublication[]
+
+  @@unique([pageId, revisionNumber])
+  /// Target of the publication's composite key (a revision of the same page).
+  @@unique([id, pageId])
+  @@index([siteId])
+}
+
+/// The current publication of a page: PUBLISHED shows its revision on the site, UNPUBLISHED shows
+/// nothing. Replaced only by publishing again; never deleted.
+model CmsPagePublication {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  pageId          String            @unique @db.Uuid
+  siteId          String            @db.Uuid
+  revisionId      String            @db.Uuid
+  status          PublicationStatus
+  publishedAt     DateTime          @db.Timestamptz(3)
+  publishedById   String            @db.Uuid
+  unpublishedAt   DateTime?         @db.Timestamptz(3)
+  unpublishedById String?           @db.Uuid
+  version         Int               @default(1)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(3)
+
+  page          CmsPage         @relation(fields: [pageId, siteId], references: [id, siteId], onDelete: Restrict)
+  revision      CmsPageRevision @relation(fields: [revisionId, pageId], references: [id, pageId], onDelete: Restrict)
+  site          Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  publishedBy   User            @relation("CmsPublicationPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict)
+  unpublishedBy User?           @relation("CmsPublicationUnpublishedBy", fields: [unpublishedById], references: [id], onDelete: Restrict)
+
+  /// One-to-one with the page (pageId is unique on its own; the pair carries the site).
+  @@unique([pageId, siteId])
+  @@index([siteId, status])
 }

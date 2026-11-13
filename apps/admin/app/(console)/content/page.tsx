@@ -2,12 +2,19 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   CMS_SITE_REGISTRY,
+  cmsDesignTemplate,
   CmsContextResponseSchema,
   CmsPageListResponseSchema,
   type CmsRegistryEntry,
   type CmsSite,
 } from "@dream/contracts";
-import { CmsKindPill, pickCmsSite, RegistryPill } from "../../../components/cms/parts";
+import { ImportButton } from "../../../components/cms/import-button";
+import {
+  CmsKindPill,
+  pickCmsSite,
+  publicationState,
+  RegistryPill,
+} from "../../../components/cms/parts";
 import { PageHeader, SiteSwitcher } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
 import { buttonStyles, EmptyState, ErrorState, Panel, StatusPill } from "../../../components/ui";
@@ -62,7 +69,7 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
       <PageHeader
         icon="content"
         title="Content"
-        description="Pages of the public sites. Drafts are saved here; preview and publishing follow in the next release."
+        description="Pages of the public sites. Edit drafts, preview them and publish; the sites show only what is published."
         actions={
           site.canEdit ? (
             <Link href={`/content/new?site=${sp}`} className={buttonStyles.primary}>
@@ -141,7 +148,9 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
                     </span>
                   </div>
                   <div>
-                    <StatusPill tone="amber">Draft</StatusPill>
+                    <StatusPill tone={publicationState(p).tone}>
+                      {publicationState(p).label}
+                    </StatusPill>
                   </div>
                   <p className="tabular text-sm text-ink-2 md:text-right">
                     {DATE.format(new Date(p.updatedAt))}
@@ -201,6 +210,16 @@ function RouteRow({ entry, site }: { entry: CmsRegistryEntry; site: CmsSite }) {
           </>
         ) : null}
       </p>
+      {entry.managedBy === "cms_pending" && cmsDesignTemplate(entry.key) && site.canEdit ? (
+        <div className="md:col-span-3">
+          <ImportButton
+            siteId={site.id}
+            siteParam={site.key.toLowerCase()}
+            templateKey={entry.key}
+            title={entry.title}
+          />
+        </div>
+      ) : null}
     </li>
   );
 }

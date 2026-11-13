@@ -13,6 +13,8 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import {
+  createContext,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -24,11 +26,20 @@ import {
   LabVesselMedia,
   TEMP_VESSEL_MEDIA,
 } from "@/components/ui/lab-vessel-media";
-import {
-  ICCSYN_APPLICATIONS,
-  ICCSYN_HERO_COPY as COPY,
-  type IccsynApplication,
-} from "@/content/iccsyn-hero";
+import { type IccsynApplication, type IccsynHeroContent } from "@/content/iccsyn-hero";
+
+// CMS S2: the hero's texts and cards come from the published `bv.home` page (lib/cms-home.ts);
+// every part of the hero reads them from this context. Timeline and motion stay in code.
+const HeroContent = createContext<IccsynHeroContent | null>(null);
+
+function useHeroContent(): {
+  COPY: IccsynHeroContent["copy"];
+  ICCSYN_APPLICATIONS: IccsynApplication[];
+} {
+  const content = useContext(HeroContent);
+  if (!content) throw new Error("SpatialDepthHero content is missing");
+  return { COPY: content.copy, ICCSYN_APPLICATIONS: content.applications };
+}
 
 type Layout = "spatial" | "deck";
 type TitleLine = "brand" | "tagline";
@@ -250,7 +261,7 @@ type CardProps = {
 };
 
 /** Keyframes for one card, per layout. */
-function cardTimeline(index: number, layout: Layout) {
+function cardTimeline(index: number, layout: Layout, count: number) {
   if (layout === "spatial") {
     const coords = SPATIAL_COORDINATES[index];
     const row = Math.floor(index / 2);
@@ -276,7 +287,7 @@ function cardTimeline(index: number, layout: Layout) {
 
   // Deck: one card at a time, alternating sides, because a phone cannot hold the
   // scatter. Each card recedes before the next one reads.
-  const length = (DECK_CARDS_END - DECK_CARDS_START) / ICCSYN_APPLICATIONS.length;
+  const length = (DECK_CARDS_END - DECK_CARDS_START) / count;
   const start = DECK_CARDS_START + index * length;
   const side = index % 2 === 0 ? -1 : 1;
   // The exit overlaps the next card's entrance, so the deck is never empty.
@@ -345,7 +356,8 @@ function SpatialCard({
   setHoveredIndex,
   onKeyboardFocus,
 }: CardProps) {
-  const t = cardTimeline(index, layout);
+  const { ICCSYN_APPLICATIONS } = useHeroContent();
+  const t = cardTimeline(index, layout, ICCSYN_APPLICATIONS.length);
 
   // Transform coordinates based on the scroll progress.
   const motionOptions = { ease: t.ease };
@@ -419,6 +431,7 @@ function SpatialCard({
 /* -------------------------------------------------------------------------- */
 
 function HeroCta({ onFocus }: { onFocus?: (event: FocusEvent<HTMLElement>) => void }) {
+  const { COPY } = useHeroContent();
   if (COPY.ctaHref) {
     return (
       <Link href={COPY.ctaHref} prefetch={false} className="hero-cta" onFocus={onFocus}>
@@ -447,6 +460,8 @@ function HeroCta({ onFocus }: { onFocus?: (event: FocusEvent<HTMLElement>) => vo
 /* -------------------------------------------------------------------------- */
 
 function StaticHero({ scrollProgress }: { scrollProgress: MotionValue<number> }) {
+  const { COPY, ICCSYN_APPLICATIONS } = useHeroContent();
+  const BRAND_DISPLAY = brandDisplay(COPY.brand);
   return (
     <section className="relative isolate overflow-hidden bg-ink px-6 pb-20 pt-24 text-center">
       <div className="hero-glow absolute inset-0 -z-10" />
@@ -487,7 +502,7 @@ const AFTER_HERO_ID = "after-iccsyn-hero";
 const TAB_FOCUS_WINDOW_MS = 200;
 
 // Keeps "BASE OILS" together when the wordmark wraps on narrow screens.
-const BRAND_DISPLAY = COPY.brand.replace("BASE OILS", "BASE OILS");
+const brandDisplay = (brand: string) => brand.replace("BASE OILS", "BASE OILS");
 
 export type HeroScrollLength = "standard" | "compact";
 
@@ -504,6 +519,8 @@ function AnimatedHero({
   isDeck: boolean;
   scrollLength: HeroScrollLength;
 }) {
+  const { COPY, ICCSYN_APPLICATIONS } = useHeroContent();
+  const BRAND_DISPLAY = brandDisplay(COPY.brand);
   const wrapRef = useRef<HTMLElement>(null);
   const layout: Layout = isDeck ? "deck" : "spatial";
   const finePointer = useMediaQuery("(hover: hover) and (pointer: fine)");
@@ -676,17 +693,25 @@ function AnimatedHero({
 }
 
 export default function SpatialDepthHero({
+  content,
   scrollLength = "standard",
 }: {
+  content: IccsynHeroContent;
   scrollLength?: HeroScrollLength;
 }) {
   const reduce = useMediaQuery("(prefers-reduced-motion: reduce)");
   const isDeck = useMediaQuery("(max-width: 767px), (max-height: 659px)");
   const idleProgress = useMotionValue(0);
 
-  if (reduce) return <StaticHero scrollProgress={idleProgress} />;
+  if (reduce) {
+    return (
+      <HeroContent.Provider value={content}>
+        <StaticHero scrollProgress={idleProgress} />
+      </HeroContent.Provider>
+    );
+  }
   return (
-    <>
+    <HeroContent.Provider value={content}>
       {/* Without JavaScript nothing can drive the scroll scene, so it is hidden and
           the static layout takes its place. React skips this on the client. */}
       <noscript>
@@ -700,6 +725,6 @@ export default function SpatialDepthHero({
           scrollLength={scrollLength}
         />
       </div>
-    </>
+    </HeroContent.Provider>
   );
 }
