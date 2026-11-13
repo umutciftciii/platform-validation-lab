@@ -17,8 +17,17 @@ export function RegistryPill({ entry }: { entry: CmsRegistryEntry }) {
   switch (entry.managedBy) {
     case "cms_pending":
       return (
-        <StatusPill tone="amber">
-          {entry.kind === "FRAGMENT" ? "Site-wide part" : "Designed page"} · import in {entry.stage}
+        <StatusPill tone={entry.importable ? "amber" : "neutral"}>
+          {entry.kind === "FRAGMENT"
+            ? "Site-wide part"
+            : entry.kind === "TEMPLATE"
+              ? "Content page"
+              : "Designed page"}
+          {entry.importable
+            ? " · ready to import"
+            : entry.stage === "content"
+              ? " · not built yet"
+              : ` · ${entry.stage}`}
         </StatusPill>
       );
     case "contract":

@@ -69,7 +69,26 @@ export type TemplateSection =
       intro: string | null;
       items: { title: string; description: string | null; link: CmsLink | null }[];
     }
-  | { id: string; type: "cta"; title: string; text: string | null; button: CmsLink };
+  | { id: string; type: "cta"; title: string; text: string | null; button: CmsLink }
+  | {
+      id: string;
+      type: "split";
+      eyebrow: string | null;
+      title: string;
+      body: string;
+      image: string;
+      imageAlt: string;
+      imageNote: string | null;
+    }
+  | {
+      id: string;
+      type: "specList";
+      title: string;
+      intro: string | null;
+      items: { term: string; detail: string | null }[];
+      link: CmsLink | null;
+    }
+  | { id: string; type: "quote"; text: string; source: string | null };
 
 export interface TemplatePageView {
   path: string;

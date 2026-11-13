@@ -2,7 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   CMS_DESIGN_TEMPLATES,
+  CMS_SITE_REGISTRY,
+  CmsSlugSchema,
+  CmsTemplateContentSchema,
   cmsAsset,
+  cmsPathForSlug,
   cmsFieldsSchema,
   type BvHomeContent,
 } from "@dream/contracts";
@@ -13,6 +17,7 @@ import {
   verifyPreviewToken,
 } from "../../../src/cms/cms-content.js";
 import { BV_FOOTER_SEED, BV_HOME_SEED, BV_NAV_SEED, CMS_SEEDS } from "../../../src/cms/seed/bv.js";
+import { CMS_PAGE_SEEDS } from "../../../src/cms/seed/bv-pages.js";
 
 describe("BV import seeds", () => {
   it("has exactly one seed per designed template, and each validates unchanged", () => {
@@ -80,6 +85,44 @@ describe("BV import seeds", () => {
       error = e;
     }
     expect(JSON.stringify(error)).toContain("content.hero.brand");
+  });
+});
+
+describe("BV content page seeds (DP-135)", () => {
+  const seeds = Object.entries(CMS_PAGE_SEEDS);
+
+  it("has one seed per importable content page of the registry, at the registry path", () => {
+    const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
+    expect(seeds.map(([k]) => k).sort()).toEqual(importable.map((e) => e.key).sort());
+    for (const [key, seed] of seeds) {
+      expect(CmsSlugSchema.parse(seed.slug), key).toBe(seed.slug);
+      expect(cmsPathForSlug(seed.slug)).toBe(importable.find((e) => e.key === key)?.path);
+    }
+  });
+
+  it("validates unchanged as template content, with registered images only", () => {
+    for (const [key, seed] of seeds) {
+      const parsed = CmsTemplateContentSchema.safeParse(seed.content);
+      expect(parsed.success, `${key}: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`).toBe(
+        true,
+      );
+      expect(parsed.data).toEqual(seed.content);
+      for (const s of seed.content.sections) {
+        if (s.type === "split") expect(cmsAsset(s["image"] as string)?.kind, key).toBe("image");
+      }
+    }
+  });
+
+  it("keeps the CGI disclosure, drops the leftover brand and the unsourced growth figure", () => {
+    const text = JSON.stringify(CMS_PAGE_SEEDS);
+    expect(text).not.toContain("Dream Chemicals");
+    expect(text).not.toContain("+12%");
+    expect(text).not.toContain("contact-us.html");
+    for (const [key, seed] of seeds) {
+      for (const s of seed.content.sections.filter((x) => x.type === "split")) {
+        expect(s["imageNote"], key).toMatch(/^Illustrative CGI image\./);
+      }
+    }
   });
 });
 

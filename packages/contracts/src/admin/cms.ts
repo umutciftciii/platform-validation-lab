@@ -333,6 +333,74 @@ export const CMS_SECTION_TYPES: readonly CmsSectionType[] = [
       { type: "link", key: "button", label: "Button", required: true },
     ],
   },
+  // BV content pages (DP-135): a page opening or block with a registered image, a technical
+  // data-sheet style list (term and detail per row), and a pull quote.
+  {
+    type: "split",
+    label: "Image and text",
+    description:
+      "Heading and text next to a registered site image. As the first section it is the page heading.",
+    fields: [
+      { type: "text", key: "eyebrow", label: "Eyebrow", max: 60 },
+      { type: "text", key: "title", label: "Heading", max: 120, required: true },
+      {
+        type: "text",
+        key: "body",
+        label: "Text",
+        max: 1200,
+        required: true,
+        multiline: true,
+        hint: "Plain text. A blank line starts a new paragraph.",
+      },
+      { type: "asset", key: "image", label: "Image", kinds: ["image"] },
+      {
+        type: "text",
+        key: "imageAlt",
+        label: "Alt text",
+        max: 300,
+        required: true,
+        multiline: true,
+      },
+      {
+        type: "text",
+        key: "imageNote",
+        label: "Image note",
+        max: 200,
+        hint: "Shown under the image, e.g. that a render is illustrative.",
+      },
+    ],
+  },
+  {
+    type: "specList",
+    label: "Specification list",
+    description: "A heading and rows of a term with an optional detail, like a data sheet.",
+    fields: [
+      { type: "text", key: "title", label: "Heading", max: 120, required: true },
+      { type: "text", key: "intro", label: "Intro", max: 600, multiline: true },
+      {
+        type: "list",
+        key: "items",
+        label: "Rows",
+        itemLabel: "Row",
+        min: 1,
+        max: 16,
+        fields: [
+          { type: "text", key: "term", label: "Term", max: 160, required: true },
+          { type: "text", key: "detail", label: "Detail", max: 300, multiline: true },
+        ],
+      },
+      { type: "link", key: "link", label: "Link" },
+    ],
+  },
+  {
+    type: "quote",
+    label: "Quote",
+    description: "A short statement set large.",
+    fields: [
+      { type: "text", key: "text", label: "Quote", max: 300, required: true, multiline: true },
+      { type: "text", key: "source", label: "Source", max: 120 },
+    ],
+  },
 ];
 
 export const CMS_SECTION_TYPE_KEYS = CMS_SECTION_TYPES.map((s) => s.type);
@@ -387,12 +455,14 @@ export type CmsSiteKey = (typeof CMS_SITE_KEYS)[number];
 export interface CmsRegistryEntry {
   key: string;
   site: CmsSiteKey;
-  kind: "DESIGN" | "FRAGMENT" | "LEGAL" | "CATALOG";
+  kind: "DESIGN" | "FRAGMENT" | "TEMPLATE" | "LEGAL" | "CATALOG";
   title: string;
   path: string | null;
   managedBy: "cms_pending" | "contract" | "catalog";
-  stage: "S2" | "S4" | null;
+  stage: "S2" | "S4" | "content" | null;
   note: string;
+  /** The API holds an import seed for it (admin shows "Import into CMS"). */
+  importable?: boolean;
 }
 
 export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
@@ -405,6 +475,7 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     managedBy: "cms_pending",
     stage: "S2",
     note: "Hero, product groups, services, CTL technology and applications. Motion stays in code.",
+    importable: true,
   },
   {
     key: "bv.products-index",
@@ -425,6 +496,7 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     managedBy: "cms_pending",
     stage: "S2",
     note: "Menu items and contact link of every page.",
+    importable: true,
   },
   {
     key: "bv.site-footer",
@@ -435,6 +507,81 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     managedBy: "cms_pending",
     stage: "S2",
     note: "Headline, contact details, link columns and legal links.",
+    importable: true,
+  },
+  {
+    key: "bv.about-us",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "About Us",
+    path: "/about-us",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "From the live site (DP-135). Market images not used: stock photos unrelated to the markets.",
+    importable: true,
+  },
+  {
+    key: "bv.energy-trading",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Energy Trading & Supply",
+    path: "/energy-trading",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "From the live site (DP-135); the unsourced +12% figure is left out.",
+    importable: true,
+  },
+  {
+    key: "bv.logistics",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Logistics",
+    path: "/logistics",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "From the live site (DP-135).",
+    importable: true,
+  },
+  {
+    key: "bv.storage-distribution",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Storage & Distribution",
+    path: "/storage-distribution",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "From the live site (DP-135).",
+    importable: true,
+  },
+  {
+    key: "bv.strategic-partnership",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Strategic Partnership",
+    path: "/strategic-partnership",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "Next package: the partnership models need confirmation by Dream Petroleum.",
+  },
+  {
+    key: "bv.sustainability",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Sustainability",
+    path: "/sustainability",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "Next package: the net-zero 2050 commitment needs confirmation by Dream Petroleum.",
+  },
+  {
+    key: "bv.our-team",
+    site: "BV",
+    kind: "TEMPLATE",
+    title: "Our Leadership Team",
+    path: "/our-team",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "Not built: the live page has no names, photos or figures (placeholders only).",
   },
   {
     key: "bv.product-detail",
