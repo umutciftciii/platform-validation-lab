@@ -2,11 +2,23 @@
  * Loads an authorization snapshot from PostgreSQL. The decision itself is pure (authorization.ts).
  * Role permissions come from the code catalogue; the database only says who holds which role
  * where, and which optional modules are on.
+ *
+ * DP-125 (ADR-012B part 2): "Membership", "RoleAssignment" and "ModuleConfiguration" have
+ * row-level security. Call these functions with the client of an `inStaffContext` transaction
+ * (iam-context.ts) of the user's own session: the database then shows the user's own assignments
+ * and memberships and the module states of the sites the user reaches. Without that context the
+ * snapshot has no grant (deny by default).
  */
 import type { AuthorizationSnapshot, Grant } from "./authorization.js";
-import { PLATFORM_SUPER_ADMIN, SYSTEM_OWNER } from "./catalog.js";
+import { SYSTEM_OWNER } from "./catalog.js";
 import type { Db } from "./db.js";
 import type { ActTarget } from "./escalation.js";
+import {
+  adminTargetRows,
+  myGrantAncestry,
+  platformAdminCount,
+  qualifiedAdminCount,
+} from "./iam-context.js";
 
 export async function loadAuthorizationSnapshot(
   db: Db,
@@ -93,62 +105,29 @@ export async function loadSystemOwnerId(db: Db): Promise<string | null> {
  * Users other than `excludeUserId` who can still administer the platform: ACTIVE or PENDING
  * (bootstrap, not yet enrolled) with an active platform_super_admin assignment. Input for
  * `canRevokeRole` / `platformAdminRemovalProblem`.
+ *
+ * DP-125: counted by the database (iam_rls_platform_admin_count) inside the caller's staff
+ * context, because row-level security shows the caller only some assignments. Answered only to a
+ * platform-wide IAM administrator; otherwise 0 (unknown counts as zero: deny by default).
  */
 export async function countOtherPlatformAdmins(
   db: Db,
   excludeUserId: string,
-  now: Date = new Date(),
   options: { nonExpiringOnly?: boolean } = {},
 ): Promise<number> {
-  const users = await db.roleAssignment.findMany({
-    where: {
-      role: { key: PLATFORM_SUPER_ADMIN },
-      scopeType: "PLATFORM",
-      revokedAt: null,
-      OR: options.nonExpiringOnly
-        ? [{ expiresAt: null }]
-        : [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      userId: { not: excludeUserId },
-      user: { status: { in: ["ACTIVE", "PENDING"] } },
-    },
-    select: { userId: true },
-    distinct: ["userId"],
-  });
-  return users.length;
+  return (await platformAdminCount(db, excludeUserId, options.nonExpiringOnly ?? false)) ?? 0;
 }
 
 /**
- * Everyone who granted the user's active roles, directly or through a chain of active grants
- * (bounded breadth-first walk). Bootstrap grants have no grantor. Used by `canAssignRole` to
- * refuse reciprocal and indirect self-grants (F1-001B).
+ * Everyone who granted the session user's active roles, directly or through a chain of active
+ * grants (F1-001B; `canAssignRole` / `canActOnUser` refuse reciprocal and indirect self-grants).
+ *
+ * DP-125: walked by the database (iam_rls_my_grant_ancestry) inside the staff context of
+ * `userId`'s own session: under row-level security a walk in the API would miss the grants of
+ * other sites and so miss ancestors. An ancestry is only ever loaded for the caller itself.
  */
-export async function loadGrantAncestry(
-  db: Db,
-  userId: string,
-  now: Date = new Date(),
-  maxDepth = 32,
-): Promise<Set<string>> {
-  const ancestry = new Set<string>();
-  let frontier = [userId];
-  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
-    const rows = await db.roleAssignment.findMany({
-      where: {
-        userId: { in: frontier },
-        grantedById: { not: null },
-        revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      },
-      select: { grantedById: true },
-    });
-    frontier = [];
-    for (const { grantedById } of rows) {
-      if (grantedById && !ancestry.has(grantedById)) {
-        ancestry.add(grantedById);
-        frontier.push(grantedById);
-      }
-    }
-  }
-  return ancestry;
+export async function loadGrantAncestry(db: Db): Promise<Set<string>> {
+  return myGrantAncestry(db);
 }
 
 /**
@@ -156,60 +135,48 @@ export async function loadGrantAncestry(
  * 10.5): ACTIVE, MFA-enrolled, with a platform_super_admin assignment that is neither revoked
  * nor expiring. For a removal, exclude only the target: the acting administrator counts toward
  * what remains (`canActOnUser`, remainingQualifiedPlatformAdmins).
+ *
+ * DP-125: counted by the database inside the caller's staff context (platform-wide IAM
+ * administrators only); undefined when unknown (deny by default in `canActOnUser`).
  */
 export async function countQualifiedPlatformAdmins(
   db: Db,
   excludeUserIds: readonly string[],
-): Promise<number> {
-  const users = await db.roleAssignment.findMany({
-    where: {
-      role: { key: PLATFORM_SUPER_ADMIN },
-      scopeType: "PLATFORM",
-      revokedAt: null,
-      expiresAt: null,
-      userId: { notIn: [...excludeUserIds] },
-      user: { status: "ACTIVE", kind: "STAFF", mfaEnrolledAt: { not: null } },
-    },
-    select: { userId: true },
-    distinct: ["userId"],
-  });
-  return users.length;
+): Promise<number | undefined> {
+  return qualifiedAdminCount(db, excludeUserIds);
 }
 
-/** Loads a user as the target of an administration action (`canActOnUser`). */
+/**
+ * Loads a user as the target of an administration action (`canActOnUser`).
+ *
+ * DP-125: the target's grants and memberships come from iam_rls_admin_target inside the caller's
+ * staff context. The superiority rule must see the target's roles on every site, which row-level
+ * security would hide; the database answers only when the target works on a site where the caller
+ * administers staff (else no row: the target is out of scope, 404).
+ */
 export async function loadActTarget(db: Db, userId: string): Promise<ActTarget | null> {
   const user = await db.user.findUnique({
     where: { id: userId },
-    select: {
-      id: true,
-      kind: true,
-      status: true,
-      memberships: { where: { status: { not: "REVOKED" } }, select: { siteId: true } },
-      roleAssignments: {
-        where: { revokedAt: null },
-        select: {
-          scopeType: true,
-          siteId: true,
-          expiresAt: true,
-          revokedAt: true,
-          role: { select: { key: true } },
-        },
-      },
-    },
+    select: { id: true, kind: true, status: true },
   });
   if (!user) return null;
+  const rows = await adminTargetRows(db, user.id);
   return {
     userId: user.id,
     kind: user.kind,
     status: user.status,
     isSystemOwner: (await loadSystemOwnerId(db)) === user.id,
-    grants: user.roleAssignments.map((a) => ({
-      roleKey: a.role.key,
-      scopeType: a.scopeType,
-      siteId: a.siteId,
-      expiresAt: a.expiresAt,
-      revokedAt: a.revokedAt,
-    })),
-    membershipSiteIds: new Set(user.memberships.map((m) => m.siteId)),
+    grants: rows
+      .filter((r) => r.row_kind === "grant" && r.role_key !== null)
+      .map((r) => ({
+        roleKey: r.role_key as string,
+        scopeType: r.scope_type,
+        siteId: r.site_id,
+        expiresAt: r.expires_at,
+        revokedAt: r.revoked_at,
+      })),
+    membershipSiteIds: new Set(
+      rows.filter((r) => r.row_kind === "membership" && r.site_id).map((r) => r.site_id as string),
+    ),
   };
 }

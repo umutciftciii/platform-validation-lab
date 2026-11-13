@@ -123,6 +123,9 @@ let base: string;
 let clock: TestClock;
 let faults: Faults;
 let db: PrismaClient;
+// DP-125: the IAM site tables are under row-level security for dp_app (`db`); the tests inspect
+// them, and set up fixtures in them, as the table owner (dp_migrator acting as dp_owner).
+let dbo: PrismaClient;
 let BV: string;
 let CORPORATE: string;
 /** Every secret value seen in this run: none may appear in logs or audit metadata (NT-L1/L2). */
@@ -334,12 +337,14 @@ async function newStaff(
 
 beforeAll(async () => {
   db = new PrismaClient({ adapter: new PrismaPg({ connectionString: urls.app }) });
+  dbo = new PrismaClient({ adapter: new PrismaPg({ connectionString: urls.migrate }) });
   factory = await loadFactory();
 });
 
 afterAll(async () => {
   await app?.close();
   await db?.$disconnect();
+  await dbo?.$disconnect();
   for (const k of Object.keys(process.env)) if (!(k in ENV_BACKUP)) delete process.env[k];
   Object.assign(process.env, ENV_BACKUP);
 });
@@ -517,7 +522,7 @@ describe("end to end on an empty database: bootstrap -> activation -> login -> M
     // NT-K1: the consumed token is dead for every step.
     expectError(await b.post("/auth/staff/enrol/inspect", { token }), 400, "AUTH_TOKEN_INVALID");
     // The database writes its own trail of the activation (K-NG3).
-    const dbAudit = await db.auditEvent.findMany({
+    const dbAudit = await dbo.auditEvent.findMany({
       where: { action: "db.user_security_changed", resourceId: user.id },
     });
     expect(dbAudit.length).toBeGreaterThan(0);
@@ -580,7 +585,7 @@ describe("end to end on an empty database: bootstrap -> activation -> login -> M
     secrets.add(PASSWORD.second);
     const sb = await signIn(second);
     expect((await sb.get("/auth/staff/session")).status).toBe(200);
-    const assignment = await db.roleAssignment.findFirstOrThrow({ where: { userId } });
+    const assignment = await dbo.roleAssignment.findFirstOrThrow({ where: { userId } });
     expect(assignment.grantedById).toBe(admin.id);
   });
 
@@ -610,11 +615,11 @@ describe("end to end on an empty database: bootstrap -> activation -> login -> M
     expectError(await sb.get("/auth/staff/session"), 401, "AUTH_SESSION_REQUIRED");
     const user = await db.user.findUniqueOrThrow({ where: { id: second.id } });
     expect(user.status).toBe("DEACTIVATED");
-    expect(await db.roleAssignment.count({ where: { userId: second.id, revokedAt: null } })).toBe(
+    expect(await dbo.roleAssignment.count({ where: { userId: second.id, revokedAt: null } })).toBe(
       0,
     );
     expect(
-      await db.membership.count({ where: { userId: second.id, status: { not: "REVOKED" } } }),
+      await dbo.membership.count({ where: { userId: second.id, status: { not: "REVOKED" } } }),
     ).toBe(0);
     // NT-D6: a deactivated account gets the generic login failure.
     expectError(
@@ -940,7 +945,7 @@ describe("operator CLI: recover-admin and cleanup", () => {
     Object.assign(admin, enrolled, { password: next });
     expect((await signIn(admin)).session).toBeDefined();
     expect(
-      await db.auditEvent.count({
+      await dbo.auditEvent.count({
         where: { action: "iam.admin_recovery_issued", outcome: "SUCCESS" },
       }),
     ).toBe(1);
@@ -1354,7 +1359,7 @@ describe("second factor", () => {
       "AUTH_MFA_INVALID",
     );
     expect(
-      await db.auditEvent.count({
+      await dbo.auditEvent.count({
         where: { action: "iam.recovery_code_used", resourceId: user.id },
       }),
     ).toBe(1);
@@ -1683,7 +1688,7 @@ describe("staff administration", () => {
 
   it("AC-AU-5 / NT-R9: a site admin manages its own site's staff; successes and refusals are audited", async () => {
     const b = await signIn(siteAdmin);
-    const before = await db.auditEvent.count({
+    const before = await dbo.auditEvent.count({
       where: { actorUserId: siteAdmin.id, outcome: "DENIED" },
     });
     expectError(
@@ -1692,7 +1697,7 @@ describe("staff administration", () => {
       "NOT_FOUND",
     );
     expect(
-      await db.auditEvent.count({ where: { actorUserId: siteAdmin.id, outcome: "DENIED" } }),
+      await dbo.auditEvent.count({ where: { actorUserId: siteAdmin.id, outcome: "DENIED" } }),
     ).toBe(before + 1);
     expect(
       (await b.post(`/admin/users/${editorBv.id}/unlock`, { reason: "forgot password attempts" }))
@@ -1708,7 +1713,8 @@ describe("staff administration", () => {
       ).status,
     ).toBe(204);
     expect(
-      (await db.membership.findFirstOrThrow({ where: { userId: editorBv.id, siteId: BV } })).status,
+      (await dbo.membership.findFirstOrThrow({ where: { userId: editorBv.id, siteId: BV } }))
+        .status,
     ).toBe("SUSPENDED");
     expect((await db.user.findUniqueOrThrow({ where: { id: editorBv.id } })).status).toBe("ACTIVE");
     expectError(
@@ -1727,7 +1733,7 @@ describe("staff administration", () => {
         })
       ).status,
     ).toBe(204);
-    const audits = await db.auditEvent.findMany({
+    const audits = await dbo.auditEvent.findMany({
       where: {
         actorUserId: siteAdmin.id,
         action: { in: ["iam.user_unlocked", "iam.membership_suspended", "iam.user_reactivated"] },
@@ -1975,9 +1981,9 @@ describe("deactivation and the last administrator", () => {
       });
       expectError(r, 500, "INTERNAL_ERROR");
       expect((await db.user.findUniqueOrThrow({ where: { id: target.id } })).status).toBe("ACTIVE");
-      expect(await db.roleAssignment.count({ where: { userId: target.id, revokedAt: null } })).toBe(
-        1,
-      );
+      expect(
+        await dbo.roleAssignment.count({ where: { userId: target.id, revokedAt: null } }),
+      ).toBe(1);
       expect((await device.get("/auth/staff/session")).status).toBe(200);
     }
     expect(faults.armed).toBeNull();
@@ -2012,7 +2018,7 @@ describe("deactivation and the last administrator", () => {
         })
       ).status,
     ).toBe(204);
-    const events = await db.auditEvent.findMany({
+    const events = await dbo.auditEvent.findMany({
       where: { action: "iam.user_deactivated", resourceId: target.id },
       orderBy: { occurredAt: "asc" },
     });
@@ -2029,7 +2035,7 @@ describe("deactivation and the last administrator", () => {
     expect(meta["roles"]).toEqual([{ role: "site_admin", scope: "SITE", siteId: BV }]);
     expect(typeof meta["revokedCount"]).toBe("number");
     expect(typeof meta["stepUpAgeSec"]).toBe("number");
-    const dbEvents = await db.auditEvent.findMany({
+    const dbEvents = await dbo.auditEvent.findMany({
       where: {
         action: { startsWith: "db." },
         OR: [{ resourceId: target.id }, { metadata: { path: ["userId"], equals: target.id } }],
@@ -2044,7 +2050,7 @@ describe("deactivation and the last administrator", () => {
 
   it("NT-D3 / NT-R5 / AC-DA-3: the last ACTIVE, MFA-enrolled, non-expiring administrator stays (409 + database)", async () => {
     // Start from admin as the only other-than-test administrator: deactivate the peers it granted.
-    const peers = await db.roleAssignment.findMany({
+    const peers = await dbo.roleAssignment.findMany({
       where: {
         role: { key: "platform_super_admin" },
         revokedAt: null,
@@ -2066,7 +2072,7 @@ describe("deactivation and the last administrator", () => {
     // peerA is gone.
     const peerA = await newStaff("peerA", { roleKey: "platform_super_admin" });
     const peerB = await newStaff("peerB", { roleKey: "platform_super_admin", by: peerA });
-    await db.roleAssignment.updateMany({
+    await dbo.roleAssignment.updateMany({
       where: { userId: peerB.id, revokedAt: null },
       data: { expiresAt: new Date(clock.now().getTime() + 7 * 86_400_000) },
     });
@@ -2094,7 +2100,7 @@ describe("deactivation and the last administrator", () => {
       409,
       "CONFLICT_LAST_ADMIN",
     );
-    const denied = await db.auditEvent.findMany({
+    const denied = await dbo.auditEvent.findMany({
       where: { actorUserId: peerB.id, outcome: "DENIED", reason: "last_platform_admin" },
     });
     expect(denied.map((d) => d.action).sort()).toEqual([
@@ -2115,10 +2121,15 @@ describe("deactivation and the last administrator", () => {
     await expect(
       db.user.update({ where: { id: admin.id }, data: { status: "SUSPENDED" } }),
     ).rejects.toThrow(/last active platform administrator/);
+    // DP-125: dp_app writes role assignments only in a staff context; admin's own context may
+    // revoke its assignment, and the last-administrator trigger refuses it.
     await expect(
-      db.roleAssignment.updateMany({
-        where: { userId: admin.id, revokedAt: null },
-        data: { revokedAt: clock.now() },
+      db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT leads_rls_set_staff_context(${ab3.session ?? ""})`;
+        return tx.roleAssignment.updateMany({
+          where: { userId: admin.id, revokedAt: null },
+          data: { revokedAt: clock.now() },
+        });
       }),
     ).rejects.toThrow(/last active platform administrator/);
   });
@@ -2157,7 +2168,7 @@ describe("no timing or secret leaks", () => {
     expect(values.length).toBeGreaterThan(20);
     const logs = logLines.join("\n");
     const audit = JSON.stringify(
-      await db.auditEvent.findMany({ select: { metadata: true, reason: true } }),
+      await dbo.auditEvent.findMany({ select: { metadata: true, reason: true } }),
     );
     for (const v of values) {
       expect(logs.includes(v), "a secret value is in the logs").toBe(false);
