@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { CMS_SITE_REGISTRY, CmsPageResponseSchema } from "@dream/contracts";
+import { CMS_SITE_REGISTRY, CmsPageResponseSchema, cmsDesignTemplate } from "@dream/contracts";
 import { NoticeProvider } from "../../../../components/catalog/notices";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { PageEditor } from "../../../../components/cms/page-editor";
-import { CmsKindPill } from "../../../../components/cms/parts";
+import { CmsKindPill, publicationState } from "../../../../components/cms/parts";
 import { EmptyState, ErrorState, StatusPill } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
@@ -21,7 +21,7 @@ const DATE = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Amsterdam",
 });
 
-/** CMS S1 (DP-015): the draft of one page. The API answers 404 for pages outside the caller's sites. */
+/** CMS S1/S2: the draft and publication of one page. The API answers 404 for pages outside the caller's sites. */
 export default async function ContentPageEditor({ params }: PageProps<"/content/[id]">) {
   await requireStaffSession();
   const { id } = await params;
@@ -40,6 +40,8 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
   const sp = site.key.toLowerCase();
   const back = { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
   const registry = CMS_SITE_REGISTRY.find((e) => e.key === page.templateKey);
+  const editable = page.kind === "TEMPLATE" || Boolean(cmsDesignTemplate(page.templateKey));
+  const state = publicationState(page);
 
   return (
     <NoticeProvider>
@@ -51,7 +53,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
           description={
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <CmsKindPill kind={page.kind} />
-              <StatusPill tone="amber">Draft</StatusPill>
+              <StatusPill tone={state.tone}>{state.label}</StatusPill>
               <span className="font-mono text-ink-3">{page.path ?? "Site-wide part"}</span>
               <span className="text-ink-3">
                 · last saved {DATE.format(new Date(page.updatedAt))} by {page.updatedBy.name}
@@ -59,8 +61,14 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
             </div>
           }
         />
-        {page.kind === "TEMPLATE" ? (
-          <PageEditor page={page} canEdit={site.canEdit} siteLabel={SITE_SHORT[site.key]} />
+        {editable ? (
+          <PageEditor
+            page={page}
+            canEdit={site.canEdit}
+            canPublish={site.canPublish}
+            siteLabel={SITE_SHORT[site.key]}
+            siteKey={site.key}
+          />
         ) : (
           <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
             <EmptyState icon="content" title="Edited after the import">

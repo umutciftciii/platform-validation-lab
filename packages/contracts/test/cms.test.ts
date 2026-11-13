@@ -1,8 +1,10 @@
 // CMS S1 (DP-015, ADR-020): page contracts — slugs, links, section validation, strictness.
 import { describe, expect, it } from "vitest";
 import {
+  CMS_DESIGN_TEMPLATES,
   CMS_SECTION_TYPES,
   CMS_SITE_REGISTRY,
+  CMS_STATIC_ASSETS,
   CmsHrefSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
@@ -179,6 +181,91 @@ describe("CMS site registry", () => {
       if (e.kind === "LEGAL") expect(e.managedBy).toBe("contract");
       if (e.kind === "CATALOG") expect(e.managedBy).toBe("catalog");
       expect(e.key.startsWith(e.site === "BV" ? "bv." : "corporate.")).toBe(true);
+    }
+  });
+});
+
+describe("CMS S2 field types", () => {
+  const fields = [
+    { type: "text", key: "anchor", label: "A", max: 60, required: true, format: "anchor" },
+    { type: "text", key: "focus", label: "F", max: 12, required: true, format: "position" },
+    { type: "text", key: "href", label: "H", max: 500, format: "href" },
+    { type: "asset", key: "image", label: "I", kinds: ["image"] },
+    {
+      type: "group",
+      key: "box",
+      label: "B",
+      fields: [{ type: "text", key: "title", label: "T", max: 20, required: true }],
+    },
+    {
+      type: "list",
+      key: "items",
+      label: "L",
+      itemLabel: "Item",
+      min: 1,
+      max: 3,
+      unique: "id",
+      fields: [{ type: "text", key: "id", label: "Id", max: 20, required: true, format: "anchor" }],
+    },
+  ] as const;
+  const schema = cmsFieldsSchema(fields as never);
+  const ok = {
+    anchor: "group-1",
+    focus: "50% 30%",
+    href: "",
+    image: "/media/ctl-technology/clear-base-oil.webp",
+    box: { title: "Box" },
+    items: [{ id: "a" }, { id: "b" }],
+  };
+
+  it("accepts valid values and turns an empty optional link target into null", () => {
+    expect(schema.parse(ok)).toMatchObject({ href: null, box: { title: "Box" } });
+    expect(schema.parse({ ...ok, href: "/products" })).toMatchObject({ href: "/products" });
+  });
+
+  it("refuses bad anchors, focal points, unknown or wrong-kind assets and duplicate keys", () => {
+    for (const bad of [
+      { anchor: "Group 1" },
+      { focus: "center" },
+      { href: "javascript:x" },
+      { image: "/media/../secret.webp" },
+      { image: "https://evil.example/x.webp" },
+      { image: "/media/iccsyn-groups/temp/group-1-loop.gif" },
+      { box: { title: "Box", extra: 1 } },
+      { items: [{ id: "a" }, { id: "a" }] },
+      { items: [] },
+    ]) {
+      expect(schema.safeParse({ ...ok, ...bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("registers every asset once, with its size", () => {
+    const srcs = CMS_STATIC_ASSETS.map((a) => a.src);
+    expect(new Set(srcs).size).toBe(srcs.length);
+    for (const a of CMS_STATIC_ASSETS) {
+      expect(a.src).toMatch(/^\/media\/[a-z0-9/_-]+\.(webp|gif)$/);
+      expect(a.width).toBeGreaterThan(0);
+      expect(a.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("fixes the list sizes the BV animations depend on", () => {
+    const home = CMS_DESIGN_TEMPLATES.find((t) => t.key === "bv.home")!;
+    const list = (group: string, key: string) => {
+      const g = home.fields.find((f) => f.key === group);
+      const l = g && g.type === "group" ? g.fields.find((f) => f.key === key) : undefined;
+      return l && l.type === "list" ? [l.min, l.max] : null;
+    };
+    expect(list("hero", "applications")).toEqual([6, 6]);
+    expect(list("ctl", "stages")).toEqual([3, 3]);
+    expect(list("applications", "scenes")).toEqual([3, 3]);
+  });
+
+  it("keeps every designed template in the site registry", () => {
+    for (const t of CMS_DESIGN_TEMPLATES) {
+      const entry = CMS_SITE_REGISTRY.find((e) => e.key === t.key);
+      expect(entry?.managedBy, t.key).toBe("cms_pending");
+      expect(entry?.path ?? null).toBe(t.path);
     }
   });
 });
