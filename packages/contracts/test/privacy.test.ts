@@ -76,6 +76,7 @@ describe("DP-095 publication gate (D-T2, D-T5)", () => {
         "D-T2: privacy contact e-mail",
         "D-T2: whether a DPO is required, and the contact if so",
         "D-T3: lead privacy notice not marked final",
+        "DP-151: contact form privacy notice not marked final",
       ]),
     );
   });
@@ -87,16 +88,20 @@ describe("DP-095 publication gate (D-T2, D-T5)", () => {
   });
 
   it("publishes in production only when nothing is missing", () => {
-    expect(privacyBlockers(COMPLETE, ALL_VALUES, true)).toEqual([]);
+    expect(privacyBlockers(COMPLETE, ALL_VALUES, true, true)).toEqual([]);
     expect(privacyPublication("production", [])).toEqual({
       publish: true,
       draft: false,
       blockers: [],
     });
-    expect(privacyBlockers(COMPLETE, ALL_VALUES, false)).toEqual([
+    expect(privacyBlockers(COMPLETE, ALL_VALUES, false, true)).toEqual([
       "D-T3: lead privacy notice not marked final",
     ]);
-    expect(privacyBlockers({ ...COMPLETE, kvkNumber: null }, ALL_VALUES, true)).toEqual([
+    // DP-151: the contact form's notice is a draft until it is approved.
+    expect(privacyBlockers(COMPLETE, ALL_VALUES, true, false)).toEqual([
+      "DP-151: contact form privacy notice not marked final",
+    ]);
+    expect(privacyBlockers({ ...COMPLETE, kvkNumber: null }, ALL_VALUES, true, true)).toEqual([
       "D-T2: Chamber of Commerce (KvK) number",
     ]);
   });

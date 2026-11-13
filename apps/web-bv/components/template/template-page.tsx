@@ -1,15 +1,17 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { cmsAsset } from "@dream/contracts";
+import { COUNTRY_CODES, LEAD_CONTACT_NOTICE, cmsAsset } from "@dream/contracts";
 import type { ReactNode } from "react";
 
 import { PreviewBanner } from "@/components/home/home-page";
+import { ContactForm } from "@/components/template/contact-form";
 import { HashScroll } from "@/components/hash-scroll";
 import SiteFooter from "@/components/ui/site-footer";
 import type { SiteFooterContent } from "@/content/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
+import { PRIVACY_PATH, sitePrivacy } from "@/lib/privacy";
 
 /**
  * A CMS template page of the BV site (CMS S3, DP-017): the four ready-made section types in the
@@ -201,11 +203,19 @@ const CONTACT_FIELDS = [
   { key: "subject", label: "Subject", type: "text", required: false, autoComplete: "off" },
 ] as const;
 
+/** Country names in English, sorted, for the contact form. */
+function contactCountries(): { code: string; name: string }[] {
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  return COUNTRY_CODES.map((code) => ({ code, name: names.of(code) ?? code })).sort((a, b) =>
+    a.name.localeCompare(b.name, "en"),
+  );
+}
+
 /**
  * Contact details (DP-150) next to the contact form. The details are the published footer's
  * (one source for the phone, e-mail and address); without a published footer they are left out.
- * The form is shown disabled, under a note saying it cannot send yet: it has no action and no
- * submit until DP-151 connects it.
+ * DP-151: the form sends where the privacy texts may be published; elsewhere it is shown
+ * disabled, under the CMS note, with no action and no submit.
  */
 function ContactSection({
   section,
@@ -215,6 +225,10 @@ function ContactSection({
   contact: ContactDetails | null;
 }) {
   const noteId = `${section.id}-form-note`;
+  // DP-151: the working form where the privacy texts may be shown (DP-095 D-T5); elsewhere (in
+  // production while they are drafts) the disabled form and the CMS note, never a form that
+  // looks like it works.
+  const live = sitePrivacy().publish;
   return (
     <section id={section.id} className="tp-contact">
       <div className="tp-inner tp-contact-grid">
@@ -258,41 +272,51 @@ function ContactSection({
             </dl>
           ) : null}
         </div>
-        <div className="tp-contact-form">
-          <h3 className="tp-contact-form-title">{section.formTitle}</h3>
-          <p id={noteId} className="tp-contact-form-note" role="note">
-            {section.formNote}
-          </p>
-          {/* No action and no submit: nothing can be sent until DP-151. */}
-          <form className="tp-contact-fields" aria-describedby={noteId} noValidate>
-            <fieldset disabled className="tp-contact-fieldset">
-              <legend className="sr-only">{section.formTitle}</legend>
-              {CONTACT_FIELDS.map((f) => (
-                <label key={f.key} className="tp-contact-field">
+        {live ? (
+          <ContactForm
+            idPrefix={section.id}
+            title={section.formTitle}
+            countries={contactCountries()}
+            notice={{ version: LEAD_CONTACT_NOTICE.version, text: LEAD_CONTACT_NOTICE.text }}
+            privacyHref={PRIVACY_PATH}
+          />
+        ) : (
+          <div className="tp-contact-form">
+            <h3 className="tp-contact-form-title">{section.formTitle}</h3>
+            <p id={noteId} className="tp-contact-form-note" role="note">
+              {section.formNote}
+            </p>
+            {/* No action and no submit: nothing can be sent until DP-151. */}
+            <form className="tp-contact-fields" aria-describedby={noteId} noValidate>
+              <fieldset disabled className="tp-contact-fieldset">
+                <legend className="sr-only">{section.formTitle}</legend>
+                {CONTACT_FIELDS.map((f) => (
+                  <label key={f.key} className="tp-contact-field">
+                    <span className="tp-contact-field-label">
+                      {f.label}
+                      {f.required ? <span aria-hidden="true"> *</span> : null}
+                    </span>
+                    <input
+                      type={f.type}
+                      name={f.key}
+                      autoComplete={f.autoComplete}
+                      className="tp-contact-input"
+                    />
+                  </label>
+                ))}
+                <label className="tp-contact-field tp-contact-field-wide">
                   <span className="tp-contact-field-label">
-                    {f.label}
-                    {f.required ? <span aria-hidden="true"> *</span> : null}
+                    Your message<span aria-hidden="true"> *</span>
                   </span>
-                  <input
-                    type={f.type}
-                    name={f.key}
-                    autoComplete={f.autoComplete}
-                    className="tp-contact-input"
-                  />
+                  <textarea name="message" rows={5} className="tp-contact-input" />
                 </label>
-              ))}
-              <label className="tp-contact-field tp-contact-field-wide">
-                <span className="tp-contact-field-label">
-                  Your message<span aria-hidden="true"> *</span>
-                </span>
-                <textarea name="message" rows={5} className="tp-contact-input" />
-              </label>
-              <button type="button" className="tp-button tp-contact-submit" disabled>
-                Not available yet
-              </button>
-            </fieldset>
-          </form>
-        </div>
+                <button type="button" className="tp-button tp-contact-submit" disabled>
+                  Not available yet
+                </button>
+              </fieldset>
+            </form>
+          </div>
+        )}
       </div>
     </section>
   );
