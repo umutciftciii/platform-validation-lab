@@ -26,6 +26,8 @@ This repository and its workflows never hold a credential for the source reposit
    source pull request needs a new sync and a new PASS.
 6. After the source merge, export the new source `main` to a `sync/main-<sha>` pull request and
    squash-merge it here once `CI result` passes. A tree that already passed is not tested again.
+   Squash commits are authored with the GitHub account's commit e-mail; keep "Keep my email
+   addresses private" enabled so that it is the noreply address.
 
 `verify --commit <public-sha>` recomputes a public commit from the source and prints MATCH or
 MISMATCH. The replacement table for pseudonymised files lives outside both repositories
