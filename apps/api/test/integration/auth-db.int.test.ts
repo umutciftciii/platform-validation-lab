@@ -10,14 +10,14 @@
 // administrator (only inside rolled-back transactions), so the bootstrap tests see the state they
 // expect whichever file runs first.
 import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PrismaClient } from "../../src/generated/prisma/client.js";
+import { PrismaClient, type Prisma } from "../../src/generated/prisma/client.js";
 import { syncCatalog } from "../../src/iam/catalog-sync.js";
 import { AUTH_RETENTION, CLEANUP_LOCK_KEY, runAuthCleanup } from "../../src/iam/auth/cleanup.js";
 import { encryptSecret, mfaAad, parseKeyring } from "../../src/iam/auth/secret-box.js";
@@ -142,13 +142,59 @@ function factorData(userId: string, extra: Record<string, unknown> = {}) {
 }
 
 async function dbEvents(resourceId: string) {
-  return app.auditEvent.findMany({
+  return owner.auditEvent.findMany({
     where: { resourceId, action: { startsWith: "db." } },
     orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
   });
 }
 
 let grantor: { id: string };
+// DP-125: dp_app writes the IAM site tables only in a staff context (row-level security). The
+// grantor fixture is a site administrator of both sites with a live admin session; the dp_app
+// probes below that need to write role assignments run in its context (`grantorRoles`), and
+// the tests read the IAM tables back as the owner.
+let grantorToken: string;
+const asGrantor = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) =>
+  app.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT leads_rls_set_staff_context(${grantorToken})`;
+    return fn(tx);
+  });
+const grantorRoles = {
+  create: (args: Prisma.RoleAssignmentCreateArgs) =>
+    asGrantor((tx) => tx.roleAssignment.create(args)),
+  update: (args: Prisma.RoleAssignmentUpdateArgs) =>
+    asGrantor((tx) => tx.roleAssignment.update(args)),
+};
+
+/** A platform administrator with a live admin session, inside `tx` (DP-125 count probes). */
+async function platformAdminContext(tx: PrismaClient): Promise<string> {
+  const e = email("ctx-admin");
+  const u = await tx.user.create({
+    data: {
+      email: e,
+      emailNormalized: e,
+      kind: "STAFF",
+      status: "ACTIVE",
+      passwordHash: ARGON,
+      mfaEnrolledAt: new Date(),
+      emailVerifiedAt: new Date(),
+    },
+  });
+  await tx.roleAssignment.create({
+    data: {
+      userId: u.id,
+      roleId: await roleId("platform_super_admin"),
+      scopeType: "PLATFORM",
+      grantedById: grantor.id,
+    },
+  });
+  const token = randomBytes(32).toString("base64url");
+  await tx.session.create({
+    data: sessionData(u.id, { tokenHash: createHash("sha256").update(token).digest("hex") }),
+  });
+  await tx.$executeRaw`SELECT leads_rls_set_staff_context(${token})`;
+  return u.id;
+}
 
 beforeAll(async () => {
   execFileSync(path.join(API_DIR, "node_modules/.bin/prisma"), ["migrate", "deploy"], {
@@ -163,6 +209,25 @@ beforeAll(async () => {
   BV = (await app.site.findUniqueOrThrow({ where: { key: "BV" } })).id;
   COM = (await app.site.findUniqueOrThrow({ where: { key: "CORPORATE" } })).id;
   grantor = await staff("grantor");
+  const root = await staff("grantor-root");
+  for (const siteId of [BV, COM]) {
+    await owner.membership.create({ data: { userId: grantor.id, siteId, status: "ACTIVE" } });
+    await owner.roleAssignment.create({
+      data: {
+        userId: grantor.id,
+        roleId: await roleId("site_admin"),
+        scopeType: "SITE",
+        siteId,
+        grantedById: root.id,
+      },
+    });
+  }
+  grantorToken = randomBytes(32).toString("base64url");
+  await owner.session.create({
+    data: sessionData(grantor.id, {
+      tokenHash: createHash("sha256").update(grantorToken).digest("hex"),
+    }),
+  });
 });
 
 afterAll(async () => {
@@ -460,7 +525,7 @@ describe("User and RoleAssignment constraints (design 8.3)", () => {
     const target = await staff("ng2-target");
     const readOnly = await roleId("read_only");
     const grant = (grantedById: string) =>
-      app.roleAssignment.create({
+      grantorRoles.create({
         data: { userId: target.id, roleId: readOnly, scopeType: "SITE", siteId: BV, grantedById },
       });
     for (const bad of [
@@ -475,7 +540,7 @@ describe("User and RoleAssignment constraints (design 8.3)", () => {
 
   it("NT-DB4: an assignment's grantor can be neither cleared nor changed", async () => {
     const target = await staff("ng4");
-    const a = await app.roleAssignment.create({
+    const a = await grantorRoles.create({
       data: {
         userId: target.id,
         roleId: await roleId("read_only"),
@@ -487,7 +552,7 @@ describe("User and RoleAssignment constraints (design 8.3)", () => {
     const other = await staff("ng4-other");
     for (const grantedById of [null, other.id]) {
       await expect(
-        app.roleAssignment.update({ where: { id: a.id }, data: { grantedById } }),
+        grantorRoles.update({ where: { id: a.id }, data: { grantedById } }),
       ).rejects.toThrow(/identity is immutable/);
     }
   });
@@ -819,7 +884,7 @@ describe("UserCredentialToken, MfaFactor, MfaRecoveryCode (NT-DB8, NT-DB9)", () 
 describe("K-NG3: database-generated audit (AC-DB-4, NT-DB10..12)", () => {
   it("NT-DB11: a forged-grantor assignment still leaves db.role_assignment_created with dbUser = dp_app", async () => {
     const target = await staff("forge");
-    const a = await app.roleAssignment.create({
+    const a = await grantorRoles.create({
       data: {
         userId: target.id,
         roleId: await roleId("read_only"),
@@ -852,7 +917,7 @@ describe("K-NG3: database-generated audit (AC-DB-4, NT-DB10..12)", () => {
 
   it("writes exactly one db.role_assignment_changed per revoke or expiry change, none for other updates", async () => {
     const target = await staff("ra-change");
-    const a = await app.roleAssignment.create({
+    const a = await grantorRoles.create({
       data: {
         userId: target.id,
         roleId: await roleId("read_only"),
@@ -861,13 +926,13 @@ describe("K-NG3: database-generated audit (AC-DB-4, NT-DB10..12)", () => {
         grantedById: grantor.id,
       },
     });
-    await app.roleAssignment.update({ where: { id: a.id }, data: { reason: "note only" } });
+    await grantorRoles.update({ where: { id: a.id }, data: { reason: "note only" } });
     expect(await dbEvents(a.id)).toHaveLength(1);
-    await app.roleAssignment.update({
+    await grantorRoles.update({
       where: { id: a.id },
       data: { expiresAt: new Date(Date.now() + 86_400_000) },
     });
-    await app.roleAssignment.update({
+    await grantorRoles.update({
       where: { id: a.id },
       data: { revokedAt: new Date(), revokedById: grantor.id },
     });
@@ -984,16 +1049,16 @@ describe("K-NG3: database-generated audit (AC-DB-4, NT-DB10..12)", () => {
         `ALTER TABLE "RoleAssignment" DISABLE TRIGGER "RoleAssignment_db_audit"`,
       ),
     ).rejects.toThrow(/must be owner/);
-    expect(await app.auditEvent.findUnique({ where: { id: event!.id } })).not.toBeNull();
+    expect(await owner.auditEvent.findUnique({ where: { id: event!.id } })).not.toBeNull();
   });
 });
 
 describe("loaders for canActOnUser", () => {
   it("loads a target's grants and non-revoked memberships", async () => {
     const t = await staff("act-target");
-    await app.membership.create({ data: { userId: t.id, siteId: BV, status: "ACTIVE" } });
-    await app.membership.create({ data: { userId: t.id, siteId: COM, status: "REVOKED" } });
-    await app.roleAssignment.create({
+    await owner.membership.create({ data: { userId: t.id, siteId: BV, status: "ACTIVE" } });
+    await owner.membership.create({ data: { userId: t.id, siteId: COM, status: "REVOKED" } });
+    await owner.roleAssignment.create({
       data: {
         userId: t.id,
         roleId: await roleId("content_editor"),
@@ -1002,7 +1067,7 @@ describe("loaders for canActOnUser", () => {
         grantedById: grantor.id,
       },
     });
-    const loaded = await loadActTarget(app, t.id);
+    const loaded = await asGrantor((tx) => loadActTarget(tx, t.id));
     expect(loaded).toMatchObject({ userId: t.id, kind: "STAFF", status: "ACTIVE" });
     expect([...(loaded?.membershipSiteIds ?? [])]).toEqual([BV]);
     expect(loaded?.grants.map((g) => [g.roleKey, g.siteId])).toEqual([["content_editor", BV]]);
@@ -1010,8 +1075,10 @@ describe("loaders for canActOnUser", () => {
   });
 
   it("counts only ACTIVE, MFA-enrolled, non-expiring platform admins, excluding actor and target", async () => {
-    await rolledBack(app, async (tx) => {
-      const base = await countQualifiedPlatformAdmins(tx, []);
+    // DP-125: the count comes from the database, for a platform administrator's staff context.
+    await rolledBack(owner, async (tx) => {
+      await platformAdminContext(tx);
+      const base = (await countQualifiedPlatformAdmins(tx, [])) ?? -1;
       const sa = await tx.role.findUniqueOrThrow({ where: { key: "platform_super_admin" } });
       const mk = async (label: string, extra: Record<string, unknown> = {}) => {
         const e = email(label);
@@ -1047,7 +1114,10 @@ describe("loaders for canActOnUser", () => {
 
 describe("last administrator: code rule and F1-001 database guards agree (design 10.5)", () => {
   it("lets one of two qualified admins deactivate the other; the database accepts it and then guards the last one", async () => {
-    await rolledBack(app, async (tx) => {
+    // DP-125: as the owner (role assignments of several users) with a platform administrator's
+    // staff context for the database count; the guards apply to the owner as well.
+    await rolledBack(owner, async (tx) => {
+      await platformAdminContext(tx);
       const sa = await tx.role.findUniqueOrThrow({ where: { key: "platform_super_admin" } });
       const mk = async (label: string) => {
         const e = email(label);
@@ -1067,7 +1137,7 @@ describe("last administrator: code rule and F1-001 database guards agree (design
         });
         return { userId: u.id, assignmentId: a.id };
       };
-      const base = await countQualifiedPlatformAdmins(tx, []);
+      const base = (await countQualifiedPlatformAdmins(tx, [])) ?? -1;
       // The F1-001 guard's own count (ACTIVE or PENDING, not expired) before this test's admins.
       const dbRows = await tx.$queryRaw<{ n: bigint }[]>`
         SELECT iam_platform_admins_remaining(NULL, NULL) AS n`;

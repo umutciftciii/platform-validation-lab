@@ -17,8 +17,8 @@
  * well); the owner is recovered only with `iam-cli owner-recover` (dp_iam_bootstrap).
  */
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { PLATFORM_SUPER_ADMIN } from "./catalog.js";
-import { countQualifiedPlatformAdmins, loadSystemOwnerId } from "./repository.js";
+import { operatorAdminState } from "./iam-context.js";
+import { loadSystemOwnerId } from "./repository.js";
 import { normalizeEmail } from "./bootstrap.js";
 import { writeAudit } from "./staff/audit-writer.js";
 import {
@@ -42,15 +42,13 @@ async function staffByEmail(prisma: PrismaClient, email: string) {
       securityVersion: true,
       emailVerifiedAt: true,
       mfaEnrolledAt: true,
-      roleAssignments: {
-        where: { revokedAt: null, role: { key: PLATFORM_SUPER_ADMIN }, scopeType: "PLATFORM" },
-        select: { grantedById: true, expiresAt: true },
-      },
     },
   });
   if (!user || user.kind !== "STAFF")
     throw new OperatorRefusedError("no staff account with this e-mail");
-  return user;
+  // DP-125 (K1): role assignments are under row-level security and the CLI has no session; the
+  // database answers the platform-administrator state of this one account (booleans, a count).
+  return { ...user, admin: await operatorAdminState(prisma, user.id) };
 }
 
 /** DP-108: the operator commands of this file never touch the system owner. */
@@ -91,7 +89,7 @@ export async function operatorEnrolLink(
 ): Promise<string> {
   const user = await staffByEmail(prisma, email);
   await refuseOwner(prisma, "iam.enrol_link_issued", user.id);
-  const bootstrapGrant = user.roleAssignments.some((a) => a.grantedById === null);
+  const bootstrapGrant = user.admin.bootstrapGrant;
   if (!bootstrapGrant) {
     return refuse(
       prisma,
@@ -179,7 +177,7 @@ export async function operatorRecoverAdmin(
     throw new OperatorRefusedError("--reason needs at least 10 characters");
   const user = await staffByEmail(prisma, email);
   await refuseOwner(prisma, "iam.admin_recovery_issued", user.id);
-  const admin = user.roleAssignments.some((a) => a.expiresAt === null || a.expiresAt > now);
+  const admin = user.admin.activeAdmin;
   if (!admin || (user.status !== "ACTIVE" && user.status !== "PENDING")) {
     return refuse(
       prisma,
@@ -188,7 +186,7 @@ export async function operatorRecoverAdmin(
       "recover-admin is only for a platform administrator",
     );
   }
-  const others = await countQualifiedPlatformAdmins(prisma, [user.id]);
+  const others = user.admin.otherQualifiedAdmins;
   if (others > 0) {
     return refuse(
       prisma,
