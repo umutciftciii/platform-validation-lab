@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from "react";
 
-import { CTL_COPY as COPY, CTL_STAGES as STAGES } from "@/content/ctl-technology";
+import { type CtlCopy, type CtlStage } from "@/content/ctl-technology";
 
 /**
  * Three layouts share one DOM, so the text order and the image alts never change:
@@ -123,7 +123,14 @@ function ScrollDriver({
   return null;
 }
 
-export default function CtlTechnology() {
+/** CMS S2: stages and copy come from the published `bv.home` page (lib/cms-home.ts). */
+export default function CtlTechnology({
+  stages: STAGES,
+  copy: COPY,
+}: {
+  stages: CtlStage[];
+  copy: CtlCopy;
+}) {
   const sectionRef = useRef<HTMLElement>(null);
   const figureRefs = useRef<(HTMLElement | null)[]>([]);
   const imageRefs = useRef<(HTMLImageElement | null)[]>([]);
@@ -172,7 +179,7 @@ export default function CtlTechnology() {
       imageRefs.current[index]?.style.removeProperty("transform");
       textRefs.current[index]?.removeAttribute("style");
     });
-  }, [cinematic]);
+  }, [cinematic, STAGES]);
 
   // Lazy loading would start each image only as it turned visible, in the middle of
   // its crossfade. All three load as the section nears.

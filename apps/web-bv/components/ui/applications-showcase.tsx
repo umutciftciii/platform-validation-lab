@@ -10,10 +10,7 @@ import {
   type RefObject,
 } from "react";
 
-import {
-  APPLICATION_SCENES as SCENES,
-  APPLICATIONS_COPY as COPY,
-} from "@/content/applications-showcase";
+import { type ApplicationScene, type ApplicationsCopy } from "@/content/applications-showcase";
 
 /**
  * Three layouts share one DOM, so the text order and the image alts never change:
@@ -158,7 +155,14 @@ function ScrollDriver({
   return null;
 }
 
-export default function ApplicationsShowcase() {
+/** CMS S2: scenes and copy come from the published `bv.home` page (lib/cms-home.ts). */
+export default function ApplicationsShowcase({
+  scenes: SCENES,
+  copy: COPY,
+}: {
+  scenes: ApplicationScene[];
+  copy: ApplicationsCopy;
+}) {
   const sectionRef = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef<HTMLDivElement>(null);
@@ -222,7 +226,7 @@ export default function ApplicationsShowcase() {
       imageRefs.current[index]?.style.removeProperty("transform");
       textRefs.current[index]?.removeAttribute("style");
     });
-  }, [cinematic]);
+  }, [cinematic, SCENES]);
 
   // Lazy loading would start each image only as it turned visible, in the middle of
   // its crossfade. All three load as the section nears.

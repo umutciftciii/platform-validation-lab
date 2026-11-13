@@ -13,12 +13,10 @@ import {
 
 import {
   AUTO_ADVANCE_MS,
-  PRODUCT_GROUPS,
-  PRODUCT_GROUPS_COPY as COPY,
   type ProductGroup,
+  type ProductGroupsCopy,
 } from "@/content/product-groups";
 
-const COUNT = PRODUCT_GROUPS.length;
 const MAX_FRAME_MS = 100;
 const MEDIA_SIZES = "(max-width: 899px) 100vw, min(56vw, 880px)";
 
@@ -122,7 +120,15 @@ function Arrow({ direction }: { direction: "left" | "right" }) {
   );
 }
 
-export default function ProductGroupsShowcase() {
+/** CMS S2: groups and copy come from the published `bv.home` page (lib/cms-home.ts). */
+export default function ProductGroupsShowcase({
+  groups: PRODUCT_GROUPS,
+  copy: COPY,
+}: {
+  groups: ProductGroup[];
+  copy: ProductGroupsCopy;
+}) {
+  const COUNT = PRODUCT_GROUPS.length;
   const sectionRef = useRef<HTMLElement>(null);
   const fillRef = useRef<HTMLDivElement>(null);
   const elapsedRef = useRef(0);
@@ -192,7 +198,7 @@ export default function ProductGroupsShowcase() {
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [rotating]);
+  }, [rotating, COUNT]);
 
   // Loads the next animation ahead of time, so its first frames are ready.
   useEffect(() => {
@@ -201,7 +207,7 @@ export default function ProductGroupsShowcase() {
     if (next.kind !== "gif") return;
     const preload = document.createElement("img");
     preload.src = next.src;
-  }, [active, isMoving]);
+  }, [active, isMoving, COUNT, PRODUCT_GROUPS]);
 
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     if (event.target.matches(":focus-visible")) setKeyboardFocus(true);
