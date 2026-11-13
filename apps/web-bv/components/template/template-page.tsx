@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { PreviewBanner } from "@/components/home/home-page";
 import { HashScroll } from "@/components/hash-scroll";
 import SiteFooter from "@/components/ui/site-footer";
+import type { SiteFooterContent } from "@/content/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
 
@@ -20,9 +21,12 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
     <>
       {view.preview ? <PreviewBanner /> : null}
       {view.nav ? <SiteNav content={view.nav} /> : null}
-      <main id="top" className="tp">
+      <main
+        id="top"
+        className={view.sections.some((s) => s.type === "contact") ? "tp tp-contact-page" : "tp"}
+      >
         {view.sections.map((s, i) => (
-          <Section key={s.id} section={s} first={i === 0} />
+          <Section key={s.id} section={s} first={i === 0} contact={view.footer?.contact ?? null} />
         ))}
       </main>
       {view.footer ? <SiteFooter content={view.footer} /> : null}
@@ -31,7 +35,17 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
   );
 }
 
-function Section({ section, first }: { section: TemplateSection; first: boolean }) {
+type ContactDetails = SiteFooterContent["contact"];
+
+function Section({
+  section,
+  first,
+  contact,
+}: {
+  section: TemplateSection;
+  first: boolean;
+  contact: ContactDetails | null;
+}) {
   switch (section.type) {
     case "hero":
       return (
@@ -171,7 +185,117 @@ function Section({ section, first }: { section: TemplateSection; first: boolean 
           </div>
         </section>
       );
+    case "contact":
+      return <ContactSection section={section} contact={contact} />;
   }
+}
+
+/**
+ * The form's fields as on the live contact page. Interface text, not content: the form and its
+ * fields are defined by DP-151, which also connects it.
+ */
+const CONTACT_FIELDS = [
+  { key: "name", label: "Your name", type: "text", required: true, autoComplete: "name" },
+  { key: "email", label: "Your e-mail", type: "email", required: true, autoComplete: "email" },
+  { key: "phone", label: "Phone number", type: "tel", required: false, autoComplete: "tel" },
+  { key: "subject", label: "Subject", type: "text", required: false, autoComplete: "off" },
+] as const;
+
+/**
+ * Contact details (DP-150) next to the contact form. The details are the published footer's
+ * (one source for the phone, e-mail and address); without a published footer they are left out.
+ * The form is shown disabled, under a note saying it cannot send yet: it has no action and no
+ * submit until DP-151 connects it.
+ */
+function ContactSection({
+  section,
+  contact,
+}: {
+  section: Extract<TemplateSection, { type: "contact" }>;
+  contact: ContactDetails | null;
+}) {
+  const noteId = `${section.id}-form-note`;
+  return (
+    <section id={section.id} className="tp-contact">
+      <div className="tp-inner tp-contact-grid">
+        <div className="tp-contact-details">
+          <h2 className="tp-title">{section.title}</h2>
+          {section.intro ? <p className="tp-intro">{section.intro}</p> : null}
+          {contact ? (
+            <dl className="tp-spec-rows tp-contact-rows">
+              <div className="tp-spec-row tp-contact-row">
+                <dt className="tp-contact-label">Phone</dt>
+                <dd className="tp-contact-value">
+                  <a href={contact.phone.href} className="tp-contact-link">
+                    {contact.phone.label}
+                  </a>
+                  <span className="tp-contact-note">{contact.phone.note}</span>
+                </dd>
+              </div>
+              <div className="tp-spec-row tp-contact-row">
+                <dt className="tp-contact-label">E-mail</dt>
+                <dd className="tp-contact-value">
+                  <a href={contact.email.href} className="tp-contact-link">
+                    {contact.email.label}
+                  </a>
+                  <span className="tp-contact-note">{contact.email.note}</span>
+                </dd>
+              </div>
+              <div className="tp-spec-row tp-contact-row">
+                <dt className="tp-contact-label">Office</dt>
+                <dd className="tp-contact-value">
+                  <address className="tp-contact-address">
+                    {contact.company}
+                    {contact.addressLines.map((line) => (
+                      <span key={line}>
+                        <br />
+                        {line}
+                      </span>
+                    ))}
+                  </address>
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+        </div>
+        <div className="tp-contact-form">
+          <h3 className="tp-contact-form-title">{section.formTitle}</h3>
+          <p id={noteId} className="tp-contact-form-note" role="note">
+            {section.formNote}
+          </p>
+          {/* No action and no submit: nothing can be sent until DP-151. */}
+          <form className="tp-contact-fields" aria-describedby={noteId} noValidate>
+            <fieldset disabled className="tp-contact-fieldset">
+              <legend className="sr-only">{section.formTitle}</legend>
+              {CONTACT_FIELDS.map((f) => (
+                <label key={f.key} className="tp-contact-field">
+                  <span className="tp-contact-field-label">
+                    {f.label}
+                    {f.required ? <span aria-hidden="true"> *</span> : null}
+                  </span>
+                  <input
+                    type={f.type}
+                    name={f.key}
+                    autoComplete={f.autoComplete}
+                    className="tp-contact-input"
+                  />
+                </label>
+              ))}
+              <label className="tp-contact-field tp-contact-field-wide">
+                <span className="tp-contact-field-label">
+                  Your message<span aria-hidden="true"> *</span>
+                </span>
+                <textarea name="message" rows={5} className="tp-contact-input" />
+              </label>
+              <button type="button" className="tp-button tp-contact-submit" disabled>
+                Not available yet
+              </button>
+            </fieldset>
+          </form>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 /** A blank line starts a new paragraph (the admin's body field says so). */
