@@ -1,5 +1,5 @@
 /**
- * Console navigation model. Ready modules have their own routes (overview, products since PM-1);
+ * Console navigation model. Ready modules have their own routes (overview, products since PM-1, content since CMS S1);
  * the others are not built yet and render an empty state that says so. Showing an item here grants nothing: every action is
  * authorised by the API (RBAC, F1-001/F1-002), not by the presence of a link.
  */
@@ -49,7 +49,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: "Content",
         icon: "content",
         summary: "Write, review and publish pages for both sites.",
-        ready: false,
+        ready: true,
       },
       {
         slug: "products",

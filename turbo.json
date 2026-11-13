@@ -49,6 +49,8 @@
         "LEADS_MIGRATE_DATABASE_URL",
         "OWNER_DATABASE_URL",
         "OWNER_MIGRATE_DATABASE_URL",
+        "CMS_DATABASE_URL",
+        "CMS_MIGRATE_DATABASE_URL",
         "POSTGRES_DB",
         "DEV_POSTGRES_DB"
       ]

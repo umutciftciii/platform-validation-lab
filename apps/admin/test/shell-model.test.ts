@@ -33,9 +33,10 @@ describe("navigation", () => {
     expect(new Set(NAV_ITEMS.map((i) => i.slug)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("marks the overview, products (PM-1), leads (DP-042), staff (DP-107) and the owner console (DP-110) as ready", () => {
+  it("marks the overview, content (CMS S1), products (PM-1), leads (DP-042), staff (DP-107) and the owner console (DP-110) as ready", () => {
     expect(NAV_ITEMS.filter((i) => i.ready).map((i) => i.href)).toEqual([
       "/",
+      "/content",
       "/products",
       "/leads",
       "/staff",

@@ -64,6 +64,8 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // DP-076/DP-077 (ADR-017): access requests for a site role carry the site; requests for the
   // platform customer-data officer have none. Read by the IAM infrastructure only.
   CustomerDataAccessRequest: { nullable: true },
+  // CMS S1 (DP-015, ADR-020): a site's pages and fragments; there are no platform-level pages.
+  CmsPage: { nullable: false },
 };
 
 export interface RelationDef {
@@ -105,6 +107,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leadActivities: { model: "LeadActivity", list: true },
     leadAssignmentsFrom: { model: "LeadActivity", list: true },
     leadAssignmentsTo: { model: "LeadActivity", list: true },
+    cmsPagesCreated: { model: "CmsPage", list: true },
+    cmsPagesUpdated: { model: "CmsPage", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -134,6 +138,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leadDocumentDownloads: { model: "LeadDocumentDownload", list: true },
     leadActivities: { model: "LeadActivity", list: true },
     customerDataAccessRequests: { model: "CustomerDataAccessRequest", list: true },
+    cmsPages: { model: "CmsPage", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -332,6 +337,11 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     requestedBy: { model: "User", list: false },
     decidedBy: { model: "User", list: false },
   },
+  CmsPage: {
+    site: { model: "Site", list: false },
+    createdBy: { model: "User", list: false },
+    updatedBy: { model: "User", list: false },
+  },
 };
 
 /** Json columns: their content is data, never relation arguments. */
@@ -339,6 +349,7 @@ const JSON_FIELDS: Readonly<Record<string, readonly string[]>> = {
   AuditEvent: ["metadata"],
   ProductImage: ["variants"],
   ProductPublication: ["snapshot"],
+  CmsPage: ["content"],
 };
 
 export const RAW_METHODS = [
