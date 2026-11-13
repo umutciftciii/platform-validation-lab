@@ -3,9 +3,17 @@
 // invariants (CHECK constraints and triggers), the bootstrap rules and the site boundary.
 //
 // ADR-012A: every client below is one database role, as in production. `prisma` is the API's
-// dp_app; `owner` is the migration runner (dp_migrator acting as dp_owner), used only for what the
+// dp_app; `owner` is the migration runner (dp_migrator acting as dp_owner), used for what the
 // API may not do (catalogue sync, migration history, proving a trigger also stops the owner);
 // `bootstrapDb` is dp_iam_bootstrap.
+//
+// DP-125 (ADR-012B part 2): dp_app reads and writes the IAM site tables (Membership,
+// RoleAssignment, ModuleConfiguration, AuditEvent, CustomerDataAccessRequest) only inside the
+// staff context of an admin session (row-level security). The constraint and trigger probes on
+// those tables therefore run as the owner, which RLS does not apply to and which every guard here
+// applies to as well; what dp_app may do under RLS is proven in owner.int.test.ts (DP-125 block)
+// and db-roles.int.test.ts. Privilege probes ("permission denied") stay on dp_app: privileges are
+// checked before row-level security.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,11 +25,7 @@ import { accessibleScope, decide } from "../../src/iam/authorization.js";
 import { BootstrapRefusedError, bootstrapPlatformAdmin } from "../../src/iam/bootstrap.js";
 import { MODULES, PERMISSIONS, ROLES } from "../../src/iam/catalog.js";
 import { catalogProblems, syncCatalog } from "../../src/iam/catalog-sync.js";
-import {
-  countOtherPlatformAdmins,
-  loadAuthorizationSnapshot,
-  loadGrantAncestry,
-} from "../../src/iam/repository.js";
+import { loadAuthorizationSnapshot } from "../../src/iam/repository.js";
 import { SiteScopeViolationError, withSiteScope } from "../../src/iam/site-scope.js";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -232,7 +236,7 @@ describe("database-enforced invariants", () => {
     const u = await staff("scope");
     const siteAdmin = await roleId("site_admin");
     await expect(
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: {
           userId: u.id,
           roleId: siteAdmin,
@@ -244,7 +248,7 @@ describe("database-enforced invariants", () => {
     ).rejects.toThrow(/RoleAssignment_scope_check/);
     const superAdmin = await roleId("platform_super_admin");
     await expect(
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: {
           userId: u.id,
           roleId: superAdmin,
@@ -261,17 +265,17 @@ describe("database-enforced invariants", () => {
     const c = await customer("esc");
     const siteAdmin = await roleId("site_admin");
     await expect(
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: { userId: u.id, roleId: siteAdmin, scopeType: "SITE", siteId: BV, grantedById: u.id },
       }),
     ).rejects.toThrow(/RoleAssignment_no_self_grant_check/);
     await expect(
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: { userId: c.id, roleId: siteAdmin, scopeType: "SITE", siteId: BV },
       }),
     ).rejects.toThrow(/role audience does not match/);
     await expect(
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: { userId: u.id, roleId: siteAdmin, scopeType: "PLATFORM" },
       }),
     ).rejects.toThrow(/cannot be assigned at this scope type/);
@@ -279,7 +283,7 @@ describe("database-enforced invariants", () => {
 
   it("does not let an assignment be turned into another role or site", async () => {
     const u = await staff("mutate");
-    const a = await prisma.roleAssignment.create({
+    const a = await owner.roleAssignment.create({
       data: {
         userId: u.id,
         roleId: await roleId("read_only"),
@@ -289,15 +293,15 @@ describe("database-enforced invariants", () => {
       },
     });
     await expect(
-      prisma.roleAssignment.update({
+      owner.roleAssignment.update({
         where: { id: a.id },
         data: { roleId: await roleId("site_admin") },
       }),
     ).rejects.toThrow(/identity is immutable/);
     await expect(
-      prisma.roleAssignment.update({ where: { id: a.id }, data: { siteId: COM } }),
+      owner.roleAssignment.update({ where: { id: a.id }, data: { siteId: COM } }),
     ).rejects.toThrow(/identity is immutable/);
-    const revoked = await prisma.roleAssignment.update({
+    const revoked = await owner.roleAssignment.update({
       where: { id: a.id },
       data: { revokedAt: new Date() },
     });
@@ -308,7 +312,7 @@ describe("database-enforced invariants", () => {
     for (const key of ["mfa", "audit", "rbac"]) {
       const mod = await prisma.featureModule.findUniqueOrThrow({ where: { key } });
       await expect(
-        prisma.moduleConfiguration.create({
+        owner.moduleConfiguration.create({
           data: { moduleId: mod.id, siteId: BV, enabled: false, reason: "test" },
         }),
       ).rejects.toThrow(/core modules cannot be disabled/);
@@ -324,17 +328,17 @@ describe("database-enforced invariants", () => {
       ).rejects.toThrow(/permission denied/i);
     }
     const crm = await prisma.featureModule.findUniqueOrThrow({ where: { key: "crm" } });
-    const cfg = await prisma.moduleConfiguration.create({
+    const cfg = await owner.moduleConfiguration.create({
       data: { moduleId: crm.id, siteId: COM, enabled: false, reason: "optional module off" },
     });
     expect(cfg.enabled).toBe(false);
     await expect(
-      prisma.moduleConfiguration.update({ where: { id: cfg.id }, data: { reason: " " } }),
+      owner.moduleConfiguration.update({ where: { id: cfg.id }, data: { reason: " " } }),
     ).rejects.toThrow(/ModuleConfiguration_reason_check/);
   });
 
   it("keeps audit events append-only (no UPDATE, DELETE or TRUNCATE)", async () => {
-    const e = await prisma.auditEvent.create({
+    const e = await owner.auditEvent.create({
       data: {
         actorType: "SYSTEM",
         action: "iam.test_event",
@@ -360,9 +364,9 @@ describe("database-enforced invariants", () => {
     ).rejects.toThrow(/append-only/);
     await expect(owner.auditEvent.delete({ where: { id: e.id } })).rejects.toThrow(/append-only/);
     await expect(owner.$executeRawUnsafe('TRUNCATE "AuditEvent"')).rejects.toThrow(/append-only/);
-    expect(await prisma.auditEvent.findUnique({ where: { id: e.id } })).not.toBeNull();
+    expect(await owner.auditEvent.findUnique({ where: { id: e.id } })).not.toBeNull();
     await expect(
-      prisma.auditEvent.create({
+      owner.auditEvent.create({
         data: {
           actorType: "USER",
           action: "x.y",
@@ -387,7 +391,7 @@ describe("secure bootstrap of the first platform administrator", () => {
         bootstrapPlatformAdmin(bootstrapDb, { email: `drift.${run}@example.test` }),
       ).rejects.toThrow(/role content_editor permission set differs.*run iam:sync first/);
       expect(
-        await prisma.roleAssignment.count({ where: { role: { key: "platform_super_admin" } } }),
+        await owner.roleAssignment.count({ where: { role: { key: "platform_super_admin" } } }),
       ).toBe(0);
     } finally {
       await syncCatalog(owner);
@@ -396,7 +400,7 @@ describe("secure bootstrap of the first platform administrator", () => {
 
   it("K-NG1 (NT-DB1, NT-DB1b): no NULL grantor outside the bootstrap shape, even before any admin exists", async () => {
     expect(
-      await prisma.roleAssignment.count({
+      await owner.roleAssignment.count({
         where: { role: { key: "platform_super_admin" }, revokedAt: null },
       }),
     ).toBe(0);
@@ -501,15 +505,15 @@ describe("secure bootstrap of the first platform administrator", () => {
       mfaEnrolledAt: null,
     });
     expect(user.emailNormalized).toBe(user.email.toLowerCase());
-    const active = await prisma.roleAssignment.count({
+    const active = await owner.roleAssignment.count({
       where: { role: { key: "platform_super_admin" }, revokedAt: null },
     });
     expect(active).toBe(1);
     // NT-DB2: the database wrote its own record, attributing the row to dp_iam_bootstrap.
-    const assignment = await prisma.roleAssignment.findFirstOrThrow({
+    const assignment = await owner.roleAssignment.findFirstOrThrow({
       where: { userId, role: { key: "platform_super_admin" } },
     });
-    const dbEvents = await prisma.auditEvent.findMany({
+    const dbEvents = await owner.auditEvent.findMany({
       where: { resourceId: assignment.id, action: "db.role_assignment_created" },
     });
     expect(dbEvents).toHaveLength(1);
@@ -545,17 +549,17 @@ describe("secure bootstrap of the first platform administrator", () => {
         );
       }),
     ).rejects.toThrow(/a platform administrator already exists \(K-NG1\)/);
-    const events = await prisma.auditEvent.findMany({ where: { action: "iam.bootstrap_admin" } });
+    const events = await owner.auditEvent.findMany({ where: { action: "iam.bootstrap_admin" } });
     expect(events.filter((e) => e.outcome === "SUCCESS")).toHaveLength(1);
     expect(events.filter((e) => e.outcome === "DENIED").length).toBeGreaterThanOrEqual(1);
     expect(JSON.stringify(events.map((e) => e.metadata))).not.toContain(`late.${run}@`);
   });
 
   it("gives the pending administrator no access until enrolment (DP-011)", async () => {
-    const assignment = await prisma.roleAssignment.findFirstOrThrow({
+    const assignment = await owner.roleAssignment.findFirstOrThrow({
       where: { role: { key: "platform_super_admin" }, revokedAt: null },
     });
-    const snap = await loadAuthorizationSnapshot(prisma, assignment.userId, { mfaVerified: true });
+    const snap = await loadAuthorizationSnapshot(owner, assignment.userId, { mfaVerified: true });
     expect(snap && decide(snap, "module:manage", { scope: "platform" })).toEqual({
       allowed: false,
       reason: "principal_inactive",
@@ -567,7 +571,7 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
   // State from the bootstrap tests: exactly one PENDING platform administrator.
   let firstAdmin: { id: string; userId: string };
   const superAdminAssignments = () =>
-    prisma.roleAssignment.findMany({
+    owner.roleAssignment.findMany({
       where: { role: { key: "platform_super_admin" }, revokedAt: null },
       select: { id: true, userId: true },
     });
@@ -589,9 +593,34 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
     });
   });
 
+  /**
+   * Platform administrators other than `userId` as the guard counts them (DP-125: the API's
+   * countOtherPlatformAdmins asks the database inside a platform administrator's staff context).
+   */
+  async function remainingAdmins(userId: string, opts: { nonExpiringOnly?: boolean } = {}) {
+    const users = await owner.roleAssignment.findMany({
+      where: {
+        role: { key: "platform_super_admin" },
+        scopeType: "PLATFORM",
+        revokedAt: null,
+        OR: opts.nonExpiringOnly
+          ? [{ expiresAt: null }]
+          : [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        userId: { not: userId },
+        user: { status: { in: ["ACTIVE", "PENDING"] } },
+      },
+      select: { userId: true },
+      distinct: ["userId"],
+    });
+    const rows = await owner.$queryRaw<{ n: bigint }[]>`
+      SELECT iam_platform_admins_remaining(NULL, ${userId}::uuid) AS n`;
+    if (!opts.nonExpiringOnly) expect(Number(rows[0]?.n)).toBe(users.length);
+    return users.length;
+  }
+
   async function addAdmin(label: string) {
     const u = await staff(label);
-    const a = await prisma.roleAssignment.create({
+    const a = await owner.roleAssignment.create({
       data: {
         userId: u.id,
         roleId: await roleId("platform_super_admin"),
@@ -606,35 +635,35 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
     const { id, userId } = firstAdmin;
     const last = /last active platform administrator/;
     await expect(
-      prisma.roleAssignment.update({ where: { id }, data: { revokedAt: new Date() } }),
+      owner.roleAssignment.update({ where: { id }, data: { revokedAt: new Date() } }),
     ).rejects.toThrow(last);
-    const assignment = await prisma.roleAssignment.findUniqueOrThrow({ where: { id } });
+    const assignment = await owner.roleAssignment.findUniqueOrThrow({ where: { id } });
     await expect(
-      prisma.roleAssignment.update({
+      owner.roleAssignment.update({
         where: { id },
         data: { expiresAt: new Date(assignment.grantedAt.getTime() + 1) },
       }),
     ).rejects.toThrow(last);
-    await expect(prisma.roleAssignment.delete({ where: { id } })).rejects.toThrow(last);
+    await expect(owner.roleAssignment.delete({ where: { id } })).rejects.toThrow(last);
     for (const status of ["SUSPENDED", "DEACTIVATED"] as const) {
       await expect(prisma.user.update({ where: { id: userId }, data: { status } })).rejects.toThrow(
         last,
       );
     }
     expect(await superAdminAssignments()).toHaveLength(1);
-    expect(await countOtherPlatformAdmins(prisma, userId)).toBe(0);
+    expect(await remainingAdmins(userId)).toBe(0);
   });
 
   it("allows removing an administrator while another remains", async () => {
     const second = await addAdmin("admin-two");
-    expect(await countOtherPlatformAdmins(prisma, firstAdmin.userId)).toBe(1);
-    await prisma.roleAssignment.update({
+    expect(await remainingAdmins(firstAdmin.userId)).toBe(1);
+    await owner.roleAssignment.update({
       where: { id: firstAdmin.id },
       data: { revokedAt: new Date(), revokedById: second.userId },
     });
     // Now `second` is the last one.
     await expect(
-      prisma.roleAssignment.update({ where: { id: second.id }, data: { revokedAt: new Date() } }),
+      owner.roleAssignment.update({ where: { id: second.id }, data: { revokedAt: new Date() } }),
     ).rejects.toThrow(/last active platform administrator/);
     firstAdmin = second;
   });
@@ -642,14 +671,14 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
   it("lets only one of two concurrent removals succeed", async () => {
     const third = await addAdmin("admin-three");
     const results = await Promise.allSettled([
-      prisma.roleAssignment.update({
+      owner.roleAssignment.update({
         where: { id: firstAdmin.id },
         data: { revokedAt: new Date() },
       }),
       prisma.user.update({ where: { id: third.userId }, data: { status: "SUSPENDED" } }),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const remaining = await prisma.roleAssignment.count({
+    const remaining = await owner.roleAssignment.count({
       where: {
         role: { key: "platform_super_admin" },
         revokedAt: null,
@@ -660,7 +689,7 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
   });
 
   it("refuses an expiry on the last non-expiring administrator (F1-001B)", async () => {
-    const [last] = await prisma.roleAssignment.findMany({
+    const [last] = await owner.roleAssignment.findMany({
       where: {
         role: { key: "platform_super_admin" },
         revokedAt: null,
@@ -669,18 +698,16 @@ describe("last platform administrator protection (database triggers, F1-001A)", 
     });
     const future = new Date(Date.now() + 30 * 24 * 3600 * 1000);
     await expect(
-      prisma.roleAssignment.update({ where: { id: last!.id }, data: { expiresAt: future } }),
+      owner.roleAssignment.update({ where: { id: last!.id }, data: { expiresAt: future } }),
     ).rejects.toThrow(/cannot get an expiry/);
-    expect(
-      await countOtherPlatformAdmins(prisma, last!.userId, new Date(), { nonExpiringOnly: true }),
-    ).toBe(0);
+    expect(await remainingAdmins(last!.userId, { nonExpiringOnly: true })).toBe(0);
 
     firstAdmin = { id: last!.id, userId: last!.userId };
     const backup = await addAdmin("admin-backup");
-    await prisma.roleAssignment.update({ where: { id: last!.id }, data: { expiresAt: future } });
+    await owner.roleAssignment.update({ where: { id: last!.id }, data: { expiresAt: future } });
     // Now `backup` is the only one without expiry; it cannot get one either.
     await expect(
-      prisma.roleAssignment.update({ where: { id: backup.id }, data: { expiresAt: future } }),
+      owner.roleAssignment.update({ where: { id: backup.id }, data: { expiresAt: future } }),
     ).rejects.toThrow(/cannot get an expiry/);
   });
 });
@@ -695,7 +722,7 @@ describe("final RBAC guards in the database (F1-001B)", () => {
       ["sales_crm_user", "SITE", BV],
       ["platform_customer_data_officer", "PLATFORM", null],
     ] as const) {
-      await prisma.roleAssignment.create({
+      await owner.roleAssignment.create({
         data: {
           userId: u.id,
           roleId: await roleId(key),
@@ -705,7 +732,7 @@ describe("final RBAC guards in the database (F1-001B)", () => {
         },
       });
     }
-    expect(await prisma.roleAssignment.count({ where: { userId: u.id, expiresAt: null } })).toBe(2);
+    expect(await owner.roleAssignment.count({ where: { userId: u.id, expiresAt: null } })).toBe(2);
   });
 
   it("refuses reciprocal and indirect self-grants", async () => {
@@ -715,7 +742,7 @@ describe("final RBAC guards in the database (F1-001B)", () => {
     const readOnly = await roleId("read_only");
     const editor = await roleId("content_editor");
     const grantRole = (userId: string, grantedById: string, role = readOnly) =>
-      prisma.roleAssignment.create({
+      owner.roleAssignment.create({
         data: { userId, roleId: role, scopeType: "SITE", siteId: BV, grantedById },
       });
     await grantRole(b.id, a.id); // A -> B
@@ -725,7 +752,9 @@ describe("final RBAC guards in the database (F1-001B)", () => {
     await expect(grantRole(b.id, c.id, editor)).rejects.toThrow(
       /reciprocal or indirect self-grant/,
     ); // C -> B
-    expect([...(await loadGrantAncestry(prisma, c.id))].sort()).toEqual([a.id, b.id].sort());
+    const ancestry = await owner.$queryRaw<{ ancestor: string }[]>`
+      SELECT ancestor::text AS ancestor FROM iam_grant_ancestry(${c.id}::uuid)`;
+    expect(ancestry.map((r) => r.ancestor).sort()).toEqual([a.id, b.id].sort());
     // An unrelated user is still fine.
     const d = await staff("chain-d");
     await expect(grantRole(d.id, c.id)).resolves.toBeTruthy();
@@ -734,7 +763,7 @@ describe("final RBAC guards in the database (F1-001B)", () => {
   it("lets publishers be assigned without the grantor publishing itself", async () => {
     const pub = await staff("publisher");
     const admin = await staff("pub-admin");
-    const created = await prisma.roleAssignment.create({
+    const created = await owner.roleAssignment.create({
       data: {
         userId: pub.id,
         roleId: await roleId("content_publisher"),
@@ -756,14 +785,14 @@ describe("site isolation against the database", () => {
     editorId = editor.id;
     const comUser = await customer("com-member");
     const bvUser = await customer("bv-member");
-    await prisma.membership.create({ data: { userId: editor.id, siteId: BV, status: "ACTIVE" } });
-    await prisma.membership.create({ data: { userId: bvUser.id, siteId: BV, status: "ACTIVE" } });
+    await owner.membership.create({ data: { userId: editor.id, siteId: BV, status: "ACTIVE" } });
+    await owner.membership.create({ data: { userId: bvUser.id, siteId: BV, status: "ACTIVE" } });
     comMembershipId = (
-      await prisma.membership.create({
+      await owner.membership.create({
         data: { userId: comUser.id, siteId: COM, status: "ACTIVE" },
       })
     ).id;
-    await prisma.roleAssignment.create({
+    await owner.roleAssignment.create({
       data: {
         userId: editor.id,
         roleId: await roleId("compliance_reviewer"),
@@ -773,7 +802,7 @@ describe("site isolation against the database", () => {
       },
     });
     for (const siteId of [BV, COM]) {
-      await prisma.auditEvent.create({
+      await owner.auditEvent.create({
         data: {
           actorType: "SYSTEM",
           action: "iam.isolation_probe",
@@ -784,7 +813,7 @@ describe("site isolation against the database", () => {
         },
       });
     }
-    await prisma.auditEvent.create({
+    await owner.auditEvent.create({
       data: {
         actorType: "SYSTEM",
         action: "iam.isolation_probe",
@@ -796,22 +825,25 @@ describe("site isolation against the database", () => {
   });
 
   it("allows the BV reviewer on BV and denies it on COM, from database state", async () => {
-    const snap = await loadAuthorizationSnapshot(prisma, editorId, { mfaVerified: false });
+    const snap = await loadAuthorizationSnapshot(owner, editorId, { mfaVerified: false });
     expect(snap).not.toBeNull();
     expect(decide(snap!, "audit:read", { scope: "site", siteId: BV }).allowed).toBe(true);
     expect(decide(snap!, "audit:read", { scope: "site", siteId: COM }).allowed).toBe(false);
     expect(
-      await loadAuthorizationSnapshot(prisma, "00000000-0000-7000-8000-000000000000", {
+      await loadAuthorizationSnapshot(owner, "00000000-0000-7000-8000-000000000000", {
         mfaVerified: true,
       }),
     ).toBeNull();
   });
 
   it("returns only BV rows and treats a COM id like a missing record (IDOR)", async () => {
-    const snap = (await loadAuthorizationSnapshot(prisma, editorId, { mfaVerified: false }))!;
+    const snap = (await loadAuthorizationSnapshot(owner, editorId, { mfaVerified: false }))!;
     const scope = accessibleScope(snap, "audit:read", [BV, COM]);
     expect(scope).toEqual({ siteIds: [BV], includePlatform: false });
-    const db = withSiteScope(prisma, scope);
+    // The first line alone (the site-scoped client): over the owner, which row-level security does
+    // not apply to, so only the scope can hide COM rows (DP-125: dp_app sees IAM rows only with a
+    // staff context; the second line is tested in owner.int.test.ts).
+    const db = withSiteScope(owner, scope);
 
     const audit = await db.auditEvent.findMany({ where: { action: "iam.isolation_probe" } });
     expect(audit.length).toBeGreaterThan(0);
@@ -832,12 +864,12 @@ describe("site isolation against the database", () => {
       ).count,
     ).toBe(0);
     expect(
-      (await prisma.membership.findUniqueOrThrow({ where: { id: comMembershipId } })).status,
+      (await owner.membership.findUniqueOrThrow({ where: { id: comMembershipId } })).status,
     ).toBe("ACTIVE");
   });
 
   it("refuses writes into another site and moving rows across sites", async () => {
-    const db = withSiteScope(prisma, { siteIds: [BV], includePlatform: false });
+    const db = withSiteScope(owner, { siteIds: [BV], includePlatform: false });
     const u = await customer("x-site");
     await expect(
       db.membership.create({ data: { userId: u.id, siteId: COM } }),
@@ -849,18 +881,18 @@ describe("site isolation against the database", () => {
   });
 
   it("sees nothing with an empty scope, and platform rows only for platform grants", async () => {
-    const none = withSiteScope(prisma, { siteIds: [], includePlatform: false });
+    const none = withSiteScope(owner, { siteIds: [], includePlatform: false });
     expect(await none.auditEvent.count()).toBe(0);
     expect(await none.membership.count()).toBe(0);
-    const platform = withSiteScope(prisma, { siteIds: [BV, COM], includePlatform: true });
+    const platform = withSiteScope(owner, { siteIds: [BV, COM], includePlatform: true });
     const probes = await platform.auditEvent.findMany({ where: { action: "iam.isolation_probe" } });
     expect(new Set(probes.map((e) => e.siteId ?? "platform"))).toEqual(
       new Set([BV, COM, "platform"]),
     );
   });
   it("filters relations reached from models that are not site-bound (F1-001A)", async () => {
-    const db = withSiteScope(prisma, { siteIds: [BV], includePlatform: false });
-    const com = await prisma.membership.findUniqueOrThrow({ where: { id: comMembershipId } });
+    const db = withSiteScope(owner, { siteIds: [BV], includePlatform: false });
+    const com = await owner.membership.findUniqueOrThrow({ where: { id: comMembershipId } });
 
     const viaUser = await db.user.findUnique({
       where: { id: com.userId },
@@ -897,7 +929,7 @@ describe("site isolation against the database", () => {
   });
 
   it("refuses nested writes, bare relation counts and relation-count ordering", async () => {
-    const db = withSiteScope(prisma, { siteIds: [BV], includePlatform: false });
+    const db = withSiteScope(owner, { siteIds: [BV], includePlatform: false });
     await expect(
       db.user.create({
         data: {
@@ -917,11 +949,11 @@ describe("site isolation against the database", () => {
     await expect(
       db.site.update({ where: { id: COM }, data: { memberships: { deleteMany: {} } } }),
     ).rejects.toBeInstanceOf(SiteScopeViolationError);
-    expect(await prisma.membership.count({ where: { siteId: COM } })).toBeGreaterThan(0);
+    expect(await owner.membership.count({ where: { siteId: COM } })).toBeGreaterThan(0);
   });
 
   it("refuses raw SQL on the scoped client, also inside transactions", async () => {
-    const db = withSiteScope(prisma, { siteIds: [BV], includePlatform: false });
+    const db = withSiteScope(owner, { siteIds: [BV], includePlatform: false });
     expect(() => db.$queryRawUnsafe('SELECT * FROM "Membership"')).toThrow(SiteScopeViolationError);
     expect(() => db.$executeRawUnsafe('DELETE FROM "Membership"')).toThrow(SiteScopeViolationError);
     await expect(

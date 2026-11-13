@@ -28,6 +28,7 @@ import {
 import { PERMISSION_BY_KEY, ROLE_BY_KEY } from "../catalog.js";
 import type { Db } from "../db.js";
 import { leadAssigneesBySite, staffNames, type LeadStaffUser } from "../lead-assignees.js";
+import { inStaffContext } from "../iam-context.js";
 import { inLeadContext } from "../lead-data.js";
 import { ApiError } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
@@ -158,7 +159,7 @@ export class StaffAccess {
 
   /** DP-041: staff who may be assigned the leads of each site (lead:manage there). */
   leadAssignees(siteIds: readonly string[]): Promise<Map<string, LeadStaffUser[]>> {
-    return leadAssigneesBySite(this.prisma, siteIds, this.now);
+    return inStaffContext(this.prisma, this.sessionToken, (tx) => leadAssigneesBySite(tx, siteIds));
   }
 
   /** DP-041: display names of staff users (lead history actors and assignees). */
@@ -195,16 +196,19 @@ export class StaffAccessService {
   async begin(ctx: RequestContext): Promise<StaffAccess> {
     const session = await this.sessions.require(ctx);
     const now = this.clock.now();
-    const snapshot = await loadAuthorizationSnapshot(this.prisma, session.userId, {
-      mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
-    });
+    // require() succeeded, so the cookie holds the live session token (rotation sets a new one).
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    // DP-125: the snapshot is read in this session's database context (row-level security).
+    const snapshot = await inStaffContext(this.prisma, token, (tx) =>
+      loadAuthorizationSnapshot(tx, session.userId, {
+        mfaVerified: isStepUpFresh(session.mfaVerifiedAt, now),
+      }),
+    );
     if (!snapshot) throw new ApiError("AUTH_SESSION_REQUIRED");
     const sites = await this.prisma.site.findMany({
       select: { id: true, key: true, name: true },
       orderBy: { key: "asc" },
     });
-    // require() succeeded, so the cookie holds the live session token (rotation sets a new one).
-    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
     return new StaffAccess(session.userId, sites, snapshot, this.prisma, ctx, now, token);
   }
 }

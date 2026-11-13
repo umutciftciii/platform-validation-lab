@@ -134,7 +134,7 @@ export function platformAdminRemovalProblem(
 /**
  * The last active platform administrator's assignment never gets an expiry (F1-001B): setting
  * `expiresAt` on a platform_super_admin assignment needs another active administrator whose
- * assignment does not expire (`countOtherPlatformAdmins(…, { nonExpiringOnly: true })`). The
+ * assignment does not expire (`countOtherPlatformAdmins(db, id, { nonExpiringOnly: true })`). The
  * database enforces the same rule.
  */
 export function platformAdminExpiryProblem(
