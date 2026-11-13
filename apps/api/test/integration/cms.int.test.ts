@@ -1160,3 +1160,72 @@ describe("11. template pages on the site (CMS S3)", () => {
     expectError(await pub("/page?path=/energy-trading"), 404, "NOT_FOUND");
   });
 });
+
+describe("12. content pages from code (DP-135)", () => {
+  it("imports a content page as a TEMPLATE draft with its SEO, and never over a page at that path", async () => {
+    const dry = await bvEditor.post(`/sites/${BV}/import`, {
+      key: "bv.storage-distribution",
+      dryRun: true,
+    });
+    expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+    expect(CmsImportResponseSchema.parse(dry.body).summary).toEqual([
+      { field: "sections", items: 5 },
+    ]);
+
+    const res = await bvEditor.post(`/sites/${BV}/import`, {
+      key: "bv.storage-distribution",
+      dryRun: false,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const id = CmsImportResponseSchema.parse(res.body).pageId!;
+    const imported = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect(imported).toMatchObject({
+      kind: "TEMPLATE",
+      templateKey: "standard",
+      path: "/storage-distribution",
+      title: "Storage & Distribution",
+      seo: {
+        title: "Storage & Distribution | Dream Petroleum BV",
+        description: null,
+        noindex: false,
+      },
+      publication: null,
+    });
+    const sections = imported.content["sections"] as { type: string }[];
+    expect(sections.map((s) => s.type)).toEqual(["split", "specList", "cards", "specList", "cta"]);
+    expect((await lastAudit("cms.page_imported"))?.metadata).toMatchObject({
+      templateKey: "bv.storage-distribution",
+    });
+
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.storage-distribution", dryRun: true }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+    // /energy-trading was made by hand above: the import leaves that page alone.
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.energy-trading", dryRun: false }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+  });
+
+  it("refuses pages whose content still needs confirmation and BV pages on the Corporate site", async () => {
+    for (const key of ["bv.strategic-partnership", "bv.sustainability", "bv.our-team"]) {
+      expectError(
+        await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: true }),
+        400,
+        "VALIDATION_FAILED",
+        { path: "key", rule: "unknown_template" },
+      );
+    }
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "bv.about-us", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+  });
+});
