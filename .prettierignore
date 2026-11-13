@@ -1,0 +1,7 @@
+pnpm-lock.yaml
+docs/planning/
+apps/web-bv/
+assets/
+**/generated/
+tools/visual-qa/scripts/
+docs/creative/

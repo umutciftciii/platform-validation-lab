@@ -1,0 +1,2 @@
+# Fixture for tools/test/migration-safety-test.sh only. Never applied outside the test database.
+provider = "postgresql"

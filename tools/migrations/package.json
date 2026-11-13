@@ -1,0 +1,16 @@
+{
+  "name": "@dream/migration-tools",
+  "private": true,
+  "type": "module",
+  "description": "Static Prisma migration safety checks (ADR-010). The checker itself has no dependencies.",
+  "scripts": {
+    "check": "node check-migrations.mjs",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@dream/config": "workspace:*",
+    "eslint": "9.39.5",
+    "vitest": "5.0.5"
+  }
+}

@@ -1,0 +1,218 @@
+@import "tailwindcss";
+
+/*
+ * Dream Petroleum admin design tokens (DP-U).
+ *
+ * Workspace: cool mist, never cream. Navigation rail: the Dream Petroleum brand navy (the deep
+ * blue of dreampetroleumbv.com) in both themes.
+ * Petrol blue carries interaction (links, focus, active state, charts).
+ * Amber is reserved for things that need a person's attention: pending review, warnings and the
+ * sample-data marker. It is never decoration.
+ * Brand orange (--brand, the DP ring) belongs to brand artwork only: the logo and the ring motif.
+ * It never marks a status, so it can never be confused with amber.
+ *
+ * Surfaces, lowest to highest: bg (page) < surface (panels) < surface-raised (menus, sheets,
+ * drawers). surface-2 is an inset tone inside a panel (table head, icon tiles).
+ * Text: ink (primary), ink-2 (secondary), ink-3 (meta; at least 4.5:1 on bg, surface and
+ * surface-2 in both themes).
+ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --surface-2: #eef2f5;
+  --surface-raised: #ffffff;
+  --line: #dfe5ea;
+  --line-strong: #c6d0d8;
+  --ink: #0f1a24;
+  --ink-2: #3f4c58;
+  --ink-3: #5b6874;
+  --petrol: #0b5d6b;
+  --petrol-strong: #084954;
+  --petrol-soft: #e2eff1;
+  --petrol-ink: #ffffff;
+  --amber: #b86e00;
+  --amber-soft: #fbf0dc;
+  --amber-ink: #6e4100;
+  --success: #1d7348;
+  --success-soft: #e3f3ea;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --brand: #f17d21;
+  --rail: #0b1b2e;
+  --rail-2: #13263b;
+  --rail-line: #1d3248;
+  --rail-ink: #dbe4ec;
+  --rail-ink-dim: #93a4b6;
+  --rail-accent: #5bb8c8;
+  /* Dashboard masthead: brand navy; lifted in the dark theme so it still reads above the page. */
+  --masthead: #0b1b2e;
+  --shadow-panel: 0 1px 0 rgb(15 26 36 / 0.04), 0 12px 32px -18px rgb(15 26 36 / 0.18);
+  --shadow-raised: 0 18px 48px -12px rgb(11 27 46 / 0.28), 0 2px 6px rgb(11 27 46 / 0.06);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a1119;
+  --surface: #101a24;
+  --surface-2: #17222e;
+  --surface-raised: #1a2633;
+  --line: #213040;
+  --line-strong: #30425a;
+  --ink: #e8eef3;
+  --ink-2: #a9b6c2;
+  --ink-3: #8a98a6;
+  --petrol: #5bb8c8;
+  --petrol-strong: #85cdd9;
+  --petrol-soft: #0f2a31;
+  --petrol-ink: #061316;
+  --amber: #f0a83a;
+  --amber-soft: #2a1f0e;
+  --amber-ink: #f6c87e;
+  --success: #5cc48d;
+  --success-soft: #10261c;
+  --danger: #f2877d;
+  --danger-soft: #2c1513;
+  --rail: #07121f;
+  --rail-2: #10202f;
+  --rail-line: #1a2b3d;
+  --rail-ink: #dbe4ec;
+  --rail-ink-dim: #8c9db0;
+  --masthead: #102538;
+  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 16px 40px -24px rgb(0 0 0 / 0.8);
+  --shadow-raised: 0 24px 60px -16px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(255 255 255 / 0.04);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-petrol: var(--petrol);
+  --color-petrol-strong: var(--petrol-strong);
+  --color-petrol-soft: var(--petrol-soft);
+  --color-petrol-ink: var(--petrol-ink);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-amber-ink: var(--amber-ink);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-surface-raised: var(--surface-raised);
+  --color-brand: var(--brand);
+  --color-rail-accent: var(--rail-accent);
+  --color-masthead: var(--masthead);
+  --color-rail: var(--rail);
+  --color-rail-2: var(--rail-2);
+  --color-rail-line: var(--rail-line);
+  --color-rail-ink: var(--rail-ink);
+  --color-rail-ink-dim: var(--rail-ink-dim);
+  --shadow-panel: var(--shadow-panel);
+  --shadow-raised: var(--shadow-raised);
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Expanded width for display type: the wordmark and page titles. */
+.type-display {
+  font-stretch: 112%;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small uppercase label: table heads, KPI captions, rail group names. */
+.type-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+:focus-visible {
+  outline: 2px solid var(--petrol);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* On the navy rail the light-theme petrol is too dark to see; use the light accent. */
+.on-rail :focus-visible {
+  outline-color: var(--rail-accent);
+}
+
+::selection {
+  background: var(--petrol-soft);
+  color: var(--ink);
+}
+
+/* Skeleton shimmer; a flat tone when the person asked for reduced motion. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* Sample-data marker: amber hatching that reads as "not real" even in greyscale. */
+.demo-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--amber) 22%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton {
+    animation: none;
+  }
+}

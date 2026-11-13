@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+.next/
+out/
+dist/
+build/
+generated/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# env and secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# logs and reports
+npm-debug.log*
+pnpm-debug.log*
+coverage/
+tools/visual-qa/output/
+tools/smoke/output/
+
+# heavy-job lock (infra/docker/lib.sh)
+.dream-heavy.lock/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

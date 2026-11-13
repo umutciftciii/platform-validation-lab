@@ -1,0 +1,6 @@
+{
+  "name": "@dream/smoke",
+  "private": true,
+  "type": "module",
+  "description": "Port preflight and HTTP smoke tests for the local Compose stack. No dependencies: runs on any Node >= 20."
+}

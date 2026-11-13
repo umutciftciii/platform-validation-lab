@@ -1,0 +1,30 @@
+{
+  "counts": {
+    "excluded": 62,
+    "exported": 638,
+    "replaced_by_overlay": 3,
+    "transformed": 2
+  },
+  "excluded_paths_sha256": "4ff1ce585d1c74b3dcd36c4e6645c20e396a675ea872377cfdd886acfb8bd850",
+  "format": 1,
+  "rules_sha256": "c4081a5b78843ebf2837fec30549a8c327ce69ec4c6506ccede4befe7878d588",
+  "source": {
+    "commit": "f7e2ebe19ababfa085b7a97cebc054d4bd647718",
+    "tree": "090d1d9b11b0ad3ac98e7317335219095ad4017b"
+  },
+  "transformed": {
+    "apps/api/src/iam/auth/password.ts": {
+      "export_blob": "db89722c33160c849e15975c14daa5c2c40239e4",
+      "source_blob": "67da502e2faf16474b9ef5e24b284ce47a8fbff7"
+    },
+    "apps/api/test/unit/iam/auth/crypto.test.ts": {
+      "export_blob": "da4ef99774f4857b05c6a3ca5f268fcb63d32c19",
+      "source_blob": "d83eec9e106c17e11d6359ad6fa67bc9167aa5c7"
+    }
+  },
+  "trees": {
+    "export": "fd25dfab945b60bef826a601e38fd5d6f121e8bb",
+    "overlay": "2c47cfeb9f5b2dee8b00ec88fdff362ccf7a0bb8",
+    "payload": "69e26b7c4eb857e10dd03a65968559725de865f0"
+  }
+}

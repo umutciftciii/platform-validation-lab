@@ -1,0 +1,70 @@
+# Disposable test stack (ADR-010): overlay on compose.yaml, always run as the separate Compose
+# project "dream-petroleum-platform-test" by tools/test/*.sh (never call compose directly).
+#
+#   - Its own database identity (dream_platform_test) on tmpfs: no volume, nothing survives
+#     `down`, and dev/local-prod data (ADR-009) is never reachable from here.
+#   - No published ports and its own network, so it can run next to the dev or prod stack.
+#   - Container names dream-test-*, outside the dream-platform-* names that stack.sh guards.
+#   - Uses the real migrate and api service definitions (same image, command and depends_on),
+#     so the failure tests exercise the production wiring. MIGRATIONS_DIR swaps in fixture
+#     migrations for those tests; by default the repo's real migrations are mounted.
+# The passwords are fixed placeholders on purpose: the database is unreachable from the host and
+# is destroyed after every run.
+#
+# ADR-012A: the init script creates the separated roles on the empty tmpfs data directory, as in
+# production; the runner connects as dp_migrator and the API as dp_app. DP_INITDB_DIR can point
+# the init hook at an empty directory to start a database WITHOUT the roles, which is how
+# tools/test/db-roles-test.sh rehearses the upgrade of an existing (pre-ADR-012A) database.
+
+x-test-migrate-url: &test-migrate-url postgresql://dp_migrator:test-only-dp-migrator-pw@postgres:5432/dream_platform_test?schema=public
+x-test-app-url: &test-app-url postgresql://dp_app:test-only-dp-app-password@postgres:5432/dream_platform_test?schema=public
+
+services:
+  postgres:
+    container_name: dream-test-postgres
+    labels: !override
+      com.dream-petroleum.platform.db-env: test
+    environment:
+      POSTGRES_DB: dream_platform_test
+      POSTGRES_USER: dream_platform_test
+      POSTGRES_PASSWORD: test-only-not-a-secret
+      DP_ROLES_PROFILE: test
+      DP_APP_PASSWORD: test-only-dp-app-password
+      DP_MIGRATOR_PASSWORD: test-only-dp-migrator-pw
+      DP_IAM_BOOTSTRAP_PASSWORD: test-only-dp-bootstrap-pw
+    ports: !reset []
+    # Read-only role setup only; the data directory is tmpfs (no volume, nothing persists).
+    volumes: !override
+      - ./postgres:/dp:ro
+      - ${DP_INITDB_DIR:-./postgres/initdb}:/docker-entrypoint-initdb.d:ro
+    # DP-042: eight empty *_test databases (one per integration suite) outgrew 128 MiB; DP-108
+    # adds a ninth.
+    tmpfs:
+      - /var/lib/postgresql/data:size=320m
+    mem_limit: 512m
+    memswap_limit: 512m
+
+  migrate:
+    container_name: dream-test-migrate
+    # The app image under test. Default: the image `stack.sh prod up` builds; a local run may point
+    # it at a separately tagged build so the running stack's image tag is never replaced.
+    image: ${DP_TEST_APP_IMAGE:-dream-petroleum-platform-app:local}
+    environment:
+      MIGRATE_DATABASE_URL: *test-migrate-url
+    volumes:
+      - ${MIGRATIONS_DIR:-../../apps/api/prisma/migrations}:/repo/apps/api/prisma/migrations:ro
+
+  api:
+    container_name: dream-test-api
+    image: ${DP_TEST_APP_IMAGE:-dream-petroleum-platform-app:local}
+    ports: !reset []
+    environment:
+      DATABASE_URL: *test-app-url
+      DB_ENV: test
+      DB_EXPECTED_NAME: dream_platform_test
+      # F1-002 Group 2: fixed placeholders (the test API is unreachable and thrown away).
+      DP_PROXY_KEY_ADMIN: test-only-admin-not-a-secret-00000000000000
+      DP_PROXY_KEY_WEB_BV: test-only-web-bv-not-a-secret-0000000000000
+      DP_PROXY_KEY_WEB_CORPORATE: test-only-corporate-not-a-secret-0000000000
+      IAM_MFA_ENC_KEYS: 1:test-only-mfa-not-a-secret-0000000000000000
+      IAM_HMAC_KEY: test-only-hmac-not-a-secret-000000000000000

@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "overlay": {
+    "description": "Paths owned by this repository. Source files at these paths are replaced, never copied.",
+    "prefixes": {
+      ".github/": "CI definitions of this repository",
+      ".validation/": "export rules, tool and manifest",
+      "README.md": "repository readme",
+      "SECURITY.md": "vulnerability reporting"
+    }
+  },
+  "exclude": {
+    "description": "Source paths that are never exported (glob, matched against the full path).",
+    "patterns": {
+      "docs/**": "planning, internal security and decision documents",
+      "assets/**": "original media sources and the external media manifest (not used by build or tests)",
+      "**/.env": "local secrets",
+      "**/.env.*": "local secrets (the committed example is re-included below)"
+    }
+  },
+  "include": {
+    "description": "Exceptions to the exclusions above, needed by tests or CI.",
+    "paths": {
+      "docs/security/rbac-matrix.md": "compared with the permission catalogue by a unit test",
+      ".env.example": "placeholder values only; CI copies it to .env"
+    }
+  },
+  "forbidden_paths": {
+    "description": "Export fails closed if an included path matches one of these.",
+    "patterns": {
+      "**/*.pem": "certificate or key",
+      "**/*.key": "private key",
+      "**/*.p12": "key store",
+      "**/*.pfx": "key store",
+      "**/id_rsa*": "ssh key",
+      "**/*.sqlite": "database file",
+      "**/*.dump": "database dump",
+      "**/*.sql.gz": "database dump",
+      "**/*.zip": "archive",
+      "**/*.docx": "office document",
+      "**/*.xlsx": "office document",
+      "**/*.pdf": "document",
+      "**/*.csv": "tabular data export"
+    }
+  },
+  "forbidden_content": {
+    "description": "Export fails closed if an exported file matches one of these (Python regular expressions). Personal-data patterns are added from private-rules.json.",
+    "patterns": {
+      "private-key-block": "-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----\\n(?!AAAA\\n)",
+      "github-token": "\\b(ghp|gho|ghs|ghu|github_pat)_[A-Za-z0-9_]{20,}",
+      "aws-key": "\\b(AKIA|ASIA)[0-9A-Z]{16}\\b"
+    }
+  },
+  "transform": {
+    "description": "Pseudonymised files. The replacement table is kept outside this repository (private-rules.json on the maintainer machine); every replacement must match, otherwise the export fails.",
+    "files": {
+      "apps/api/test/unit/iam/auth/crypto.test.ts": "pseudonymised",
+      "apps/api/src/iam/auth/password.ts": "pseudonymised"
+    }
+  }
+}

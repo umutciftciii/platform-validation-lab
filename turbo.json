@@ -1,0 +1,61 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "concurrency": "2",
+  "globalDependencies": [".env.example"],
+  "globalEnv": ["NODE_ENV"],
+  "tasks": {
+    "generate": {
+      "outputs": ["src/generated/**"]
+    },
+    "build": {
+      "dependsOn": ["^build", "generate"],
+      "inputs": ["$TURBO_DEFAULT$", "!README.md", "!**/*.md"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build", "generate"],
+      "outputs": []
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build", "generate"],
+      "outputs": []
+    },
+    "test:integration": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "MIGRATE_DATABASE_URL",
+        "IAM_BOOTSTRAP_DATABASE_URL",
+        "TEST_SUPERUSER_DATABASE_URL",
+        "SHADOW_DATABASE_URL",
+        "AUTH_DATABASE_URL",
+        "AUTH_MIGRATE_DATABASE_URL",
+        "AUTH_IAM_BOOTSTRAP_DATABASE_URL",
+        "CATALOG_DATABASE_URL",
+        "CATALOG_MIGRATE_DATABASE_URL",
+        "WORKFLOW_DATABASE_URL",
+        "WORKFLOW_MIGRATE_DATABASE_URL",
+        "DOCUMENTS_DATABASE_URL",
+        "DOCUMENTS_MIGRATE_DATABASE_URL",
+        "XREFS_DATABASE_URL",
+        "XREFS_MIGRATE_DATABASE_URL",
+        "LEADS_DATABASE_URL",
+        "LEADS_MIGRATE_DATABASE_URL",
+        "OWNER_DATABASE_URL",
+        "OWNER_MIGRATE_DATABASE_URL",
+        "POSTGRES_DB",
+        "DEV_POSTGRES_DB"
+      ]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

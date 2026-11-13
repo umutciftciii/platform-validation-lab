@@ -1,0 +1,371 @@
+# Development overlay: hot reload on top of compose.yaml.
+#
+#   infra/docker/stack.sh dev up        # never call `docker compose` with this file directly
+#
+# Same Compose project, container names and ports as the production-build stack, so the two
+# modes can never run side by side: a container is either the dev or the prod variant.
+# stack.sh refuses to switch while the other mode is running (fail-fast) instead of silently
+# recreating containers.
+#
+# Source code is bind-mounted from the host (read-write, so editors and generators work).
+# node_modules, .next, dist and generated code live in named volumes prefixed
+# "dream-petroleum-platform_dev-", so no Linux binaries or build output land in the host tree.
+#
+# Database (ADR-009): dev mode has its own Postgres data volume (postgres-data-dev), database,
+# user and password (DEV_POSTGRES_* in .env). Same container name and port 5440 as prod mode;
+# the modes never run together. Default commands never remove a database volume; only
+# `stack.sh reset-db dev --yes` removes the dev one.
+#
+# Resource budget: each service overrides the prod limits with dev values (next dev with
+# Turbopack and tsc watchers need more than production servers). Limits are hard, without swap;
+# NODE_OPTIONS caps the V8 heap of every Node process in the container (Turbopack's native memory
+# is outside the heap, which is why the container limit is higher). The Postgres limit comes
+# from compose.yaml. `infra/docker/stack.sh budget dev` shows the table.
+
+x-dev-image: &dev-image
+  image: dream-petroleum-platform-dev:local
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile
+    target: dev
+
+x-dev-env: &dev-env
+  NODE_ENV: development
+  TSC_WATCH_POLLING: --watchFile dynamicPriorityPolling --watchDirectory dynamicPriorityPolling
+  NEXT_TELEMETRY_DISABLED: "1"
+  TURBO_TELEMETRY_DISABLED: "1"
+  PORT: "3000"
+  HOSTNAME: 0.0.0.0
+
+x-dev-volumes: &dev-volumes
+  - ../..:/repo
+  - dev-pnpm-store:/pnpm-store
+  - dev-turbo:/repo/.turbo
+  - dev-nm-root:/repo/node_modules
+  - dev-nm-web-bv:/repo/apps/web-bv/node_modules
+  - dev-next-web-bv:/repo/apps/web-bv/.next
+  - dev-nm-web-corporate:/repo/apps/web-corporate/node_modules
+  - dev-next-web-corporate:/repo/apps/web-corporate/.next
+  - dev-nm-admin:/repo/apps/admin/node_modules
+  - dev-next-admin:/repo/apps/admin/.next
+  - dev-nm-api:/repo/apps/api/node_modules
+  - dev-dist-api:/repo/apps/api/dist
+  - dev-generated-api:/repo/apps/api/src/generated
+  - dev-nm-config:/repo/packages/config/node_modules
+  - dev-nm-ui:/repo/packages/ui/node_modules
+  - dev-nm-contracts:/repo/packages/contracts/node_modules
+  - dev-dist-contracts:/repo/packages/contracts/dist
+  - dev-nm-content-schema:/repo/packages/content-schema/node_modules
+  - dev-dist-content-schema:/repo/packages/content-schema/dist
+  - dev-nm-test-utils:/repo/packages/test-utils/node_modules
+  - dev-dist-test-utils:/repo/packages/test-utils/dist
+  - dev-nm-smoke:/repo/tools/smoke/node_modules
+  - dev-nm-visual-qa:/repo/tools/visual-qa/node_modules
+  - dev-nm-migrations:/repo/tools/migrations/node_modules
+  # turbo writes <package>/.turbo/turbo-build.log for the packages dev-install builds
+  - dev-turbo-contracts:/repo/packages/contracts/.turbo
+  - dev-turbo-content-schema:/repo/packages/content-schema/.turbo
+  - dev-turbo-test-utils:/repo/packages/test-utils/.turbo
+
+x-after-install: &after-install
+  dev-install:
+    condition: service_completed_successfully
+
+# next dev compiles a route on its first request, so allow a long start period.
+x-dev-healthcheck: &dev-healthcheck
+  interval: 10s
+  timeout: 10s
+  retries: 6
+  start_period: 120s
+
+services:
+  # One-shot: installs dependencies into the volumes, builds the shared packages once and
+  # generates the Prisma client. Every Node service waits for it to exit successfully.
+  # DEV_INSTALL_CPUS (default 4.0, the local value) lets a smaller engine run it: Docker refuses
+  # a cpus limit above the engine's CPU count (GitHub's private-repo runners have 2). The memory
+  # limit stays fixed; resource-check.mjs fails fast if any cpus limit does not fit the engine.
+  dev-install:
+    <<: *dev-image
+    container_name: dream-platform-dev-install
+    working_dir: /repo
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: ${DEV_INSTALL_CPUS:-4.0}
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=1024
+    volumes: *dev-volumes
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - >-
+        pnpm install --frozen-lockfile &&
+        pnpm turbo run build --filter=@dream/contracts --filter=@dream/content-schema --filter=@dream/test-utils &&
+        pnpm --filter @dream/api run generate
+
+  # Rebuilds packages/*/dist on change, so apps pick up shared contract edits.
+  # The three tsc watchers run directly (same flags as each package's "dev" script): going
+  # through `pnpm turbo run dev` added four pnpm wrapper processes of ~100 MB each. If one
+  # watcher exits, the container exits and its restart policy brings all three back.
+  dev-packages:
+    <<: *dev-image
+    container_name: dream-platform-dev-packages
+    working_dir: /repo
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 1.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=192
+    volumes: *dev-volumes
+    restart: unless-stopped
+    init: true
+    depends_on: *after-install
+    command:
+      - bash
+      - -c
+      - >-
+        for p in contracts content-schema test-utils; do
+        (cd packages/$$p && exec node_modules/.bin/tsc -p tsconfig.json --watch --preserveWatchOutput $$TSC_WATCH_POLLING) &
+        done;
+        wait -n; exit 1
+
+  # Same service as prod mode with the dev identity and data volume. The volume entry replaces
+  # the prod one because Compose merges service volumes by container path.
+  postgres:
+    labels:
+      com.dream-petroleum.platform.db-env: dev
+    environment:
+      POSTGRES_DB: ${DEV_POSTGRES_DB:?set DEV_POSTGRES_DB in .env}
+      POSTGRES_USER: ${DEV_POSTGRES_USER:?set DEV_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:?set DEV_POSTGRES_PASSWORD in .env}
+      # ADR-012A roles of the dev cluster, with their own passwords. In dev, dp_owner may create
+      # databases: `prisma migrate dev` creates its shadow database.
+      DP_ROLES_PROFILE: dev
+      DP_APP_PASSWORD: ${DEV_DP_APP_PASSWORD:?set DEV_DP_APP_PASSWORD in .env}
+      DP_MIGRATOR_PASSWORD: ${DEV_DP_MIGRATOR_PASSWORD:?set DEV_DP_MIGRATOR_PASSWORD in .env}
+      DP_IAM_BOOTSTRAP_PASSWORD: ${DEV_DP_IAM_BOOTSTRAP_PASSWORD:?set DEV_DP_IAM_BOOTSTRAP_PASSWORD in .env}
+    volumes:
+      - postgres-data-dev:/var/lib/postgresql/data
+
+  # Dev variant of the migration runner: applies committed migrations to the dev database on
+  # every `dev up` (never creates migrations; that is `stack.sh migrate dev`). Depends on
+  # dev-install for node_modules and on postgres (from compose.yaml).
+  migrate:
+    <<: *dev-image
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=256
+      MIGRATE_DATABASE_URL: postgresql://dp_migrator:${DEV_DP_MIGRATOR_PASSWORD}@postgres:5432/${DEV_POSTGRES_DB}?schema=public
+    volumes: *dev-volumes
+    depends_on: *after-install
+
+  api:
+    <<: *dev-image
+    # PM-6 (2026-11-11): the cold tsc build of the API (no incremental info yet, as in CI) ran out
+    # of a 320 MiB heap after the cross-reference module; 576 MiB with a 896 MiB container.
+    mem_limit: 896m
+    memswap_limit: 896m
+    cpus: 1.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=576
+      DATABASE_URL: postgresql://dp_app:${DEV_DP_APP_PASSWORD}@postgres:5432/${DEV_POSTGRES_DB}?schema=public
+      DB_ENV: dev
+      DB_EXPECTED_NAME: ${DEV_POSTGRES_DB}
+      # F1-002 Group 2: dev has its own proxy keys and IAM secrets (one value per environment).
+      DP_PROXY_KEY_ADMIN: ${DEV_DP_PROXY_KEY_ADMIN:?set DEV_DP_PROXY_KEY_ADMIN in .env}
+      DP_PROXY_KEY_WEB_BV: ${DEV_DP_PROXY_KEY_WEB_BV:?set DEV_DP_PROXY_KEY_WEB_BV in .env}
+      DP_PROXY_KEY_WEB_CORPORATE: ${DEV_DP_PROXY_KEY_WEB_CORPORATE:?set DEV_DP_PROXY_KEY_WEB_CORPORATE in .env}
+      DP_PROXY_KEY_ADMIN_NEXT: ${DEV_DP_PROXY_KEY_ADMIN_NEXT:-}
+      DP_PROXY_KEY_WEB_BV_NEXT: ${DEV_DP_PROXY_KEY_WEB_BV_NEXT:-}
+      DP_PROXY_KEY_WEB_CORPORATE_NEXT: ${DEV_DP_PROXY_KEY_WEB_CORPORATE_NEXT:-}
+      IAM_MFA_ENC_KEYS: ${DEV_IAM_MFA_ENC_KEYS:?set DEV_IAM_MFA_ENC_KEYS in .env}
+      IAM_HMAC_KEY: ${DEV_IAM_HMAC_KEY:?set DEV_IAM_HMAC_KEY in .env}
+      # DP-119: the https origins of the DEV TLS proxy (admin-tls) next to the plain http ones.
+      DP_ALLOWED_ORIGINS_ADMIN: http://localhost:3112,http://admin.localhost:3112,https://admin.localhost:3114,https://localhost:3114
+      DP_ALLOWED_ORIGINS_WEB_BV: http://localhost:3110,http://bv.localhost:3110
+      DP_ALLOWED_ORIGINS_WEB_CORPORATE: http://localhost:3111,http://corporate.localhost:3111
+      # DP-119: set DEV_DP_ADMIN_BASE_URL=https://admin.localhost:3114 once the DEV CA is trusted.
+      DP_ADMIN_BASE_URL: ${DEV_DP_ADMIN_BASE_URL:-http://admin.localhost:3112}
+      # PM-2: product images on the DEV media volume (filesystem adapter).
+      DP_MEDIA_STORAGE: filesystem
+      DP_MEDIA_DIR: /data/media
+    # The shared dev volumes plus the media volume (YAML cannot append to an anchored list).
+    volumes:
+      - ../..:/repo
+      - dev-pnpm-store:/pnpm-store
+      - dev-turbo:/repo/.turbo
+      - dev-nm-root:/repo/node_modules
+      - dev-nm-web-bv:/repo/apps/web-bv/node_modules
+      - dev-next-web-bv:/repo/apps/web-bv/.next
+      - dev-nm-web-corporate:/repo/apps/web-corporate/node_modules
+      - dev-next-web-corporate:/repo/apps/web-corporate/.next
+      - dev-nm-admin:/repo/apps/admin/node_modules
+      - dev-next-admin:/repo/apps/admin/.next
+      - dev-nm-api:/repo/apps/api/node_modules
+      - dev-dist-api:/repo/apps/api/dist
+      - dev-generated-api:/repo/apps/api/src/generated
+      - dev-nm-config:/repo/packages/config/node_modules
+      - dev-nm-ui:/repo/packages/ui/node_modules
+      - dev-nm-contracts:/repo/packages/contracts/node_modules
+      - dev-dist-contracts:/repo/packages/contracts/dist
+      - dev-nm-content-schema:/repo/packages/content-schema/node_modules
+      - dev-dist-content-schema:/repo/packages/content-schema/dist
+      - dev-nm-test-utils:/repo/packages/test-utils/node_modules
+      - dev-dist-test-utils:/repo/packages/test-utils/dist
+      - dev-nm-smoke:/repo/tools/smoke/node_modules
+      - dev-nm-visual-qa:/repo/tools/visual-qa/node_modules
+      - dev-nm-migrations:/repo/tools/migrations/node_modules
+      - dev-turbo-contracts:/repo/packages/contracts/.turbo
+      - dev-turbo-content-schema:/repo/packages/content-schema/.turbo
+      - dev-turbo-test-utils:/repo/packages/test-utils/.turbo
+      - dev-media:/data/media
+    depends_on: *after-install
+    # tsc --watch recompiles src/ into dist/; node --watch restarts the server on dist changes.
+    # tsc polls the bind-mounted sources: per-file inotify watches are lost when an editor saves
+    # by rename (atomic save), which made later edits invisible. Polling a small tree is cheap.
+    # --incremental on both runs: without it the watcher's first build rewrites every file in
+    # dist/ although nothing changed, and node --watch restarted the API seconds after it first
+    # answered /health/ready (F1-001D). The build info is kept in dist/ (volume dev-dist-api):
+    # tsc's default puts it next to the tsconfig, in the bind mount, which is not writable on
+    # Linux, and in dist/ it goes away together with the output it describes. Source edits
+    # still re-emit and restart.
+    command:
+      - sh
+      - -c
+      - >-
+        pnpm exec tsc -p tsconfig.build.json --incremental --tsBuildInfoFile dist/.tsbuildinfo &&
+        { pnpm exec tsc -p tsconfig.build.json --incremental --tsBuildInfoFile dist/.tsbuildinfo --watch --preserveWatchOutput $$TSC_WATCH_POLLING & } &&
+        exec node --watch-path=dist --watch-preserve-output dist/main.js
+    healthcheck: *dev-healthcheck
+
+  web-bv:
+    <<: *dev-image
+    mem_limit: 1280m
+    memswap_limit: 1280m
+    cpus: 2.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=896
+      # PM-3: public product content, read server-side with this site's key only.
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_WEB_BV: ${DEV_DP_PROXY_KEY_WEB_BV:?set DEV_DP_PROXY_KEY_WEB_BV in .env}
+    volumes: *dev-volumes
+    depends_on: *after-install
+    command: ["node_modules/.bin/next", "dev", "--port", "3000", "--hostname", "0.0.0.0"]
+    healthcheck: *dev-healthcheck
+
+  web-corporate:
+    <<: *dev-image
+    mem_limit: 640m
+    memswap_limit: 640m
+    cpus: 1.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=448
+    volumes: *dev-volumes
+    depends_on: *after-install
+    command: ["node_modules/.bin/next", "dev", "--port", "3000", "--hostname", "0.0.0.0"]
+    healthcheck: *dev-healthcheck
+
+  admin:
+    <<: *dev-image
+    # Same budget as web-bv since DP-U: next dev with Tailwind (Turbopack + oxide) and the console
+    # UI outgrew 640m and was OOM-killed every ~20 s, which reloaded the page in the browser.
+    mem_limit: 1280m
+    memswap_limit: 1280m
+    cpus: 2.0
+    environment:
+      <<: *dev-env
+      NODE_OPTIONS: --max-old-space-size=896
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_ADMIN: ${DEV_DP_PROXY_KEY_ADMIN:?set DEV_DP_PROXY_KEY_ADMIN in .env}
+      DP_TRUSTED_PROXY_HOPS: "0"
+    volumes: *dev-volumes
+    depends_on: *after-install
+    command: ["node_modules/.bin/next", "dev", "--port", "3000", "--hostname", "0.0.0.0"]
+    # DP-084: `next dev` re-reads next.config.ts on every change. A restart that catches the file
+    # truncated (mid-write) keeps serving 200s on an EMPTY config: no clickjacking headers, no
+    # Tailwind loader (globals.css errors, endless full reloads) until the next restart. So the
+    # DEV liveness probe also requires the frame headers: the container turns unhealthy, and
+    # `stack.sh dev up` / smoke report it (fix: `stack.sh dev restart admin`). Production builds
+    # bake the config in and keep the plain probe.
+    healthcheck:
+      <<: *dev-healthcheck
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok&&r.headers.get('x-frame-options')==='DENY'&&/frame-ancestors 'none'/.test(r.headers.get('content-security-policy')||'')?0:1),()=>process.exit(1))"
+
+  # DP-119: HTTPS for the DEV admin console (Safari keeps Secure cookies only on https). DEV only;
+  # production terminates TLS at its own edge. infra/docker/caddy/Caddyfile.dev explains the CA.
+  admin-tls:
+    image: caddy:2.11.6-alpine
+    container_name: dream-platform-admin-tls
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.25
+    ports:
+      - "127.0.0.1:3114:443"
+    volumes:
+      - ./caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - tls-ca-dev:/data
+      - tls-config-dev:/config
+    depends_on:
+      admin:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "--no-check-certificate",
+          "https://localhost/api/health",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  postgres-data-dev:
+  dev-media:
+  dev-pnpm-store:
+  dev-turbo:
+  dev-nm-root:
+  dev-nm-web-bv:
+  dev-next-web-bv:
+  dev-nm-web-corporate:
+  dev-next-web-corporate:
+  dev-nm-admin:
+  dev-next-admin:
+  dev-nm-api:
+  dev-dist-api:
+  dev-generated-api:
+  dev-nm-config:
+  dev-nm-ui:
+  dev-nm-contracts:
+  dev-dist-contracts:
+  dev-nm-content-schema:
+  dev-dist-content-schema:
+  dev-nm-test-utils:
+  dev-dist-test-utils:
+  dev-nm-smoke:
+  dev-nm-visual-qa:
+  dev-nm-migrations:
+  dev-turbo-contracts:
+  dev-turbo-content-schema:
+  dev-turbo-test-utils:
+  # DP-119: the DEV local CA and its certificates. Not "dev-" prefixed on purpose: `dev reset`
+  # removes dev-* caches, and a new CA would have to be trusted on the Mac again.
+  tls-ca-dev:
+  tls-config-dev:
