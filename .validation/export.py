@@ -369,18 +369,22 @@ def cmd_gate(a, repo: str) -> bool:
     git("fetch", "-q", "origin", cwd=repo)
     git("fetch", "-q", "origin", cwd=a.source)
     print(f"source PR {pr['url']} ({pr['state']}) head {head}")
+    # What CI must have tested: the exported payload (export + overlay, without the manifest) of
+    # the source head, built locally with the CI definitions currently on public main.
+    expected = build(a.source, head, "origin/main", repo)["manifest"]["trees"]["payload"]
+    print(f"expected payload tree {expected}")
     refs = git("for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/", cwd=repo).decode().split("\n")
     candidates = []
     for line in filter(None, refs):
         sha, ref = line.split(" ", 1)
         try:
-            mf = json.loads(git("show", f"{sha}:{MANIFEST}", cwd=repo))
-        except (ExportError, json.JSONDecodeError):
+            check_manifest(sha, repo)
+        except (ExportError, json.JSONDecodeError, KeyError):
             continue
-        if mf["source"]["commit"] == head:
+        if tree_without(sha, repo, lambda p: p == MANIFEST) == expected:
             candidates.append((sha, ref))
     if not candidates:
-        print(f"FAIL: no public commit validates source {head}. Run: sync --rev {head} --branch sync/pr-{a.pr} --push --pr")
+        print(f"FAIL: no public commit has this content. Run: sync --rev {head} --branch sync/pr-{a.pr} --push --pr")
         return False
     for sha, ref in candidates:
         runs = gh_json("api", f"repos/{pub_slug}/commits/{sha}/check-runs?per_page=100")["check_runs"]
@@ -390,10 +394,9 @@ def cmd_gate(a, repo: str) -> bool:
         print(f"public {ref} {sha[:12]}: {RESULT_CHECK} = {status}")
         if not latest or latest["conclusion"] != "success":
             continue
-        ns = argparse.Namespace(commit=sha, rev=head, source=a.source)
-        if not cmd_verify(ns, repo):
-            continue
-        print(f"PASS: source {head} validated by {latest['html_url']}")
+        tested_for = json.loads(git("show", f"{sha}:{MANIFEST}", cwd=repo))["source"]["commit"]
+        note = "" if tested_for == head else f" (content-identical export of source {tested_for[:12]})"
+        print(f"PASS: source {head} validated by {latest['html_url']}{note}")
         if a.post_status:
             gh_json(
                 "api", f"repos/{src_slug}/statuses/{head}", "-f", "state=success",
