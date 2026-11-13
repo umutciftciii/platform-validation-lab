@@ -10,5 +10,6 @@ export * from "./admin/catalog-documents.js";
 export * from "./admin/catalog-xrefs.js";
 export * from "./admin/staff-roles.js";
 export * from "./admin/owner.js";
+export * from "./admin/cms.js";
 export * from "./leads.js";
 export * from "./privacy.js";

@@ -144,6 +144,9 @@ model User {
   leadActivities              LeadActivity[]               @relation("LeadActivityActor")
   leadAssignmentsFrom         LeadActivity[]               @relation("LeadActivityFromAssignee")
   leadAssignmentsTo           LeadActivity[]               @relation("LeadActivityToAssignee")
+  /// CMS S1 (DP-015, ADR-020): pages this user created and last saved.
+  cmsPagesCreated             CmsPage[]                    @relation("CmsPageCreatedBy")
+  cmsPagesUpdated             CmsPage[]                    @relation("CmsPageUpdatedBy")
 
   @@index([kind, status])
 }
@@ -183,6 +186,8 @@ model Site {
   // DP-041 (ADR-019): sales activity on this site's leads.
   leadActivities             LeadActivity[]
   customerDataAccessRequests CustomerDataAccessRequest[]
+  // CMS S1 (DP-015, ADR-020): the site's pages and site-wide fragments.
+  cmsPages                   CmsPage[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1415,4 +1420,53 @@ model CustomerDataAccessRequest {
   @@index([status, decideBy])
   @@index([userId])
   @@index([accessExpiresAt])
+}
+
+// ===========================================================================================
+// CMS S1 (DP-015, ADR-020): pages of the two public sites. One table holds the three kinds
+// (TEMPLATE pages built from section types, DESIGN pages whose fixed components the CMS fills,
+// FRAGMENT site-wide parts without a URL). S1 stores the draft only; publication, revisions and
+// preview arrive in S2. Rules Prisma cannot express (path format, reserved slugs, kind
+// consistency) are in migration 20261126090000_cms_s1_pages and tested in
+// test/integration/cms.int.test.ts.
+// ===========================================================================================
+
+enum CmsPageKind {
+  DESIGN
+  TEMPLATE
+  FRAGMENT
+}
+
+model CmsPage {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  siteId         String      @db.Uuid
+  kind           CmsPageKind
+  /// "standard" for TEMPLATE pages; the registry key (contracts CMS_SITE_REGISTRY) otherwise.
+  templateKey    String      @db.VarChar(80)
+  /// "/" or "/<slug>"; null for fragments. Unique per site.
+  path           String?     @db.VarChar(120)
+  /// The site's default locale (one locale until DP-073).
+  locale         String      @db.VarChar(35)
+  title          String      @db.VarChar(200)
+  seoTitle       String?     @db.VarChar(120)
+  seoDescription String?     @db.VarChar(320)
+  noindex        Boolean     @default(false)
+  /// The draft, validated against the contracts schema of its kind and template on every save.
+  content        Json
+  /// Version of the content schema the draft was written with.
+  schemaVersion  Int         @default(1)
+  version        Int         @default(1)
+  createdById    String      @db.Uuid
+  updatedById    String      @db.Uuid
+  createdAt      DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @db.Timestamptz(3)
+
+  site      Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy User @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User @relation("CmsPageUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([siteId, path])
+  /// One DESIGN page or fragment per registry key and site.
+  @@unique([siteId, templateKey], map: "CmsPage_registry_siteId_templateKey_key", where: raw("(kind <> 'TEMPLATE'::\"CmsPageKind\")"))
+  @@index([siteId, kind])
 }
