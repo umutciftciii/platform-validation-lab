@@ -101,9 +101,9 @@ function NavLink({
   );
 }
 
-function Logo({ onNavigate }: { onNavigate?: () => void }) {
+function Logo({ href, onNavigate }: { href: string; onNavigate?: () => void }) {
   return (
-    <a href={SITE_NAV_UI.homeHref} className="site-nav-logo" onClick={onNavigate}>
+    <a href={href} className="site-nav-logo" onClick={onNavigate}>
       <Image
         src={SITE_NAV_UI.logo.src}
         alt={SITE_NAV_UI.logo.alt}
@@ -179,7 +179,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
       </noscript>
 
       <div className="site-nav-inner">
-        <Logo />
+        <Logo href={NAV.homeHref} />
 
         <nav aria-label={NAV.mainLabel} className="site-nav-links">
           <ul>
@@ -247,7 +247,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
         onKeyDown={onMenuKeyDown}
       >
         <div className="site-menu-bar">
-          <Logo onNavigate={closeMenu} />
+          <Logo href={NAV.homeHref} onNavigate={closeMenu} />
           <button
             type="button"
             autoFocus

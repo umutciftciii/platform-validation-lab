@@ -31,7 +31,7 @@ export function HomePage({ view }: { view: CmsPageView }) {
 }
 
 /** Fixed at the bottom so it never moves the page's own layout (preview only). */
-function PreviewBanner() {
+export function PreviewBanner() {
   return (
     <div
       role="status"

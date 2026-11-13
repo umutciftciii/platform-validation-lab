@@ -15,12 +15,14 @@ import {
   BV_HOME_FIELDS,
   BV_NAV_FIELDS,
   CmsPublicBundleSchema,
+  CmsTemplateContentSchema,
   PUBLIC_CMS_API,
   cmsAsset,
   cmsFieldsSchema,
   type BvFooterContent,
   type BvHomeContent,
   type BvNavContent,
+  type CmsLink,
   type CmsPublicPage,
 } from "@dream/contracts";
 
@@ -48,6 +50,40 @@ export interface HomeProps {
   ctl: { stages: CtlStage[]; copy: CtlCopy };
   applications: { scenes: ApplicationScene[]; copy: ApplicationsCopy };
 }
+
+/** A section of a TEMPLATE page, as validated by CmsTemplateContentSchema. */
+export type TemplateSection =
+  | {
+      id: string;
+      type: "hero";
+      eyebrow: string | null;
+      title: string;
+      intro: string | null;
+      cta: CmsLink | null;
+    }
+  | { id: string; type: "text"; title: string | null; body: string }
+  | {
+      id: string;
+      type: "cards";
+      title: string | null;
+      intro: string | null;
+      items: { title: string; description: string | null; link: CmsLink | null }[];
+    }
+  | { id: string; type: "cta"; title: string; text: string | null; button: CmsLink };
+
+export interface TemplatePageView {
+  path: string;
+  title: string;
+  seo: CmsPublicPage["seo"];
+  sections: TemplateSection[];
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+  preview: boolean;
+}
+
+export type AnyPageView =
+  | ({ kind: "home" } & CmsPageView)
+  | ({ kind: "template" } & TemplatePageView);
 
 export interface CmsPageView {
   title: string;
@@ -171,14 +207,19 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
 }
 
 export function toNavProps(c: BvNavContent, currentPath: string): SiteNavContent {
+  const home = currentPath === "/";
+  // The navigation's in-page links ("#top", "#services") belong to the home page: on any other
+  // page they lead there ("/#services"), and the logo goes home.
+  const target = (href: string | null) => (href && !home && href.startsWith("#") ? `/${href}` : href);
   return {
     ...SITE_NAV_UI,
+    homeHref: home ? SITE_NAV_UI.homeHref : "/",
     // The home page marks its own item as current (an in-page link, "#top").
-    items: c.items.map((i) => ({ ...i, current: currentPath === "/" && i.href === "#top" })),
-    contact: c.contact,
-    noScriptLinks: c.noScriptLinks.filter(
-      (l): l is { label: string; href: string } => l.href !== null,
-    ).map((l) => ({ ...l, current: currentPath === "/" && l.href === "#top" })),
+    items: c.items.map((i) => ({ ...i, href: target(i.href), current: home && i.href === "#top" })),
+    contact: { ...c.contact, href: target(c.contact.href) },
+    noScriptLinks: c.noScriptLinks
+      .filter((l): l is { label: string; href: string } => l.href !== null)
+      .map((l) => ({ ...l, href: target(l.href) as string, current: home && l.href === "#top" })),
     pendingNote: c.pendingNote,
   };
 }
@@ -207,28 +248,55 @@ function fragment<T>(
   return parsed.success ? map(parsed.data as T) : null;
 }
 
-/** Maps a public bundle of the home page to the component props; null when it does not validate. */
-export function homeView(json: unknown): CmsPageView | null {
+/** Maps a public bundle to the view of its page; null when it does not validate. */
+export function pageView(json: unknown): AnyPageView | null {
   const bundle = CmsPublicBundleSchema.safeParse(json);
-  if (!bundle.success || bundle.data.page.templateKey !== "bv.home") return null;
-  const home = HOME.safeParse(bundle.data.page.content);
-  if (!home.success) return null;
+  if (!bundle.success) return null;
   const { page, fragments, preview } = bundle.data;
-  return {
-    title: page.title,
-    seo: page.seo,
-    home: toHomeProps(home.data as unknown as BvHomeContent),
-    nav: fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
-      toNavProps(c, "/"),
-    ) as SiteNavContent | null,
-    footer: fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
-      | SiteFooterContent
-      | null,
-    preview,
-  };
+  const path = page.path ?? "/";
+  const nav = fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
+    toNavProps(c, path),
+  ) as SiteNavContent | null;
+  const footer = fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+    | SiteFooterContent
+    | null;
+  if (page.kind === "DESIGN" && page.templateKey === "bv.home") {
+    const home = HOME.safeParse(page.content);
+    if (!home.success) return null;
+    return {
+      kind: "home",
+      title: page.title,
+      seo: page.seo,
+      home: toHomeProps(home.data as unknown as BvHomeContent),
+      nav,
+      footer,
+      preview,
+    };
+  }
+  if (page.kind === "TEMPLATE") {
+    const content = CmsTemplateContentSchema.safeParse(page.content);
+    if (!content.success) return null;
+    return {
+      kind: "template",
+      path,
+      title: page.title,
+      seo: page.seo,
+      sections: content.data.sections as TemplateSection[],
+      nav,
+      footer,
+      preview,
+    };
+  }
+  return null;
 }
 
-async function read(path: string): Promise<Read<CmsPageView>> {
+/** The home page view of a bundle (the home route renders nothing else). */
+export function homeView(json: unknown): CmsPageView | null {
+  const view = pageView(json);
+  return view?.kind === "home" ? view : null;
+}
+
+async function read(path: string): Promise<Read<AnyPageView>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
   let res: Response;
@@ -244,7 +312,7 @@ async function read(path: string): Promise<Read<CmsPageView>> {
   }
   if (res.status === 404) return { ok: false, reason: "not_found" };
   if (!res.ok) return { ok: false, reason: "unavailable" };
-  const view = homeView(await res.json().catch(() => null));
+  const view = pageView(await res.json().catch(() => null));
   if (!view) {
     console.error("public cms: the response does not match the contract; not rendered");
     return { ok: false, reason: "unavailable" };
@@ -253,14 +321,26 @@ async function read(path: string): Promise<Read<CmsPageView>> {
 }
 
 /** The published home page with its navigation and footer. */
-export function getPublishedHome(): Promise<Read<CmsPageView>> {
-  return read(`/page?path=${encodeURIComponent("/")}`);
+export async function getPublishedHome(): Promise<Read<CmsPageView>> {
+  const res = await read(`/page?path=${encodeURIComponent("/")}`);
+  if (!res.ok) return res;
+  return res.data.kind === "home" ? { ok: true, data: res.data } : { ok: false, reason: "unavailable" };
+}
+
+const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** A published TEMPLATE page at `/<slug>` (CMS S3); anything else is not found. */
+export async function getPublishedPage(slug: string): Promise<Read<TemplatePageView>> {
+  if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
+  const res = await read(`/page?path=${encodeURIComponent(`/${slug}`)}`);
+  if (!res.ok) return res;
+  return res.data.kind === "template" ? { ok: true, data: res.data } : { ok: false, reason: "not_found" };
 }
 
 const TOKEN = /^v1\.[0-9a-f-]{36}\.(BV|CORPORATE)\.\d{10,13}\.[0-9a-f]{64}$/;
 
 /** The draft a preview link shows (the API checks the signature, expiry and site). */
-export function getPreview(token: string): Promise<Read<CmsPageView>> {
+export function getPreview(token: string): Promise<Read<AnyPageView>> {
   if (!TOKEN.test(token)) return Promise.resolve({ ok: false, reason: "not_found" });
   return read(`/preview/${token}`);
 }

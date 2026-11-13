@@ -144,6 +144,8 @@ describe("/content/[id] renders on the server", () => {
     expect(html).toContain("Draft, not published");
     expect(html).toContain("Who we are");
     expect(html).toContain("Sections");
+    // CMS S3: template pages of the BV site have a preview too.
+    expect(html).toContain("Preview draft");
   });
 
   it("answers 404 for a page the API does not return", async () => {

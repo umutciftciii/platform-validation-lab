@@ -23,7 +23,9 @@ export const SITE_NAV_UI = {
   menuLabel: "Site menu",
 } as const;
 
-export type SiteNavContent = typeof SITE_NAV_UI & {
+export type SiteNavContent = Omit<typeof SITE_NAV_UI, "homeHref"> & {
+  /** "#top" on the home page; "/" on every other page. */
+  homeHref: string;
   items: SiteNavItem[];
   contact: SiteNavItem;
   /** Shown on phones and tablets only when JavaScript is off: real destinations only. */

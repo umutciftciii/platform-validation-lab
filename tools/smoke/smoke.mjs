@@ -154,6 +154,20 @@ try {
 } catch (e) {
   record("bv-route", "/preview/<invalid>", false, String(e));
 }
+// CMS S3: an unknown or unpublished /<slug> renders the not-found page with noindex (Next streams
+// it with status 200, as /products/<unknown>), never a draft.
+try {
+  const res = await get(base("web-bv") + "/cms-smoke-no-such-page");
+  const html = await res.text();
+  record(
+    "bv-route",
+    "/<unknown slug> not found, noindex",
+    /This page could not be found/.test(html) && /<meta name="robots" content="noindex"/.test(html),
+    `HTTP ${res.status}`,
+  );
+} catch (e) {
+  record("bv-route", "/<unknown slug>", false, String(e));
+}
 // The public CMS API answers only with a site proxy key.
 try {
   const res = await get(base("api") + "/api/v1/public/cms/page?path=/");

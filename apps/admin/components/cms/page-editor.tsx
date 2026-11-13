@@ -286,7 +286,7 @@ export function PageEditor({
           version={version}
           dirty={dirty}
           canPublish={canPublish}
-          previewable={page.templateKey.startsWith("bv.")}
+          previewable={siteKey === "BV"}
         />
 
         <Panel id="seo" title="SEO" description="Search results and link previews.">
