@@ -3,7 +3,7 @@
  * visitor saw are identified by version and the SHA-256 of their exact text.
  */
 import { createHash, randomInt } from "node:crypto";
-import { LEAD_MARKETING_CONSENT, LEAD_PRIVACY_NOTICE } from "@dream/contracts";
+import { LEAD_CONTACT_NOTICE, LEAD_MARKETING_CONSENT, LEAD_PRIVACY_NOTICE } from "@dream/contracts";
 
 export function textSha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -11,6 +11,8 @@ export function textSha256(text: string): string {
 
 export const PRIVACY_NOTICE_SHA256 = textSha256(LEAD_PRIVACY_NOTICE.text);
 export const MARKETING_CONSENT_SHA256 = textSha256(LEAD_MARKETING_CONSENT.text);
+/** DP-151: the contact form's notice. */
+export const CONTACT_NOTICE_SHA256 = textSha256(LEAD_CONTACT_NOTICE.text);
 
 /** Crockford base32 without I, L, O, U (same alphabet as the recovery codes). */
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -35,4 +37,11 @@ export function consentVersionProblem(input: {
     return "marketingConsentVersion";
   }
   return null;
+}
+
+/** DP-151: the contact form names the notice it showed; it must be the current one. */
+export function contactNoticeVersionProblem(input: {
+  privacyNoticeVersion: string;
+}): ConsentProblem | null {
+  return input.privacyNoticeVersion === LEAD_CONTACT_NOTICE.version ? null : "privacyNoticeVersion";
 }

@@ -48,6 +48,7 @@ export const CLEARED_FIELDS = [
   "LeadDocumentRequest.requestId",
   "LeadDocumentDownload.sha256 (of the stamped PDF)",
   "LeadDocumentDownload.httpRequestId",
+  "LeadContactMessage.fullName, company, phone, subject, message, ipPrefixHmac, requestId (DP-151)",
   "LeadActivity.body (sales notes and contact summaries, DP-041)",
 ] as const;
 
@@ -55,6 +56,7 @@ export const CLEARED_FIELDS = [
 export const RETAINED_FIELDS = [
   "site, country, free-mail flag, request count, request times",
   "document, revision and product of each request",
+  "time and country of each contact message (DP-151)",
   "notice and consent versions and SHA-256, consent flag",
   "download size and time; grant expiry and counters",
   "sales status and assignment; activity kind, time, channel and staff actor (DP-041)",
@@ -151,6 +153,12 @@ export async function anonymiseLeads(tx: Db, leadIds: string[], now: Date): Prom
     UPDATE "LeadDocumentRequest"
     SET "fullName" = '', "company" = '', "ipPrefixHmac" = NULL, "reference" = NULL, "requestId" = NULL
     WHERE "leadId" = ANY(${ids}::uuid[])`;
+  // DP-151: before the lead (an anonymised lead never changes again).
+  await tx.$executeRaw`
+    UPDATE "LeadContactMessage"
+    SET "fullName" = '', "company" = '', "phone" = NULL, "subject" = NULL, "message" = NULL,
+        "ipPrefixHmac" = NULL, "requestId" = NULL, "redactedAt" = ${now}
+    WHERE "leadId" = ANY(${ids}::uuid[]) AND "redactedAt" IS NULL`;
   await tx.$executeRaw`
     UPDATE "Lead"
     SET "email" = 'anonymised+' || "id"::text || '@anonymised.invalid', "fullName" = '', "company" = '',
@@ -220,9 +228,13 @@ export async function runRetention(
       due.map((r) => r.id),
       now,
     );
-    const ipHmacCleared = await tx.$executeRaw`
-      UPDATE "LeadDocumentRequest" SET "ipPrefixHmac" = NULL
-      WHERE "ipPrefixHmac" IS NOT NULL AND "createdAt" < ${c.ipHmac}`;
+    const ipHmacCleared =
+      (await tx.$executeRaw`
+        UPDATE "LeadDocumentRequest" SET "ipPrefixHmac" = NULL
+        WHERE "ipPrefixHmac" IS NOT NULL AND "createdAt" < ${c.ipHmac}`) +
+      (await tx.$executeRaw`
+        UPDATE "LeadContactMessage" SET "ipPrefixHmac" = NULL
+        WHERE "ipPrefixHmac" IS NOT NULL AND "createdAt" < ${c.ipHmac}`);
     const unusedGrantsDeleted = await tx.$executeRaw`
       DELETE FROM "DocumentDownloadGrant" WHERE "downloadCount" = 0 AND "expiresAt" < ${c.unusedGrant}`;
     const rateLimitBucketsDeleted = await tx.$executeRaw`

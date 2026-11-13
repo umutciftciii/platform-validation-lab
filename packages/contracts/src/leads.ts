@@ -60,6 +60,24 @@ export const LEAD_MARKETING_CONSENT = {
 } as const;
 
 /**
+ * DP-151: required information for the contact form (GDPR Art. 13), not consent: shown next to
+ * the form with a link to the Privacy Policy, never as a box to tick. Same rules as the document
+ * notice: a new wording is a new version, older texts go to the archive. A draft
+ * until Dream Petroleum (or its DPO) approves it (`final: false` blocks production publication,
+ * `privacyBlockers()`).
+ */
+export const LEAD_CONTACT_NOTICE = {
+  version: "2026-11-13.en",
+  final: false,
+  text:
+    "Dream Petroleum B.V. uses your name, company, e-mail, country, your message and, if you give " +
+    "it, your phone number to answer your enquiry and to keep a record of it. We do this on the " +
+    "basis of our legitimate interest in answering business enquiries. We keep these details for " +
+    "24 months after your last message or request, then anonymise them. You can ask to see, " +
+    "correct or delete them, or object to this use, as explained in our Privacy Policy.",
+} as const;
+
+/**
  * Earlier texts, kept so the version and SHA-256 stored with an older request can still be
  * checked against the exact words the visitor saw (DP-095 D-T7). Never edit an entry.
  */
@@ -428,6 +446,77 @@ export const LEAD_COMPANY_MAX = 160;
 export const LEAD_EMAIL_MAX = 254;
 
 /** The short form as the site's server forwards it (strict: unknown keys are refused). */
+export const LEAD_PHONE_MAX = 40;
+export const LEAD_SUBJECT_MAX = 160;
+export const LEAD_MESSAGE_MIN = 10;
+export const LEAD_MESSAGE_MAX = 4000;
+
+/** Multi-line text: line breaks kept (at most one blank line in a row), other control characters refused. */
+function messageText(min: number, max: number) {
+  return z
+    .string()
+    .transform((v) =>
+      v
+        .normalize("NFC")
+        .replace(/\r\n?/g, "\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim(),
+    )
+    .pipe(
+      z
+        .string()
+        .min(min)
+        .max(max)
+        // Refusing control characters is the point (line feeds stay, everything else goes).
+        // eslint-disable-next-line no-control-regex
+        .regex(/^[^\p{Cf}<>\u0000-\u0009\u000B-\u001F\u007F]*$/u),
+    );
+}
+
+/** An optional single-line field: blank becomes null. */
+function optionalText(max: number, pattern?: RegExp) {
+  return z
+    .string()
+    .transform((v) => v.normalize("NFC").replace(/\s+/g, " ").trim())
+    .pipe(
+      z
+        .string()
+        .max(max)
+        .regex(pattern ?? /^[^\p{Cc}\p{Cf}<>]*$/u),
+    )
+    .transform((v) => (v === "" ? null : v));
+}
+
+/**
+ * DP-151: the contact form as the site's server forwards it. Name, company, e-mail, country and
+ * the message are required (company and country because one person is one lead per site, and a
+ * lead always has them); phone and subject are optional.
+ *
+ * Owner decisions (2026-11-13): no marketing consent on this form, and no tick box for the
+ * notice. Answering an enquiry rests on legitimate interest, not consent, so the notice is
+ * information the visitor can read next to the form, not something to agree to. The form sends
+ * the version of the notice it showed; the API stores that version and the SHA-256 of its text.
+ */
+export const LeadContactMessageInputSchema = z.strictObject({
+  fullName: formText(2, LEAD_FULL_NAME_MAX),
+  company: formText(1, LEAD_COMPANY_MAX),
+  email: EmailSchema.pipe(z.string().max(LEAD_EMAIL_MAX)),
+  country: CountryCodeSchema,
+  phone: optionalText(LEAD_PHONE_MAX, /^[+0-9 ()./-]*$/),
+  subject: optionalText(LEAD_SUBJECT_MAX),
+  message: messageText(LEAD_MESSAGE_MIN, LEAD_MESSAGE_MAX),
+  /** The notice version shown next to the form (information, not consent). */
+  privacyNoticeVersion: z.string().max(20),
+  /** Honeypot: hidden in the form, must stay empty. */
+  website: z.literal(""),
+});
+export type LeadContactMessageInput = z.input<typeof LeadContactMessageInputSchema>;
+
+/** Nothing about the stored message comes back to the visitor. */
+export const LeadContactMessageResponseSchema = z.strictObject({ received: z.literal(true) });
+export type LeadContactMessageResponse = z.infer<typeof LeadContactMessageResponseSchema>;
+
 export const LeadDocumentRequestInputSchema = z.strictObject({
   documentId: UuidSchema,
   fullName: formText(2, LEAD_FULL_NAME_MAX),
@@ -661,9 +750,29 @@ export const LeadRequestSchema = z.strictObject({
 });
 export type LeadRequest = z.infer<typeof LeadRequestSchema>;
 
+/** DP-151: a contact-form message. Name, company, phone, subject and text are cleared on anonymisation. */
+export const LeadContactMessageSchema = z.strictObject({
+  id: UuidSchema,
+  createdAt: IsoDate,
+  fullName: z.string(),
+  company: z.string(),
+  country: z.string(),
+  phone: z.string().nullable(),
+  subject: z.string().nullable(),
+  /** Null once the lead is anonymised. */
+  message: z.string().nullable(),
+  /** The notice shown with the form (version and SHA-256 of its exact text). */
+  privacyNoticeVersion: z.string(),
+  privacyNoticeSha256: z.string(),
+  redactedAt: IsoDate.nullable(),
+});
+export type LeadContactMessage = z.infer<typeof LeadContactMessageSchema>;
+
 export const LeadDetailResponseSchema = z.strictObject({
   lead: LeadSummarySchema,
   requests: z.array(LeadRequestSchema).max(200),
+  /** DP-151: contact-form messages, newest first. */
+  contactMessages: z.array(LeadContactMessageSchema).max(200),
   /** DP-041: newest first. */
   activities: z.array(LeadActivitySchema).max(LEAD_ACTIVITY_LIMIT),
   /** The caller holds lead:manage on the lead's site (and the lead is not anonymised). */
