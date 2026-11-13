@@ -1,0 +1,75 @@
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { CMS_SITE_REGISTRY, CmsPageResponseSchema } from "@dream/contracts";
+import { NoticeProvider } from "../../../../components/catalog/notices";
+import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
+import { PageEditor } from "../../../../components/cms/page-editor";
+import { CmsKindPill } from "../../../../components/cms/parts";
+import { EmptyState, ErrorState, StatusPill } from "../../../../components/ui";
+import { serverRead } from "../../../../lib/server-api";
+import { requireStaffSession } from "../../../../lib/server-session";
+
+export const metadata: Metadata = { title: "Edit page" };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DATE = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "Europe/Amsterdam",
+});
+
+/** CMS S1 (DP-015): the draft of one page. The API answers 404 for pages outside the caller's sites. */
+export default async function ContentPageEditor({ params }: PageProps<"/content/[id]">) {
+  await requireStaffSession();
+  const { id } = await params;
+  if (!UUID.test(id)) notFound();
+  const res = await serverRead(`/api/v1/admin/cms/pages/${id}`, CmsPageResponseSchema);
+  if (!res.ok && res.status === 404) notFound();
+  if (!res.ok) {
+    return (
+      <div className="space-y-8">
+        <PageHeader icon="content" title="Page" back={{ href: "/content", label: "All pages" }} />
+        <ErrorState title="The page could not be loaded">Try again in a moment.</ErrorState>
+      </div>
+    );
+  }
+  const { page, site } = res.data;
+  const sp = site.key.toLowerCase();
+  const back = { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
+  const registry = CMS_SITE_REGISTRY.find((e) => e.key === page.templateKey);
+
+  return (
+    <NoticeProvider>
+      <div className="space-y-6 sm:space-y-8">
+        <PageHeader
+          icon="content"
+          title={page.title}
+          back={back}
+          description={
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <CmsKindPill kind={page.kind} />
+              <StatusPill tone="amber">Draft</StatusPill>
+              <span className="font-mono text-ink-3">{page.path ?? "Site-wide part"}</span>
+              <span className="text-ink-3">
+                · last saved {DATE.format(new Date(page.updatedAt))} by {page.updatedBy.name}
+              </span>
+            </div>
+          }
+        />
+        {page.kind === "TEMPLATE" ? (
+          <PageEditor page={page} canEdit={site.canEdit} siteLabel={SITE_SHORT[site.key]} />
+        ) : (
+          <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
+            <EmptyState icon="content" title="Edited after the import">
+              {registry?.note ?? "This designed page"} Its fields get their own form when the page
+              is imported into the CMS; until then the site shows the content from code.
+            </EmptyState>
+          </div>
+        )}
+      </div>
+    </NoticeProvider>
+  );
+}
