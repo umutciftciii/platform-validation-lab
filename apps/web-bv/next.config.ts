@@ -9,14 +9,22 @@ const nextConfig: NextConfig = {
     // reload loop, vercel/next.js#100267). Dev only.
     turbopackFileSystemCacheForDev: false,
   },
-  // The prototype has no home page. Temporary, so browsers do not cache it and a
-  // real home page can replace it by removing this entry.
+  // CMS S2 (DP-134): the home page is "/" now, filled from the CMS. The former review routes of
+  // the prototype rendered the same content from code; they point at the real page instead, so
+  // the content has one source. Temporary: no browser caches the redirect.
   redirects() {
+    return [{ source: "/demo/:path*", destination: "/", permanent: false }];
+  },
+  // Preview links carry a signed token: never cached, never sent on as a referrer.
+  headers() {
     return [
       {
-        source: "/",
-        destination: "/demo/iccsyn-hero-products",
-        permanent: false,
+        source: "/preview/:token",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
       },
     ];
   },

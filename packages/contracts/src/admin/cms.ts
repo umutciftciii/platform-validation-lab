@@ -97,6 +97,12 @@ export type CmsField =
       max: number;
       required?: boolean;
       multiline?: boolean;
+      /**
+       * anchor:   a DOM id / stable key (lower-case kebab-case);
+       * position: a focal point, CSS object-position "X% Y%";
+       * href:     an optional link target (null = a page that does not exist yet, shown as text).
+       */
+      format?: "anchor" | "position" | "href";
       hint?: string;
     }
   | { type: "link"; key: string; label: string; required?: boolean; hint?: string }
@@ -108,8 +114,79 @@ export type CmsField =
       min: number;
       max: number;
       fields: readonly CmsField[];
+      /** A field whose value must differ between the items (e.g. the anchor). */
+      unique?: string;
+      hint?: string;
+    }
+  /** A fixed group of fields (one card, one block of a designed page). */
+  | { type: "group"; key: string; label: string; fields: readonly CmsField[]; hint?: string }
+  /** A registered static asset of the site (CMS_STATIC_ASSETS); uploads come with S5. */
+  | {
+      type: "asset";
+      key: string;
+      label: string;
+      kinds: readonly CmsAssetKind[];
       hint?: string;
     };
+
+// --- registered static assets ------------------------------------------------------------------
+
+export type CmsAssetKind = "image" | "animation";
+
+export interface CmsStaticAsset {
+  site: "BV" | "CORPORATE";
+  src: string;
+  kind: CmsAssetKind;
+  width: number;
+  height: number;
+}
+
+const bv = (src: string, width: number, height: number, kind: CmsAssetKind = "image") =>
+  ({ site: "BV", src, kind, width, height }) as const;
+
+/**
+ * Files in the web apps' public folders that pages may use (S2). An asset field accepts only these,
+ * so a draft can never point at an arbitrary URL; the sizes give next/image its dimensions. The
+ * hero's frame sequence and the brand logo stay in code (DP-137, ADR-020 D3).
+ */
+export const CMS_STATIC_ASSETS: readonly CmsStaticAsset[] = [
+  bv("/media/applications/baby-care-concept-1448.webp", 1448, 1086),
+  bv("/media/applications/baby-care-concept-828.webp", 828, 621),
+  bv("/media/applications/personal-care-packaging-1448.webp", 1448, 1086),
+  bv("/media/applications/personal-care-packaging-828.webp", 828, 621),
+  bv("/media/applications/transparent-polymers-1448.webp", 1448, 1086),
+  bv("/media/applications/transparent-polymers-828.webp", 828, 621),
+  bv("/media/ctl-technology/clear-base-oil.webp", 826, 461),
+  bv("/media/ctl-technology/industrial-process.webp", 826, 460),
+  bv("/media/ctl-technology/molecular-visualization.webp", 826, 460),
+  bv("/media/iccsyn-cards/engine-valvetrain.webp", 1200, 900),
+  bv("/media/iccsyn-cards/hydraulic-power-unit.webp", 1200, 900),
+  bv("/media/iccsyn-cards/turbine-compressor-rotor.webp", 1200, 900),
+  bv("/media/iccsyn-cards/temp/compressor-turbine.webp", 900, 675),
+  bv("/media/iccsyn-cards/temp/engine-oils.webp", 900, 674),
+  bv("/media/iccsyn-cards/temp/hydraulic.webp", 900, 675),
+  bv("/media/iccsyn-cards/temp/industrial.webp", 900, 675),
+  bv("/media/iccsyn-cards/temp/specialty.webp", 900, 675),
+  bv("/media/iccsyn-cards/temp/transmission-gear.webp", 900, 675),
+  bv("/media/iccsyn-groups/temp/group-1-loop.gif", 587, 436, "animation"),
+  bv("/media/iccsyn-groups/temp/group-1-poster.webp", 587, 436),
+  bv("/media/iccsyn-groups/temp/group-2-loop.gif", 587, 435, "animation"),
+  bv("/media/iccsyn-groups/temp/group-2-poster.webp", 587, 435),
+  bv("/media/iccsyn-groups/temp/group-3-loop.gif", 587, 439, "animation"),
+  bv("/media/iccsyn-groups/temp/group-3-poster.webp", 587, 439),
+  bv("/media/iccsyn-groups/temp/group-3-plus-loop.gif", 586, 439, "animation"),
+  bv("/media/iccsyn-groups/temp/group-3-plus-poster.webp", 586, 439),
+  bv("/media/services-showcase/energy-trading-supply-desktop.webp", 1448, 1086),
+  bv("/media/services-showcase/energy-trading-supply-mobile.webp", 815, 1086),
+  bv("/media/services-showcase/logistics-desktop.webp", 1448, 1086),
+  bv("/media/services-showcase/logistics-mobile.webp", 815, 1086),
+  bv("/media/services-showcase/storage-distribution-desktop.webp", 1448, 1086),
+  bv("/media/services-showcase/storage-distribution-mobile.webp", 815, 1086),
+];
+
+export function cmsAsset(src: string): CmsStaticAsset | undefined {
+  return CMS_STATIC_ASSETS.find((a) => a.src === src);
+}
 
 /**
  * Link targets: a site path, an in-page anchor, https, mailto or tel. Everything else (javascript:,
@@ -133,14 +210,51 @@ export const CmsLinkSchema = z.strictObject({
 });
 export type CmsLink = z.infer<typeof CmsLinkSchema>;
 
+const ANCHOR = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+const POSITION = /^\d{1,3}% \d{1,3}%$/;
+
+function textSchema(field: Extract<CmsField, { type: "text" }>): z.ZodType {
+  switch (field.format) {
+    case "anchor":
+      return requiredText(Math.min(field.max, 60)).pipe(
+        z.string().regex(ANCHOR, { message: "anchor" }),
+      );
+    case "position":
+      return requiredText(12).pipe(z.string().regex(POSITION, { message: "position" }));
+    case "href":
+      return CmsHrefSchema.nullish()
+        .or(z.literal("").transform(() => null))
+        .transform((v) => v ?? null);
+    default:
+      return field.required ? requiredText(field.max) : optionalText(field.max);
+  }
+}
+
 function fieldSchema(field: CmsField): z.ZodType {
   switch (field.type) {
     case "text":
-      return field.required ? requiredText(field.max) : optionalText(field.max);
+      return textSchema(field);
     case "link":
       return field.required ? CmsLinkSchema : CmsLinkSchema.nullish().transform((v) => v ?? null);
-    case "list":
-      return z.array(cmsFieldsSchema(field.fields)).min(field.min).max(field.max);
+    case "list": {
+      const list = z.array(cmsFieldsSchema(field.fields)).min(field.min).max(field.max);
+      const key = field.unique;
+      if (!key) return list;
+      return list.refine((items) => new Set(items.map((i) => i[key])).size === items.length, {
+        message: "duplicate",
+        path: [],
+      });
+    }
+    case "group":
+      return cmsFieldsSchema(field.fields);
+    case "asset":
+      return z.string().refine(
+        (src) => {
+          const asset = cmsAsset(src);
+          return Boolean(asset && field.kinds.includes(asset.kind));
+        },
+        { message: "asset" },
+      );
   }
 }
 
@@ -408,6 +522,20 @@ export type CmsContextResponse = z.infer<typeof CmsContextResponseSchema>;
 
 const UserRefSchema = z.object({ id: UuidSchema, name: z.string() });
 
+/** S2: the page's current publication (one per page; PM-3 pattern). */
+export const CmsPublicationSchema = z.object({
+  status: z.enum(["PUBLISHED", "UNPUBLISHED"]),
+  revisionNumber: z.number().int(),
+  /** The draft version that was published; differs from the page version after an edit. */
+  pageVersion: z.number().int(),
+  publishedAt: IsoDate,
+  publishedBy: UserRefSchema,
+  unpublishedAt: IsoDate.nullable(),
+  unpublishedBy: UserRefSchema.nullable(),
+  version: z.number().int(),
+});
+export type CmsPublication = z.infer<typeof CmsPublicationSchema>;
+
 export const CmsPageSummarySchema = z.object({
   id: UuidSchema,
   siteId: UuidSchema,
@@ -420,6 +548,7 @@ export const CmsPageSummarySchema = z.object({
   version: z.number().int(),
   updatedAt: IsoDate,
   updatedBy: UserRefSchema,
+  publication: CmsPublicationSchema.nullable(),
 });
 export type CmsPageSummary = z.infer<typeof CmsPageSummarySchema>;
 
@@ -436,7 +565,8 @@ export const CmsPageSchema = CmsPageSummarySchema.extend({
     description: z.string().nullable(),
     noindex: z.boolean(),
   }),
-  content: z.object({ sections: z.array(z.looseObject({ id: z.string(), type: z.string() })) }),
+  /** TEMPLATE pages: `{ sections }`; DESIGN pages and fragments: their template's fields. */
+  content: z.record(z.string(), z.unknown()),
   createdAt: IsoDate,
   createdBy: UserRefSchema,
 });

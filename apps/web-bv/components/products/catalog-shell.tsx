@@ -2,7 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { SITE_NAV } from "@/content/site-nav";
+import { BRAND_LOGO } from "@/content/brand";
 import { privacyHref } from "@/lib/privacy";
 
 /** Header and frame of the product pages (PM-3): the brand, a way home and the breadcrumb. */
@@ -18,10 +18,10 @@ export function CatalogShell({
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-5 sm:px-8">
         <Link href="/" aria-label="Dream Petroleum BV home" className="shrink-0">
           <Image
-            src={SITE_NAV.logo.src}
-            alt={SITE_NAV.logo.alt}
-            width={SITE_NAV.logo.width}
-            height={SITE_NAV.logo.height}
+            src={BRAND_LOGO.src}
+            alt={BRAND_LOGO.alt}
+            width={BRAND_LOGO.width}
+            height={BRAND_LOGO.height}
             className="h-8 w-auto sm:h-10"
             priority
           />

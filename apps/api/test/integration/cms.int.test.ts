@@ -11,12 +11,17 @@
 // the section schema, optimistic versions, audit metadata without values); DESIGN pages are not
 // editable before the S2 import.
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  BV_FOOTER_FIELDS,
   CmsContextResponseSchema,
+  CmsImportResponseSchema,
+  CmsPreviewResponseSchema,
+  CmsPublicBundleSchema,
+  cmsFieldsSchema,
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
   ErrorBodySchema,
@@ -505,7 +510,12 @@ describe("4. save a draft", () => {
       description: "Who we are.",
       noindex: true,
     });
-    expect(page.content.sections[0]).toEqual({ ...HERO, eyebrow: null, intro: null, cta: null });
+    expect((page.content["sections"] as unknown[])[0]).toEqual({
+      ...HERO,
+      eyebrow: null,
+      intro: null,
+      cta: null,
+    });
     const audit = await lastAudit("cms.page_draft_saved");
     expect(audit?.metadata).toMatchObject({
       permission: "content:edit",
@@ -623,8 +633,8 @@ describe("5. lists and DESIGN pages", () => {
     expect(com.items.map((p) => p.path)).toEqual(["/about-us"]);
   });
 
-  it("does not save DESIGN pages before the S2 import gives them a form", async () => {
-    const home = await row({ kind: "DESIGN", templateKey: "bv.home", path: "/" });
+  it("does not save a designed page that has no template yet (bv.products-index)", async () => {
+    const home = await row({ kind: "DESIGN", templateKey: "bv.products-index", path: "/products" });
     const res = await bvEditor.post(`/pages/${home.id}/draft`, {
       version: 1,
       title: "Home",
@@ -634,6 +644,432 @@ describe("5. lists and DESIGN pages", () => {
     });
     expectError(res, 409, "CONFLICT_STATE", { path: "kind", rule: "not_editable_yet" });
     const read = CmsPageResponseSchema.parse((await bvReader.get(`/pages/${home.id}`)).body);
-    expect(read.page).toMatchObject({ kind: "DESIGN", slug: null, path: "/" });
+    expect(read.page).toMatchObject({ kind: "DESIGN", slug: null, path: "/products" });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// CMS S2 (DP-017, DP-134): import, designed drafts, publication, public read model, preview
+// ---------------------------------------------------------------------------------------------
+
+async function pub(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+  return parse(
+    await fetch(`${base}/api/v1/public/cms${p}`, {
+      headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.41" },
+    }),
+  );
+}
+const page = (id: string, as: Staff = bvEditor) => as.get(`/pages/${id}`);
+let homeId: string;
+let navId: string;
+let footerId: string;
+
+describe("6. import from code", () => {
+  it("dry-runs, imports as a draft, and never imports twice", async () => {
+    const dry = await bvEditor.post(`/sites/${BV}/import`, { key: "bv.home", dryRun: true });
+    expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+    const check = CmsImportResponseSchema.parse(dry.body);
+    expect(check).toMatchObject({ key: "bv.home", dryRun: true, pageId: null });
+    expect(check.summary.map((s) => s.field)).toEqual([
+      "hero",
+      "productGroups",
+      "services",
+      "ctl",
+      "applications",
+    ]);
+    expect(await owner.cmsPage.count({ where: { siteId: BV, templateKey: "bv.home" } })).toBe(0);
+
+    const res = await bvEditor.post(`/sites/${BV}/import`, { key: "bv.home", dryRun: false });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    homeId = CmsImportResponseSchema.parse(res.body).pageId!;
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    expect(home).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "bv.home",
+      path: "/",
+      publication: null,
+    });
+    expect((await lastAudit("cms.page_imported"))?.resourceId).toBe(homeId);
+
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.home", dryRun: true }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.home", dryRun: false }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+
+    for (const key of ["bv.site-nav", "bv.site-footer"]) {
+      const r = await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: false });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      const id = CmsImportResponseSchema.parse(r.body).pageId!;
+      if (key === "bv.site-nav") navId = id;
+      else footerId = id;
+    }
+  });
+
+  it("refuses unknown keys, keys of the other site and callers without content:edit", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.nothing", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "bv.home", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    expectError(
+      await bvPublisher.post(`/sites/${BV}/import`, { key: "bv.site-nav", dryRun: true }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await comEditor.post(`/sites/${BV}/import`, { key: "bv.site-nav", dryRun: true }),
+      403,
+      "FORBIDDEN",
+    );
+  });
+});
+
+describe("7. drafts of designed pages", () => {
+  it("saves validated fields; the path stays fixed", async () => {
+    const before = CmsPageResponseSchema.parse((await page(footerId)).body).page;
+    const content = { ...before.content, headline: "Let’s move energy forward, together." };
+    const res = await bvEditor.post(`/pages/${footerId}/draft`, {
+      version: before.version,
+      title: "Footer",
+      seo: { title: null, description: null, noindex: false },
+      content,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const after = CmsPageResponseSchema.parse(res.body).page;
+    expect(after).toMatchObject({ version: before.version + 1, path: null });
+    expect(after.content["headline"]).toBe("Let’s move energy forward, together.");
+    expect((await lastAudit("cms.page_draft_saved"))?.metadata).toMatchObject({
+      changed: ["content"],
+    });
+  });
+
+  it("refuses removing a required disclosure, unknown fields and unregistered images", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    const c = home.content as Record<string, Record<string, unknown>>;
+    const save = (content: unknown) =>
+      bvEditor.post(`/pages/${homeId}/draft`, {
+        version: home.version,
+        title: "Home",
+        seo: home.seo,
+        content,
+      });
+    const r1 = await save({ ...c, services: { ...c["services"], disclosure: " " } });
+    expectError(r1, 400, "VALIDATION_FAILED");
+    expect(r1.body.error.details.map((d: { path: string }) => d.path)).toContain(
+      "content.services.disclosure",
+    );
+    expectError(await save({ ...c, extra: 1 }), 400, "VALIDATION_FAILED");
+    const ctl = c["ctl"] as { stages: Record<string, unknown>[] };
+    const stages = ctl.stages.map((s, i) =>
+      i === 0 ? { ...s, image: "https://evil.example/x.webp" } : s,
+    );
+    expectError(await save({ ...c, ctl: { ...ctl, stages } }), 400, "VALIDATION_FAILED");
+    expectError(
+      await save({ ...c, ctl: { ...ctl, stages: ctl.stages.slice(0, 2) } }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await bvEditor.post(`/pages/${homeId}/draft`, {
+        version: home.version,
+        title: "Home",
+        slug: "x-y",
+        seo: home.seo,
+        content: c,
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+  });
+});
+
+describe("8. publication and the public read model", () => {
+  it("shows nothing before the first publication (no fallback)", async () => {
+    expectError(await pub("/page?path=/"), 404, "NOT_FOUND");
+  });
+
+  it("publishes only with content:publish of the site", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    expectError(
+      await bvEditor.post(`/pages/${homeId}/publish`, { version: home.version }),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(
+      await root.post(`/pages/${homeId}/publish`, { version: home.version }),
+      404,
+      "NOT_FOUND",
+    );
+    expect((await lastAudit("cms.access_denied"))?.actorUserId).toBe(root.userId);
+    expectError(
+      await bvPublisher.post(`/pages/${homeId}/publish`, { version: home.version + 5 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+  });
+
+  it("publishes a revision; the site reads it with published fragments only", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    const res = await bvPublisher.post(`/pages/${homeId}/publish`, { version: home.version });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const published = CmsPageResponseSchema.parse(res.body).page;
+    expect(published.publication).toMatchObject({
+      status: "PUBLISHED",
+      revisionNumber: 1,
+      pageVersion: home.version,
+      publishedBy: { id: bvPublisher.userId },
+    });
+    expect((await lastAudit("cms.page_published"))?.metadata).toMatchObject({
+      revisionNumber: 1,
+      path: "/",
+    });
+
+    const live = await pub("/page?path=/");
+    expect(live.status, JSON.stringify(live.body)).toBe(200);
+    const bundle = CmsPublicBundleSchema.parse(live.body);
+    expect(bundle).toMatchObject({
+      preview: false,
+      page: { templateKey: "bv.home", revisionNumber: 1 },
+    });
+    expect(bundle.page.content).toEqual(home.content);
+    // Navigation and footer are imported but not published: not shown.
+    expect(bundle.fragments).toEqual({ "bv.site-nav": null, "bv.site-footer": null });
+    // The Corporate site cannot read BV pages, the admin key cannot read public pages.
+    expectError(await pub("/page?path=/", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    expectError(await pub("/page?path=/", TEST_KEYS.admin), 404, "NOT_FOUND");
+    expectError(await pub("/page?path=..%2F"), 404, "NOT_FOUND");
+  });
+
+  it("keeps a saved draft off the site until it is published again", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    const c = home.content as { hero: Record<string, unknown> };
+    const save = await bvEditor.post(`/pages/${homeId}/draft`, {
+      version: home.version,
+      title: "Home",
+      seo: home.seo,
+      content: { ...c, hero: { ...c.hero, tagline: "Purity in Motion. (CMS S2 test)" } },
+    });
+    expect(save.status, JSON.stringify(save.body)).toBe(200);
+    const saved = CmsPageResponseSchema.parse(save.body).page;
+    expect(saved.publication?.pageVersion).toBe(home.version);
+    expect(saved.version).toBe(home.version + 1);
+    const before = CmsPublicBundleSchema.parse((await pub("/page?path=/")).body);
+    expect((before.page.content as { hero: { tagline: string } }).hero.tagline).toBe(
+      "Purity in Motion.",
+    );
+
+    const re = await bvPublisher.post(`/pages/${homeId}/publish`, { version: saved.version });
+    expect(re.status, JSON.stringify(re.body)).toBe(200);
+    const after = CmsPublicBundleSchema.parse((await pub("/page?path=/")).body);
+    expect(after.page.revisionNumber).toBe(2);
+    expect((after.page.content as { hero: { tagline: string } }).hero.tagline).toBe(
+      "Purity in Motion. (CMS S2 test)",
+    );
+  });
+
+  it("shows published fragments, validated", async () => {
+    for (const id of [navId, footerId]) {
+      const p = CmsPageResponseSchema.parse((await page(id)).body).page;
+      const r = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
+    const bundle = CmsPublicBundleSchema.parse((await pub("/page?path=/")).body);
+    expect(bundle.fragments["bv.site-nav"]?.templateKey).toBe("bv.site-nav");
+    const footer = cmsFieldsSchema(BV_FOOTER_FIELDS).parse(
+      bundle.fragments["bv.site-footer"]?.content,
+    );
+    expect(footer["headline"]).toBe("Let’s move energy forward, together.");
+  });
+
+  it("unpublishes: the page is gone from the site (no fallback); republishing brings the draft", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    expectError(
+      await bvPublisher.post(`/pages/${homeId}/unpublish`, { publicationVersion: 99 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "publicationVersion", rule: "stale" },
+    );
+    const res = await bvPublisher.post(`/pages/${homeId}/unpublish`, {
+      publicationVersion: home.publication!.version,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(CmsPageResponseSchema.parse(res.body).page.publication).toMatchObject({
+      status: "UNPUBLISHED",
+      unpublishedBy: { id: bvPublisher.userId },
+    });
+    expectError(await pub("/page?path=/"), 404, "NOT_FOUND");
+    expectError(
+      await bvPublisher.post(`/pages/${homeId}/unpublish`, {
+        publicationVersion: home.publication!.version + 1,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "status", rule: "not_published" },
+    );
+
+    const re = await bvPublisher.post(`/pages/${homeId}/publish`, { version: home.version });
+    expect(re.status, JSON.stringify(re.body)).toBe(200);
+    expect(CmsPublicBundleSchema.parse((await pub("/page?path=/")).body).page.revisionNumber).toBe(
+      3,
+    );
+    expect(await owner.cmsPageRevision.count({ where: { pageId: homeId } })).toBe(3);
+  });
+
+  it("refuses publishing a path that another page shows live", async () => {
+    const a = CmsPageResponseSchema.parse(
+      (await bvEditor.post(`/sites/${BV}/pages`, { title: "A", slug: "clash-a" })).body,
+    ).page;
+    const pa = await bvPublisher.post(`/pages/${a.id}/publish`, { version: a.version });
+    expect(pa.status, JSON.stringify(pa.body)).toBe(200);
+    const moved = await bvEditor.post(`/pages/${a.id}/draft`, {
+      version: a.version,
+      title: "A",
+      slug: "clash-a-moved",
+      seo: SEO,
+      content: { sections: [] },
+    });
+    expect(moved.status).toBe(200);
+    const b = CmsPageResponseSchema.parse(
+      (await bvEditor.post(`/sites/${BV}/pages`, { title: "B", slug: "clash-a" })).body,
+    ).page;
+    expectError(
+      await bvPublisher.post(`/pages/${b.id}/publish`, { version: b.version }),
+      409,
+      "CONFLICT_STATE",
+      { path: "slug", rule: "live_elsewhere" },
+    );
+  });
+});
+
+describe("9. preview links", () => {
+  const hmac = Buffer.from(TEST_KEYS.hmac, "base64url");
+  const forge = (pageId: string, site: string, exp: number) =>
+    `v1.${pageId}.${site}.${exp}.${createHmac("sha256", hmac).update("dp:cms_preview\0").update(`${pageId}\0${site}\0${exp}`).digest("hex")}`;
+
+  it("shows the current draft of one page on its site for 15 minutes", async () => {
+    const home = CmsPageResponseSchema.parse((await page(homeId)).body).page;
+    const c = home.content as { hero: Record<string, unknown> };
+    const draft = await bvEditor.post(`/pages/${homeId}/draft`, {
+      version: home.version,
+      title: "Home",
+      seo: home.seo,
+      content: { ...c, hero: { ...c.hero, tagline: "Draft tagline (preview only)" } },
+    });
+    expect(draft.status).toBe(200);
+    const res = await bvReader.post(`/pages/${homeId}/preview`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const { url } = CmsPreviewResponseSchema.parse(res.body);
+    const token = url.split("/preview/")[1]!;
+    const view = await pub(`/preview/${token}`);
+    expect(view.status, JSON.stringify(view.body)).toBe(200);
+    const bundle = CmsPublicBundleSchema.parse(view.body);
+    expect(bundle).toMatchObject({ preview: true, page: { revisionNumber: null } });
+    expect((bundle.page.content as { hero: { tagline: string } }).hero.tagline).toBe(
+      "Draft tagline (preview only)",
+    );
+    // The live page is unchanged.
+    expect(
+      (
+        CmsPublicBundleSchema.parse((await pub("/page?path=/")).body).page.content as {
+          hero: { tagline: string };
+        }
+      ).hero.tagline,
+    ).not.toBe("Draft tagline (preview only)");
+    expect((await lastAudit("cms.preview_issued"))?.actorUserId).toBe(bvReader.userId);
+    // Another site's key, a forged, an expired or a too-long token: nothing.
+    expectError(await pub(`/preview/${token}`, TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    expectError(await pub(`/preview/${token.slice(0, -1)}0`), 404, "NOT_FOUND");
+    expectError(await pub(`/preview/${forge(homeId, "BV", Date.now() - 1000)}`), 404, "NOT_FOUND");
+    expectError(
+      await pub(`/preview/${forge(homeId, "BV", Date.now() + 86_400_000)}`),
+      404,
+      "NOT_FOUND",
+    );
+    expect((await pub(`/preview/${forge(homeId, "BV", Date.now() + 60_000)}`)).status).toBe(200);
+  });
+
+  it("previews a fragment around the home page", async () => {
+    const res = await bvEditor.post(`/pages/${navId}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(res.body).url.split("/preview/")[1]!;
+    const bundle = CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body);
+    expect(bundle.page.templateKey).toBe("bv.home");
+    expect(bundle.fragments["bv.site-nav"]?.revisionNumber).toBeNull();
+  });
+
+  it("issues links only to readers of the page's site", async () => {
+    expectError(await comEditor.post(`/pages/${homeId}/preview`, {}), 404, "NOT_FOUND");
+    expectError(await nobody.post(`/pages/${homeId}/preview`, {}), 404, "NOT_FOUND");
+  });
+});
+
+describe("10. publication rules in the database", () => {
+  it("keeps revisions immutable and publications undeletable", async () => {
+    const rev = await owner.cmsPageRevision.findFirstOrThrow({ where: { pageId: homeId } });
+    await rejectsDb(
+      owner.cmsPageRevision.update({ where: { id: rev.id }, data: { title: "x" } }),
+      /published revision cannot be changed/,
+    );
+    await rejectsDb(
+      owner.cmsPageRevision.delete({ where: { id: rev.id } }),
+      /published revision cannot be changed/,
+    );
+    await rejectsDb(
+      asApp.cmsPageRevision.update({ where: { id: rev.id }, data: { title: "x" } }),
+      /permission denied/,
+    );
+    await rejectsDb(
+      asApp.cmsPagePublication.delete({ where: { pageId: homeId } }),
+      /permission denied/,
+    );
+  });
+
+  it("refuses inconsistent publication state and revisions of another page or site", async () => {
+    await rejectsDb(
+      owner.cmsPagePublication.update({
+        where: { pageId: homeId },
+        data: { status: "UNPUBLISHED" },
+      }),
+      /CmsPagePublication_status_fields/,
+    );
+    const footerRev = await owner.cmsPageRevision.findFirstOrThrow({ where: { pageId: footerId } });
+    await rejectsDb(
+      owner.cmsPagePublication.update({
+        where: { pageId: homeId },
+        data: { revisionId: footerRev.id },
+      }),
+      /foreign key|CmsPagePublication_revisionId_pageId_fkey/i,
+    );
+    await rejectsDb(
+      owner.cmsPageRevision.create({
+        data: {
+          pageId: homeId,
+          siteId: COM,
+          revisionNumber: 99,
+          pageVersion: 1,
+          title: "x",
+          noindex: false,
+          content: {},
+          schemaVersion: 1,
+          createdById: root.userId,
+        },
+      }),
+      /foreign key|CmsPageRevision_pageId_siteId_fkey/i,
+    );
   });
 });
