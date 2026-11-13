@@ -185,6 +185,8 @@ model Site {
   // DP-042/DP-043 (ADR-016): leads and document requests of this site.
   leads                      Lead[]
   leadDocumentRequests       LeadDocumentRequest[]
+  // DP-151: contact-form messages to this site.
+  leadContactMessages        LeadContactMessage[]
   documentGrants             DocumentDownloadGrant[]
   leadDocumentDownloads      LeadDocumentDownload[]
   // DP-041 (ADR-019): sales activity on this site's leads.
@@ -1206,9 +1208,10 @@ model Lead {
   workflowVersion    Int                @default(0)
 
   site       Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  requests   LeadDocumentRequest[]
-  assignedTo User?                 @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
-  activities LeadActivity[]
+  requests        LeadDocumentRequest[]
+  contactMessages LeadContactMessage[]
+  assignedTo      User?                 @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  activities      LeadActivity[]
 
   @@unique([siteId, email])
   @@index([siteId, lastRequestAt])
@@ -1324,6 +1327,37 @@ model LeadDocumentRequest {
   @@index([leadId, createdAt])
   @@index([documentId])
   @@index([revisionId, documentId])
+}
+
+/// DP-151: one message sent with the site's contact form, with its consent evidence (append-only
+/// for dp_app). Attached to the sender's lead on the site; read with lead:read on that site.
+model LeadContactMessage {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  leadId               String    @db.Uuid
+  siteId               String    @db.Uuid
+  /// What the visitor submitted. Name and company become '' and phone, subject and message null
+  /// when the lead is anonymised (DP-096); `redactedAt` records when.
+  fullName             String    @db.VarChar(120)
+  company              String    @db.VarChar(160)
+  country              String    @db.Char(2)
+  phone                String?   @db.VarChar(40)
+  subject              String?   @db.VarChar(160)
+  message              String?   @db.VarChar(4000)
+  /// The notice shown next to the form (information, not consent): version and SHA-256 of the
+  /// exact text. The form has no marketing consent (owner decision 2026-11-13).
+  privacyNoticeVersion String    @db.VarChar(20)
+  privacyNoticeSha256  String    @db.Char(64)
+  /// HMAC of the client's IP prefix (never the address); null when the site sent none.
+  ipPrefixHmac         String?   @db.Char(64)
+  requestId            String?   @db.VarChar(100)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+  redactedAt           DateTime? @db.Timestamptz(3)
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, createdAt])
+  @@index([leadId, createdAt])
 }
 
 /// Short-lived permission to download the file of one request (15 minutes, at most 3 times).

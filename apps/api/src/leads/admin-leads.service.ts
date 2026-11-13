@@ -377,6 +377,12 @@ export class AdminLeadsService {
         orderBy: { deliveredAt: "asc" },
         select: { requestId: true, deliveredAt: true, byteSize: true, sha256: true },
       });
+      // DP-151: contact-form messages of this lead.
+      const messageRows = await tx.leadContactMessage.findMany({
+        where: { leadId: row.id, siteId: row.siteId },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      });
       const activityRows: ActivityRow[] = await tx.leadActivity.findMany({
         where: { leadId: row.id, siteId: row.siteId },
         orderBy: [{ createdAt: "desc" }, { seq: "desc" }],
@@ -388,6 +394,7 @@ export class AdminLeadsService {
         requests: reqs,
         grants: grantRows,
         downloads: downloadRows,
+        messages: messageRows,
         activities: activityRows,
       };
     });
@@ -396,7 +403,7 @@ export class AdminLeadsService {
       await access.denied(PERMISSION, { type: "lead", id }, "not_found_or_other_site");
       throw new ApiError("NOT_FOUND");
     }
-    const { lead, requests, grants, downloads, activities } = found;
+    const { lead, requests, grants, downloads, messages, activities } = found;
     const canManage =
       lead.anonymisedAt === null && access.allows(MANAGE, { scope: "site", siteId: lead.siteId });
     const [people, assignees] = await Promise.all([
@@ -438,6 +445,7 @@ export class AdminLeadsService {
       permission: PERMISSION,
       metadata: {
         requests: requests.length,
+        contactMessages: messages.length,
         activities: activities.length,
         accessAssignmentIds: access.grantRefs(PERMISSION, [lead.siteId]),
       },
@@ -447,6 +455,19 @@ export class AdminLeadsService {
       activities: activities.map((a) => this.activity(a, people.names)),
       canManage,
       assignees,
+      contactMessages: messages.map((m) => ({
+        id: m.id,
+        createdAt: m.createdAt.toISOString(),
+        fullName: m.fullName,
+        company: m.company,
+        country: m.country,
+        phone: m.phone,
+        subject: m.subject,
+        message: m.message,
+        privacyNoticeVersion: m.privacyNoticeVersion,
+        privacyNoticeSha256: m.privacyNoticeSha256,
+        redactedAt: m.redactedAt?.toISOString() ?? null,
+      })),
       requests: requests.map((r) => {
         const g = grantOf.get(r.id);
         const p = productOf.get(r.productId);

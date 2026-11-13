@@ -480,7 +480,7 @@ describe("DP-103: what can step around row-level security", () => {
   it("keeps the SECURITY DEFINER functions to a reviewed list, all owned by dp_owner", async () => {
     const rows = await su.$queryRawUnsafe<{ f: string; owner: string; lead: boolean }[]>(
       `SELECT p.proname::text AS f, pg_get_userbyid(p.proowner)::text AS owner,
-              p.prosrc ~ '"(Lead|LeadDocumentRequest|DocumentDownloadGrant|LeadDocumentDownload)"' AS lead
+              p.prosrc ~ '"(Lead|LeadDocumentRequest|LeadContactMessage|DocumentDownloadGrant|LeadDocumentDownload)"' AS lead
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef ORDER BY 1`,
     );
     expect(rows).toEqual([

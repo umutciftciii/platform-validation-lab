@@ -1,11 +1,12 @@
 /**
- * Lead routes (DP-042; ADR-016). Public: the site's server forwards the short form (site from its
- * proxy key). Admin: list and detail with lead:read; the sales workflow (status, assignment,
+ * Lead routes (DP-042; ADR-016). Public: the site's server forwards the short form and the contact
+ * form (DP-151; site from its proxy key). Admin: list and detail with lead:read; the sales workflow (status, assignment,
  * notes, contacts) with lead:manage (DP-041, ADR-019). Export: DP-126.
  */
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query } from "@nestjs/common";
 import type {
   LeadActivityResponse,
+  LeadContactMessageResponse,
   LeadDetailResponse,
   LeadDocumentRequestResponse,
   LeadListResponse,
@@ -13,6 +14,7 @@ import type {
 } from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { AdminLeadsService } from "./admin-leads.service.js";
+import { ContactMessagesService } from "./contact-messages.service.js";
 import { LeadRequestsService } from "./lead-requests.service.js";
 
 function single(value: unknown): string | undefined {
@@ -21,12 +23,25 @@ function single(value: unknown): string | undefined {
 
 @Controller("api/v1/public/leads")
 export class PublicLeadsController {
-  constructor(@Inject(LeadRequestsService) private readonly leads: LeadRequestsService) {}
+  constructor(
+    @Inject(LeadRequestsService) private readonly leads: LeadRequestsService,
+    @Inject(ContactMessagesService) private readonly contact: ContactMessagesService,
+  ) {}
 
   @Post("document-requests")
   @HttpCode(201)
   request(@Ctx() ctx: RequestContext, @Body() body: unknown): Promise<LeadDocumentRequestResponse> {
     return this.leads.request(ctx, body);
+  }
+
+  /** DP-151: a message from the site's contact form. */
+  @Post("contact-messages")
+  @HttpCode(201)
+  contactMessage(
+    @Ctx() ctx: RequestContext,
+    @Body() body: unknown,
+  ): Promise<LeadContactMessageResponse> {
+    return this.contact.send(ctx, body);
   }
 }
 

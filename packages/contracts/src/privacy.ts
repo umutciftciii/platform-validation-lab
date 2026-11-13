@@ -8,7 +8,7 @@
  *   banner outside production and are not published in production at all (D-T3, D-T5). The lead
  *   form follows the same gate, because its notice points to this policy.
  */
-import { LEAD_MARKETING_CONSENT, LEAD_PRIVACY_NOTICE } from "./leads.js";
+import { LEAD_CONTACT_NOTICE, LEAD_MARKETING_CONSENT, LEAD_PRIVACY_NOTICE } from "./leads.js";
 
 export type PrivacyDeployEnv = "local" | "staging" | "production";
 
@@ -60,6 +60,7 @@ export function privacyBlockers(
   controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
   values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
   noticeFinal: boolean = LEAD_PRIVACY_NOTICE.final,
+  contactNoticeFinal: boolean = LEAD_CONTACT_NOTICE.final,
 ): string[] {
   const out: string[] = [];
   if (!controller.registeredAddress) out.push("D-T2: registered address");
@@ -71,6 +72,7 @@ export function privacyBlockers(
   }
   if (!noticeFinal) out.push("D-T3: lead privacy notice not marked final");
   if (!LEAD_MARKETING_CONSENT.final) out.push("D-T4: marketing consent text not marked final");
+  if (!contactNoticeFinal) out.push("DP-151: contact form privacy notice not marked final");
   return out;
 }
 

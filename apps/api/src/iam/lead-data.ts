@@ -1,8 +1,8 @@
 /**
  * The only way into the lead tables for the API (DP-103; ADR-012B, lead data).
  *
- * "Lead", "LeadDocumentRequest", "DocumentDownloadGrant" and "LeadDocumentDownload" have row-level
- * security for dp_app (migration 20261123090000_dp_103_lead_row_level_security): without a
+ * "Lead", "LeadDocumentRequest", "DocumentDownloadGrant", "LeadDocumentDownload" and (DP-151)
+ * "LeadContactMessage" have row-level security for dp_app (migration 20261123090000_dp_103_lead_row_level_security): without a
  * context of the current transaction they show no row. `inLeadContext` opens ONE interactive
  * transaction, sets the context with `set_config(..., true)` (transaction-local: it ends with the
  * transaction, so nothing leaks to the next user of the pooled connection) and hands the callback
