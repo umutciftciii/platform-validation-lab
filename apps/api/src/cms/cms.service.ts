@@ -51,6 +51,7 @@ import {
 } from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
 import { CMS_SEEDS } from "./seed/bv.js";
+import { CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 
 const READ = "content:read";
 const EDIT = "content:edit";
@@ -306,33 +307,36 @@ export class CmsService {
     const siteId = await CmsService.requireSite(a, EDIT, rawSiteId);
     const input = parseBody(CmsImportRequestSchema, body);
     const site = await CmsService.site(a, siteId);
-    const template = cmsDesignTemplate(input.key);
-    const seed = CMS_SEEDS[input.key];
-    if (!template || !seed || template.site !== site.key) {
-      throw new ApiError("VALIDATION_FAILED", [{ path: "key", rule: "unknown_template" }]);
-    }
-    const content = validateContent(template.kind, template.key, seed.content);
+    const plan = CmsService.importPlan(input.key, site.key);
+    const content = validateContent(plan.kind, plan.templateKey, plan.content);
     const summary = Object.entries(content).map(([field, value]) => ({
       field,
       items: Array.isArray(value) ? value.length : null,
     }));
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    // Never overwrite (ADR-020 D7): a designed page by its registry key, a content page by its path.
     const existing = await db.cmsPage.findFirst({
-      where: { siteId, templateKey: template.key },
+      where:
+        plan.kind === "TEMPLATE"
+          ? { siteId, path: plan.path }
+          : { siteId, templateKey: plan.templateKey },
       select: { id: true },
     });
     if (existing) throw new ApiError("CONFLICT_STATE", [{ path: "key", rule: "already_imported" }]);
-    if (input.dryRun) return { key: template.key, dryRun: true, summary, pageId: null };
+    if (input.dryRun) return { key: input.key, dryRun: true, summary, pageId: null };
     try {
       const id = await db.$transaction(async (tx) => {
         const created = await tx.cmsPage.create({
           data: {
             siteId,
-            kind: template.kind,
-            templateKey: template.key,
-            path: template.path,
+            kind: plan.kind,
+            templateKey: plan.templateKey,
+            path: plan.path,
             locale: site.locale,
-            title: seed.title,
+            title: plan.title,
+            seoTitle: plan.seo.title,
+            seoDescription: plan.seo.description,
+            noindex: plan.seo.noindex,
             content: content as never,
             schemaVersion: SCHEMA_VERSION,
             createdById: a.userId,
@@ -346,15 +350,43 @@ export class CmsService {
           resourceId: created.id,
           siteId,
           permission: EDIT,
-          metadata: { templateKey: template.key, fields: summary.length },
+          metadata: { templateKey: input.key, fields: summary.length },
         });
         return created.id;
       });
-      return { key: template.key, dryRun: false, summary, pageId: id };
+      return { key: input.key, dryRun: false, summary, pageId: id };
     } catch (e) {
-      // A concurrent import of the same key: the registry unique index answers.
+      // A concurrent import of the same key: the registry or path unique index answers.
       return mapCmsDbError(e);
     }
+  }
+
+  /** What an import key creates: a designed page or fragment, or a content (TEMPLATE) page. */
+  private static importPlan(key: string, siteKey: CmsSite["key"]) {
+    const template = cmsDesignTemplate(key);
+    const seed = CMS_SEEDS[key];
+    if (template && seed && template.site === siteKey) {
+      return {
+        kind: template.kind,
+        templateKey: template.key,
+        path: template.path,
+        title: seed.title,
+        seo: { title: null, description: null, noindex: false },
+        content: seed.content,
+      };
+    }
+    const page = CMS_PAGE_SEEDS[key];
+    if (page && key.startsWith(`${siteKey.toLowerCase()}.`)) {
+      return {
+        kind: "TEMPLATE" as const,
+        templateKey: CMS_STANDARD_TEMPLATE,
+        path: cmsPathForSlug(page.slug),
+        title: page.title,
+        seo: page.seo,
+        content: page.content,
+      };
+    }
+    throw new ApiError("VALIDATION_FAILED", [{ path: "key", rule: "unknown_template" }]);
   }
 
   // --- preview and publication ---------------------------------------------------------------
