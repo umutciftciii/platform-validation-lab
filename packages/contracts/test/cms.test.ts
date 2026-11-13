@@ -269,3 +269,54 @@ describe("CMS S2 field types", () => {
     }
   });
 });
+
+describe("CMS content page sections (DP-135)", () => {
+  const parse = (section: Record<string, unknown>) =>
+    CmsTemplateContentSchema.safeParse({ sections: [{ id: "sec-0001", ...section }] });
+  const split = {
+    type: "split",
+    eyebrow: null,
+    title: "Logistics",
+    body: "Sea and road.",
+    image: "/media/services-showcase/logistics-desktop.webp",
+    imageAlt: "A tanker at a quay.",
+    imageNote: null,
+  };
+
+  it("accepts an image beside text, a specification list and a quote", () => {
+    expect(parse(split).success).toBe(true);
+    expect(
+      parse({
+        type: "specList",
+        title: "Products",
+        intro: null,
+        items: [{ term: "Base Oils", detail: "Group I, Group II" }],
+        link: { label: "Contact", href: "/contact" },
+      }).success,
+    ).toBe(true);
+    expect(parse({ type: "quote", text: "Long-term value.", source: null }).success).toBe(true);
+  });
+
+  it("refuses an unregistered image, a missing alt text, an empty list and an empty quote", () => {
+    expect(parse({ ...split, image: "/media/elsewhere.webp" }).success).toBe(false);
+    expect(parse({ ...split, imageAlt: "" }).success).toBe(false);
+    expect(
+      parse({ type: "specList", title: "T", intro: null, items: [], link: null }).success,
+    ).toBe(false);
+    expect(parse({ type: "quote", text: " ", source: null }).success).toBe(false);
+  });
+
+  it("offers an import only for content the site has a seed for", () => {
+    for (const e of CMS_SITE_REGISTRY) {
+      if (e.importable) expect(e.managedBy, e.key).toBe("cms_pending");
+      if (e.kind === "TEMPLATE") expect(e.path, e.key).toMatch(/^\/[a-z0-9-]+$/);
+    }
+    const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
+    expect(importable.map((e) => e.path).sort()).toEqual([
+      "/about-us",
+      "/energy-trading",
+      "/logistics",
+      "/storage-distribution",
+    ]);
+  });
+});
