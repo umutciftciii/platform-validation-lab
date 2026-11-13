@@ -297,6 +297,20 @@ describe("CMS content page sections (DP-135)", () => {
     expect(parse({ type: "quote", text: "Long-term value.", source: null }).success).toBe(true);
   });
 
+  it("accepts the contact section only with its form note (DP-150)", () => {
+    const contact = {
+      type: "contact",
+      title: "Contact",
+      intro: null,
+      formTitle: "Send us a message",
+      formNote: "This form cannot send messages yet.",
+    };
+    expect(parse(contact).success).toBe(true);
+    expect(parse({ ...contact, formNote: "" }).success).toBe(false);
+    // The phone, e-mail and address come from the footer, never from the section.
+    expect(parse({ ...contact, phone: "+31 20 000 0000" }).success).toBe(false);
+  });
+
   it("refuses an unregistered image, a missing alt text, an empty list and an empty quote", () => {
     expect(parse({ ...split, image: "/media/elsewhere.webp" }).success).toBe(false);
     expect(parse({ ...split, imageAlt: "" }).success).toBe(false);
@@ -314,6 +328,7 @@ describe("CMS content page sections (DP-135)", () => {
     const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
     expect(importable.map((e) => e.path).sort()).toEqual([
       "/about-us",
+      "/contact",
       "/energy-trading",
       "/logistics",
       "/storage-distribution",
