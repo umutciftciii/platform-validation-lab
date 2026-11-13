@@ -262,6 +262,8 @@ jobs:
       LEADS_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_leads_test?schema=public
       OWNER_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_owner_test?schema=public
       OWNER_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_owner_test?schema=public
+      CMS_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_cms_test?schema=public
+      CMS_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_cms_test?schema=public
       # Application database names, so the test guard refuses them (ADR-009, ADR-010).
       POSTGRES_DB: dream_platform
       DEV_POSTGRES_DB: dream_platform_dev
@@ -285,7 +287,7 @@ jobs:
           PG: ${{ job.services.postgres.id }}
         run: |
           infra/docker/postgres/apply-roles.sh "$PG" test
-          for db in auth catalog workflow documents xrefs leads owner; do
+          for db in auth catalog workflow documents xrefs leads owner cms; do
             docker exec "$PG" createdb -U dream_platform_test "dream_platform_${db}_test"
             infra/docker/postgres/apply-roles.sh "$PG" test "dream_platform_${db}_test"
           done
