@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   CMS_SITE_REGISTRY,
-  cmsDesignTemplate,
   CmsContextResponseSchema,
   CmsPageListResponseSchema,
   type CmsRegistryEntry,
@@ -59,10 +58,15 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
   const site = pickCmsSite(sites, typeof params["site"] === "string" ? params["site"] : undefined);
   const sp = site.key.toLowerCase();
   const list = await serverRead(`${CMS}/sites/${site.id}/pages`, CmsPageListResponseSchema);
-  const imported = new Set(
-    list.ok ? list.data.items.filter((p) => p.kind !== "TEMPLATE").map((p) => p.templateKey) : [],
+  // A registry entry leaves the list once its page exists in the CMS: designed pages and
+  // fragments by their key, content pages by their path.
+  const pages = list.ok ? list.data.items : [];
+  const imported = new Set(pages.filter((p) => p.kind !== "TEMPLATE").map((p) => p.templateKey));
+  const paths = new Set(pages.map((p) => p.path));
+  const routes = CMS_SITE_REGISTRY.filter(
+    (e) =>
+      e.site === site.key && !imported.has(e.key) && !(e.kind === "TEMPLATE" && paths.has(e.path)),
   );
-  const routes = CMS_SITE_REGISTRY.filter((e) => e.site === site.key && !imported.has(e.key));
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -188,7 +192,7 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
 
 function RouteRow({ entry, site }: { entry: CmsRegistryEntry; site: CmsSite }) {
   return (
-    <li className="grid grid-cols-1 gap-x-4 gap-y-2 px-5 py-3.5 sm:px-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2.2fr)] md:items-center">
+    <li className="grid grid-cols-1 gap-x-4 gap-y-2 px-5 py-3.5 sm:px-6 md:grid-cols-[minmax(0,2fr)_auto_minmax(0,2.2fr)] md:items-center">
       <div className="min-w-0">
         <span className="block font-medium text-ink">{entry.title}</span>
         <span className="block font-mono text-xs text-ink-3">{entry.path ?? "Site-wide part"}</span>
@@ -210,7 +214,7 @@ function RouteRow({ entry, site }: { entry: CmsRegistryEntry; site: CmsSite }) {
           </>
         ) : null}
       </p>
-      {entry.managedBy === "cms_pending" && cmsDesignTemplate(entry.key) && site.canEdit ? (
+      {entry.managedBy === "cms_pending" && entry.importable && site.canEdit ? (
         <div className="md:col-span-3">
           <ImportButton
             siteId={site.id}
