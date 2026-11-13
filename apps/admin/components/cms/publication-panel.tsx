@@ -111,7 +111,9 @@ export function PublicationPanel({
             Preview draft
           </button>
         ) : (
-          <p className="text-ink-3">Preview of template pages arrives with the next release.</p>
+          <p className="text-ink-3">
+            Preview shows pages of the BV site; this site has no pages yet.
+          </p>
         )}
         {previewUrl ? (
           <p className="text-xs text-ink-3">

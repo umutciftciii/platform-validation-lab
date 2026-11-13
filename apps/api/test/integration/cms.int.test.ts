@@ -1073,3 +1073,90 @@ describe("10. publication rules in the database", () => {
     );
   });
 });
+
+describe("11. template pages on the site (CMS S3)", () => {
+  it("serves a published template page at its path, with fragments; drafts stay off the site", async () => {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "Energy trading",
+      slug: "energy-trading",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const sections = [
+      {
+        id: "sec-hero-0001",
+        type: "hero",
+        eyebrow: "Services",
+        title: "Energy trading",
+        intro: "From Rotterdam.",
+        cta: { label: "Contact", href: "/contact" },
+      },
+      { id: "sec-text-0001", type: "text", title: null, body: "One.\n\nTwo." },
+      {
+        id: "sec-cards-001",
+        type: "cards",
+        title: "Markets",
+        intro: null,
+        items: [{ title: "Base oils", description: null, link: null }],
+      },
+      {
+        id: "sec-cta-00001",
+        type: "cta",
+        title: "Talk to us",
+        text: null,
+        button: { label: "Write", href: "mailto:info@example.com" },
+      },
+    ];
+    const saved = await bvEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title: "Energy trading",
+      slug: "energy-trading",
+      seo: {
+        title: "Energy trading | Dream Petroleum BV",
+        description: "Trading desk.",
+        noindex: true,
+      },
+      content: { sections },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const draft = CmsPageResponseSchema.parse(saved.body).page;
+    expectError(await pub("/page?path=/energy-trading"), 404, "NOT_FOUND");
+
+    const preview = await bvEditor.post(`/pages/${p.id}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(preview.body).url.split("/preview/")[1]!;
+    const pv = CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body);
+    expect(pv).toMatchObject({
+      preview: true,
+      page: { kind: "TEMPLATE", path: "/energy-trading", revisionNumber: null },
+    });
+
+    expect(
+      (await bvPublisher.post(`/pages/${p.id}/publish`, { version: draft.version })).status,
+    ).toBe(200);
+    const live = CmsPublicBundleSchema.parse((await pub("/page?path=/energy-trading")).body);
+    expect(live.page).toMatchObject({
+      kind: "TEMPLATE",
+      path: "/energy-trading",
+      revisionNumber: 1,
+      seo: {
+        title: "Energy trading | Dream Petroleum BV",
+        description: "Trading desk.",
+        noindex: true,
+      },
+    });
+    expect((live.page.content["sections"] as unknown[]).length).toBe(4);
+    expect(live.fragments["bv.site-nav"]?.templateKey).toBe("bv.site-nav");
+    // A fragment is never a page of its own; the Corporate site does not see BV pages.
+    expectError(await pub("/page?path=/energy-trading", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+
+    const after = CmsPageResponseSchema.parse((await page(p.id)).body).page;
+    expect(
+      (
+        await bvPublisher.post(`/pages/${p.id}/unpublish`, {
+          publicationVersion: after.publication!.version,
+        })
+      ).status,
+    ).toBe(200);
+    expectError(await pub("/page?path=/energy-trading"), 404, "NOT_FOUND");
+  });
+});
