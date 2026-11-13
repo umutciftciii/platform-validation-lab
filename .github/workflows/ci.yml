@@ -61,6 +61,28 @@ jobs:
           fetch-depth: 0
       - name: Source manifest (source commit, tree ids, rules digest)
         run: python3 -I .validation/export.py check-manifest
+      - name: Commit identities use GitHub noreply addresses
+        # Pull requests: every new commit. Push to main: the squash commit GitHub created, whose
+        # author is the account's commit e-mail (fails until "Keep my email addresses private").
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) range="$BASE_SHA..HEAD" ;;
+            push) range="-1 HEAD" ;;
+            *) echo "not checked for $EVENT"; exit 0 ;;
+          esac
+          # shellcheck disable=SC2086
+          bad="$(git log --format='%h %ae %ce' $range |
+            awk '{for (i = 2; i <= 3; i++) if ($i !~ /@users\.noreply\.github\.com$/ && $i != "noreply@github.com") print $1}' |
+            sort -u)"
+          if [[ -n "$bad" ]]; then
+            echo "::error::commits with a non-noreply author or committer e-mail: $(tr '\n' ' ' <<<"$bad")"
+            exit 1
+          fi
+          echo "all checked commits use noreply identities"
       - name: Decide which gates run
         id: plan
         env:

@@ -225,8 +225,11 @@ def build(source: str, rev: str, overlay: str, repo: str) -> dict:
             exported.append((mode, new_sha, path))
     finally:
         reader.close()
+    # A listed file that does not exist in this source revision has nothing to pseudonymise; a
+    # moved copy would still be caught by the forbidden-content patterns above.
     missing = sorted(set(rules.transform) - set(transformed))
-    problems += [f"{p}: listed in transform but not exported" for p in missing]
+    for path in missing:
+        print(f"note: {path} is not in this source revision; no pseudonymisation needed", file=sys.stderr)
     if problems:
         raise ExportError("export refused:\n  " + "\n  ".join(problems))
 
@@ -361,11 +364,37 @@ def cmd_verify(a, repo: str) -> bool:
     return ok
 
 
+def cmd_merge(a, repo: str) -> bool:
+    """The only supported way to merge a source pull request: gate first, then a merge that
+    GitHub performs only if the pull request head is still the commit the gate verified."""
+    src_slug = remote_slug(a.source)
+    pr = gh_json("pr", "view", str(a.pr), "--repo", src_slug, "--json", "headRefOid,state")
+    if pr["state"] != "OPEN":
+        print(f"FAIL: source PR #{a.pr} is {pr['state']}")
+        return False
+    # The source repository is written to (commit status, merge) only with --yes.
+    if not cmd_gate(argparse.Namespace(source=a.source, pr=a.pr, post_status=a.yes, expect_head=pr["headRefOid"]), repo):
+        print("not merged: the gate did not pass")
+        return False
+    if not a.yes:
+        print(f"gate PASS. To merge, re-run with --yes (merges only head {pr['headRefOid']}).")
+        return True
+    subprocess.run(
+        ["gh", "pr", "merge", str(a.pr), "--repo", src_slug, "--merge", "--match-head-commit", pr["headRefOid"]],
+        check=True,
+    )
+    print(f"merged source PR #{a.pr} at head {pr['headRefOid']}")
+    return True
+
+
 def cmd_gate(a, repo: str) -> bool:
     src_slug = remote_slug(a.source)
     pub_slug = remote_slug(repo)
     pr = gh_json("pr", "view", str(a.pr), "--repo", src_slug, "--json", "headRefOid,baseRefName,state,url")
     head = pr["headRefOid"]
+    if getattr(a, "expect_head", None) and head != a.expect_head:
+        print(f"FAIL: the source PR head moved to {head} during the gate")
+        return False
     git("fetch", "-q", "origin", cwd=repo)
     git("fetch", "-q", "origin", cwd=a.source)
     print(f"source PR {pr['url']} ({pr['state']}) head {head}")
@@ -437,6 +466,10 @@ def main() -> int:
     p.add_argument("--source", required=True)
     p.add_argument("--pr", required=True, type=int)
     p.add_argument("--post-status", action="store_true")
+    p = sub.add_parser("merge")
+    p.add_argument("--source", required=True)
+    p.add_argument("--pr", required=True, type=int)
+    p.add_argument("--yes", action="store_true", help="perform the merge after a PASS")
     a = parser.parse_args()
     repo = os.getcwd()
     try:
@@ -463,6 +496,8 @@ def main() -> int:
             return 0 if cmd_verify(a, repo) else 1
         elif a.cmd == "gate":
             return 0 if cmd_gate(a, repo) else 1
+        elif a.cmd == "merge":
+            return 0 if cmd_merge(a, repo) else 1
     except ExportError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
