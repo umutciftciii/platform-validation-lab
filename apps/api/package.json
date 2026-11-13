@@ -1,0 +1,46 @@
+{
+  "name": "@dream/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared modular-monolith API (NestJS + Prisma + PostgreSQL). IAM foundation since F1-001.",
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:validate": "prisma validate",
+    "db:drift": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
+    "iam:matrix": "node dist/iam/iam-cli.js matrix",
+    "iam:sync": "node dist/iam/iam-cli.js sync",
+    "iam:bootstrap": "node dist/iam/iam-cli.js bootstrap"
+  },
+  "dependencies": {
+    "@dream/contracts": "workspace:*",
+    "@nestjs/common": "12.4.2",
+    "@nestjs/core": "12.4.2",
+    "@nestjs/platform-express": "12.4.2",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "argon2": "0.45.1",
+    "pdf-lib": "1.17.1",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@dream/config": "workspace:*",
+    "@dream/test-utils": "workspace:*",
+    "@types/node": "24.19.2",
+    "eslint": "9.39.5",
+    "prisma": "7.10.1",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  },
+  "type": "module"
+}

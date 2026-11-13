@@ -1,0 +1,30 @@
+{
+  "name": "@dream/content-schema",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed CMS content block schemas (ADR-002). Placeholder only in F0-002: no CMS models yet.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput --watchFile dynamicPriorityPolling --watchDirectory dynamicPriorityPolling",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@dream/config": "workspace:*",
+    "eslint": "9.39.5",
+    "typescript": "5.9.3"
+  }
+}

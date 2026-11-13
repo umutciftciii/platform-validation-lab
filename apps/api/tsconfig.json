@@ -1,0 +1,9 @@
+{
+  "extends": "@dream/config/tsconfig/nest.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

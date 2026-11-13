@@ -1,0 +1,422 @@
+# Validation CI. Sources arrive only as sync/* pull requests built by .validation/export.py;
+# .validation/source.json ties every run to its source commit. No step holds a credential for
+# the source repository, and nothing here writes to it.
+#
+# When the full gates run (secret scan, quality, integration, Docker/migration/isolation):
+#   - every pull request whose tree was not fully validated before (code, config, lockfile,
+#     migrations, workflow or export rule changes);
+#   - the weekly schedule and a manual run (default "full"), on main;
+#   - a push to main whose tree no earlier run fully validated (for example a merge that
+#     produced a new tree).
+# They are skipped only when (a) a previous run on this repository already passed every gate
+# for exactly the same Git tree, or (b) the change touches only Markdown (format check still
+# runs) and/or the source manifest. The secret scan and the manifest check always run.
+name: ci
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run every gate even if this tree was already validated"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # A newer push to the same pull request supersedes the old run; main and schedules finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+  TURBO_TELEMETRY_DISABLED: "1"
+  PRISMA_HIDE_UPDATE_MESSAGE: "1"
+  # Pull requests are tested at their head commit: the tested tree is the tree the merge gate
+  # verifies against the source (the main ruleset requires branches to be up to date).
+  CHECKOUT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  plan:
+    name: Source manifest and run plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      cache_write: ${{ steps.plan.outputs.cache_write }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
+      - name: Source manifest (source commit, tree ids, rules digest)
+        run: python3 -I .validation/export.py check-manifest
+      - name: Decide which gates run
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          FULL_INPUT: ${{ inputs.full }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          mode=full reason="code or configuration changed"
+          changed=""
+          if [[ -n "${BASE_SHA//0/}" ]] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+          fi
+
+          if [[ "$EVENT" == schedule || ( "$EVENT" == workflow_dispatch && "$FULL_INPUT" != false ) ]]; then
+            reason="$EVENT run"
+          else
+            # (a) the same tree already passed every gate in an earlier run of this workflow
+            for id in $(gh api "repos/$REPO/actions/workflows/ci.yml/runs?status=success&per_page=100" \
+                --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_commit.tree_id == \"$tree\") | .id"); do
+              full="$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" --jq \
+                '[.jobs[] | select(.name | test("^(Quality|Integration|Docker):")) | .conclusion]
+                 | length == 3 and all(. == "success")')"
+              if [[ "$full" == true ]]; then
+                mode=validated reason="tree $tree passed every gate in run $id"
+                break
+              fi
+            done
+            # (b) only Markdown and/or the manifest changed (the RBAC matrix is test input)
+            if [[ "$mode" == full && -n "$changed" ]]; then
+              code="$(grep -v -E '^\.validation/source\.json$' <<<"$changed" |
+                grep -v -E '\.md$' || true)"
+              code+="$(grep -x 'docs/security/rbac-matrix.md' <<<"$changed" || true)"
+              if [[ -z "$code" ]]; then mode=docs reason="only Markdown or the manifest changed"; fi
+            fi
+          fi
+
+          # The dependency image layers are cached from main only; refresh them when their inputs
+          # change, on schedules and on manual runs. Pull requests only read the cache.
+          cache_write=false
+          if [[ "$EVENT" != pull_request ]]; then
+            if [[ "$EVENT" != push || -z "$changed" ]] ||
+              grep -q -E '(^|/)package\.json$|^pnpm-(lock|workspace)\.yaml$|^\.npmrc$|^\.nvmrc$|^infra/docker/Dockerfile$' <<<"$changed"; then
+              cache_write=true
+            fi
+          fi
+
+          echo "mode=$mode" >>"$GITHUB_OUTPUT"
+          echo "cache_write=$cache_write" >>"$GITHUB_OUTPUT"
+          echo "plan: mode=$mode cache_write=$cache_write ($reason)"
+          { echo "### Plan"; echo; echo "- tree \`$tree\`"; echo "- mode **$mode**: $reason";
+            echo "- dependency cache write: $cache_write"; } >>"$GITHUB_STEP_SUMMARY"
+
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # gitleaks v8.30.1, pinned by its multi-arch image index digest.
+      GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0 # full history and all branches
+      - name: Gitleaks (every commit on every branch, merge diffs included)
+        # Kept as its own job on purpose: it runs before any dependency is installed, so no
+        # package script can influence it, and it fails fast and independently.
+        run: |
+          docker run --rm --network none -v "$PWD:/repo:ro" "$GITLEAKS_IMAGE" \
+            git /repo --no-banner --redact --verbose --exit-code 1 --log-opts="--all -m"
+
+  quality:
+    name: "Quality: format, lint, typecheck, unit tests, build, migration rules"
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0 # the migration immutability check compares with the base commit
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Format
+        run: pnpm format:check
+      - name: Lint
+        run: pnpm turbo run lint
+      - name: Typecheck
+        run: pnpm turbo run typecheck
+      - name: Unit tests
+        run: pnpm turbo run test
+      - name: Build
+        run: pnpm turbo run build
+      - name: Admin bundle secret scan (NT-P11; a random canary as the build-time proxy key)
+        run: |
+          canary="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+          (cd apps/admin && DP_PROXY_KEY_ADMIN="$canary" DP_API_URL=http://api.invalid pnpm exec next build >/dev/null)
+          node apps/admin/scripts/scan-build-for-secrets.mjs "$canary"
+      - name: Local Git hook regression (disposable repos only)
+        run: bash tools/dev/git-hooks-test.sh
+      - name: Prisma schema validation
+        run: pnpm --filter @dream/api run db:validate
+      - name: Migration rules (layout, destructive SQL, immutability)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="origin/$GITHUB_BASE_REF"
+          else
+            base="$(git rev-parse --verify -q HEAD~1 || true)"
+          fi
+          node tools/migrations/check-migrations.mjs ${base:+--base "$base"}
+
+  docs:
+    name: "Docs: format check"
+    needs: plan
+    if: needs.plan.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Format
+        run: pnpm format:check
+
+  integration:
+    name: "Integration: tests and migration drift (disposable *_test database)"
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_DB: dream_platform_test
+          POSTGRES_USER: dream_platform_test
+          POSTGRES_PASSWORD: test-only-not-a-secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dream_platform_test -d dream_platform_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # ADR-012A: one URL per database role, as in production (tools/test/integration-test.sh).
+      DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_test?schema=public
+      MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_test?schema=public
+      IAM_BOOTSTRAP_DATABASE_URL: postgresql://dp_iam_bootstrap:test-only-dp-bootstrap-pw@localhost:5432/dream_platform_test?schema=public
+      TEST_SUPERUSER_DATABASE_URL: postgresql://dream_platform_test:test-only-not-a-secret@localhost:5432/dream_platform_test?schema=public
+      SHADOW_DATABASE_URL: postgresql://dream_platform_test:test-only-not-a-secret@localhost:5432/dream_platform_shadow_test?schema=public
+      AUTH_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_auth_test?schema=public
+      AUTH_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_auth_test?schema=public
+      AUTH_IAM_BOOTSTRAP_DATABASE_URL: postgresql://dp_iam_bootstrap:test-only-dp-bootstrap-pw@localhost:5432/dream_platform_auth_test?schema=public
+      CATALOG_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_catalog_test?schema=public
+      CATALOG_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_catalog_test?schema=public
+      WORKFLOW_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_workflow_test?schema=public
+      WORKFLOW_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_workflow_test?schema=public
+      DOCUMENTS_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_documents_test?schema=public
+      DOCUMENTS_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_documents_test?schema=public
+      XREFS_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_xrefs_test?schema=public
+      XREFS_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_xrefs_test?schema=public
+      LEADS_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_leads_test?schema=public
+      LEADS_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_leads_test?schema=public
+      OWNER_DATABASE_URL: postgresql://dp_app:test-only-dp-app-password@localhost:5432/dream_platform_owner_test?schema=public
+      OWNER_MIGRATE_DATABASE_URL: postgresql://dp_migrator:test-only-dp-migrator-pw@localhost:5432/dream_platform_owner_test?schema=public
+      # Application database names, so the test guard refuses them (ADR-009, ADR-010).
+      POSTGRES_DB: dream_platform
+      DEV_POSTGRES_DB: dream_platform_dev
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Shadow database for the drift check
+        run: docker exec ${{ job.services.postgres.id }} createdb -U dream_platform_test dream_platform_shadow_test
+      - name: Database roles (ADR-012A; a service container has no init hook)
+        env:
+          DP_APP_PASSWORD: test-only-dp-app-password
+          DP_MIGRATOR_PASSWORD: test-only-dp-migrator-pw
+          DP_IAM_BOOTSTRAP_PASSWORD: test-only-dp-bootstrap-pw
+          PG: ${{ job.services.postgres.id }}
+        run: |
+          infra/docker/postgres/apply-roles.sh "$PG" test
+          for db in auth catalog workflow documents xrefs leads owner; do
+            docker exec "$PG" createdb -U dream_platform_test "dream_platform_${db}_test"
+            infra/docker/postgres/apply-roles.sh "$PG" test "dream_platform_${db}_test"
+          done
+      - name: Build the API and its packages
+        run: pnpm turbo run build --filter=@dream/api...
+      - name: Migration drift (schema without a migration fails with exit 2)
+        run: pnpm --filter @dream/api run db:drift
+      - name: Integration tests
+        run: pnpm turbo run test:integration --filter=@dream/api
+
+  docker:
+    name: "Docker: stack, migration safety, DB isolation, smoke"
+    needs: [plan, quality, integration]
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - name: Runner capacity
+        run: |
+          echo "nproc: $(nproc)"
+          free -m
+          docker info -f 'Docker engine: cpus={{.NCPU}} memory={{.MemTotal}} os={{.OperatingSystem}}'
+      - name: BuildKit cache backend (containerd image store)
+        run: .github/ci/buildkit-cache.sh enable
+      - name: Expose the Actions cache service to BuildKit
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            for (const name of ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL", "ACTIONS_CACHE_SERVICE_V2"]) {
+              if (process.env[name]) core.exportVariable(name, process.env[name]);
+            }
+      - name: Dependency image layers from the main-branch cache (best effort)
+        env:
+          CACHE_WRITE: ${{ needs.plan.outputs.cache_write }}
+        run: .github/ci/buildkit-cache.sh deps
+      - name: Local env from the example (placeholder passwords only)
+        run: cp .env.example .env
+      - name: Compose config (prod, dev, test)
+        run: |
+          docker compose -f infra/docker/compose.yaml --env-file .env config --quiet
+          docker compose -f infra/docker/compose.yaml -f infra/docker/compose.dev.yaml --env-file .env config --quiet
+          docker compose -f infra/docker/compose.yaml -f infra/docker/compose.test.yaml --env-file .env config --quiet
+      - name: Shell syntax and resource check script (DP-116 policy tests)
+        run: |
+          for f in infra/docker/*.sh tools/dev/*.sh tools/test/*.sh; do bash -n "$f"; done
+          node --check infra/docker/resource-check.mjs
+          node --test infra/docker/resource-policy.test.mjs
+      - name: Readiness probe and credential masking (no Docker, a few seconds)
+        run: tools/dev/readiness-test.sh
+      - name: Production-build stack (runs the migration runner before the API)
+        run: infra/docker/stack.sh prod up
+      - name: Smoke tests
+        run: infra/docker/stack.sh smoke
+      - name: API credential boundary on the running stack (ADR-012A)
+        run: |
+          env_of() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1"; }
+          api="$(env_of dream-platform-api)"
+          grep -q '^DATABASE_URL=postgresql://dp_app:' <<<"$api"
+          if grep -Eq 'MIGRATE_DATABASE_URL|IAM_BOOTSTRAP|DP_IAM_BOOTSTRAP_PASSWORD|POSTGRES_PASSWORD' <<<"$api"; then
+            echo "the API container holds a credential that is not its own"; exit 1
+          fi
+          if grep -Eq 'IAM_BOOTSTRAP|DP_IAM_BOOTSTRAP_PASSWORD|^DATABASE_URL=' <<<"$(env_of dream-platform-migrate)"; then
+            echo "the migrate container holds a credential that is not its own"; exit 1
+          fi
+          echo "api and migrate hold only their own database credential"
+          admin="$(env_of dream-platform-admin)"
+          grep -q '^DP_PROXY_KEY_ADMIN=' <<<"$admin"
+          if grep -Eq 'DP_PROXY_KEY_WEB|IAM_|DATABASE_URL|NEXT_PUBLIC_.*(KEY|PROXY)' <<<"$admin"; then
+            echo "the admin container holds a secret that is not its own"; exit 1
+          fi
+          for site in dream-platform-web-bv dream-platform-web-corporate; do
+            if grep -Eq 'DP_PROXY_KEY_ADMIN|IAM_|DATABASE_URL|NEXT_PUBLIC_.*(KEY|PROXY)' <<<"$(env_of "$site")"; then
+              echo "$site holds a secret that is not its own"; exit 1
+            fi
+          done
+          grep -q '^DP_PROXY_KEY_WEB_BV=' <<<"$(env_of dream-platform-web-bv)"
+          if grep -q 'DP_PROXY_KEY_WEB_CORPORATE' <<<"$(env_of dream-platform-web-bv)"; then
+            echo "web-bv holds the Corporate site's key"; exit 1
+          fi
+          echo "proxy keys and IAM secrets are where they belong"
+      - name: Migration safety (concurrency, lock timeout, failed migration blocks the API)
+        run: infra/docker/stack.sh test migrations
+      - name: Database role separation (ADR-012A; new and upgraded database, credentials, bootstrap)
+        run: infra/docker/stack.sh test roles
+      - name: Dev/prod database isolation regression
+        env:
+          ISOLATION_DEV_SERVICES: api
+        run: |
+          export DEV_INSTALL_CPUS="$(( $(nproc) < 4 ? $(nproc) : 4 ))"
+          echo "DEV_INSTALL_CPUS=$DEV_INSTALL_CPUS ISOLATION_DEV_SERVICES=$ISOLATION_DEV_SERVICES"
+          tools/dev/db-isolation-test.sh
+      - name: Logs on failure
+        if: failure()
+        run: infra/docker/stack.sh prod logs || true
+      - name: Stop the stack
+        if: always()
+        run: infra/docker/stack.sh prod down || true
+
+  docker-cache:
+    name: Dependency image cache refresh (main only)
+    needs: plan
+    if: needs.plan.outputs.mode != 'full' && needs.plan.outputs.cache_write == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - run: .github/ci/buildkit-cache.sh enable
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            for (const name of ["ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_URL", "ACTIONS_CACHE_SERVICE_V2"]) {
+              if (process.env[name]) core.exportVariable(name, process.env[name]);
+            }
+      - name: Build the dependency layers and write them to the cache
+        env:
+          CACHE_WRITE: "true"
+        run: .github/ci/buildkit-cache.sh deps
+
+  result:
+    name: CI result
+    needs: [plan, secrets, quality, docs, integration, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every gate the plan required passed
+        env:
+          MODE: ${{ needs.plan.outputs.mode }}
+          PLAN: ${{ needs.plan.result }}
+          SECRETS: ${{ needs.secrets.result }}
+          QUALITY: ${{ needs.quality.result }}
+          DOCS: ${{ needs.docs.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          DOCKER: ${{ needs.docker.result }}
+        run: |
+          echo "mode=$MODE plan=$PLAN secrets=$SECRETS quality=$QUALITY docs=$DOCS integration=$INTEGRATION docker=$DOCKER"
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$PLAN" == success ]] || fail "plan: $PLAN"
+          [[ "$SECRETS" == success ]] || fail "secret scan: $SECRETS"
+          case "$MODE" in
+            full)
+              for r in "quality=$QUALITY" "integration=$INTEGRATION" "docker=$DOCKER"; do
+                [[ "${r#*=}" == success ]] || fail "${r%%=*}: ${r#*=}"
+              done ;;
+            docs) [[ "$DOCS" == success ]] || fail "docs: $DOCS" ;;
+            validated) echo "this exact tree already passed every gate in an earlier run" ;;
+            *) fail "unknown plan mode '$MODE'" ;;
+          esac
+          echo "all required gates passed"

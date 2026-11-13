@@ -1,0 +1,18 @@
+**/node_modules
+**/.next
+**/dist
+**/generated
+**/.turbo
+**/*.tsbuildinfo
+**/next-env.d.ts
+.git
+.env
+.env.*
+!.env.example
+**/.DS_Store
+docs
+# The API unit suite compares the generated permission matrix with the catalogue (catalog.test.ts).
+!docs/security/rbac-matrix.md
+tools/visual-qa/output
+tools/smoke/output
+.dream-heavy.lock

@@ -1,0 +1,207 @@
+# Isolated local stack for the Dream Petroleum platform.
+#   infra/docker/stack.sh prod up      (from the repo root, needs .env; never call compose directly)
+#
+# Isolation rules: own Compose project name, own container names, own named volume and
+# network (both prefixed "dream-petroleum-platform_"), ports bound to 127.0.0.1 only.
+# It does not use or touch the prototype stack (dream-petroleum-iccsyn, port 3107).
+#
+# Resource budget: every service has a hard memory limit (no swap) and a CPU cap, and every Node
+# process a V8 heap cap below it. The Docker Desktop VM is shared with other projects, so a leak or
+# spike here hits this container's own limit (and its restart policy) instead of a VM-wide OOM
+# that kills other projects' processes. `infra/docker/stack.sh budget` shows the table.
+name: dream-petroleum-platform
+
+x-node-app: &node-app
+  image: dream-petroleum-platform-app:local
+  build:
+    context: ../..
+    dockerfile: infra/docker/Dockerfile
+    target: runtime
+  restart: unless-stopped
+  init: true
+  environment: &node-env
+    NODE_ENV: production
+    NEXT_TELEMETRY_DISABLED: "1"
+    PORT: "3000"
+    HOSTNAME: 0.0.0.0
+
+x-next-healthcheck: &next-healthcheck
+  test:
+    - CMD
+    - node
+    - -e
+    - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    container_name: dream-platform-postgres
+    restart: unless-stopped
+    labels:
+      # Which mode's database this container serves (ADR-009). compose.dev.yaml sets "dev".
+      com.dream-petroleum.platform.db-env: prod
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # ADR-012A: passwords of the separated roles, read only by the init script when the data
+      # directory is empty (infra/docker/postgres/initdb). Existing data directories get the roles
+      # through `stack.sh db-roles prod`. The superuser above is for infrastructure only; no
+      # application service connects with it.
+      DP_ROLES_PROFILE: prod
+      DP_APP_PASSWORD: ${DP_APP_PASSWORD:?set DP_APP_PASSWORD in .env}
+      DP_MIGRATOR_PASSWORD: ${DP_MIGRATOR_PASSWORD:?set DP_MIGRATOR_PASSWORD in .env}
+      DP_IAM_BOOTSTRAP_PASSWORD: ${DP_IAM_BOOTSTRAP_PASSWORD:?set DP_IAM_BOOTSTRAP_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5440:5432"
+    volumes:
+      # Local production-build data. Kept as created in F0-002; dev mode mounts its own volume.
+      - postgres-data:/var/lib/postgresql/data
+      # ADR-012A role setup: the SQL (/dp) and the init hook that runs it on an empty data dir.
+      - ./postgres:/dp:ro
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot migration runner (ADR-010): `prisma migrate deploy` applies the committed migrations
+  # baked into the image, then exits. It never creates migrations or resets data. The API starts
+  # only after it exited 0. Concurrent runners are serialised by Prisma's own PostgreSQL advisory
+  # lock; there is deliberately no second lock. It connects as dp_migrator, whose sessions act as
+  # dp_owner (ADR-012A), so every object it creates is owned by dp_owner.
+  migrate:
+    <<: *node-app
+    container_name: dream-platform-migrate
+    restart: "no"
+    working_dir: /repo/apps/api
+    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    environment:
+      <<: *node-env
+      NODE_OPTIONS: --max-old-space-size=256
+      MIGRATE_DATABASE_URL: postgresql://dp_migrator:${DP_MIGRATOR_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The API connects as dp_app (ADR-012A): data access only. It never receives the superuser,
+  # migrator or bootstrap credential; /health/ready reports 503 on a privileged connection.
+  api:
+    <<: *node-app
+    container_name: dream-platform-api
+    working_dir: /repo/apps/api
+    command: ["node", "dist/main.js"]
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1.0
+    environment:
+      <<: *node-env
+      NODE_OPTIONS: --max-old-space-size=160
+      DATABASE_URL: postgresql://dp_app:${DP_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      # /health/ready reports 503 if the API is connected to any other database.
+      DB_ENV: prod
+      DB_EXPECTED_NAME: ${POSTGRES_DB}
+      # F1-002 Group 2 (ADR-013 D2, D19): the three proxy keys (plus optional rotation slots) and
+      # the IAM secrets. Missing or weak values: the API does not start. Local stack: plain HTTP
+      # on the Compose network (DP_DEPLOY_ENV defaults to local); staging/production need TLS.
+      DP_PROXY_KEY_ADMIN: ${DP_PROXY_KEY_ADMIN:?set DP_PROXY_KEY_ADMIN in .env}
+      DP_PROXY_KEY_WEB_BV: ${DP_PROXY_KEY_WEB_BV:?set DP_PROXY_KEY_WEB_BV in .env}
+      DP_PROXY_KEY_WEB_CORPORATE: ${DP_PROXY_KEY_WEB_CORPORATE:?set DP_PROXY_KEY_WEB_CORPORATE in .env}
+      DP_PROXY_KEY_ADMIN_NEXT: ${DP_PROXY_KEY_ADMIN_NEXT:-}
+      DP_PROXY_KEY_WEB_BV_NEXT: ${DP_PROXY_KEY_WEB_BV_NEXT:-}
+      DP_PROXY_KEY_WEB_CORPORATE_NEXT: ${DP_PROXY_KEY_WEB_CORPORATE_NEXT:-}
+      IAM_MFA_ENC_KEYS: ${IAM_MFA_ENC_KEYS:?set IAM_MFA_ENC_KEYS in .env}
+      IAM_HMAC_KEY: ${IAM_HMAC_KEY:?set IAM_HMAC_KEY in .env}
+      DP_ALLOWED_ORIGINS_ADMIN: http://localhost:3112,http://admin.localhost:3112
+      DP_ALLOWED_ORIGINS_WEB_BV: http://localhost:3110,http://bv.localhost:3110
+      DP_ALLOWED_ORIGINS_WEB_CORPORATE: http://localhost:3111,http://corporate.localhost:3111
+      DP_ADMIN_BASE_URL: http://admin.localhost:3112
+      # PM-2: product images on a persistent named volume (local stack). Hosted environments
+      # use DP_MEDIA_STORAGE=s3 with DP_S3_* (the API refuses filesystem storage there).
+      DP_MEDIA_STORAGE: filesystem
+      DP_MEDIA_DIR: /data/media
+    volumes:
+      - media-data:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3113:3000"
+    healthcheck:
+      <<: *next-healthcheck
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+
+  web-bv:
+    <<: *node-app
+    container_name: dream-platform-web-bv
+    working_dir: /repo/apps/web-bv
+    command: ["node_modules/.bin/next", "start", "--port", "3000", "--hostname", "0.0.0.0"]
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 2.0
+    environment:
+      <<: *node-env
+      NODE_OPTIONS: --max-old-space-size=512
+      # PM-3: public product content (/products), read server-side with this site's key only;
+      # the API derives the BV site from it. Never a NEXT_PUBLIC_ variable.
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_WEB_BV: ${DP_PROXY_KEY_WEB_BV:?set DP_PROXY_KEY_WEB_BV in .env}
+    ports:
+      - "127.0.0.1:3110:3000"
+    healthcheck: *next-healthcheck
+
+  web-corporate:
+    <<: *node-app
+    container_name: dream-platform-web-corporate
+    working_dir: /repo/apps/web-corporate
+    command: ["node_modules/.bin/next", "start", "--port", "3000", "--hostname", "0.0.0.0"]
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    environment:
+      <<: *node-env
+      NODE_OPTIONS: --max-old-space-size=256
+    ports:
+      - "127.0.0.1:3111:3000"
+    healthcheck: *next-healthcheck
+
+  admin:
+    <<: *node-app
+    container_name: dream-platform-admin
+    working_dir: /repo/apps/admin
+    command: ["node_modules/.bin/next", "start", "--port", "3000", "--hostname", "0.0.0.0"]
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    environment:
+      <<: *node-env
+      NODE_OPTIONS: --max-old-space-size=256
+      # F1-002 Group 2: the server-side API proxy (app/api/[...path]). Only the admin key, never a
+      # NEXT_PUBLIC_ variable; the API is reached on the Compose network.
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_ADMIN: ${DP_PROXY_KEY_ADMIN:?set DP_PROXY_KEY_ADMIN in .env}
+      DP_TRUSTED_PROXY_HOPS: "0"
+    ports:
+      - "127.0.0.1:3112:3000"
+    healthcheck: *next-healthcheck
+
+volumes:
+  postgres-data:
+  media-data:

@@ -1,0 +1,23 @@
+# DP-119: HTTPS in front of the DEV admin console, https://admin.localhost:3114.
+#
+# The admin console signs in with Secure, __Host- cookies. Chrome and Firefox treat
+# http://localhost as secure, Safari does not: over plain http it drops those cookies and the
+# sign-in cannot finish. This proxy gives DEV a real https origin, so cookie security stays the
+# same in every environment (never relaxed for development).
+#
+# - Certificates come from Caddy's own local CA ("Caddy Local Authority"), kept in the DEV volume
+#   tls-ca-dev so the root stays the same across restarts. Trusting that root on the Mac is the
+#   owner's step: `infra/docker/stack.sh dev tls-ca` exports it and prints the command.
+# - DEV only: production terminates TLS at its own edge. No access log (the token of a link is in
+#   the fragment and never reaches a server anyway), no admin endpoint, no automatic trust install.
+{
+	admin off
+	skip_install_trust
+	local_certs
+	auto_https disable_redirects
+}
+
+https://admin.localhost, https://localhost {
+	tls internal
+	reverse_proxy admin:3000
+}

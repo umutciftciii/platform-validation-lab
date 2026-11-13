@@ -1,0 +1,33 @@
+{
+  "name": "dream-petroleum-platform",
+  "private": true,
+  "description": "Dream Petroleum two-site platform: web-bv, web-corporate, admin, api.",
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=24.11.0",
+    "pnpm": ">=10.28.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "check": "turbo run lint typecheck test build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:up": "infra/docker/stack.sh dev up",
+    "dev:down": "infra/docker/stack.sh dev down",
+    "prod:up": "infra/docker/stack.sh prod up",
+    "prod:down": "infra/docker/stack.sh prod down",
+    "smoke": "infra/docker/stack.sh smoke",
+    "test:hot-reload": "tools/dev/hot-reload-test.sh",
+    "test:db-isolation": "tools/dev/db-isolation-test.sh",
+    "test": "turbo run test",
+    "test:integration": "infra/docker/stack.sh test integration",
+    "test:migrations": "infra/docker/stack.sh test migrations",
+    "migrations:check": "node tools/migrations/check-migrations.mjs"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10",
+    "turbo": "2.11.10"
+  }
+}

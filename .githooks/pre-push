@@ -1,0 +1,28 @@
+#!/bin/sh
+# F1-001E: deny any update to refs/heads/main, regardless of source ref.
+set -eu
+remote_name="${1:-unknown}"
+blocked=0
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${remote_ref:-}" ] || continue
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    blocked=1
+  fi
+done
+[ "$blocked" -eq 1 ] || exit 0
+
+if [ "${DREAM_ALLOW_MAIN_PUSH:-}" = "1" ]; then
+  reason="$(git config --local --get dream.pushGuard.reason || true)"
+  if [ -n "$reason" ]; then
+    # Consume the approval before allowing this push. A second push needs a new reason.
+    git config --local --unset-all dream.pushGuard.reason
+    log_file="$(git rev-parse --git-path dream-push-guard.log)"
+    printf '%s remote=%s reason=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$remote_name" "$reason" >> "$log_file"
+    echo "WARNING: one-time main push exception recorded in local git log." >&2
+    exit 0
+  fi
+fi
+echo "BLOCKED: pushing, force-pushing or deleting refs/heads/main is prohibited." >&2
+echo "Exception requires DREAM_ALLOW_MAIN_PUSH=1 for this command and" >&2
+echo "a local reason set via: git config --local dream.pushGuard.reason '<reason>'" >&2
+exit 1

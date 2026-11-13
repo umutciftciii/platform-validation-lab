@@ -1,0 +1,1418 @@
+// Prisma schema for the shared API.
+//
+// F1-001 (DP-069, DP-070, DP-071; data model for DP-011 and DP-075) adds the identity and
+// authorization foundation: users, sites, memberships, RBAC, feature modules and the audit trail.
+// See docs/adr/ADR-011-identity-authorization.md. CMS, catalog and lead models arrive with their
+// own backlog items (DP-015, DP-031, DP-043) and migrations.
+//
+// Rules that Prisma cannot express live in the migration SQL and are enforced by PostgreSQL:
+// CHECK constraints (scope consistency, normalised e-mail, Argon2id-only password hashes, no
+// self-grant) and triggers (role audience/scope guard, core modules cannot be disabled, audit
+// events are append-only). Prisma's drift check ignores CHECK constraints and triggers, so the
+// integration suite tests each one against the real database.
+
+generator client {
+  provider            = "prisma-client"
+  /// partialIndexes: the "one live token per purpose" and "one confirmed factor per type"
+  /// unique indexes of F1-002 (ADR-013) are partial; declaring them here keeps the drift check
+  /// exact instead of hiding them from Prisma.
+  previewFeatures     = ["partialIndexes"]
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// STAFF = people who administer the platform or a site (admin app, MFA mandatory).
+/// CUSTOMER = members of a public site. The kind is fixed per user; staff and customer sessions
+/// follow different security policies (src/iam/session-policy.ts).
+enum UserKind {
+  STAFF
+  CUSTOMER
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum SiteKey {
+  BV
+  CORPORATE
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+/// PLATFORM = applies to every site (platform administration, God Mode).
+/// SITE = applies to exactly one site.
+enum ScopeType {
+  PLATFORM
+  SITE
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+  BOOTSTRAP
+}
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+  FAILURE
+}
+
+/// DP-108 (ADR-018): STANDARD events are what staff audit views show. PROTECTED events are the
+/// system owner's own actions and every action aimed at the owner account; a database trigger
+/// classifies them, chains them with SHA-256 and keeps them out of the site-scoped client.
+/// Neither stream can be changed or deleted (append-only triggers).
+enum AuditStream {
+  STANDARD
+  PROTECTED
+}
+
+/// One identity across both sites and the admin app.
+model User {
+  id                String     @id @default(uuid(7)) @db.Uuid
+  /// As entered, for display and delivery.
+  email             String     @db.VarChar(320)
+  /// lower(trim(email)); the login and uniqueness key (CHECK in the migration).
+  emailNormalized   String     @unique @db.VarChar(320)
+  kind              UserKind
+  status            UserStatus @default(PENDING)
+  displayName       String?    @db.VarChar(200)
+  emailVerifiedAt   DateTime?  @db.Timestamptz(3)
+  /// Argon2id PHC string only (CHECK in the migration); never a plaintext or reversible value.
+  /// Null until the user enrols a password (DP-011).
+  passwordHash      String?    @db.VarChar(512)
+  passwordUpdatedAt DateTime?  @db.Timestamptz(3)
+  /// Set when MFA enrolment completes (DP-011). Staff need it before any sensitive permission.
+  mfaEnrolledAt     DateTime?  @db.Timestamptz(3)
+  /// Incremented to invalidate every session of the user (password reset, suspension, role loss).
+  securityVersion   Int        @default(0)
+  /// Unused since F1-002, see ADR-013 D6: login throttling lives in AuthThrottle only. Kept so
+  /// that no existing column changes (owner decision Ö4).
+  failedLoginCount  Int        @default(0)
+  /// Unused since F1-002, see ADR-013 D6 (AuthThrottle). Kept, owner decision Ö4.
+  lockedUntil       DateTime?  @db.Timestamptz(3)
+  lastLoginAt       DateTime?  @db.Timestamptz(3)
+  createdAt         DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @db.Timestamptz(3)
+
+  memberships                 Membership[]
+  roleAssignments             RoleAssignment[]             @relation("RoleAssignmentUser")
+  grantedAssignments          RoleAssignment[]             @relation("RoleAssignmentGrantedBy")
+  revokedAssignments          RoleAssignment[]             @relation("RoleAssignmentRevokedBy")
+  customerDataAccessRequests  CustomerDataAccessRequest[]  @relation("CustomerDataAccessAssignee")
+  customerDataAccessRequested CustomerDataAccessRequest[]  @relation("CustomerDataAccessRequestedBy")
+  customerDataAccessDecided   CustomerDataAccessRequest[]  @relation("CustomerDataAccessDecidedBy")
+  moduleChanges               ModuleConfiguration[]
+  auditEvents                 AuditEvent[]
+  // F1-002 (ADR-013): authentication. Only the IAM infrastructure (src/iam) reads these.
+  sessions                    Session[]
+  credentialTokens            UserCredentialToken[]        @relation("UserCredentialTokenUser")
+  issuedCredentialTokens      UserCredentialToken[]        @relation("UserCredentialTokenCreatedBy")
+  mfaFactors                  MfaFactor[]
+  recoveryCodes               MfaRecoveryCode[]
+  // PM-3 (DP-068): review and publication actors.
+  productsSubmitted           Product[]                    @relation("ProductSubmittedBy")
+  productsApproved            Product[]                    @relation("ProductApprovedBy")
+  productReviewEvents         ProductReviewEvent[]
+  publicationsPublished       ProductPublication[]         @relation("ProductPublicationPublishedBy")
+  publicationsUnpublished     ProductPublication[]         @relation("ProductPublicationUnpublishedBy")
+  // PM-5 (DP-035): technical document revisions uploaded by this user.
+  documentRevisions           ProductDocumentRevision[]
+  /// PM-6: cross-reference verification requests, decisions and history.
+  crossReferencesRequested    ProductCrossReference[]      @relation("CrossReferenceRequestedBy")
+  crossReferencesVerified     ProductCrossReference[]      @relation("CrossReferenceVerifiedBy")
+  crossReferenceEvents        ProductCrossReferenceEvent[]
+  /// DP-108 (ADR-018): the system owner record and pending owner designations.
+  systemOwner                 SystemOwner?
+  ownerDesignations           SystemOwnerDesignation[]
+  /// DP-041 (ADR-019): leads assigned to this staff user and the sales activity they recorded.
+  assignedLeads               Lead[]                       @relation("LeadAssignedTo")
+  leadActivities              LeadActivity[]               @relation("LeadActivityActor")
+  leadAssignmentsFrom         LeadActivity[]               @relation("LeadActivityFromAssignee")
+  leadAssignmentsTo           LeadActivity[]               @relation("LeadActivityToAssignee")
+
+  @@index([kind, status])
+}
+
+/// A public site. Site-bound rows carry siteId; queries are filtered by it (src/iam/site-scope.ts).
+model Site {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  key           SiteKey  @unique
+  name          String   @db.VarChar(200)
+  primaryDomain String   @unique @db.VarChar(253)
+  defaultLocale String   @db.VarChar(35)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  memberships                Membership[]
+  roleAssignments            RoleAssignment[]
+  moduleConfigurations       ModuleConfiguration[]
+  auditEvents                AuditEvent[]
+  sessions                   Session[]
+  credentialTokens           UserCredentialToken[]
+  // PM-1 (DP-031..DP-034): the site's product catalogue.
+  productCategories          ProductCategory[]
+  productListings            ProductSiteListing[]
+  productListingTexts        ProductListingText[]
+  // PM-3 (DP-068): publications and their review history.
+  productPublications        ProductPublication[]
+  productReviewEvents        ProductReviewEvent[]
+  // PM-5 (DP-035): technical documents shown on this site.
+  productDocumentSites       ProductDocumentSite[]
+  /// PM-6: cross-references this site shows.
+  crossReferenceSites        ProductCrossReferenceSite[]
+  // DP-042/DP-043 (ADR-016): leads and document requests of this site.
+  leads                      Lead[]
+  leadDocumentRequests       LeadDocumentRequest[]
+  documentGrants             DocumentDownloadGrant[]
+  leadDocumentDownloads      LeadDocumentDownload[]
+  // DP-041 (ADR-019): sales activity on this site's leads.
+  leadActivities             LeadActivity[]
+  customerDataAccessRequests CustomerDataAccessRequest[]
+}
+
+/// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
+model Membership {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  userId    String           @db.Uuid
+  siteId    String           @db.Uuid
+  status    MembershipStatus @default(INVITED)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, siteId])
+  @@index([siteId, status])
+}
+
+/// Catalogue of modules God Mode can see. Core modules (isCore) can never be disabled.
+model FeatureModule {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  key         String   @unique @db.VarChar(64)
+  name        String   @db.VarChar(200)
+  description String   @db.VarChar(1000)
+  isCore      Boolean
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  permissions    Permission[]
+  configurations ModuleConfiguration[]
+}
+
+/// Per-site switch for an optional module. Disabling never deletes data (K-03).
+model ModuleConfiguration {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  moduleId    String   @db.Uuid
+  siteId      String   @db.Uuid
+  enabled     Boolean
+  /// Why God Mode set this state (K-03: every module change has a reason).
+  reason      String   @db.VarChar(1000)
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  module    FeatureModule @relation(fields: [moduleId], references: [id], onDelete: Restrict)
+  site      Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  updatedBy User?         @relation(fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([moduleId, siteId])
+  @@index([siteId])
+}
+
+/// Action on a resource, e.g. content:publish. `scopeType` says where it can be granted.
+model Permission {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  key         String    @unique @db.VarChar(128)
+  resource    String    @db.VarChar(64)
+  action      String    @db.VarChar(64)
+  description String    @db.VarChar(1000)
+  audience    UserKind
+  scopeType   ScopeType
+  moduleKey   String    @db.VarChar(64)
+  /// Needs a fresh MFA verification of a staff session (step-up).
+  sensitive   Boolean   @default(false)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  module FeatureModule    @relation(fields: [moduleKey], references: [key], onDelete: Restrict)
+  roles  RolePermission[]
+
+  @@unique([resource, action])
+}
+
+/// A named set of permissions for one audience, assignable at one scope type.
+model Role {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  key         String    @unique @db.VarChar(64)
+  name        String    @db.VarChar(200)
+  description String    @db.VarChar(1000)
+  audience    UserKind
+  scopeType   ScopeType
+  /// Defined by the code catalogue (src/iam/catalog.ts); not editable from the admin app.
+  isSystem    Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  permissions                RolePermission[]
+  assignments                RoleAssignment[]
+  customerDataAccessRequests CustomerDataAccessRequest[]
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+/// User + role + scope. PLATFORM scope has no siteId, SITE scope has exactly one (CHECK).
+/// Revocation keeps the row (revokedAt); history is also in AuditEvent.
+model RoleAssignment {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @db.Uuid
+  roleId      String    @db.Uuid
+  scopeType   ScopeType
+  siteId      String?   @db.Uuid
+  /// Null only for the bootstrap of the first platform administrator.
+  grantedById String?   @db.Uuid
+  grantedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime? @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+  revokedById String?   @db.Uuid
+  reason      String?   @db.VarChar(1000)
+
+  user              User                        @relation("RoleAssignmentUser", fields: [userId], references: [id], onDelete: Restrict)
+  role              Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  site              Site?                       @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  grantedBy         User?                       @relation("RoleAssignmentGrantedBy", fields: [grantedById], references: [id], onDelete: Restrict)
+  revokedBy         User?                       @relation("RoleAssignmentRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  extensionRequests CustomerDataAccessRequest[] @relation("CustomerDataAccessExtends")
+
+  @@index([userId, revokedAt])
+  @@index([siteId])
+  @@index([roleId])
+}
+
+/// Append-only record of security-relevant actions: who, when, in which scope, what, outcome.
+/// UPDATE, DELETE and TRUNCATE are rejected by triggers. Metadata is masked before it is written
+/// (src/iam/audit.ts).
+model AuditEvent {
+  id           String         @id @default(uuid(7)) @db.Uuid
+  occurredAt   DateTime       @default(now()) @db.Timestamptz(3)
+  actorType    AuditActorType
+  actorUserId  String?        @db.Uuid
+  action       String         @db.VarChar(100)
+  resourceType String         @db.VarChar(100)
+  resourceId   String?        @db.VarChar(200)
+  scopeType    ScopeType
+  siteId       String?        @db.Uuid
+  outcome      AuditOutcome
+  reason       String?        @db.VarChar(1000)
+  metadata     Json           @default("{}")
+  requestId    String?        @db.VarChar(100)
+  /// DP-108: set by the trigger AuditEvent_protected_stream, never trusted from the caller.
+  stream       AuditStream    @default(STANDARD)
+  /// DP-108: hash chain of the PROTECTED stream (null for STANDARD events, CHECK).
+  chainSeq     BigInt?        @unique
+  prevHash     String?        @db.Char(64)
+  rowHash      String?        @db.Char(64)
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  site  Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@index([resourceType, resourceId])
+  @@index([stream, occurredAt])
+}
+
+/// DP-108 (ADR-018): the system owner (GOD). At most one row (CHECK id = true); written only by the
+/// SECURITY DEFINER function iam_owner_designation_confirm, never updated or deleted (trigger), so
+/// the owner identity cannot be assigned through RBAC or handed on. dp_app may only read it.
+model SystemOwner {
+  id            Boolean  @id @default(true)
+  userId        String   @unique @db.Uuid
+  designatedAt  DateTime @default(now()) @db.Timestamptz(3)
+  designationId String   @unique @db.Uuid
+
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  designation SystemOwnerDesignation @relation(fields: [designationId], references: [id], onDelete: Restrict)
+}
+
+/// DP-108: a pending owner designation started by the operator CLI (dp_iam_bootstrap). The owner
+/// confirms it in the admin app with the link token, password and a fresh MFA step-up. Only the
+/// SECURITY DEFINER functions touch this table; dp_app has no privilege on it.
+model SystemOwnerDesignation {
+  id             String    @id @db.Uuid
+  userId         String    @db.Uuid
+  /// SHA-256 hex of the link token.
+  tokenHash      String    @unique @db.Char(64)
+  reason         String    @db.VarChar(1000)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  consumedAt     DateTime? @db.Timestamptz(3)
+  invalidatedAt  DateTime? @db.Timestamptz(3)
+  failedAttempts Int       @default(0)
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  owner SystemOwner?
+
+  @@index([userId])
+}
+
+// ===========================================================================================
+// F1-002 Group 1 (DP-011, ADR-013): authentication foundation. Rules Prisma cannot express
+// (CHECK constraints, guard, immutability and database-audit triggers) are in migration
+// 20261111090000_f1_002_authentication and tested in test/integration/auth-db.int.test.ts.
+// ===========================================================================================
+
+/// What a one-time credential token is for. EMAIL_VERIFICATION and EMAIL_CHANGE exist for DP-E and
+/// DP-039 and are unused in F1-002, so those items need no enum migration.
+enum CredentialTokenPurpose {
+  ADMIN_ENROLMENT
+  STAFF_INVITE
+  MFA_REENROLMENT
+  ADMIN_RECOVERY
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+  EMAIL_CHANGE
+  LOGIN_MFA_CHALLENGE
+}
+
+/// The Next.js app a session or challenge belongs to; the API derives it from the proxy key.
+enum AuthApp {
+  ADMIN
+  WEB_BV
+  WEB_CORPORATE
+}
+
+/// WEBAUTHN is reserved for F2; a CHECK constraint allows only TOTP until then.
+enum MfaFactorType {
+  TOTP
+  WEBAUTHN
+}
+
+enum SessionRevokeReason {
+  LOGOUT
+  ROTATED
+  USER_REVOKED
+  ADMIN_REVOKED
+  SECURITY_VERSION
+  LIMIT_EXCEEDED
+}
+
+enum AuthThrottleKind {
+  ACCOUNT
+  ACCOUNT_IP
+  IP
+}
+
+/// Single-use tokens (enrolment, invitation, reset, recovery) and the login MFA challenge. Only
+/// the SHA-256 of the token is stored. consumedAt/invalidatedAt are set once (trigger); at most
+/// one live token per user and purpose (partial unique index).
+model UserCredentialToken {
+  id              String                 @id @default(uuid(7)) @db.Uuid
+  userId          String                 @db.Uuid
+  purpose         CredentialTokenPurpose
+  /// SHA-256 hex of the token.
+  tokenHash       String                 @unique @db.Char(64)
+  /// User.securityVersion when the token was issued; a later increase invalidates it.
+  securityVersion Int
+  app             AuthApp?
+  /// Customer tokens only.
+  siteId          String?                @db.Uuid
+  /// Normalised new address, EMAIL_CHANGE only (CHECK).
+  newEmail        String?                @db.VarChar(320)
+  expiresAt       DateTime               @db.Timestamptz(3)
+  consumedAt      DateTime?              @db.Timestamptz(3)
+  invalidatedAt   DateTime?              @db.Timestamptz(3)
+  /// Wrong attempts; the token dies at 5 (CHECK 0..5).
+  failedAttempts  Int                    @default(0)
+  createdByType   AuditActorType
+  createdByUserId String?                @db.Uuid
+  createdAt       DateTime               @default(now()) @db.Timestamptz(3)
+
+  user      User  @relation("UserCredentialTokenUser", fields: [userId], references: [id], onDelete: Restrict)
+  site      Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy User? @relation("UserCredentialTokenCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, purpose], map: "UserCredentialToken_live_userId_purpose_key", where: raw("(\"consumedAt\" IS NULL) AND (\"invalidatedAt\" IS NULL)"))
+  @@index([expiresAt])
+  @@index([siteId])
+}
+
+/// A TOTP factor. The secret is AES-256-GCM encrypted (`v<key>:<iv>:<ciphertext>:<tag>`, AAD
+/// `userId|factorId`); one confirmed factor per user and type.
+model MfaFactor {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  userId           String        @db.Uuid
+  type             MfaFactorType
+  secretCiphertext String
+  label            String?       @db.VarChar(100)
+  confirmedAt      DateTime?     @db.Timestamptz(3)
+  /// Last accepted TOTP time step; a code is accepted only for a later step (replay guard).
+  lastUsedStep     BigInt?
+  lastUsedAt       DateTime?     @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, type], map: "MfaFactor_confirmed_userId_type_key", where: raw("(\"confirmedAt\" IS NOT NULL)"))
+  @@index([userId])
+}
+
+/// Recovery codes, stored as HMAC-SHA-256 (IAM_HMAC_KEY). usedAt is set once (trigger).
+model MfaRecoveryCode {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @db.Uuid
+  codeHash  String    @db.Char(64)
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, codeHash])
+}
+
+/// Opaque server-side sessions; the cookie holds the token, the row its SHA-256. Staff sessions
+/// belong to the admin app without a site, customer sessions to one public site (CHECK, trigger).
+model Session {
+  id                String               @id @default(uuid(7)) @db.Uuid
+  tokenHash         String               @unique @db.Char(64)
+  userId            String               @db.Uuid
+  kind              UserKind
+  app               AuthApp
+  siteId            String?              @db.Uuid
+  securityVersion   Int
+  createdAt         DateTime             @default(now()) @db.Timestamptz(3)
+  lastSeenAt        DateTime             @db.Timestamptz(3)
+  idleExpiresAt     DateTime             @db.Timestamptz(3)
+  absoluteExpiresAt DateTime             @db.Timestamptz(3)
+  /// Last MFA verification (login or step-up).
+  mfaVerifiedAt     DateTime?            @db.Timestamptz(3)
+  /// Last password re-authentication of a customer.
+  reauthAt          DateTime?            @db.Timestamptz(3)
+  persistent        Boolean              @default(false)
+  rotatedFromId     String?              @db.Uuid
+  revokedAt         DateTime?            @db.Timestamptz(3)
+  revokedReason     SessionRevokeReason?
+  /// Network prefix only (/24 or /48), never the full address.
+  ipPrefix          String?              @db.VarChar(45)
+  userAgent         String?              @db.VarChar(256)
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  site        Site?     @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  rotatedFrom Session?  @relation("SessionRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+  rotatedTo   Session[] @relation("SessionRotation")
+
+  @@index([userId, revokedAt])
+  @@index([absoluteExpiresAt])
+  @@index([siteId])
+  @@index([rotatedFromId])
+}
+
+/// Progressive-delay buckets (ADR-013 D6). The key is an HMAC digest of the e-mail and/or IP
+/// prefix, so the table holds no personal data.
+model AuthThrottle {
+  key             String           @id @db.Char(64)
+  kind            AuthThrottleKind
+  failures        Int              @default(0)
+  windowStartedAt DateTime         @db.Timestamptz(3)
+  lastFailureAt   DateTime         @db.Timestamptz(3)
+  notBefore       DateTime?        @db.Timestamptz(3)
+  updatedAt       DateTime         @db.Timestamptz(3)
+
+  @@index([updatedAt])
+}
+
+// ===========================================================================================
+// PM-1 (DP-031, DP-032, DP-033, DP-034): catalogue foundation. A Product is the platform-wide
+// master record of one product; it has no site. What a site shows (visibility, category, its own
+// texts) is a ProductSiteListing of that site. Categories belong to one site. Rules Prisma cannot
+// express (formats, same-site category tree without cycles, depth) are CHECK constraints and
+// triggers in migration 20261111140000_pm_1_catalog_foundation, tested in
+// test/integration/catalog.int.test.ts. Approval and publication (DP-068) come with PM-3.
+// ===========================================================================================
+
+/// Lifecycle of a product master record. DRAFT = being entered; ARCHIVED = withdrawn, kept for
+/// history (nothing is deleted). Review and approval states arrive with PM-3 (DP-068).
+/// PM-3: DRAFT -> IN_REVIEW -> APPROVED; a content change while IN_REVIEW or APPROVED returns
+/// the master to DRAFT (trigger). ARCHIVED masters are neither reviewed nor published.
+enum ProductStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  ARCHIVED
+}
+
+/// Whether a site lists the product. HIDDEN listings stay in the admin only. Publication itself
+/// (product:publish, DP-068) is a separate step (PM-3, ProductPublication); the public sites show
+/// a product only while it is published AND its listing is VISIBLE.
+enum ListingVisibility {
+  VISIBLE
+  HIDDEN
+}
+
+/// Platform-wide product master record (DP-031). Changed only with the PLATFORM permission
+/// product_master:edit; site roles read it through product:read of a site.
+model Product {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  /// Product code, upper case (CHECK in the migration), unique across the platform.
+  code        String        @unique @db.VarChar(64)
+  /// URL slug, lower-case kebab case (CHECK in the migration), unique across the platform.
+  slug        String        @unique @db.VarChar(120)
+  name        String        @db.VarChar(200)
+  summary     String?       @db.VarChar(500)
+  /// Plain text, at most 8000 characters (CHECK in the migration).
+  description String?
+  status      ProductStatus @default(DRAFT)
+  /// Optimistic concurrency: every change must name the version it was based on.
+  version     Int           @default(1)
+  archivedAt  DateTime?     @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  /// PM-3: users who changed the content since the last approval. None of them may approve or
+  /// request changes on this revision (separation of duties; trigger). Cleared on approval.
+  revisionEditorIds String[]  @default([]) @db.Uuid
+  submittedAt       DateTime? @db.Timestamptz(3)
+  submittedById     String?   @db.Uuid
+  /// The version that was submitted (the version after the submit transition).
+  submittedVersion  Int?
+  approvedAt        DateTime? @db.Timestamptz(3)
+  approvedById      String?   @db.Uuid
+  /// The version that was approved. Publication needs status APPROVED, which a later content
+  /// change revokes, so a published snapshot is always of an approved version.
+  approvedVersion   Int?
+
+  listings             ProductSiteListing[]
+  specValues           ProductSpecValue[]
+  images               ProductImage[]
+  submittedBy          User?                   @relation("ProductSubmittedBy", fields: [submittedById], references: [id], onDelete: Restrict)
+  approvedBy           User?                   @relation("ProductApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  reviewEvents         ProductReviewEvent[]
+  publications         ProductPublication[]
+  documents            ProductDocument[]
+  /// PM-6: global brand products this master is cross-referenced with.
+  crossReferences      ProductCrossReference[]
+  /// DP-042: document requests left for this product (evidence; the product is never deleted).
+  leadDocumentRequests LeadDocumentRequest[]
+
+  @@index([status, name])
+}
+
+/// A product category of one site (DP-033). Categories form a tree inside one site (at most three
+/// levels, no cycles: trigger). One category per site may be the default for new listings.
+model ProductCategory {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  siteId      String   @db.Uuid
+  parentId    String?  @db.Uuid
+  name        String   @db.VarChar(120)
+  /// Lower-case kebab case (CHECK), unique per site.
+  slug        String   @db.VarChar(120)
+  description String?  @db.VarChar(1000)
+  sortOrder   Int      @default(0)
+  isDefault   Boolean  @default(false)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  site     Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  parent   ProductCategory?     @relation("ProductCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children ProductCategory[]    @relation("ProductCategoryTree")
+  listings ProductSiteListing[]
+
+  @@unique([siteId, slug])
+  /// Target of the listings' composite foreign key: a listing's category is of the same site.
+  @@unique([id, siteId])
+  @@unique([siteId], map: "ProductCategory_default_siteId_key", where: raw("\"isDefault\""))
+  @@index([siteId, parentId, sortOrder])
+}
+
+/// A product as listed on one site (DP-032): visibility, the site's category and the site's own
+/// texts. Changed with product:edit of that site.
+model ProductSiteListing {
+  id         String            @id @default(uuid(7)) @db.Uuid
+  productId  String            @db.Uuid
+  siteId     String            @db.Uuid
+  categoryId String            @db.Uuid
+  visibility ListingVisibility @default(HIDDEN)
+  sortOrder  Int               @default(0)
+  version    Int               @default(1)
+  createdAt  DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime          @updatedAt @db.Timestamptz(3)
+
+  product      Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  site         Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  /// Composite key: the category must belong to the listing's site (foreign key, not code).
+  category     ProductCategory      @relation(fields: [categoryId, siteId], references: [id, siteId], onDelete: Restrict)
+  texts        ProductListingText[]
+  publications ProductPublication[]
+
+  @@unique([productId, siteId])
+  /// Target of the texts' composite foreign key.
+  @@unique([id, siteId])
+  @@index([siteId, visibility])
+  @@index([siteId, categoryId])
+}
+
+/// Site-specific product texts of a listing, one row per locale. PM-1 writes English ("en") only;
+/// the table is shaped for translations later. siteId is repeated so the site scope applies.
+model ProductListingText {
+  listingId   String   @db.Uuid
+  siteId      String   @db.Uuid
+  /// BCP 47 language tag (CHECK); "en" only in PM-1.
+  locale      String   @db.VarChar(35)
+  title       String?  @db.VarChar(200)
+  summary     String?  @db.VarChar(500)
+  /// Plain text, at most 8000 characters (CHECK in the migration).
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  listing ProductSiteListing @relation(fields: [listingId, siteId], references: [id, siteId], onDelete: Restrict)
+  site    Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@id([listingId, locale])
+  @@index([siteId])
+}
+
+// ===========================================================================================
+// PM-2: technical specifications and product images. Both belong to the platform-wide product
+// master (no site). Rules Prisma cannot express are in migration
+// 20261112090000_pm_2_specs_images and tested in test/integration/catalog.int.test.ts.
+// ===========================================================================================
+
+enum SpecDataType {
+  NUMBER
+  TEXT
+  BOOLEAN
+  RANGE
+}
+
+/// A technical specification the platform tracks (e.g. kinematic viscosity at 100 °C).
+model SpecDefinition {
+  id          String       @id @default(uuid(7)) @db.Uuid
+  /// snake_case, unique, never changes (CHECK + trigger).
+  key         String       @unique @db.VarChar(64)
+  name        String       @db.VarChar(120)
+  /// Never changes once created (trigger): values depend on it.
+  dataType    SpecDataType
+  /// Accepted units, first = default; empty for unitless values.
+  units       String[]     @default([]) @db.VarChar(32)
+  /// Recommended test methods (ASTM, ISO, ...).
+  testMethods String[]     @default([]) @db.VarChar(64)
+  required    Boolean      @default(false)
+  minValue    Decimal?     @db.Decimal(20, 6)
+  maxValue    Decimal?     @db.Decimal(20, 6)
+  decimals    Int?
+  maxLength   Int?
+  sortOrder   Int          @default(0)
+  archived    Boolean      @default(false)
+  version     Int          @default(1)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+
+  values ProductSpecValue[]
+
+  @@index([archived, sortOrder])
+}
+
+/// One product's value for one specification. Exactly one value shape per data type (CHECK and
+/// trigger against the definition).
+model ProductSpecValue {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  productId    String   @db.Uuid
+  definitionId String   @db.Uuid
+  numberValue  Decimal? @db.Decimal(20, 6)
+  rangeMin     Decimal? @db.Decimal(20, 6)
+  rangeMax     Decimal? @db.Decimal(20, 6)
+  textValue    String?  @db.VarChar(2000)
+  booleanValue Boolean?
+  unit         String?  @db.VarChar(32)
+  testMethod   String?  @db.VarChar(64)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  product    Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  definition SpecDefinition @relation(fields: [definitionId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, definitionId])
+  @@index([definitionId])
+}
+
+/// An image of a product master. The bytes live in the media storage (never in PostgreSQL);
+/// this row holds the metadata and random storage keys. Private by default: only the admin
+/// API serves it, to staff who may read the catalogue.
+model ProductImage {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  productId        String   @db.Uuid
+  /// Random key of the original bytes (CHECK format); derived keys share its prefix.
+  storageKey       String   @unique @db.VarChar(200)
+  mimeType         String   @db.VarChar(32)
+  byteSize         Int
+  width            Int
+  height           Int
+  sha256           String   @db.Char(64)
+  /// Sanitised display name of the uploaded file; never used as a storage path.
+  originalFilename String   @db.VarChar(255)
+  altText          String?  @db.VarChar(300)
+  sortOrder        Int      @default(0)
+  isCover          Boolean  @default(false)
+  /// Derived WebP variants: { display: { key, width, height, bytes }, thumb: { ... } }.
+  variants         Json     @default("{}")
+  version          Int      @default(1)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([productId], map: "ProductImage_cover_productId_key", where: raw("\"isCover\""))
+  @@index([productId, sortOrder])
+}
+
+// ===========================================================================================
+// PM-3 (DP-068): review, approval and per-site publication. Rules Prisma cannot express (the
+// status machine, separation of duties, append-only history, snapshot immutability) are in
+// migration 20261113090100_pm_3_review_publication and tested in
+// test/integration/catalog-workflow.int.test.ts.
+// ===========================================================================================
+
+enum ProductReviewAction {
+  SUBMITTED
+  WITHDRAWN
+  APPROVED
+  CHANGES_REQUESTED
+  REVIEW_RESET
+  PUBLISHED
+  UNPUBLISHED
+}
+
+enum PublicationStatus {
+  PUBLISHED
+  UNPUBLISHED
+}
+
+/// Append-only history of a product's review and publication (trigger: no UPDATE or DELETE).
+/// Master events have no site; publication events carry the site (site scope applies).
+model ProductReviewEvent {
+  id             String              @id @default(uuid(7)) @db.Uuid
+  productId      String              @db.Uuid
+  siteId         String?             @db.Uuid
+  action         ProductReviewAction
+  /// The master version the event refers to.
+  productVersion Int
+  actorUserId    String              @db.Uuid
+  /// The reviewer's or editor's reason; required for CHANGES_REQUESTED (CHECK).
+  comment        String?             @db.VarChar(2000)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  site    Site?   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  actor   User    @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt])
+  @@index([siteId, createdAt])
+}
+
+/// A product's publication on one site: an immutable snapshot of the approved content (master
+/// and listing versions recorded), replaced only by republishing. BV and Corporate are separate
+/// rows; one never changes the other.
+model ProductPublication {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  productId       String            @db.Uuid
+  siteId          String            @db.Uuid
+  listingId       String            @db.Uuid
+  status          PublicationStatus
+  productVersion  Int
+  listingVersion  Int
+  /// The public content (contracts PublishedSnapshotSchema); never edited, only replaced.
+  snapshot        Json
+  /// Images the snapshot shows: the public image route serves only these, and they cannot be
+  /// deleted while the publication is PUBLISHED.
+  imageIds        String[]          @db.Uuid
+  publishedAt     DateTime          @db.Timestamptz(3)
+  publishedById   String            @db.Uuid
+  unpublishedAt   DateTime?         @db.Timestamptz(3)
+  unpublishedById String?           @db.Uuid
+  version         Int               @default(1)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(3)
+
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  site          Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  /// Composite key: the listing belongs to the publication's site.
+  listing       ProductSiteListing @relation(fields: [listingId, siteId], references: [id, siteId], onDelete: Restrict)
+  publishedBy   User               @relation("ProductPublicationPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict)
+  unpublishedBy User?              @relation("ProductPublicationUnpublishedBy", fields: [unpublishedById], references: [id], onDelete: Restrict)
+
+  @@unique([productId, siteId])
+  @@index([siteId, status])
+}
+
+// ===========================================================================================
+// PM-5 (DP-035): technical documents (TDS, SDS, COA, other PDFs) of a product master. Rules
+// Prisma cannot express (immutable revisions, one active revision, formats, archived documents)
+// are in migration 20261114090000_pm_5_technical_documents and tested in
+// test/integration/catalog-documents.int.test.ts. ADR-014 records the access model.
+// ===========================================================================================
+
+enum DocumentType {
+  TDS
+  SDS
+  COA
+  OTHER
+}
+
+/// Who may download a document on a public site. INTERNAL (the default) never leaves the admin.
+/// MEMBERS_ONLY and LEAD_REQUIRED are listed on a site but not downloadable until membership
+/// (DP-039) and the lead grant with watermark (DP-042, DP-043) exist: fail-closed in code.
+enum DocumentAccessPolicy {
+  PUBLIC
+  MEMBERS_ONLY
+  LEAD_REQUIRED
+  INTERNAL
+}
+
+enum DocumentStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// A technical document of a product master (platform-wide, like images). The file itself is a
+/// chain of immutable revisions; exactly one revision is active once the first is uploaded.
+model ProductDocument {
+  id            String               @id @default(uuid(7)) @db.Uuid
+  productId     String               @db.Uuid
+  type          DocumentType
+  title         String               @db.VarChar(200)
+  description   String?              @db.VarChar(2000)
+  accessPolicy  DocumentAccessPolicy @default(INTERNAL)
+  status        DocumentStatus       @default(ACTIVE)
+  /// The highest revision number given so far (revisions are numbered 1, 2, 3, ...).
+  revisionCount Int                  @default(0)
+  version       Int                  @default(1)
+  archivedAt    DateTime?            @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime             @updatedAt @db.Timestamptz(3)
+
+  product      Product                   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  revisions    ProductDocumentRevision[]
+  sites        ProductDocumentSite[]
+  /// DP-042: lead requests for this document.
+  leadRequests LeadDocumentRequest[]
+
+  @@index([productId, status, type])
+}
+
+/// One uploaded file of a document. Never changed or deleted (trigger and privileges); only the
+/// active flag moves between the revisions of a document.
+model ProductDocumentRevision {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  documentId       String   @db.Uuid
+  revisionNumber   Int
+  isActive         Boolean  @default(false)
+  /// Random key of the PDF in the media storage (CHECK format); never derived from a request.
+  storageKey       String   @unique @db.VarChar(200)
+  mimeType         String   @db.VarChar(32)
+  byteSize         Int
+  sha256           String   @db.Char(64)
+  /// Sanitised display name of the uploaded file; never used as a storage path.
+  originalFilename String   @db.VarChar(255)
+  pageCount        Int?
+  pdfVersion       String?  @db.VarChar(8)
+  /// What changed in this revision (e.g. "Section 8 updated").
+  changeNote       String?  @db.VarChar(1000)
+  uploadedById     String   @db.Uuid
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  document        ProductDocument         @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  uploadedBy      User                    @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  /// DP-086: site rows pinned to this revision.
+  sites           ProductDocumentSite[]
+  /// PM-6: cross-references verified against this revision (source evidence).
+  crossReferences ProductCrossReference[]
+  /// DP-042: lead requests for this revision (the revision the site had pinned).
+  leadRequests    LeadDocumentRequest[]
+
+  @@unique([documentId, revisionNumber])
+  /// Target of the site rows' composite foreign key: a pinned revision is of the same document.
+  @@unique([id, documentId])
+  @@unique([documentId], map: "ProductDocumentRevision_active_documentId_key", where: raw("\"isActive\""))
+}
+
+/// A document shown on one site (presence = shown). Decided by that site's publisher
+/// (product:publish); the public site serves it only while the product is live there.
+/// DP-086: the row pins the revision the site serves. A new upload or another active revision
+/// never changes it; only that site's publisher moves the pin, and only to the active revision.
+model ProductDocumentSite {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  documentId String   @db.Uuid
+  siteId     String   @db.Uuid
+  /// The revision this site serves (composite key: a revision of the same document).
+  revisionId String   @db.Uuid
+  /// When the publisher last pinned a revision (the first pin or a later confirmation).
+  pinnedAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  document ProductDocument         @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  site     Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  revision ProductDocumentRevision @relation(fields: [revisionId, documentId], references: [id, documentId], onDelete: Restrict)
+
+  @@unique([documentId, siteId])
+  @@index([siteId])
+  @@index([revisionId])
+}
+
+// ===========================================================================================
+// PM-6 (DP-036): global brands, their products and cross-references to our product masters.
+// Rules Prisma cannot express (status machine, verification evidence and separation of duties,
+// append-only history, site rows) are in migration 20261116090000_pm_6_global_cross_references
+// and tested in test/integration/catalog-xrefs.int.test.ts. ADR-015 records the model.
+// ===========================================================================================
+
+enum GlobalCatalogStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// A brand of another manufacturer (platform-wide). Changed with product_master:edit.
+model GlobalBrand {
+  id           String              @id @default(uuid(7)) @db.Uuid
+  name         String              @db.VarChar(120)
+  /// Lower-case, whitespace-collapsed name (CHECK): one brand per name, whatever the spelling.
+  nameKey      String              @unique @db.VarChar(120)
+  /// The company that makes the brand's products.
+  manufacturer String              @db.VarChar(200)
+  /// ISO 3166-1 alpha-2 of the manufacturer, upper case (CHECK).
+  country      String?             @db.Char(2)
+  notes        String?             @db.VarChar(2000)
+  status       GlobalCatalogStatus @default(ACTIVE)
+  version      Int                 @default(1)
+  archivedAt   DateTime?           @db.Timestamptz(3)
+  createdAt    DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @db.Timestamptz(3)
+
+  products GlobalProduct[]
+
+  @@index([status, name])
+}
+
+/// A product (and grade) of a global brand. Its version is recorded by a verification: a later
+/// change makes that verification stale.
+model GlobalProduct {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  brandId     String              @db.Uuid
+  name        String              @db.VarChar(200)
+  /// Lower-case, whitespace-collapsed name + grade (CHECK); unique per brand.
+  nameKey     String              @db.VarChar(330)
+  /// Viscosity grade or specification class, e.g. "SAE 5W-30" or "ISO VG 46".
+  grade       String?             @db.VarChar(120)
+  description String?             @db.VarChar(2000)
+  status      GlobalCatalogStatus @default(ACTIVE)
+  version     Int                 @default(1)
+  archivedAt  DateTime?           @db.Timestamptz(3)
+  createdAt   DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime            @updatedAt @db.Timestamptz(3)
+
+  brand           GlobalBrand             @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  crossReferences ProductCrossReference[]
+
+  @@unique([brandId, nameKey])
+  @@index([nameKey])
+}
+
+/// SIMILAR: staff consider the products comparable (no documented equivalence).
+/// PENDING_VERIFICATION: an editor asked for verification against a source document.
+/// VERIFIED: a second person with product:approve confirmed it against that document.
+/// REMOVED: withdrawn; kept with its history, never shown.
+enum CrossReferenceStatus {
+  SIMILAR
+  PENDING_VERIFICATION
+  VERIFIED
+  REMOVED
+}
+
+enum CrossReferenceAction {
+  CREATED
+  UPDATED
+  VERIFICATION_REQUESTED
+  VERIFIED
+  VERIFICATION_REJECTED
+  MARKED_SIMILAR
+  VERIFICATION_RESET
+  REMOVED
+  RESTORED
+}
+
+/// One of our product masters cross-referenced with one global product.
+model ProductCrossReference {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  productId       String               @db.Uuid
+  /// Never changes (trigger): another global product is another cross-reference.
+  globalProductId String               @db.Uuid
+  status          CrossReferenceStatus @default(SIMILAR)
+  /// Staff explanation (plain text).
+  description     String?              @db.VarChar(2000)
+  /// Technical comparison (plain text, at most 8000 characters: CHECK); required to verify.
+  comparison      String?
+  /// Users who changed the content since the last decision; none of them may verify (trigger).
+  editorIds       String[]             @default([]) @db.Uuid
+
+  /// Source evidence: a revision of a technical document (PM-5) of the same product master.
+  sourceDocumentId      String?   @db.Uuid
+  sourceRevisionId      String?   @db.Uuid
+  requestedById         String?   @db.Uuid
+  requestedAt           DateTime? @db.Timestamptz(3)
+  verifiedById          String?   @db.Uuid
+  verifiedAt            DateTime? @db.Timestamptz(3)
+  /// sha256 of the product's specification values when verified (contracts specFingerprint).
+  verifiedSpecHash      String?   @db.Char(64)
+  /// The global product version when verified.
+  verifiedGlobalVersion Int?
+
+  removedAt DateTime? @db.Timestamptz(3)
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  product        Product                      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  globalProduct  GlobalProduct                @relation(fields: [globalProductId], references: [id], onDelete: Restrict)
+  /// Composite key: the revision belongs to the named document.
+  sourceRevision ProductDocumentRevision?     @relation(fields: [sourceRevisionId, sourceDocumentId], references: [id, documentId], onDelete: Restrict)
+  requestedBy    User?                        @relation("CrossReferenceRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  verifiedBy     User?                        @relation("CrossReferenceVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  events         ProductCrossReferenceEvent[]
+  sites          ProductCrossReferenceSite[]
+
+  @@unique([productId, globalProductId])
+  @@index([globalProductId])
+  @@index([status])
+  @@index([sourceRevisionId, sourceDocumentId])
+}
+
+/// Append-only history of a cross-reference (trigger: no UPDATE or DELETE).
+model ProductCrossReferenceEvent {
+  id               String                @id @default(uuid(7)) @db.Uuid
+  crossReferenceId String                @db.Uuid
+  action           CrossReferenceAction
+  fromStatus       CrossReferenceStatus?
+  toStatus         CrossReferenceStatus
+  /// The cross-reference version after the event.
+  version          Int
+  actorUserId      String                @db.Uuid
+  /// Reason or note; required for a rejection, a downgrade and a removal (CHECK).
+  comment          String?               @db.VarChar(2000)
+  /// The source revision the event refers to (requests and decisions).
+  sourceRevisionId String?               @db.Uuid
+  createdAt        DateTime              @default(now()) @db.Timestamptz(3)
+
+  crossReference ProductCrossReference @relation(fields: [crossReferenceId], references: [id], onDelete: Restrict)
+  actor          User                  @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([crossReferenceId, createdAt])
+}
+
+/// A cross-reference shown on one site (presence = shown). Decided by that site's publisher
+/// (product:publish); served only while the product is live there and the relation holds.
+model ProductCrossReferenceSite {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  crossReferenceId String   @db.Uuid
+  siteId           String   @db.Uuid
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  crossReference ProductCrossReference @relation(fields: [crossReferenceId], references: [id], onDelete: Restrict)
+  site           Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@unique([crossReferenceId, siteId])
+  @@index([siteId])
+}
+
+// ===========================================================================================
+// DP-042/DP-043 (ADR-016): lead-gated document downloads. A visitor leaves a short form with the
+// privacy notice confirmed (and optional marketing consent); the request is stored with its
+// consent evidence and a short-lived download grant; every delivered file is a counted, stamped
+// download row. Rules Prisma cannot express (formats, append-only evidence, grant limits) are in
+// migration 20261117090000_dp_042_lead_document_requests and tested in
+// test/integration/leads.int.test.ts. Personal data: lead:read on the site only (customer data).
+// ===========================================================================================
+
+/// One person per site and normalised e-mail, with the latest details they gave.
+model Lead {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  siteId             String    @db.Uuid
+  /// Normalised (trimmed, lower case); unique per site.
+  email              String    @db.VarChar(254)
+  fullName           String    @db.VarChar(120)
+  company            String    @db.VarChar(160)
+  /// ISO 3166-1 alpha-2.
+  country            String    @db.Char(2)
+  /// The e-mail domain is a known free-mail provider (flag for sales; accepted, ADR-016 D1).
+  freeMailDomain     Boolean   @default(false)
+  /// When marketing consent was last given; a later unticked form never clears it (D2).
+  marketingConsentAt DateTime? @db.Timestamptz(3)
+  requestCount       Int       @default(0)
+  firstRequestAt     DateTime  @default(now()) @db.Timestamptz(3)
+  lastRequestAt      DateTime  @default(now()) @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+  /// DP-096: when the identity fields were cleared (retention or an erasure request). An
+  /// anonymised lead never changes again; written only by dp_lead_retention (trigger, CHECK).
+  anonymisedAt       DateTime? @db.Timestamptz(3)
+  /// DP-096 (D-R1): customer, open sales opportunity or legal hold. A held lead is never
+  /// anonymised automatically (the CRM retention policy decides); set by the operator only.
+  retentionHold      LeadRetentionHold?
+  retentionHoldAt    DateTime? @db.Timestamptz(3)
+  /// DP-041 (ADR-019): the sales workflow. Only staff with lead:manage on the lead's site change
+  /// these columns (RLS policy + guard trigger); every change is logged as a LeadActivity by the
+  /// database itself. QUALIFIED and CONVERTED keep the lead out of automatic anonymisation.
+  status             LeadStatus @default(NEW)
+  statusChangedAt    DateTime?  @db.Timestamptz(3)
+  /// A staff user who holds lead:manage on the lead's site when assigned (checked by the database).
+  assignedToId       String?    @db.Uuid
+  assignedAt         DateTime?  @db.Timestamptz(3)
+  /// Optimistic concurrency of the workflow columns: +1 on every staff change.
+  workflowVersion    Int        @default(0)
+
+  site       Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  requests   LeadDocumentRequest[]
+  assignedTo User?                 @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  activities LeadActivity[]
+
+  @@unique([siteId, email])
+  @@index([siteId, lastRequestAt])
+  @@index([siteId, status, lastRequestAt])
+  @@index([assignedToId])
+}
+
+/// DP-041 (ADR-019): where a lead is in the sales workflow.
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  CONVERTED
+}
+
+/// DP-041: what a LeadActivity records. STATUS_CHANGED and ASSIGNMENT_CHANGED are written only by
+/// the database (trigger on Lead); NOTE and CONTACT by staff with lead:manage.
+enum LeadActivityKind {
+  NOTE
+  CONTACT
+  STATUS_CHANGED
+  ASSIGNMENT_CHANGED
+}
+
+enum LeadContactChannel {
+  EMAIL
+  PHONE
+  MEETING
+  OTHER
+}
+
+/// DP-041 (ADR-019): append-only sales history of a lead: who did what, when. The actor is the
+/// user of the admin session the database sees (RLS WITH CHECK), never a value the API chooses.
+/// Free text (`body`) is cleared when the lead is anonymised (DP-096); the row stays as evidence.
+model LeadActivity {
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId         String              @db.Uuid
+  leadId         String              @db.Uuid
+  kind           LeadActivityKind
+  actorUserId    String              @db.Uuid
+  /// Note text or contact summary (NOTE, CONTACT); null once redacted.
+  body           String?             @db.VarChar(4000)
+  contactChannel LeadContactChannel?
+  /// When the contact took place (CONTACT); not in the future.
+  contactedAt    DateTime?           @db.Timestamptz(3)
+  fromStatus     LeadStatus?
+  toStatus       LeadStatus?
+  fromAssigneeId String?             @db.Uuid
+  toAssigneeId   String?             @db.Uuid
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  /// DP-096: when the free text was cleared by the anonymisation.
+  redactedAt     DateTime?           @db.Timestamptz(3)
+  /// Insertion order (one change writes several rows within the same millisecond).
+  seq            BigInt              @default(autoincrement())
+
+  site         Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lead         Lead  @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  actor        User  @relation("LeadActivityActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  fromAssignee User? @relation("LeadActivityFromAssignee", fields: [fromAssigneeId], references: [id], onDelete: Restrict)
+  toAssignee   User? @relation("LeadActivityToAssignee", fields: [toAssigneeId], references: [id], onDelete: Restrict)
+
+  @@index([leadId, createdAt])
+  @@index([leadId, seq])
+  @@index([siteId, createdAt])
+  @@index([actorUserId])
+  @@index([fromAssigneeId])
+  @@index([toAssigneeId])
+}
+
+/// DP-096 (ADR-003 §4): why a lead is kept outside the 24-month rule.
+enum LeadRetentionHold {
+  CUSTOMER
+  OPEN_OPPORTUNITY
+  LEGAL_HOLD
+}
+
+/// One submitted form for one document: the consent evidence (append-only for dp_app).
+model LeadDocumentRequest {
+  id                      String   @id @default(uuid(7)) @db.Uuid
+  /// Short reference printed on the watermark (Crockford base32, 8 characters). Cleared (null)
+  /// when the lead is anonymised: it re-links a stamped PDF to the record (DP-096 D-R5).
+  reference               String?  @unique @db.Char(8)
+  leadId                  String   @db.Uuid
+  siteId                  String   @db.Uuid
+  productId               String   @db.Uuid
+  documentId              String   @db.Uuid
+  /// The revision the site had pinned when the form was sent (DP-086); the one delivered.
+  revisionId              String   @db.Uuid
+  /// What the visitor submitted with this request.
+  fullName                String   @db.VarChar(120)
+  company                 String   @db.VarChar(160)
+  country                 String   @db.Char(2)
+  privacyNoticeVersion    String   @db.VarChar(20)
+  privacyNoticeSha256     String   @db.Char(64)
+  marketingConsent        Boolean
+  marketingConsentVersion String?  @db.VarChar(20)
+  marketingConsentSha256  String?  @db.Char(64)
+  /// HMAC of the client's IP prefix (never the address); null when the site sent none.
+  ipPrefixHmac            String?  @db.Char(64)
+  requestId               String?  @db.VarChar(100)
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+
+  lead      Lead                    @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  site      Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  product   Product                 @relation(fields: [productId], references: [id], onDelete: Restrict)
+  document  ProductDocument         @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  revision  ProductDocumentRevision @relation(fields: [revisionId, documentId], references: [id, documentId], onDelete: Restrict)
+  grant     DocumentDownloadGrant?
+  downloads LeadDocumentDownload[]
+
+  @@index([siteId, createdAt])
+  @@index([leadId, createdAt])
+  @@index([documentId])
+  @@index([revisionId, documentId])
+}
+
+/// Short-lived permission to download the file of one request (15 minutes, at most 3 times).
+model DocumentDownloadGrant {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  requestId      String    @unique @db.Uuid
+  siteId         String    @db.Uuid
+  /// SHA-256 of the 256-bit token; the token itself is never stored.
+  tokenHash      String    @unique @db.Char(64)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  downloadCount  Int       @default(0)
+  lastDownloadAt DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+
+  request   LeadDocumentRequest    @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  site      Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  downloads LeadDocumentDownload[]
+
+  @@index([siteId, expiresAt])
+}
+
+/// One delivered, stamped file (append-only for dp_app).
+model LeadDocumentDownload {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  requestId     String   @db.Uuid
+  grantId       String   @db.Uuid
+  siteId        String   @db.Uuid
+  /// Size and SHA-256 of the stamped bytes that left (they differ from the revision file). The
+  /// hash is cleared when the lead is anonymised: it re-links the stamped PDF (DP-096 D-R5).
+  byteSize      Int
+  sha256        String?  @db.Char(64)
+  httpRequestId String?  @db.VarChar(100)
+  deliveredAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  request LeadDocumentRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  grant   DocumentDownloadGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  site    Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, deliveredAt])
+  @@index([siteId, deliveredAt])
+}
+
+/// Fixed-window counters of the public routes (ADR-016 D7). Keys are HMACs: no personal data.
+model PublicRateLimit {
+  key             String   @id @db.Char(64)
+  windowStartedAt DateTime @db.Timestamptz(3)
+  count           Int
+  expiresAt       DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
+// ===========================================================================================
+// DP-076/DP-077 (ADR-017): dual-approved, time-limited customer-data access. A customer-data
+// role is assigned only through an APPROVED request (requester, approver and assignee are three
+// different people); the guard triggers live in migration 20261118090000_dp_076_customer_data_access.
+// ===========================================================================================
+
+enum CustomerDataRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+/// A request for a customer-data role. Only PENDING rows change, once, to a final status.
+model CustomerDataAccessRequest {
+  id                  String                    @id @default(uuid(7)) @db.Uuid
+  /// The assignee (STAFF).
+  userId              String                    @db.Uuid
+  roleId              String                    @db.Uuid
+  scopeType           ScopeType
+  siteId              String?                   @db.Uuid
+  /// Business justification given by the requester (no customer data).
+  justification       String                    @db.VarChar(1000)
+  durationDays        Int
+  /// The assignee's current assignment this request extends (revoked and replaced on approval).
+  extendsAssignmentId String?                   @db.Uuid
+  status              CustomerDataRequestStatus @default(PENDING)
+  requestedById       String                    @db.Uuid
+  requestedAt         DateTime                  @default(now()) @db.Timestamptz(3)
+  /// Last moment the request can be approved.
+  decideBy            DateTime                  @db.Timestamptz(3)
+  decidedById         String?                   @db.Uuid
+  decidedAt           DateTime?                 @db.Timestamptz(3)
+  decisionNote        String?                   @db.VarChar(1000)
+  /// Id of the RoleAssignment created on approval (inserted in the same transaction).
+  assignmentId        String?                   @unique @db.Uuid
+  accessExpiresAt     DateTime?                 @db.Timestamptz(3)
+  /// When the expiry of the approved access was recorded in the audit trail (once).
+  expiryRecordedAt    DateTime?                 @db.Timestamptz(3)
+
+  user        User            @relation("CustomerDataAccessAssignee", fields: [userId], references: [id], onDelete: Restrict)
+  role        Role            @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  site        Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  extends     RoleAssignment? @relation("CustomerDataAccessExtends", fields: [extendsAssignmentId], references: [id], onDelete: Restrict)
+  requestedBy User            @relation("CustomerDataAccessRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy   User?           @relation("CustomerDataAccessDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([status, decideBy])
+  @@index([userId])
+  @@index([accessExpiresAt])
+}

@@ -1,0 +1,19 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.docx binary
+*.xlsx binary
+*.mp4 binary
+
+# Original planning files are kept byte-for-byte (BOM/CRLF included).
+docs/planning/v0.2/** -text
+
+# Third-party data kept byte-for-byte; its SHA-256 is pinned in a unit test (F1-002, A11).
+apps/api/data/breached-passwords/seclists-*.txt -text
+apps/api/data/breached-passwords/SECLISTS-LICENSE -text

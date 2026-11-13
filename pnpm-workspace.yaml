@@ -1,0 +1,27 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tools/*"
+
+# pnpm 10 blocks dependency install scripts by default. Only these may run them.
+onlyBuiltDependencies:
+  - "@nestjs/core"
+  - "@prisma/engines"
+  - "@tailwindcss/oxide"
+  - esbuild
+  - prisma
+  - sharp
+  - unrs-resolver
+
+# Installed without running their install script: argon2 ships prebuilt binaries for the
+# platforms we use (linux x64/arm64 glibc) and node-gyp-build loads them at runtime (F1-002).
+ignoredBuiltDependencies:
+  - argon2
+
+# Security overrides. Scoped to one parent and pinned; remove once upstream depends on a fixed
+# version.
+overrides:
+  # GHSA-g3hv-75wg-m249 / CVE-2026-118764 (minimatch >=7 <11.0.1, globparts DoS; DP-085).
+  # typescript-estree 8.72.x still asks for ^10.2.2. It only calls minimatch(path, pattern,
+  # { dot: true }), which 11.x keeps. Lint-time only.
+  "@typescript-eslint/typescript-estree>minimatch": "11.0.1"

@@ -1,0 +1,10 @@
+{
+  "name": "@dream/visual-qa",
+  "private": true,
+  "type": "module",
+  "description": "Playwright capture/measurement scripts copied from the prototype review. Run against a running web-bv (default http://localhost:3110).",
+  "dependencies": {
+    "axe-core": "4.10.3",
+    "playwright-core": "1.56.1"
+  }
+}

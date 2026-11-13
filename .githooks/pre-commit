@@ -1,0 +1,9 @@
+#!/bin/sh
+# F1-001E: prohibit creating new commits while checked out on main.
+set -eu
+branch="$(git symbolic-ref --quiet --short HEAD || true)"
+if [ "$branch" = "main" ]; then
+  echo "BLOCKED: direct commits on main. Create a feature branch and PR." >&2
+  exit 1
+fi
+exit 0
