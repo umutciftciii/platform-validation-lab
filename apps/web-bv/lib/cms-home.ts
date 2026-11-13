@@ -88,7 +88,15 @@ export type TemplateSection =
       items: { term: string; detail: string | null }[];
       link: CmsLink | null;
     }
-  | { id: string; type: "quote"; text: string; source: string | null };
+  | { id: string; type: "quote"; text: string; source: string | null }
+  | {
+      id: string;
+      type: "contact";
+      title: string;
+      intro: string | null;
+      formTitle: string;
+      formNote: string;
+    };
 
 export interface TemplatePageView {
   path: string;

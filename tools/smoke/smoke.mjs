@@ -32,6 +32,19 @@ async function get(url, init) {
   return fetch(url, { redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS), ...init });
 }
 
+/**
+ * Runs `fn` over `items`, at most `limit` at a time (DP-009). Fetching every public file at once
+ * pushed the web-bv dev server past its memory limit (OOM restart, then "fetch failed").
+ */
+const FETCH_CONCURRENCY = 8;
+async function eachLimited(items, limit, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 // 1. Health
 const health = [
   ["web-bv", "/api/health"],
@@ -185,24 +198,22 @@ const walk = (dir) =>
   });
 const sha = (buf) => createHash("sha256").update(buf).digest("hex");
 const files = walk(publicDir).filter((f) => !f.endsWith(".DS_Store"));
-await Promise.all(
-  files.map(async (file) => {
-    const rel = "/" + path.relative(publicDir, file).split(path.sep).join("/");
-    try {
-      const res = await get(base("web-bv") + encodeURI(rel));
-      const buf = Buffer.from(await res.arrayBuffer());
-      const same = sha(buf) === sha(readFileSync(file));
-      record(
-        "bv-public",
-        rel,
-        res.status === 200 && same,
-        `HTTP ${res.status}${same ? "" : " sha mismatch"}`,
-      );
-    } catch (e) {
-      record("bv-public", rel, false, String(e));
-    }
-  }),
-);
+await eachLimited(files, FETCH_CONCURRENCY, async (file) => {
+  const rel = "/" + path.relative(publicDir, file).split(path.sep).join("/");
+  try {
+    const res = await get(base("web-bv") + encodeURI(rel));
+    const buf = Buffer.from(await res.arrayBuffer());
+    const same = sha(buf) === sha(readFileSync(file));
+    record(
+      "bv-public",
+      rel,
+      res.status === 200 && same,
+      `HTTP ${res.status}${same ? "" : " sha mismatch"}`,
+    );
+  } catch (e) {
+    record("bv-public", rel, false, String(e));
+  }
+});
 
 // 4. Media referenced by rendered pages (incl. next/image URLs)
 const refs = new Set();
@@ -219,17 +230,15 @@ for (const html of Object.values(pages)) {
     }
   }
 }
-await Promise.all(
-  [...refs].map(async (url) => {
-    try {
-      const res = await get(base("web-bv") + url);
-      await res.arrayBuffer();
-      record("bv-referenced", url, res.status === 200, `HTTP ${res.status}`);
-    } catch (e) {
-      record("bv-referenced", url, false, String(e));
-    }
-  }),
-);
+await eachLimited([...refs], FETCH_CONCURRENCY, async (url) => {
+  try {
+    const res = await get(base("web-bv") + url);
+    await res.arrayBuffer();
+    record("bv-referenced", url, res.status === 200, `HTTP ${res.status}`);
+  } catch (e) {
+    record("bv-referenced", url, false, String(e));
+  }
+});
 
 // 5. Skeleton home page (web-corporate)
 try {

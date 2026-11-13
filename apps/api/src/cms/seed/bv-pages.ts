@@ -9,13 +9,16 @@
  *  - About Us: the active countries are listed under the four target markets the page names, and
  *    the four market photos are not used (stock photos unrelated to the markets);
  *  - service pages open with the site's existing illustrative CGI renders, with their disclosure;
- *  - buttons that pointed at the legacy contact-us.html go to the live contact page.
+ *  - buttons that pointed at the legacy contact-us.html go to the contact page here (/contact).
+ *
+ * Contact (DP-150): the live page's texts; the phone, e-mail and address are not repeated here, the
+ * page shows them from the published footer. The live form sends nothing yet here (DP-151).
  *
  * Used by the import only; it never overwrites a page that exists (ADR-020 D7).
  */
 import type { CmsSeo } from "@dream/contracts";
 
-const CONTACT = "https://dreampetroleumbv.com/en/contact";
+const CONTACT = "/contact";
 const CGI_NOTE =
   "Illustrative CGI image. It does not show Dream Petroleum facilities, vessels or vehicles.";
 const PARTNER_CTA = {
@@ -35,6 +38,38 @@ export interface CmsPageSeed {
 const seo = (title: string): CmsSeo => ({ title, description: null, noindex: false });
 
 export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
+  "bv.contact": {
+    slug: "contact",
+    title: "Contact Us",
+    seo: {
+      title: "Contact Us | Dream Petroleum BV",
+      description:
+        "Have a question, a trading enquiry, or want to explore a partnership? Our team is ready to assist.",
+      noindex: false,
+    },
+    content: {
+      sections: [
+        {
+          id: "contact-hero",
+          type: "hero",
+          eyebrow: "Get In Touch",
+          title: "Contact Us",
+          intro:
+            "Have a question, a trading enquiry, or want to explore a partnership? Our team is ready to assist.",
+          cta: null,
+        },
+        {
+          id: "contact-details",
+          type: "contact",
+          title: "We Are Always Ready to Help You",
+          intro: null,
+          formTitle: "Send Us a Message",
+          formNote:
+            "This form cannot send messages yet. Please call us or write to us by e-mail in the meantime.",
+        },
+      ],
+    },
+  },
   "bv.about-us": {
     slug: "about-us",
     title: "About Us",

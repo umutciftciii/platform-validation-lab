@@ -152,7 +152,7 @@ export const BV_HOME_SEED: BvHomeContent = {
           "Deep market expertise providing a competitive edge in international energy and chemical markets.",
         cta: {
           label: "Learn More",
-          href: "https://dreampetroleumbv.com/en/energy-trading",
+          href: "/energy-trading",
         },
         imageAlt:
           "Illustrative CGI render of a tanker and a storage terminal at night under a glowing world map.",
@@ -170,7 +170,7 @@ export const BV_HOME_SEED: BvHomeContent = {
           "World-class terminal services and integrated distribution from Rotterdam.",
         cta: {
           label: "Learn More",
-          href: "https://dreampetroleumbv.com/en/storage-distribution",
+          href: "/storage-distribution",
         },
         imageAlt:
           "Illustrative CGI render of storage tanks, a road tanker loading bay and an amber-lit pipeline at night.",
@@ -188,7 +188,7 @@ export const BV_HOME_SEED: BvHomeContent = {
           "Integrated sea and road logistics capabilities with coordinated shipment control and timely product distribution.",
         cta: {
           label: "Learn More",
-          href: "https://dreampetroleumbv.com/en/logistics",
+          href: "/logistics",
         },
         imageAlt:
           "Illustrative CGI render of a tanker at a port crane and a road tanker on a curved quay at dusk.",
@@ -267,7 +267,7 @@ export const BV_HOME_SEED: BvHomeContent = {
       note: "Group III base oils are lubricant base stocks, not by default raw materials for polymer resins.",
       cta: {
         label: "Contact Dream Petroleum",
-        href: "https://dreampetroleumbv.com/en/contact",
+        href: "/contact",
       },
     },
     scenes: [
@@ -280,7 +280,7 @@ export const BV_HOME_SEED: BvHomeContent = {
           "AI-generated concept image. Not a real product and not a verified ICCSYN application.",
         cta: {
           label: "Discuss this concept",
-          href: "https://dreampetroleumbv.com/en/contact",
+          href: "/contact",
         },
         image: "/media/applications/transparent-polymers-1448.webp",
         imageSmall: "/media/applications/transparent-polymers-828.webp",
@@ -338,11 +338,11 @@ export const BV_NAV_SEED: BvNavContent = {
     },
     {
       label: "Services",
-      href: null,
+      href: "#services",
     },
     {
       label: "Company",
-      href: null,
+      href: "/about-us",
     },
     {
       label: "Blogs",
@@ -350,12 +350,12 @@ export const BV_NAV_SEED: BvNavContent = {
     },
     {
       label: "Contact Us",
-      href: null,
+      href: "/contact",
     },
   ],
   contact: {
     label: "Contact",
-    href: null,
+    href: "/contact",
   },
   noScriptLinks: [
     {
@@ -386,7 +386,7 @@ export const BV_FOOTER_SEED: BvFooterContent = {
   headline: "Let’s Move Energy Forward.",
   cta: {
     label: "Get in Touch",
-    href: "https://dreampetroleumbv.com/en/contact",
+    href: "/contact",
   },
   intro:
     "Dream Petroleum BV is a global leader in the trading and distribution of high-quality base oils and petrochemical products. We add value to the energy sector through our strategic Rotterdam-based logistics network.",
@@ -418,15 +418,15 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "Base Oils (Group I, II & III)",
-          href: "https://dreampetroleumbv.com/en/products",
+          href: "/products",
         },
         {
           label: "High-Quality Solvents",
-          href: "https://dreampetroleumbv.com/en/products",
+          href: "/products",
         },
         {
           label: "Petrochemicals",
-          href: "https://dreampetroleumbv.com/en/products",
+          href: "/products",
         },
       ],
     },
@@ -435,15 +435,15 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "Sea & Road Logistics",
-          href: "https://dreampetroleumbv.com/en/logistics",
+          href: "/logistics",
         },
         {
           label: "Energy Trading & Supply",
-          href: "https://dreampetroleumbv.com/en/energy-trading",
+          href: "/energy-trading",
         },
         {
           label: "Storage & Distribution",
-          href: "https://dreampetroleumbv.com/en/storage-distribution",
+          href: "/storage-distribution",
         },
       ],
     },
@@ -452,7 +452,7 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "About Us",
-          href: "https://dreampetroleumbv.com/en/about-us",
+          href: "/about-us",
         },
         {
           label: "Strategic Partnership",
@@ -472,7 +472,7 @@ export const BV_FOOTER_SEED: BvFooterContent = {
         },
         {
           label: "Contact Us",
-          href: "https://dreampetroleumbv.com/en/contact",
+          href: "/contact",
         },
       ],
     },
