@@ -161,6 +161,7 @@ function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
 
 /**
  * DP-042 (ADR-016): one lead with its document requests, consent evidence and downloads.
+ * DP-151: and the messages it sent with the site's contact form.
  * DP-041 (ADR-019): sales pipeline, assignment, notes and contact history; the controls appear
  * only with lead:manage on the lead's site (`canManage`), the API decides every change.
  */
@@ -182,7 +183,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
       </div>
     );
   }
-  const { lead, requests, activities, canManage, assignees } = res.data;
+  const { lead, requests, contactMessages, activities, canManage, assignees } = res.data;
   const pipelineHeld = LEAD_PIPELINE_HELD.includes(lead.status);
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -289,11 +290,71 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
         </Panel>
       </div>
       <Panel
+        id="contact-messages"
+        title="Contact form messages"
+        description="Each message keeps the details as submitted and the privacy notice shown with the form (evidence, never edited)."
+        bodyClassName={contactMessages.length ? "px-0! pb-2! pt-3!" : undefined}
+      >
+        {contactMessages.length ? (
+          <ol className="divide-y divide-line">
+            {contactMessages.map((m) => (
+              <li key={m.id} className="space-y-3 px-5 py-4 sm:px-6">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+                  <p className="font-medium text-ink">
+                    {m.redactedAt ? "Message cleared" : (m.subject ?? "No subject")}
+                  </p>
+                  <p className="text-sm tabular-nums text-ink-3">
+                    {DATE.format(new Date(m.createdAt))}
+                  </p>
+                </div>
+                {m.message !== null ? (
+                  <p className="whitespace-pre-line text-sm leading-relaxed text-ink-2">
+                    {m.message}
+                  </p>
+                ) : (
+                  <p className="text-sm text-ink-3">
+                    Cleared when the lead was anonymised
+                    {m.redactedAt ? ` (${DATE.format(new Date(m.redactedAt))})` : ""}.
+                  </p>
+                )}
+                <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-ink-3">Submitted as</dt>
+                    <dd className="text-ink-2">
+                      {m.redactedAt
+                        ? `cleared, ${countryName(m.country)}`
+                        : `${m.fullName}, ${m.company}, ${countryName(m.country)}`}
+                      {m.phone ? (
+                        <span className="block font-mono text-xs text-ink-3">{m.phone}</span>
+                      ) : null}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-ink-3">Privacy notice shown</dt>
+                    <dd className="text-ink-2">
+                      version {m.privacyNoticeVersion}{" "}
+                      <span className="font-mono text-xs text-ink-3" title={m.privacyNoticeSha256}>
+                        {m.privacyNoticeSha256.slice(0, 12)}…
+                      </span>
+                    </dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-sm text-ink-3">No message from the contact form.</p>
+        )}
+      </Panel>
+      <Panel
         id="requests"
         title="Downloaded documents and request history"
         description="Each request keeps the details and consent as submitted (evidence, never edited)."
         bodyClassName="px-0! pb-2! pt-3!"
       >
+        {requests.length === 0 ? (
+          <p className="px-5 py-2 text-sm text-ink-3 sm:px-6">No document requests.</p>
+        ) : null}
         <ol className="divide-y divide-line">
           {requests.map((r) => (
             <li key={r.id} className="space-y-3 px-5 py-4 sm:px-6">

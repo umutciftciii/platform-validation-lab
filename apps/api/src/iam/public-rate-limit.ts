@@ -33,6 +33,10 @@ export const PUBLIC_RATE_LIMITS = {
   leadRequestPerEmail: { limit: 5, windowSec: 3600 },
   leadRequestPerSite: { limit: 300, windowSec: 3600 },
   documentDownloadPerIp: { limit: 120, windowSec: 600 },
+  // DP-151: the contact form (stricter than documents: a message is free text).
+  contactMessagePerIp: { limit: 5, windowSec: 3600 },
+  contactMessagePerEmail: { limit: 3, windowSec: 3600 },
+  contactMessagePerSite: { limit: 200, windowSec: 3600 },
 } as const;
 
 const NO_IP = "(no client ip)";

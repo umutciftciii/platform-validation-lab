@@ -57,6 +57,8 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // data of one site (K-02); there are no platform-level rows.
   Lead: { nullable: false },
   LeadDocumentRequest: { nullable: false },
+  // DP-151: contact-form messages, attached to a lead of the same site.
+  LeadContactMessage: { nullable: false },
   DocumentDownloadGrant: { nullable: false },
   LeadDocumentDownload: { nullable: false },
   // DP-041 (ADR-019): the sales history of a lead belongs to the lead's site.
@@ -140,6 +142,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     crossReferenceSites: { model: "ProductCrossReferenceSite", list: true },
     leads: { model: "Lead", list: true },
     leadDocumentRequests: { model: "LeadDocumentRequest", list: true },
+    leadContactMessages: { model: "LeadContactMessage", list: true },
     documentGrants: { model: "DocumentDownloadGrant", list: true },
     leadDocumentDownloads: { model: "LeadDocumentDownload", list: true },
     leadActivities: { model: "LeadActivity", list: true },
@@ -308,6 +311,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   Lead: {
     site: { model: "Site", list: false },
     requests: { model: "LeadDocumentRequest", list: true },
+    contactMessages: { model: "LeadContactMessage", list: true },
     assignedTo: { model: "User", list: false },
     activities: { model: "LeadActivity", list: true },
   },
@@ -326,6 +330,10 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     revision: { model: "ProductDocumentRevision", list: false },
     grant: { model: "DocumentDownloadGrant", list: false },
     downloads: { model: "LeadDocumentDownload", list: true },
+  },
+  LeadContactMessage: {
+    lead: { model: "Lead", list: false },
+    site: { model: "Site", list: false },
   },
   DocumentDownloadGrant: {
     request: { model: "LeadDocumentRequest", list: false },

@@ -25,6 +25,7 @@ import sharp from "sharp";
 import {
   AssignRoleResponseSchema,
   ErrorBodySchema,
+  LEAD_CONTACT_NOTICE,
   LEAD_MARKETING_CONSENT,
   LEAD_PRIVACY_NOTICE,
   LeadActivityResponseSchema,
@@ -1248,6 +1249,7 @@ describe("DP-103 row-level security on lead data", () => {
     const LEAD_TABLES = [
       "Lead",
       "LeadActivity",
+      "LeadContactMessage",
       "LeadDocumentRequest",
       "DocumentDownloadGrant",
       "LeadDocumentDownload",
@@ -1261,6 +1263,8 @@ describe("DP-103 row-level security on lead data", () => {
       { t: "Lead", force: false },
       // DP-041: the sales history of a lead.
       { t: "LeadActivity", force: false },
+      // DP-151: contact-form messages.
+      { t: "LeadContactMessage", force: false },
       { t: "LeadDocumentDownload", force: false },
       { t: "LeadDocumentRequest", force: false },
     ]);
@@ -1286,6 +1290,7 @@ describe("DP-103 row-level security on lead data", () => {
       "Lead:UPDATE",
       "Lead:UPDATE",
       "LeadActivity:INSERT",
+      "LeadContactMessage:INSERT",
       "LeadDocumentDownload:INSERT",
       "LeadDocumentRequest:INSERT",
     ]);
@@ -1849,6 +1854,7 @@ describe("DP-096 lead retention, anonymisation and erasure", () => {
     const rows = await owner.$queryRaw<{ t: string; n: bigint; h: string | null }[]>`
       SELECT 'lead' AS t, count(*) AS n, md5(string_agg(l::text, '|' ORDER BY l."id")) AS h FROM "Lead" l
       UNION ALL SELECT 'req', count(*), md5(string_agg(r::text, '|' ORDER BY r."id")) FROM "LeadDocumentRequest" r
+      UNION ALL SELECT 'msg', count(*), md5(string_agg(m::text, '|' ORDER BY m."id")) FROM "LeadContactMessage" m
       UNION ALL SELECT 'dl', count(*), md5(string_agg(d::text, '|' ORDER BY d."id")) FROM "LeadDocumentDownload" d
       UNION ALL SELECT 'grant', count(*), md5(string_agg(g::text, '|' ORDER BY g."id")) FROM "DocumentDownloadGrant" g
       UNION ALL SELECT 'bucket', count(*), md5(string_agg(b::text, '|' ORDER BY b."key")) FROM "PublicRateLimit" b
@@ -2832,5 +2838,251 @@ describe("DP-041 lead sales workflow (ADR-019)", () => {
       }),
       /may only clear the text/,
     );
+  });
+});
+
+describe("DP-151 contact-form messages", () => {
+  const contact = (input: Record<string, unknown> = {}) => ({
+    fullName: "Grace Hopper",
+    company: "Compiler Works BV",
+    email: "grace@compiler.example",
+    country: "NL",
+    phone: "+31 20 000 0000",
+    subject: "Base oil supply",
+    message: "We are looking for Group III base oil.\n\nPlease call us back.",
+    privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    website: "",
+    ...input,
+  });
+  async function send(
+    site: "bv" | "com",
+    body: Record<string, unknown>,
+    ip: string | null = freshIp(),
+  ): Promise<Res> {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": KEY[site],
+      origin: site === "bv" ? BV_ORIGIN : COM_ORIGIN,
+      "content-type": "application/json",
+    };
+    if (ip) headers["x-dp-client-ip"] = ip;
+    return parse(
+      await fetch(`${base}/api/v1/public/leads/contact-messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+  let comReader: Staff;
+  let firstMessageId: string;
+  let firstLeadId: string;
+
+  beforeAll(async () => {
+    comReader = await staff("contact-com", [], root.userId, undefined, { memberships: [COM] });
+    await assignRole(comReader, "sales_crm_user", COM);
+  });
+
+  it("stores a message on a new lead with the notice shown; the visitor gets nothing back", async () => {
+    const res = await send("bv", contact());
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toEqual({ received: true });
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { siteId: BV, email: "grace@compiler.example" },
+    });
+    expect(lead).toMatchObject({
+      fullName: "Grace Hopper",
+      company: "Compiler Works BV",
+      country: "NL",
+      requestCount: 0,
+    });
+    // The contact form never records marketing consent (owner decision 2026-11-13).
+    expect(lead.marketingConsentAt).toBeNull();
+    const msg = await owner.leadContactMessage.findFirstOrThrow({ where: { leadId: lead.id } });
+    expect(msg).toMatchObject({
+      siteId: BV,
+      phone: "+31 20 000 0000",
+      subject: "Base oil supply",
+      message: "We are looking for Group III base oil.\n\nPlease call us back.",
+      privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+      privacyNoticeSha256: createHash("sha256").update(LEAD_CONTACT_NOTICE.text).digest("hex"),
+      redactedAt: null,
+    });
+    expect(msg.ipPrefixHmac).toMatch(/^[0-9a-f]{64}$/);
+    firstMessageId = msg.id;
+    firstLeadId = lead.id;
+    // The audit trail has no personal data and no message text.
+    const audit = await lastAudit("leads.contact_message_created");
+    expect(audit).toMatchObject({ resourceId: msg.id, siteId: BV, actorType: "SYSTEM" });
+    expect(JSON.stringify(audit)).not.toMatch(/grace|Hopper|Compiler|Group III|\+31/i);
+  });
+
+  it("refuses missing required fields, a filled honeypot, consent fields, a short message and an old notice", async () => {
+    expectError(await send("bv", contact({ company: "" })), 400, "VALIDATION_FAILED");
+    expectError(await send("bv", contact({ country: undefined })), 400, "VALIDATION_FAILED");
+    expectError(
+      await send("bv", contact({ website: "https://spam.example" })),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(await send("bv", contact({ message: "Hi" })), 400, "VALIDATION_FAILED");
+    expectError(await send("bv", contact({ phone: "call me" })), 400, "VALIDATION_FAILED");
+    // No consent fields on this form (owner decision 2026-11-13): sending one is refused.
+    expectError(
+      await send("bv", contact({ privacyNoticeAccepted: true })),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await send(
+        "bv",
+        contact({
+          marketingConsent: true,
+          marketingConsentVersion: LEAD_MARKETING_CONSENT.version,
+        }),
+      ),
+      400,
+      "VALIDATION_FAILED",
+    );
+    // The document form's notice is not the contact notice.
+    expectError(
+      await send("bv", contact({ privacyNoticeVersion: LEAD_PRIVACY_NOTICE.version })),
+      400,
+      "VALIDATION_FAILED",
+      { path: "privacyNoticeVersion", rule: "outdated" },
+    );
+    expectError(await send("bv", contact({ unknown: 1 })), 400, "VALIDATION_FAILED");
+  });
+
+  it("attaches a message to an existing lead: details and last contact move, the request count does not", async () => {
+    const email = "existing.lead@firm.example";
+    const doc = await requestLead("bv", form({ documentId: leadDoc, email }));
+    expect(doc.status, JSON.stringify(doc.body)).toBe(201);
+    const before = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
+    const res = await send(
+      "bv",
+      contact({ email, company: "Renamed Firm", phone: "", subject: "  " }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const after = await owner.lead.findFirstOrThrow({ where: { id: before.id } });
+    expect(after.requestCount).toBe(before.requestCount);
+    expect(after.company).toBe("Renamed Firm");
+    expect(after.lastRequestAt.getTime()).toBeGreaterThanOrEqual(before.lastRequestAt.getTime());
+    const msg = await owner.leadContactMessage.findFirstOrThrow({ where: { leadId: before.id } });
+    // Blank optional fields are stored as null.
+    expect(msg).toMatchObject({ phone: null, subject: null, company: "Renamed Firm" });
+  });
+
+  it("limits messages per e-mail before anything is written", async () => {
+    const email = "limit.contact@firm.example";
+    for (let i = 0; i < 3; i++) {
+      const ok = await send("bv", contact({ email }));
+      expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+    }
+    const lead = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
+    expectError(await send("bv", contact({ email })), 429, "RATE_LIMITED");
+    expect(await owner.leadContactMessage.count({ where: { leadId: lead.id } })).toBe(3);
+  });
+
+  it("shows messages to lead:read on the lead's site only", async () => {
+    const detail = LeadDetailResponseSchema.parse((await salesBv.leads(`/${firstLeadId}`)).body);
+    expect(detail.contactMessages).toHaveLength(1);
+    expect(detail.contactMessages[0]).toMatchObject({
+      id: firstMessageId,
+      subject: "Base oil supply",
+      phone: "+31 20 000 0000",
+      redactedAt: null,
+    });
+    expect((await lastAudit("leads.lead_viewed"))?.metadata).toMatchObject({ contactMessages: 1 });
+    expectError(await comReader.leads(`/${firstLeadId}`), 404, "NOT_FOUND");
+    // A message sent to the Corporate site is that site's: BV staff never see it.
+    const res = await send("com", contact({ email: "com.only@firm.example" }));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const comLead = await owner.lead.findFirstOrThrow({
+      where: { siteId: COM, email: "com.only@firm.example" },
+    });
+    expectError(await salesBv.leads(`/${comLead.id}`), 404, "NOT_FOUND");
+    const comDetail = LeadDetailResponseSchema.parse(
+      (await comReader.leads(`/${comLead.id}`)).body,
+    );
+    expect(comDetail.contactMessages).toHaveLength(1);
+  });
+
+  it("keeps messages under row-level security and append-only for dp_app", async () => {
+    // No context: nothing.
+    expect(await asApp.leadContactMessage.count()).toBe(0);
+    expect(await appIn({}, (tx) => tx.leadContactMessage.count())).toBe(0);
+    // The public context of one visitor sees that visitor's messages only.
+    expect(
+      await appIn({ site: BV, email: "grace@compiler.example" }, (tx) =>
+        tx.leadContactMessage.count(),
+      ),
+    ).toBe(1);
+    expect(
+      await appIn({ site: COM, email: "grace@compiler.example" }, (tx) =>
+        tx.leadContactMessage.count(),
+      ),
+    ).toBe(0);
+    // Staff of BV see BV messages only.
+    const bvCount = await owner.leadContactMessage.count({ where: { siteId: BV } });
+    expect(await appIn({ staff: salesBv.token }, (tx) => tx.leadContactMessage.count())).toBe(
+      bvCount,
+    );
+    // dp_app never changes or deletes a message.
+    await expect(
+      asApp.$executeRaw`UPDATE "LeadContactMessage" SET "subject" = 'x' WHERE "id" = ${firstMessageId}::uuid`,
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asApp.$executeRaw`DELETE FROM "LeadContactMessage" WHERE "id" = ${firstMessageId}::uuid`,
+    ).rejects.toThrow(/permission denied/);
+    // Even the owner cannot rewrite evidence or attach a message to a lead of another site.
+    await expect(
+      owner.$executeRaw`UPDATE "LeadContactMessage" SET "subject" = 'x' WHERE "id" = ${firstMessageId}::uuid`,
+    ).rejects.toThrow(/contact messages are evidence/);
+    await expect(
+      owner.$executeRaw`DELETE FROM "LeadContactMessage" WHERE "id" = ${firstMessageId}::uuid`,
+    ).rejects.toThrow(/contact messages are evidence/);
+    const tmpl = await owner.leadContactMessage.findFirstOrThrow({ where: { id: firstMessageId } });
+    await expect(
+      owner.leadContactMessage.create({ data: { ...tmpl, id: undefined, siteId: COM } }),
+    ).rejects.toThrow(/active lead of the same site/);
+  });
+
+  it("clears every message on erasure; the same e-mail then starts a new lead", async () => {
+    const email = "erase.contact@firm.example";
+    expect((await send("bv", contact({ email }))).status).toBe(201);
+    const lead = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
+    const operator = new PrismaClient({ adapter: new PrismaPg({ connectionString: urls.boot }) });
+    try {
+      const r = await eraseByEmail(
+        operator,
+        { email, identityCheck: "DSR-151", apply: true },
+        new Date(),
+      );
+      expect(r.anonymised).toBe(1);
+    } finally {
+      await operator.$disconnect();
+    }
+    const msg = await owner.leadContactMessage.findFirstOrThrow({ where: { leadId: lead.id } });
+    expect(msg).toMatchObject({
+      fullName: "",
+      company: "",
+      phone: null,
+      subject: null,
+      message: null,
+      ipPrefixHmac: null,
+      requestId: null,
+      country: "NL",
+      privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    });
+    expect(msg.redactedAt).not.toBeNull();
+    // Retention cannot put text back.
+    await expect(
+      owner.$executeRaw`UPDATE "LeadContactMessage" SET "message" = 'back' WHERE "id" = ${msg.id}::uuid`,
+    ).rejects.toThrow(/contact messages are evidence/);
+    // A new message from the same address is a new lead.
+    expect((await send("bv", contact({ email }))).status).toBe(201);
+    const leads = await owner.lead.findMany({ where: { siteId: BV, email } });
+    expect(leads).toHaveLength(1);
+    expect(leads[0]!.id).not.toBe(lead.id);
   });
 });
