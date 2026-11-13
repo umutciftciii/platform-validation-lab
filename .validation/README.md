@@ -22,8 +22,18 @@ This repository and its workflows never hold a credential for the source reposit
    python3 -I .validation/export.py gate --source ../source --pr <n>
    ```
 
-5. Merge in the source repository only after a PASS for its current head. A new push to the
-   source pull request needs a new sync and a new PASS.
+5. Merge only with the gated merge command, never with the web "Merge" button:
+
+   ```bash
+   python3 -I .validation/export.py merge --source ../source --pr <n> --yes
+   ```
+
+   It runs the gate again, posts `public-ci/validated` on the source head and merges with
+   `--match-head-commit`, so GitHub refuses the merge if the head is not the verified commit. A
+   new push to the source pull request needs a new sync and a new PASS. (Free private
+   repositories have no branch protection, so GitHub itself cannot block a manual merge; this
+   command is the control.)
+
 6. After the source merge, export the new source `main` to a `sync/main-<sha>` pull request and
    squash-merge it here once `CI result` passes. A tree that already passed is not tested again.
    Squash commits are authored with the GitHub account's commit e-mail; keep "Keep my email
