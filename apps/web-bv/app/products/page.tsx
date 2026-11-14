@@ -10,6 +10,7 @@ import {
   chipRows,
   filterProducts,
   paginate,
+  packSize,
   parseBrowse,
   topCategories,
   trail,
@@ -290,9 +291,18 @@ function ProductGrid({ products, categories }: { products: PublicProductSummary[
                 >
                   {categoryLabel(categories, p.category)}
                 </p>
-                <h2 className="line-clamp-3 min-h-[calc(1.35em*3)] text-sm font-medium leading-[1.35] text-glass [font-stretch:108%] sm:text-base md:min-h-0 md:text-xl md:leading-snug">
+                <h2 className="line-clamp-4 min-h-[calc(1.35em*4)] text-sm font-medium leading-[1.35] text-glass [font-stretch:108%] sm:text-base md:line-clamp-3 md:min-h-0 md:text-xl md:leading-snug">
                   {p.name}
                 </h2>
+                {/* DP-169: on phones the pack size gets its own line, so variants that share one
+                    image stay distinguishable when a long name is cut; the line is reserved on every
+                    card to keep the codes aligned. Already part of the name for screen readers. */}
+                <p
+                  aria-hidden="true"
+                  className="min-h-[1.4em] text-xs font-semibold leading-[1.4] text-glass/90 md:hidden"
+                >
+                  {packSize(p.name) ?? ""}
+                </p>
                 {/* DP-167: long codes (PJ-PHARMA-YELLOW-165KG) wrap on phones; two reserved lines keep the
                     codes of a row on the same top line. The code is never cut. */}
                 <p className="mt-auto min-h-[calc(1.35em*2+0.25rem)] break-words pt-1 font-mono text-[0.7rem] leading-[1.35] text-steel/80 sm:text-xs md:mt-0 md:min-h-0 md:pt-0 md:text-sm md:text-steel">
