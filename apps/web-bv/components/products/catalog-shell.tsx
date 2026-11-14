@@ -1,21 +1,91 @@
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { connection } from "next/server";
+import { cache, Suspense, type ReactNode } from "react";
 
+import SiteFooter from "@/components/ui/site-footer";
+import SiteNav from "@/components/ui/site-nav";
 import { BRAND_LOGO } from "@/content/brand";
+import { getSiteChrome } from "@/lib/cms-home";
 import { privacyHref } from "@/lib/privacy";
 
-/** Header and frame of the product pages (PM-3): the brand, a way home and the breadcrumb. */
+/** One read of the published navigation and footer per request (both slots use it). */
+const chrome = cache((path: string) => getSiteChrome(path));
+
+/**
+ * Frame of the product pages. DP-155: the published BV site navigation and footer (the same CMS
+ * fragments as every other page), the page in the shared `tp` layout and type scale, and the
+ * breadcrumb under the navigation. While the CMS cannot be read, the minimal brand header and
+ * legal footer of PM-3 stand in, so the catalogue never depends on the CMS being up.
+ */
 export function CatalogShell({
   crumbs,
+  path = "/products",
   children,
 }: {
   crumbs: { label: string; href?: string }[];
+  /** The page's path: marks the current navigation item. */
+  path?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-dvh bg-[radial-gradient(ellipse_80%_50%_at_50%_0%,var(--color-navy),var(--color-ink)_70%)]">
-      <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-5 sm:px-8">
+    <>
+      <Suspense fallback={<MinimalHeader />}>
+        <CatalogNav path={path} />
+      </Suspense>
+      <main id="top" className="tp catalog">
+        <div className="tp-inner pb-24">
+          <Breadcrumb crumbs={crumbs} />
+          {children}
+        </div>
+      </main>
+      <Suspense fallback={<MinimalFooter />}>
+        <CatalogFooter path={path} />
+      </Suspense>
+    </>
+  );
+}
+
+async function CatalogNav({ path }: { path: string }) {
+  await connection();
+  const { nav } = await chrome(path);
+  return nav ? <SiteNav content={nav} /> : <MinimalHeader />;
+}
+
+async function CatalogFooter({ path }: { path: string }) {
+  await connection();
+  const { footer } = await chrome(path);
+  return footer ? <SiteFooter content={footer} /> : <MinimalFooter />;
+}
+
+function Breadcrumb({ crumbs }: { crumbs: { label: string; href?: string }[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="pt-8 text-sm text-steel sm:pt-10">
+      <ol className="flex flex-wrap items-center gap-2">
+        {crumbs.map((c, i) => (
+          <li key={c.label} className="flex min-w-0 items-center gap-2">
+            {i > 0 ? <span aria-hidden="true">/</span> : null}
+            {c.href ? (
+              <Link href={c.href} className="truncate hover:text-glass">
+                {c.label}
+              </Link>
+            ) : (
+              <span aria-current="page" className="truncate text-glass">
+                {c.label}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+/** PM-3 frame, kept as the fallback while the published navigation cannot be read. */
+function MinimalHeader() {
+  return (
+    <header className="fixed inset-x-0 top-0 z-40 bg-ink/80 backdrop-blur">
+      <div className="mx-auto flex h-[72px] max-w-6xl items-center px-4 sm:px-8">
         <Link href="/" aria-label="Dream Petroleum BV home" className="shrink-0">
           <Image
             src={BRAND_LOGO.src}
@@ -26,33 +96,13 @@ export function CatalogShell({
             priority
           />
         </Link>
-        <nav aria-label="Breadcrumb" className="min-w-0 text-sm text-steel">
-          <ol className="flex items-center gap-2">
-            {crumbs.map((c, i) => (
-              <li key={c.label} className="flex min-w-0 items-center gap-2">
-                {i > 0 ? <span aria-hidden="true">/</span> : null}
-                {c.href ? (
-                  <Link href={c.href} className="truncate hover:text-glass">
-                    {c.label}
-                  </Link>
-                ) : (
-                  <span aria-current="page" className="truncate text-glass">
-                    {c.label}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ol>
-        </nav>
-      </header>
-      <main className="mx-auto max-w-6xl px-4 pb-24 sm:px-8">{children}</main>
-      <ShellFooter />
-    </div>
+      </div>
+    </header>
   );
 }
 
 /** DP-095 D-T5: the legal line under every catalogue page; the policy link only where published. */
-function ShellFooter() {
+function MinimalFooter() {
   const href = privacyHref();
   return (
     <footer className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 border-t border-glass/10 px-4 py-6 text-xs text-steel sm:px-8">

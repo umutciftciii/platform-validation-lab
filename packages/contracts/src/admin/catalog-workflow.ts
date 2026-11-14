@@ -379,6 +379,25 @@ export const PublicProductSummarySchema = z.strictObject({
 });
 export type PublicProductSummary = z.infer<typeof PublicProductSummarySchema>;
 
+/**
+ * DP-160: a category of the public catalogue tree. Only categories with live products in them or
+ * below them are listed; `count` includes the products of the sub-categories. The category of a
+ * product is the one its published snapshot names.
+ */
+export const PublicCategorySchema = z.strictObject({
+  slug: z.string(),
+  name: z.string(),
+  parentSlug: z.string().nullable(),
+  sortOrder: z.number().int(),
+  count: z.number().int().min(1),
+});
+export type PublicCategory = z.infer<typeof PublicCategorySchema>;
+
+export const PublicCategoryListResponseSchema = z.strictObject({
+  items: z.array(PublicCategorySchema).max(1000),
+});
+export type PublicCategoryListResponse = z.infer<typeof PublicCategoryListResponseSchema>;
+
 export const PublicProductListResponseSchema = z.strictObject({
   items: z.array(PublicProductSummarySchema).max(500),
 });
