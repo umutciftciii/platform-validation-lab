@@ -19,6 +19,8 @@ import {
   toPublicProduct,
   toPublicSummary,
   type PublicProduct,
+  type PublicCategory,
+  type PublicCategoryListResponse,
   type PublicProductListResponse,
   type PublicProductSummary,
   type PublishedSnapshot,
@@ -89,6 +91,51 @@ export class PublicCatalogService {
     }
     items.sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, "en"));
     return { items: items.map(({ sortOrder: _s, ...rest }) => (void _s, rest)) };
+  }
+
+  /**
+   * DP-160: the category tree of the live products. A category is listed when a live product's
+   * snapshot names it or one of its descendants; ancestors come from the site's current tree.
+   * Nothing about drafts, hidden listings or empty categories is revealed.
+   */
+  async categories(ctx: RequestContext): Promise<PublicCategoryListResponse> {
+    const site = await this.sites.begin(ctx);
+    const rows = await PublicCatalogService.live(site);
+    const direct = new Map<string, number>();
+    for (const row of rows) {
+      const s = this.parse(row);
+      if (s) direct.set(s.category.slug, (direct.get(s.category.slug) ?? 0) + 1);
+    }
+    if (direct.size === 0) return { items: [] };
+    const cats = await site.db.productCategory.findMany({
+      where: { siteId: site.siteId },
+      select: { id: true, parentId: true, slug: true, name: true, sortOrder: true },
+    });
+    const byId = new Map(cats.map((c) => [c.id, c]));
+    const total = new Map<string, number>();
+    for (const c of cats) {
+      const n = direct.get(c.slug) ?? 0;
+      if (n === 0) continue;
+      // add this category's products to it and every ancestor (the tree has at most 3 levels)
+      for (
+        let cur: typeof c | undefined = c, i = 0;
+        cur && i < 10;
+        cur = byId.get(cur.parentId ?? ""), i++
+      ) {
+        total.set(cur.id, (total.get(cur.id) ?? 0) + n);
+      }
+    }
+    const items: PublicCategory[] = cats
+      .filter((c) => (total.get(c.id) ?? 0) > 0)
+      .map((c) => ({
+        slug: c.slug,
+        name: c.name,
+        parentSlug: c.parentId ? (byId.get(c.parentId)?.slug ?? null) : null,
+        sortOrder: c.sortOrder,
+        count: total.get(c.id) as number,
+      }))
+      .sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, "en"));
+    return { items };
   }
 
   async product(ctx: RequestContext, rawSlug: string): Promise<{ product: PublicProduct }> {

@@ -272,6 +272,7 @@ export const ISSUE_CODES = [
   "too_long",
   "unknown_definition",
   "optional_missing",
+  "specs_missing",
   "test_method_missing",
   "alt_text_missing",
 ] as const;
@@ -427,8 +428,8 @@ export function checkSpecValue(def: DefinitionRule, v: ValueForCheck): Validatio
 /**
  * The publishing-relevant validation of a product master's technical data and images.
  * BLOCKING: a required specification missing, or a value with the wrong type, unit, range,
- * bounds or precision. WARNING: optional data missing, a recommended test method missing,
- * an image without alt text. Archived definitions are ignored unless a value uses them.
+ * bounds or precision. WARNING: no technical data at all (DP-161), a recommended test method
+ * missing, an image without alt text. Archived definitions are ignored unless a value uses them.
  */
 export function validateProductData(input: {
   definitions: readonly DefinitionRule[];
@@ -443,12 +444,22 @@ export function validateProductData(input: {
       .map((v) => v.definitionId),
   );
   const all: ValidationIssue[] = [];
+  // DP-161: only a definition marked required reports its missing value (BLOCKING). The
+  // platform tracks many optional properties that most products do not have; one warning per
+  // unused one would bury the real issues, so a product without any technical data gets a
+  // single warning instead (its page then says that technical data is available on request).
   for (const d of input.definitions) {
-    if (d.archived || valued.has(d.id)) continue;
+    if (d.archived || valued.has(d.id) || !d.required) continue;
+    all.push(issue("BLOCKING", "required_missing", `spec:${d.key}`, `${d.name} is required.`));
+  }
+  if (input.values.length === 0) {
     all.push(
-      d.required
-        ? issue("BLOCKING", "required_missing", `spec:${d.key}`, `${d.name} is required.`)
-        : issue("WARNING", "optional_missing", `spec:${d.key}`, `${d.name} has no value.`),
+      issue(
+        "WARNING",
+        "specs_missing",
+        "spec:*",
+        "No technical data: the product page says that technical data is available on request.",
+      ),
     );
   }
   for (const v of input.values) {

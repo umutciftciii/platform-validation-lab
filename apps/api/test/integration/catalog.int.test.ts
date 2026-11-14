@@ -1315,10 +1315,7 @@ describe("9. specification values (master data, product version)", () => {
     expect(r.body.validation.ok).toBe(true);
     expect(
       r.body.validation.warnings.map((i: { code: string; target: string }) => [i.code, i.target]),
-    ).toEqual([
-      ["optional_missing", "spec:food_grade"],
-      ["test_method_missing", "spec:pour_point"],
-    ]);
+    ).toEqual([["test_method_missing", "spec:pour_point"]]);
     expect(
       r.body.values.find((v: { definitionId: string }) => v.definitionId === defs["pour_point"]!.id)
         .value,
