@@ -53,6 +53,29 @@ describe("specFingerprint", () => {
     expect(specFingerprint([kv])).not.toBe(HASH);
     expect(specFingerprint([])).not.toBe(HASH);
   });
+
+  it("DP-156: default basis and closed ends keep the fingerprints taken before it", () => {
+    const explicit = [
+      { ...kv, basis: "SPECIFICATION", rangeMinExclusive: false, rangeMaxExclusive: false },
+      { ...vi, basis: "SPECIFICATION" },
+    ];
+    expect(specFingerprint(explicit)).toBe(HASH);
+    // a typical value, or an open end, is a different fact
+    expect(specFingerprint([{ ...kv, basis: "TYPICAL" }, vi])).not.toBe(HASH);
+    const range: SpecValueFact = {
+      ...kv,
+      key: "pour",
+      numberValue: null,
+      rangeMin: null,
+      rangeMax: dec("-30"),
+    };
+    expect(specFingerprint([range])).not.toBe(
+      specFingerprint([{ ...range, rangeMaxExclusive: true }]),
+    );
+    // a specification and a typical value of the same key: order-independent
+    const both = [kv, { ...kv, basis: "TYPICAL", numberValue: dec("6.2") }];
+    expect(specFingerprint(both)).toBe(specFingerprint([...both].reverse()));
+  });
 });
 
 describe("verification state", () => {

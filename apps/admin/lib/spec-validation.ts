@@ -7,22 +7,38 @@
  * cannot see (an empty or non-numeric input) are added here, as BLOCKING `invalid_type`.
  *
  * Image issues (alt text) are not part of this form; they are taken from the server's report.
+ *
+ * DP-156: a definition has up to two values, the specification value and a typical value (each
+ * its own draft, keyed by `slotKey`); a range may leave one end empty and mark an end open.
  */
 import {
+  specTarget,
   validateProductData,
   type ProductValidation,
   type SpecDefinition,
+  type SpecValueBasis,
   type SpecValueData,
   type ValidationIssue,
   type ValueForCheck,
 } from "@dream/contracts";
 
-/** Editable state of one definition's value; strings as typed. */
+export const SPEC_BASES: readonly SpecValueBasis[] = ["SPECIFICATION", "TYPICAL"];
+
+/** The drafts' key of a definition's value of one basis. */
+export function slotKey(definitionId: string, basis: SpecValueBasis): string {
+  return basis === "SPECIFICATION" ? definitionId : `${definitionId}:typical`;
+}
+
+/** Editable state of one definition's value of one basis; strings as typed. */
 export interface Draft {
   on: boolean;
+  basis: SpecValueBasis;
   number: string;
   min: string;
   max: string;
+  /** RANGE: the end is open ("> min", "< max"). */
+  minExclusive: boolean;
+  maxExclusive: boolean;
   text: string;
   bool: "" | "true" | "false";
   unit: string;
@@ -42,12 +58,22 @@ export function draftValue(
       return Number.isFinite(v) ? { type: "NUMBER", number: v } : "not_a_number";
     }
     case "RANGE": {
-      if (d.min.trim() === "" || d.max.trim() === "") return "empty";
-      const a = n(d.min);
-      const b = n(d.max);
-      return Number.isFinite(a) && Number.isFinite(b)
-        ? { type: "RANGE", min: a, max: b }
-        : "not_a_number";
+      // DP-156: one end may stay empty (a one-sided limit), not both.
+      const hasMin = d.min.trim() !== "";
+      const hasMax = d.max.trim() !== "";
+      if (!hasMin && !hasMax) return "empty";
+      const a = hasMin ? n(d.min) : null;
+      const b = hasMax ? n(d.max) : null;
+      if ((a !== null && !Number.isFinite(a)) || (b !== null && !Number.isFinite(b))) {
+        return "not_a_number";
+      }
+      return {
+        type: "RANGE",
+        min: a,
+        max: b,
+        minExclusive: a !== null && d.minExclusive,
+        maxExclusive: b !== null && d.maxExclusive,
+      };
     }
     case "TEXT":
       return d.text.trim() === "" ? "empty" : { type: "TEXT", text: d.text.trim() };
@@ -65,6 +91,7 @@ export function draftForCheck(
   if (v === "empty" || v === "not_a_number") return v;
   return {
     definitionId: def.id,
+    basis: d.basis,
     value: v,
     unit: def.units.length ? d.unit || null : null,
     testMethod: d.testMethod.trim() || null,
@@ -84,19 +111,22 @@ export function liveValidation(
   const values: ValueForCheck[] = [];
   const shape: ValidationIssue[] = [];
   for (const def of definitions) {
-    const d = drafts[def.id];
-    if (!d?.on) continue;
-    const v = draftForCheck(def, d);
-    if (v === "empty" || v === "not_a_number") {
-      shape.push({
-        severity: "BLOCKING",
-        code: "invalid_type",
-        target: `spec:${def.key}`,
-        message: `${def.name}: ${v === "empty" ? "enter a value or remove it" : "enter a number"}.`,
-      });
-      continue;
+    for (const basis of SPEC_BASES) {
+      const d = drafts[slotKey(def.id, basis)];
+      if (!d?.on) continue;
+      const v = draftForCheck(def, d);
+      if (v === "empty" || v === "not_a_number") {
+        const what = basis === "TYPICAL" ? `${def.name} (typical)` : def.name;
+        shape.push({
+          severity: "BLOCKING",
+          code: "invalid_type",
+          target: specTarget(def.key, basis),
+          message: `${what}: ${v === "empty" ? "enter a value or remove it" : "enter a number"}.`,
+        });
+        continue;
+      }
+      values.push(v);
     }
-    values.push(v);
   }
   // Inputs that are not a value yet must not also count as "required missing".
   const typedButInvalid = new Set(shape.map((i) => i.target));

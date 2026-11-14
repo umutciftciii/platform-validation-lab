@@ -5,6 +5,7 @@ export * from "./auth/staff.js";
 export * from "./admin/users.js";
 export * from "./admin/catalog.js";
 export * from "./admin/catalog-specs.js";
+export * from "./admin/catalog-import.js";
 export * from "./admin/catalog-workflow.js";
 export * from "./admin/catalog-documents.js";
 export * from "./admin/catalog-xrefs.js";

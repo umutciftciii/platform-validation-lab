@@ -3,7 +3,8 @@
  *  - reading needs `product:read` on at least one site (masters are shared by every site);
  *  - every change needs the PLATFORM permission `product_master:edit`;
  *  - a product's values are saved as one set that replaces the previous one and bumps the
- *    product master's version (the values are part of the master; a stale version is 409);
+ *    product master's version; DP-156: one value per definition AND basis (SPECIFICATION or
+ *    TYPICAL), and a RANGE may be one-sided or open-ended (the values are part of the master; a stale version is 409);
  *  - value-level BLOCKING problems (type, unit, range, bounds, precision) refuse the save;
  *    missing required values do not (drafts may be incomplete) but show up as BLOCKING in the
  *    validation report that gates review and publication (PM-3, workflow.service.ts);
@@ -16,10 +17,12 @@ import {
   SpecDefinitionCreateRequestSchema,
   SpecDefinitionUpdateRequestSchema,
   SpecValuesSaveRequestSchema,
+  specTarget,
   validateProductData,
   type DefinitionRule,
   type ProductSpecsResponse,
   type SpecDefinition,
+  type SpecValueBasis,
   type SpecValueData,
   type ValueForCheck,
 } from "@dream/contracts";
@@ -57,9 +60,12 @@ interface DefinitionRow {
 
 interface ValueRow {
   definitionId: string;
+  basis: SpecValueBasis;
   numberValue: Dec;
   rangeMin: Dec;
   rangeMax: Dec;
+  rangeMinExclusive: boolean;
+  rangeMaxExclusive: boolean;
   textValue: string | null;
   booleanValue: boolean | null;
   unit: string | null;
@@ -98,8 +104,14 @@ function toDefinition(d: DefinitionRow, valueCount: number): SpecDefinition {
 
 export function valueData(v: ValueRow): SpecValueData {
   if (v.numberValue !== null) return { type: "NUMBER", number: num(v.numberValue) as number };
-  if (v.rangeMin !== null) {
-    return { type: "RANGE", min: num(v.rangeMin) as number, max: num(v.rangeMax) as number };
+  if (v.rangeMin !== null || v.rangeMax !== null) {
+    return {
+      type: "RANGE",
+      min: num(v.rangeMin),
+      max: num(v.rangeMax),
+      minExclusive: v.rangeMinExclusive,
+      maxExclusive: v.rangeMaxExclusive,
+    };
   }
   if (v.textValue !== null) return { type: "TEXT", text: v.textValue };
   return { type: "BOOLEAN", boolean: v.booleanValue as boolean };
@@ -110,6 +122,8 @@ function columnsOf(value: SpecValueData) {
     numberValue: value.type === "NUMBER" ? value.number : null,
     rangeMin: value.type === "RANGE" ? value.min : null,
     rangeMax: value.type === "RANGE" ? value.max : null,
+    rangeMinExclusive: value.type === "RANGE" ? value.minExclusive : false,
+    rangeMaxExclusive: value.type === "RANGE" ? value.maxExclusive : false,
     textValue: value.type === "TEXT" ? value.text : null,
     booleanValue: value.type === "BOOLEAN" ? value.boolean : null,
   };
@@ -280,6 +294,7 @@ export class SpecsService {
     const shown = defs.filter((d) => !d.archived || used.has(d.id));
     const checks: ValueForCheck[] = values.map((v) => ({
       definitionId: v.definitionId,
+      basis: v.basis,
       value: valueData(v),
       unit: v.unit,
       testMethod: v.testMethod,
@@ -289,6 +304,7 @@ export class SpecsService {
       definitions: shown.map((d) => toDefinition(d, counts.get(d.id) ?? 0)),
       values: values.map((v) => ({
         definitionId: v.definitionId,
+        basis: v.basis,
         value: valueData(v),
         unit: v.unit,
         testMethod: v.testMethod,
@@ -328,7 +344,9 @@ export class SpecsService {
         const defs = await tx.specDefinition.findMany();
         const byId = new Map(defs.map((d) => [d.id, d]));
         const existing = await tx.productSpecValue.findMany({ where: { productId } });
-        const had = new Map(existing.map((v) => [v.definitionId, v]));
+        const slot = (definitionId: string, basis: SpecValueBasis) => `${definitionId}:${basis}`;
+        const had = new Map(existing.map((v) => [slot(v.definitionId, v.basis), v]));
+        const hadDefinition = new Set(existing.map((v) => v.definitionId));
         const seen = new Set<string>();
         const details: { path: string; rule: string }[] = [];
         for (const v of input.values) {
@@ -337,11 +355,12 @@ export class SpecsService {
             details.push({ path: `spec:${v.definitionId}`, rule: "unknown_definition" });
             continue;
           }
-          if (seen.has(v.definitionId))
-            details.push({ path: `spec:${def.key}`, rule: "duplicate" });
-          seen.add(v.definitionId);
-          if (def.archived && !had.has(def.id)) {
-            details.push({ path: `spec:${def.key}`, rule: "archived" });
+          const target = specTarget(def.key, v.basis);
+          if (seen.has(slot(v.definitionId, v.basis)))
+            details.push({ path: target, rule: "duplicate" });
+          seen.add(slot(v.definitionId, v.basis));
+          if (def.archived && !hadDefinition.has(def.id)) {
+            details.push({ path: target, rule: "archived" });
           }
           for (const i of checkSpecValue(toRule(def), v)) {
             if (i.severity === "BLOCKING") details.push({ path: i.target, rule: i.code });
@@ -354,25 +373,35 @@ export class SpecsService {
           expectedVersion: input.version,
           cause: "spec_values",
         });
-        const removed = existing.filter((v) => !seen.has(v.definitionId));
+        const removed = existing.filter((v) => !seen.has(slot(v.definitionId, v.basis)));
         if (removed.length) {
           await tx.productSpecValue.deleteMany({
-            where: { productId, definitionId: { in: removed.map((v) => v.definitionId) } },
+            where: { productId, id: { in: removed.map((v) => v.id) } },
           });
         }
+        const label = (definitionId: string, basis: SpecValueBasis) => {
+          const key = byId.get(definitionId)?.key ?? definitionId;
+          return basis === "TYPICAL" ? `${key}:typical` : key;
+        };
         const changed: string[] = [];
         for (const v of input.values) {
           const cols = { ...columnsOf(v.value), unit: v.unit, testMethod: v.testMethod };
-          const prev = had.get(v.definitionId);
+          const prev = had.get(slot(v.definitionId, v.basis));
           const same =
             prev &&
             JSON.stringify({ ...valueData(prev), u: prev.unit, t: prev.testMethod }) ===
               JSON.stringify({ ...v.value, u: v.unit, t: v.testMethod });
           if (same) continue;
-          changed.push((byId.get(v.definitionId) as DefinitionRow).key);
+          changed.push(label(v.definitionId, v.basis));
           await tx.productSpecValue.upsert({
-            where: { productId_definitionId: { productId, definitionId: v.definitionId } },
-            create: { productId, definitionId: v.definitionId, ...cols },
+            where: {
+              productId_definitionId_basis: {
+                productId,
+                definitionId: v.definitionId,
+                basis: v.basis,
+              },
+            },
+            create: { productId, definitionId: v.definitionId, basis: v.basis, ...cols },
             update: cols,
           });
         }
@@ -384,7 +413,7 @@ export class SpecsService {
           permission: MASTER,
           metadata: {
             changed,
-            removed: removed.map((v) => byId.get(v.definitionId)?.key ?? v.definitionId),
+            removed: removed.map((v) => label(v.definitionId, v.basis)),
             version: input.version + 1,
           },
         });

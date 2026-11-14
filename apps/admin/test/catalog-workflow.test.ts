@@ -35,9 +35,12 @@ const FLASH = def({
 });
 const blank: Draft = {
   on: false,
+  basis: "SPECIFICATION",
   number: "",
   min: "",
   max: "",
+  minExclusive: false,
+  maxExclusive: false,
   text: "",
   bool: "",
   unit: "mm²/s",
@@ -99,6 +102,21 @@ describe("live specification validation (unsaved values)", () => {
       blocking: ["too_precise@spec:kv100"],
       warnings: ["optional_missing@spec:flash"],
     });
+  });
+
+  it("DP-156: a typical value is checked on its own target and never satisfies required", () => {
+    const v = liveValidation(
+      [KV],
+      {
+        "d-kv": blank,
+        "d-kv:typical": { ...blank, basis: "TYPICAL", on: true, number: "6.123" },
+      },
+      { ok: true, blocking: [], warnings: [] },
+    );
+    expect(codes(v).blocking).toEqual([
+      "required_missing@spec:kv100",
+      "too_precise@spec:kv100:typical",
+    ]);
   });
 
   it("knows when the form differs from the saved values", () => {
