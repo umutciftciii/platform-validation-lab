@@ -74,8 +74,10 @@ async function loadContent(db: Db, productIds: readonly string[]) {
   const [defs, values, images] = await Promise.all([
     db.specDefinition.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
     db.productSpecValue.findMany({ where: { productId: { in: [...productIds] } } }),
+    // DP-166: only the images shown to visitors take part in validation and publication; hidden
+    // ones stay in the admin and never enter a snapshot or its imageIds.
     db.productImage.findMany({
-      where: { productId: { in: [...productIds] } },
+      where: { productId: { in: [...productIds] }, isPublic: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
