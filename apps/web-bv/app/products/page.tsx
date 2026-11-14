@@ -20,12 +20,14 @@ export const metadata: Metadata = {
 export default function ProductsPage() {
   return (
     <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products" }]}>
-      <div className="pb-8 pt-6 sm:pb-12 sm:pt-12">
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber">Dream Petroleum BV</p>
-        <h1 className="mt-3 text-[clamp(2rem,5vw,3.5rem)] font-medium leading-none [font-stretch:115%]">
-          Products
-        </h1>
-      </div>
+      <header className="pb-10 pt-8 sm:pb-14 sm:pt-12">
+        <p className="tp-eyebrow">Dream Petroleum BV</p>
+        <h1 className="tp-display">Products</h1>
+        <p className="tp-lead">
+          Base oils, white oils, solvents and specialty products, with technical data and documents
+          where available.
+        </p>
+      </header>
       <Suspense fallback={<ListSkeleton />}>
         <ProductList />
       </Suspense>
@@ -72,7 +74,7 @@ async function ProductList() {
             </div>
             <div className="flex flex-1 flex-col gap-2 p-5">
               <p className="text-xs uppercase tracking-[0.16em] text-steel">{p.category.name}</p>
-              <h2 className="text-xl font-medium text-glass [font-stretch:110%]">{p.name}</h2>
+              <h2 className="text-xl font-medium leading-snug text-glass [font-stretch:108%]">{p.name}</h2>
               <p className="line-clamp-3 text-sm leading-relaxed text-steel">{p.summary}</p>
               <p className="mt-auto pt-2 font-mono text-xs text-steel/80">{p.code}</p>
             </div>
