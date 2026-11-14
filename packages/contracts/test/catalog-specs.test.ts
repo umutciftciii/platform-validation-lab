@@ -6,6 +6,7 @@ import {
   ImageUpdateRequestSchema,
   SpecDefinitionCreateRequestSchema,
   SpecDefinitionUpdateRequestSchema,
+  SpecValueDataSchema,
   SpecValuesSaveRequestSchema,
   validateProductData,
   type DefinitionRule,
@@ -159,12 +160,29 @@ describe("validation engine", () => {
       codes(
         checkSpecValue(pour, {
           definitionId: "d2",
-          value: { type: "RANGE", min: 10, max: -10 },
+          value: { type: "RANGE", min: 10, max: -10, minExclusive: false, maxExclusive: false },
           unit: "°C",
           testMethod: "ASTM D445",
         }),
       ),
     ).toEqual(["invalid_range"]);
+    // DP-156: one-sided and open ranges; shape problems are invalid_range
+    const range = (r: object) =>
+      codes(
+        checkSpecValue(pour, {
+          definitionId: "d2",
+          value: SpecValueDataSchema.parse({ type: "RANGE", ...r }),
+          unit: "°C",
+          testMethod: "ASTM D445",
+        }),
+      );
+    expect(range({ min: null, max: -30 })).toEqual([]);
+    expect(range({ min: -30, max: null, minExclusive: true })).toEqual([]);
+    expect(range({ min: -45, max: -30, maxExclusive: true })).toEqual([]);
+    expect(range({ min: -42, max: -42 })).toEqual([]);
+    expect(range({ min: null, max: null })).toEqual(["invalid_range"]);
+    expect(range({ min: null, max: -30, minExclusive: true })).toEqual(["invalid_range"]);
+    expect(range({ min: -42, max: -42, maxExclusive: true })).toEqual(["invalid_range"]);
     expect(
       codes(
         checkSpecValue(visc, {
@@ -228,6 +246,42 @@ describe("validation engine", () => {
     ).toEqual(["too_precise"]);
   });
 
+  it("DP-156: a typical value never satisfies a required specification", () => {
+    const typicalOnly = validateProductData({
+      definitions: [visc],
+      values: [
+        {
+          definitionId: "d1",
+          basis: "TYPICAL",
+          value: { type: "NUMBER", number: 5.8 },
+          unit: "mm²/s",
+          testMethod: null,
+        },
+      ],
+      images: [],
+    });
+    expect(typicalOnly.blocking.map((i) => [i.code, i.target])).toEqual([
+      ["required_missing", "spec:kv100"],
+    ]);
+    expect(typicalOnly.warnings.map((i) => [i.code, i.target])).toEqual([
+      ["test_method_missing", "spec:kv100:typical"],
+    ]);
+    // the save request defaults the basis and the open ends
+    const req = SpecValuesSaveRequestSchema.parse({
+      version: 1,
+      values: [
+        {
+          definitionId: "0190a8f0-0000-7000-8000-000000000001",
+          value: { type: "RANGE", min: null, max: -30 },
+        },
+      ],
+    });
+    expect(req.values[0]).toMatchObject({
+      basis: "SPECIFICATION",
+      value: { type: "RANGE", min: null, max: -30, minExclusive: false, maxExclusive: false },
+    });
+  });
+
   it("reports required as BLOCKING, optional and alt text as WARNING, ignores archived", () => {
     const empty = validateProductData({
       definitions: defs,
@@ -258,7 +312,7 @@ describe("validation engine", () => {
         },
         {
           definitionId: "d2",
-          value: { type: "RANGE", min: -30, max: -20 },
+          value: { type: "RANGE", min: -30, max: -20, minExclusive: false, maxExclusive: false },
           unit: "°C",
           testMethod: "ASTM D445",
         },

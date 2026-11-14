@@ -21,9 +21,13 @@ type Dec = { toString(): string } | null;
 
 export interface SpecValueFact {
   key: string;
+  /** DP-156; absent or SPECIFICATION for values stored before it. */
+  basis?: string;
   numberValue: Dec;
   rangeMin: Dec;
   rangeMax: Dec;
+  rangeMinExclusive?: boolean;
+  rangeMaxExclusive?: boolean;
   textValue: string | null;
   booleanValue: boolean | null;
   unit: string | null;
@@ -35,10 +39,24 @@ const dec = (d: Dec) => (d === null ? null : d.toString());
 /**
  * sha256 over the product's specification values, ordered by definition key. Any change of a
  * value, unit or test method, or a value added or removed, changes the fingerprint.
+ *
+ * DP-156: the basis and open range ends join a row only when they differ from the defaults
+ * (SPECIFICATION, closed ends), so the fingerprints of values stored before DP-156, and the
+ * verifications based on them, stay unchanged.
  */
 export function specFingerprint(values: readonly SpecValueFact[]): string {
+  const extra = (v: SpecValueFact) => {
+    const typical = (v.basis ?? "SPECIFICATION") !== "SPECIFICATION";
+    const open = Boolean(v.rangeMinExclusive) || Boolean(v.rangeMaxExclusive);
+    return typical || open
+      ? [v.basis ?? "SPECIFICATION", Boolean(v.rangeMinExclusive), Boolean(v.rangeMaxExclusive)]
+      : [];
+  };
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
   const rows = [...values]
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .sort(
+      (a, b) => cmp(a.key, b.key) || cmp(a.basis ?? "SPECIFICATION", b.basis ?? "SPECIFICATION"),
+    )
     .map((v) => [
       v.key,
       dec(v.numberValue),
@@ -48,6 +66,7 @@ export function specFingerprint(values: readonly SpecValueFact[]): string {
       v.booleanValue,
       v.unit,
       v.testMethod,
+      ...extra(v),
     ]);
   return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 }
