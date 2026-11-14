@@ -64,9 +64,16 @@ export interface MediaPlan {
   confirmCount: number;
 }
 
-/** Title and description of an imported technical summary (never called TDS or COA). */
+/**
+ * Title and description of an imported technical summary (never called TDS or COA). The title
+ * starts with the product code: two products can share a document name (ICCSYN 6 Group III and
+ * Group III+), and the admin lists documents by title.
+ */
 export function documentTitle(e: MediaPdfEntry): string {
-  return `${e.nameOnDocument} — technical summary compiled from source documents`.slice(0, 200);
+  return `${e.code} · ${e.nameOnDocument} — technical summary compiled from source documents`.slice(
+    0,
+    200,
+  );
 }
 export function documentDescription(e: MediaPdfEntry): string {
   const cited = e.citedSourceDocuments.length

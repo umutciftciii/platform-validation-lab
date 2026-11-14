@@ -118,7 +118,9 @@ describe("media plan", () => {
 
   it("names the document a compiled summary, never a TDS or COA", () => {
     const e = manifest.files[1] as Parameters<typeof documentTitle>[0];
-    expect(documentTitle(e)).toBe("Product A-1 — technical summary compiled from source documents");
+    expect(documentTitle(e)).toBe(
+      "A-1 · Product A-1 — technical summary compiled from source documents",
+    );
     expect(documentDescription(e)).toContain("Not a TDS or certificate of analysis");
     expect(documentDescription(e)).toContain("Source A.pdf");
   });
