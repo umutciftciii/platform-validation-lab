@@ -28,11 +28,18 @@ export class AdminApiError extends Error {
 export interface AdminApi {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body: unknown): Promise<T>;
+  /** DP-158: a raw upload (image or PDF bytes), as the admin upload proxies send it. */
+  put<T>(path: string, body: Buffer, headers: Record<string, string>): Promise<T>;
 }
 
 export function adminApi(cfg: AdminApiConfig, fetchImpl: typeof fetch = fetch): AdminApi {
   const base = `${cfg.baseUrl.replace(/\/+$/, "")}/api/v1/admin/catalog`;
-  async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  async function call<T>(
+    method: "GET" | "POST" | "PUT",
+    path: string,
+    body?: unknown,
+    extra: Record<string, string> = {},
+  ): Promise<T> {
     const headers: Record<string, string> = {
       "x-dp-proxy-key": cfg.proxyKey,
       "x-dp-client-ip": "127.0.0.1",
@@ -42,10 +49,16 @@ export function adminApi(cfg: AdminApiConfig, fetchImpl: typeof fetch = fetch): 
       headers["origin"] = cfg.origin;
       headers["content-type"] = "application/json";
     }
+    if (method === "PUT") Object.assign(headers, { origin: cfg.origin }, extra);
     const res = await fetchImpl(`${base}${path}`, {
       method,
       headers,
-      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+      body:
+        method === "POST"
+          ? JSON.stringify(body ?? {})
+          : method === "PUT"
+            ? new Uint8Array(body as Buffer)
+            : undefined,
       redirect: "error",
     });
     const text = await res.text();
@@ -61,5 +74,7 @@ export function adminApi(cfg: AdminApiConfig, fetchImpl: typeof fetch = fetch): 
   return {
     get: <T>(path: string) => call<T>("GET", path),
     post: <T>(path: string, body: unknown) => call<T>("POST", path, body),
+    put: <T>(path: string, body: Buffer, headers: Record<string, string>) =>
+      call<T>("PUT", path, body, headers),
   };
 }
