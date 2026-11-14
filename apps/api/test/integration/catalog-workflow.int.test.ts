@@ -24,6 +24,7 @@ import sharp from "sharp";
 import {
   ErrorBodySchema,
   ProductWorkflowResponseSchema,
+  PublicCategoryListResponseSchema,
   PublicProductListResponseSchema,
   PublicProductResponseSchema,
   ReviewQueueResponseSchema,
@@ -1185,6 +1186,18 @@ describe("6. public read API", () => {
     }
     const com = PublicProductListResponseSchema.parse((await pub("com", "/products")).body);
     expect(com.items.map((i) => i.name)).toEqual(["Product WF-P"]);
+  });
+
+  it("DP-160: lists the category tree of live products only, with counts", async () => {
+    const bv = PublicCategoryListResponseSchema.parse((await pub("bv", "/categories")).body);
+    // one live BV product (wf-p): its category alone, nothing about drafts or empty categories
+    expect(bv.items).toHaveLength(1);
+    expect(bv.items[0]).toMatchObject({ count: 1, parentSlug: null });
+    const one = PublicProductListResponseSchema.parse((await pub("bv", "/products")).body);
+    expect(bv.items[0]!.slug).toBe(one.items[0]!.category.slug);
+    const text = JSON.stringify(bv);
+    expect(text).not.toMatch(/"id"|siteId|isDefault/);
+    expect((await pub("admin", "/categories")).status).toBe(404);
   });
 
   it("serves a product by slug; drafts, approved-but-unpublished and unknown slugs are 404", async () => {
