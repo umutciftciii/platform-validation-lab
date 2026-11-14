@@ -18,7 +18,15 @@
 // files), private reads, cover/order/delete consistency, storage failures and orphan clean-up,
 // audit events and authorization (platform master permission, any-site read, no access).
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
@@ -38,7 +46,9 @@ import { PrismaClient } from "../../src/generated/prisma/client.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 import { adminApi } from "../../src/catalog/import/client.js";
 import { runImport } from "../../src/catalog/import/run.js";
-import { CatalogMappingSchema } from "@dream/contracts";
+import { runMedia } from "../../src/catalog/import/media.js";
+import { makePdf } from "../fixtures/pdf.js";
+import { CatalogMappingSchema, MediaManifestSchema } from "@dream/contracts";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CLI = path.join(API_DIR, "dist/iam/iam-cli.js");
@@ -2215,5 +2225,239 @@ describe("13. DP-157 catalogue import (dry run, apply, idempotence, conflicts)",
     expect(resume.written.map((w) => `${w.kind}:${w.ref}`)).toEqual(["listing:IMP-4"]);
     const final = await runImport(api(), mapping, { apply: false, resumePartial: true });
     expect(final.plan.confirmCount).toBe(0);
+  });
+});
+
+describe("14. DP-158 media stage (images and compiled PDFs, no site link)", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dp-158-media-"));
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  let importer: Staff;
+  let files: { img1: Buffer; pdf1: Buffer; pdf2: Buffer; snImg: Buffer };
+  let manifest: ReturnType<typeof MediaManifestSchema.parse>;
+  const api = (s: Staff) =>
+    adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: s.token,
+      origin: ADMIN_ORIGIN,
+    });
+  const footprint = async () => ({
+    images: await owner.productImage.count(),
+    documents: await owner.productDocument.count(),
+    revisions: await owner.productDocumentRevision.count(),
+    siteLinks: await owner.productDocumentSite.count(),
+    publications: await owner.productPublication.count(),
+  });
+
+  beforeAll(async () => {
+    importer = await staff(
+      "media-importer",
+      [{ role: "platform_product_manager" }, { role: "product_editor", site: BV }],
+      admin.userId,
+    );
+    files = {
+      img1: await image(1080, 1080, "jpeg"),
+      pdf1: makePdf({ pages: 1, text: "Imported IMP-1 technical summary" }),
+      pdf2: makePdf({ pages: 2, text: "Imported IMP-2 technical summary" }),
+      snImg: await image(1000, 800, "png"),
+    };
+    mkdirSync(path.join(root, "originals"), { recursive: true });
+    const put = (name: string, b: Buffer) => writeFileSync(path.join(root, "originals", name), b);
+    put("IMP-1__1.jpg", files.img1);
+    put("IMP-1__1.pdf", files.pdf1);
+    put("IMP-2__1.pdf", files.pdf2);
+    put("SN-500__1.png", files.snImg);
+    const pdf = (code: string, b: Buffer) => ({
+      kind: "pdf",
+      code,
+      file: `originals/${code}__1.pdf`,
+      bytes: b.length,
+      mime: "application/pdf",
+      sha256: sha(b),
+      nameOnDocument: `Imported ${code}`,
+      documentType: "OTHER",
+      citedSourceDocuments: ["Source spec.pdf"],
+      plannedAccessPolicy: "LEAD_REQUIRED",
+      publishToSite: false,
+    });
+    manifest = MediaManifestSchema.parse({
+      dp: "DP-158",
+      files: [
+        {
+          kind: "image",
+          code: "IMP-1",
+          file: "originals/IMP-1__1.jpg",
+          bytes: files.img1.length,
+          mime: "image/jpeg",
+          sha256: sha(files.img1),
+          altText: "Imported IMP-1",
+        },
+        pdf("IMP-1", files.pdf1),
+        pdf("IMP-2", files.pdf2),
+        // SN-500 already has images: never touched
+        {
+          kind: "image",
+          code: "SN-500",
+          file: "originals/SN-500__1.png",
+          bytes: files.snImg.length,
+          mime: "image/png",
+          sha256: sha(files.snImg),
+          altText: "SN 500",
+        },
+      ],
+    });
+  });
+
+  it("a dry run writes nothing; a changed file or a reader refuses the run", async () => {
+    const before = await footprint();
+    const r = await runMedia(api(importer), manifest, root, { apply: false });
+    expect(r.plan.items.map((i) => [i.kind, i.code, i.action])).toEqual([
+      ["image", "IMP-1", "CREATE"],
+      ["pdf", "IMP-1", "CREATE"],
+      ["pdf", "IMP-2", "CREATE"],
+      ["image", "SN-500", "CONFLICT"],
+    ]);
+    expect(r.plan.confirmCount).toBe(3);
+    expect(await footprint()).toEqual(before);
+    // the file on disk must be exactly the manifest's file
+    const tampered = MediaManifestSchema.parse({
+      ...manifest,
+      files: manifest.files.map((f) => (f.code === "IMP-2" ? { ...f, sha256: "0".repeat(64) } : f)),
+    });
+    await expect(
+      runMedia(api(importer), tampered, root, { apply: true, confirm: 3 }),
+    ).rejects.toThrow(/does not match the manifest/);
+    await expect(
+      runMedia(api(importer), manifest, root, { apply: true, confirm: 2 }),
+    ).rejects.toThrow(/does not match the plan/);
+    const denied = await runMedia(api(bvReader), manifest, root, { apply: true, confirm: 3 });
+    expect(denied.error).toMatch(/403/);
+    expect(await footprint()).toEqual(before);
+  });
+
+  it("apply uploads the cover image with alt text and LEAD_REQUIRED OTHER documents, unlinked", async () => {
+    const before = await footprint();
+    const sn500 = await owner.productImage.findMany({
+      where: { product: { code: "SN-500" } },
+      orderBy: { id: "asc" },
+    });
+    const pubs = await owner.productPublication.findMany({ orderBy: { id: "asc" } });
+    const r = await runMedia(api(importer), manifest, root, { apply: true, confirm: 3 });
+    expect(r.error).toBeNull();
+    expect(r.written.map((w) => `${w.kind}:${w.code}`)).toEqual([
+      "image:IMP-1",
+      "alt:IMP-1",
+      "document:IMP-1",
+      "revision:IMP-1",
+      "document:IMP-2",
+      "revision:IMP-2",
+    ]);
+    const after = await footprint();
+    expect([
+      after.images - before.images,
+      after.documents - before.documents,
+      after.revisions - before.revisions,
+      after.siteLinks - before.siteLinks,
+      after.publications - before.publications,
+    ]).toEqual([1, 2, 2, 0, 0]);
+    const img = await owner.productImage.findFirstOrThrow({
+      where: { product: { code: "IMP-1" } },
+    });
+    expect([img.isCover, img.altText, img.sha256]).toEqual([
+      true,
+      "Imported IMP-1",
+      sha(files.img1),
+    ]);
+    const docs = await owner.productDocument.findMany({
+      where: { product: { code: { in: ["IMP-1", "IMP-2"] } } },
+      include: { revisions: true, sites: true },
+      orderBy: { title: "asc" },
+    });
+    expect(
+      docs.map((d) => [d.type, d.accessPolicy, d.title, d.revisions.map((x) => x.sha256), d.sites]),
+    ).toEqual([
+      [
+        "OTHER",
+        "LEAD_REQUIRED",
+        "IMP-1 · Imported IMP-1 — technical summary compiled from source documents",
+        [sha(files.pdf1)],
+        [],
+      ],
+      [
+        "OTHER",
+        "LEAD_REQUIRED",
+        "IMP-2 · Imported IMP-2 — technical summary compiled from source documents",
+        [sha(files.pdf2)],
+        [],
+      ],
+    ]);
+    // the stored bytes are the manifest's bytes
+    const res = await fetch(
+      `${base}/api/v1/admin/catalog/document-revisions/${docs[0]!.revisions[0]!.id}/attachment`,
+      {
+        headers: {
+          "x-dp-proxy-key": TEST_KEYS.admin,
+          "x-dp-client-ip": "10.20.30.40",
+          cookie: `__Host-dp_admin_session=${importer.token}`,
+        },
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(sha(Buffer.from(await res.arrayBuffer()))).toBe(sha(files.pdf1));
+    // existing images and publications are untouched
+    expect(
+      await owner.productImage.findMany({
+        where: { product: { code: "SN-500" } },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(sn500);
+    expect(await owner.productPublication.findMany({ orderBy: { id: "asc" } })).toEqual(pubs);
+  });
+
+  it("re-running writes nothing; an interrupted document is completed only on request", async () => {
+    const again = await runMedia(api(importer), manifest, root, { apply: true, confirm: 0 });
+    expect(again.written).toEqual([]);
+    expect(again.plan.items.map((i) => i.action)).toEqual([
+      "ALREADY_IMPORTED",
+      "ALREADY_IMPORTED",
+      "ALREADY_IMPORTED",
+      "CONFLICT",
+    ]);
+    // a document of ours whose upload never happened (IMP-3)
+    const pdf3 = makePdf({ text: "Imported IMP-3 technical summary" });
+    writeFileSync(path.join(root, "originals", "IMP-3__1.pdf"), pdf3);
+    const m3 = MediaManifestSchema.parse({
+      dp: "DP-158",
+      files: [
+        {
+          ...manifest.files[1],
+          code: "IMP-3",
+          file: "originals/IMP-3__1.pdf",
+          bytes: pdf3.length,
+          sha256: sha(pdf3),
+          nameOnDocument: "Imported IMP-3",
+        },
+      ],
+    });
+    const imp3 = await owner.product.findUniqueOrThrow({ where: { code: "IMP-3" } });
+    const made = await pm.post(`/products/${imp3.id}/documents`, {
+      type: "OTHER",
+      title: "IMP-3 · Imported IMP-3 — technical summary compiled from source documents",
+      accessPolicy: "LEAD_REQUIRED",
+    });
+    expect(made.status).toBe(201);
+    const partial = await runMedia(api(importer), m3, root, { apply: false });
+    expect(partial.plan.items[0]!.action).toBe("PARTIAL");
+    const resumed = await runMedia(api(importer), m3, root, {
+      apply: true,
+      confirm: 1,
+      resumePartial: true,
+    });
+    expect(resumed.written.map((w) => w.kind)).toEqual(["revision"]);
+    const doc = await owner.productDocument.findUniqueOrThrow({
+      where: { id: made.body.document.id },
+      include: { revisions: true },
+    });
+    expect(doc.revisions.map((x) => x.sha256)).toEqual([sha(pdf3)]);
   });
 });
