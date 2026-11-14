@@ -130,3 +130,61 @@ export const CatalogMappingSchema = z
     });
   });
 export type CatalogMapping = z.infer<typeof CatalogMappingSchema>;
+
+/**
+ * DP-158: the verified media manifest (`manifest.json` of the DP-158 download, outside the
+ * repository). The media stage of the import reads only these entries. The schema enforces the
+ * owner decisions: documents are OTHER (transcribed technical summaries, never TDS or COA),
+ * LEAD_REQUIRED and not linked to any site.
+ */
+const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+const RelativeFileSchema = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(/^[A-Za-z0-9._/-]+$/)
+  .refine(
+    (p) => !p.startsWith("/") && !p.split("/").includes(".."),
+    "relative path inside the root",
+  );
+
+export const MediaImageEntrySchema = z.object({
+  kind: z.literal("image"),
+  code: ProductCodeSchema,
+  file: RelativeFileSchema,
+  bytes: z.number().int().positive(),
+  mime: z.enum(["image/jpeg", "image/png", "image/webp"]),
+  sha256: Sha256Schema,
+  altText: z.string().trim().min(1).max(300),
+});
+export const MediaPdfEntrySchema = z.object({
+  kind: z.literal("pdf"),
+  code: ProductCodeSchema,
+  file: RelativeFileSchema,
+  bytes: z.number().int().positive(),
+  mime: z.literal("application/pdf"),
+  sha256: Sha256Schema,
+  nameOnDocument: z.string().trim().min(1).max(200),
+  documentType: z.literal("OTHER"),
+  citedSourceDocuments: z.array(z.string().min(1).max(300)).max(20),
+  plannedAccessPolicy: z.literal("LEAD_REQUIRED"),
+  publishToSite: z.literal(false),
+});
+export const MediaManifestSchema = z
+  .object({
+    dp: z.literal("DP-158"),
+    files: z
+      .array(z.discriminatedUnion("kind", [MediaImageEntrySchema, MediaPdfEntrySchema]))
+      .max(1000),
+  })
+  .superRefine((m, ctx) => {
+    const seen = new Set<string>();
+    m.files.forEach((f, i) => {
+      const k = `${f.kind}:${f.code}`;
+      if (seen.has(k)) ctx.addIssue({ code: "custom", path: ["files", i], message: `second ${k}` });
+      seen.add(k);
+    });
+  });
+export type MediaManifest = z.infer<typeof MediaManifestSchema>;
+export type MediaImageEntry = z.infer<typeof MediaImageEntrySchema>;
+export type MediaPdfEntry = z.infer<typeof MediaPdfEntrySchema>;
