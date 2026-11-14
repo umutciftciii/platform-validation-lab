@@ -26,6 +26,7 @@ import {
   ProductDocumentResponseSchema,
   ProductWorkflowResponseSchema,
   PublicDocumentListResponseSchema,
+  PublicProductListResponseSchema,
   type ProductDocument,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
@@ -991,6 +992,11 @@ describe("4. sites and public delivery", () => {
       where: { documentId: docId, isActive: true },
     });
     expect(createHash("sha256").update(file.body).digest("hex")).toBe(active.sha256);
+    // DP-163: the list flags the product, and only with what a visitor can reach.
+    const entry = PublicProductListResponseSchema.parse(
+      (await pub("bv", "/products")).body,
+    ).items.find((i) => i.slug === slug);
+    expect(entry).toMatchObject({ hasDocuments: true });
   });
 
   it("isolates the sites: Corporate and the admin key get nothing", async () => {
@@ -1177,6 +1183,34 @@ describe("4. sites and public delivery", () => {
         (await pub("bv", `/products/${slug}/documents`)).body,
       ).items.map((i) => i.id),
     ).not.toContain(d.id);
+  });
+
+  it("DP-163: flags documents in the list only while one is open to visitors", async () => {
+    const flag = async () =>
+      PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items.find(
+        (i) => i.slug === slug,
+      )?.hasDocuments;
+    expect(await flag()).toBe(true);
+    // Make every open document of the product closed or internal: the flag goes off.
+    const open = await owner.productDocument.findMany({
+      where: { productId: P["d1"]!, accessPolicy: { in: ["PUBLIC", "LEAD_REQUIRED"] } },
+    });
+    const saved = open.map((d) => ({ id: d.id, accessPolicy: d.accessPolicy }));
+    await owner.productDocument.updateMany({
+      where: { id: { in: saved.map((d) => d.id) } },
+      data: { accessPolicy: "MEMBERS_ONLY" },
+    });
+    try {
+      expect(await flag()).toBe(false);
+    } finally {
+      for (const d of saved) {
+        await owner.productDocument.update({
+          where: { id: d.id },
+          data: { accessPolicy: d.accessPolicy },
+        });
+      }
+    }
+    expect(await flag()).toBe(true);
   });
 
   it("refuses a site row the database rules forbid, whoever writes it", async () => {

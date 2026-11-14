@@ -111,3 +111,33 @@ export function browseHref(p: Partial<BrowseParams>): string {
   const s = sp.toString();
   return s ? `/products?${s}` : "/products";
 }
+
+// --- DP-163: category strip and sub-category chips -------------------------------------------
+
+/** The top-level categories of the live tree, in the API's order (the cards of the strip). */
+export function topCategories(items: readonly PublicCategory[]): PublicCategory[] {
+  const slugs = new Set(items.map((c) => c.slug));
+  return items.filter((c) => !c.parentSlug || !slugs.has(c.parentSlug));
+}
+
+/**
+ * The chip rows under the strip while a category is chosen: for every category on the chosen
+ * path that has live sub-categories, its children. Empty when nothing (or a leaf root) is chosen.
+ */
+export function chipRows(
+  items: readonly PublicCategory[],
+  slug: string | null,
+): { parent: PublicCategory; children: PublicCategory[] }[] {
+  return trail(items, slug)
+    .map((parent) => ({ parent, children: items.filter((c) => c.parentSlug === parent.slug) }))
+    .filter((r) => r.children.length > 0);
+}
+
+/** "Base Oil · Group III+": the product's category with its ancestors, for the card eyebrow. */
+export function categoryLabel(
+  items: readonly PublicCategory[],
+  category: { slug: string; name: string },
+): string {
+  const path = trail(items, category.slug);
+  return path.length ? path.map((c) => c.name).join(" · ") : category.name;
+}

@@ -56,6 +56,19 @@ export function decideDocumentAccess(
   }
 }
 
+/**
+ * DP-163: whether a visitor of the site can obtain a document of this policy: download it freely
+ * or request it with the short form (ADR-016). MEMBERS_ONLY stays closed until DP-039 brings
+ * member sessions; INTERNAL never qualifies. Drives the "Documents" indicator of the list.
+ */
+export function offeredToVisitors(
+  policy: DocumentAccessPolicy,
+  capabilities: DocumentAccessCapabilities = DOCUMENT_ACCESS_CAPABILITIES,
+): boolean {
+  const access = decideDocumentAccess(policy, capabilities);
+  return access.downloadable && (access.requires === "nothing" || access.requires === "lead_grant");
+}
+
 /** What a stamper knows about one delivery. Personal data only in `grant` (lead downloads). */
 export interface DeliveryContext {
   documentId: string;
