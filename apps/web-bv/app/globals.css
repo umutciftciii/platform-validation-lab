@@ -3118,3 +3118,195 @@ select.tp-contact-input {
 .tp-contact-form:focus {
   outline: none;
 }
+
+/* -------------------------------------------------------------------------- */
+/* News (DP-020): the article list and the article page, built on the CMS     */
+/* template page styles (.tp-*). Server-rendered, no motion.                  */
+/* -------------------------------------------------------------------------- */
+
+.news-head {
+  padding-block: clamp(3.5rem, 12svh, 7.5rem) clamp(1.5rem, 4svh, 2.5rem);
+}
+
+.news-list {
+  padding-block: 0 clamp(4rem, 12svh, 7rem);
+}
+
+.news-empty {
+  padding: clamp(2rem, 5vw, 3rem);
+  border-radius: 14px;
+  background: rgb(237 243 247 / 0.035);
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.1);
+}
+
+.news-grid {
+  display: grid;
+  gap: clamp(1.25rem, 2.5vw, 2rem);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+}
+
+.news-card {
+  position: relative;
+  display: flex;
+  border-radius: 14px;
+  background: rgb(237 243 247 / 0.035);
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.1);
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.news-card:hover,
+.news-card:focus-within {
+  background: rgb(237 243 247 / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(233 162 59 / 0.45);
+}
+
+.news-card-body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.news-card-media {
+  overflow: hidden;
+  border-radius: 14px 14px 0 0;
+}
+
+.news-card-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+.news-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 1.5rem;
+}
+
+.news-date {
+  color: var(--color-amber);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.news-card-title {
+  font-size: 1.35rem;
+  font-stretch: 108%;
+  font-weight: 600;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+/* The whole card is the link target; the title carries the accessible name. */
+.news-card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+}
+
+.news-card-link:focus-visible {
+  outline: none;
+}
+
+.news-card-link:focus-visible::after {
+  outline: 2px solid var(--color-glass);
+  outline-offset: 3px;
+}
+
+.news-card-excerpt {
+  color: var(--color-steel);
+  font-size: 0.98rem;
+  line-height: 1.55;
+}
+
+.news-card-more {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  color: var(--color-amber);
+  font-weight: 600;
+}
+
+/* The newest article spans the row next to its cover on wide screens. */
+@media (min-width: 900px) {
+  .news-card-lead {
+    grid-column: 1 / -1;
+  }
+
+  .news-card-lead .news-card-body:has(.news-card-media) {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    align-items: stretch;
+  }
+
+  .news-card-lead .news-card-media {
+    border-radius: 14px 0 0 14px;
+  }
+
+  .news-card-lead .news-card-image {
+    height: 100%;
+    min-height: 22rem;
+  }
+
+  .news-card-lead .news-card-text {
+    justify-content: center;
+    padding: clamp(1.75rem, 3vw, 3rem);
+  }
+
+  .news-card-lead .news-card-title {
+    font-size: clamp(1.6rem, 2.4vw, 2.25rem);
+  }
+}
+
+.news-article-head {
+  padding-block: clamp(3rem, 10svh, 6rem) clamp(2rem, 5svh, 3rem);
+}
+
+.news-back {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-bottom: 1.5rem;
+  color: var(--color-steel);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.news-back:hover {
+  color: var(--color-glass);
+}
+
+.news-article-title {
+  max-width: 22ch;
+  margin-top: 0.75rem;
+  font-size: clamp(2.1rem, min(4.8vw, 8.5svh), 4rem);
+}
+
+.news-article-cover {
+  margin: 0 0 clamp(1rem, 3svh, 2rem);
+}
+
+.news-article-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 14px;
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.1);
+}
+
+.news-article-body {
+  padding-bottom: clamp(3rem, 10svh, 6rem);
+}
+
+.news-removed-link {
+  margin-top: 2rem;
+}

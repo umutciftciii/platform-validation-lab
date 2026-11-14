@@ -39,7 +39,8 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
 
 type ContactDetails = SiteFooterContent["contact"];
 
-function Section({
+/** One section of a template page or of a news article's body (DP-020). */
+export function Section({
   section,
   first,
   contact,
@@ -331,7 +332,7 @@ function paragraphs(body: string): string[] {
 }
 
 /** Site paths use client navigation; anchors, https, mailto and tel are plain links. */
-function CmsLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
+export function CmsLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
   if (href.startsWith("/")) {
     return (
       <Link href={href} className={className}>

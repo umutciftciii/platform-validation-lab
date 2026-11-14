@@ -21,6 +21,12 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "slug:reserved":
     "This address is reserved for the site itself (for example products or privacy) or is a language code.",
   "kind:not_editable_yet": "This page is managed in code until it is imported into the CMS.",
+  "content:article_incomplete":
+    "An article needs a summary and at least one body section before it can be published.",
+  "content.coverAlt:custom": "Add the alt text of the cover image.",
+  "content:invalid":
+    "This content no longer matches the current fields. Save the draft again and check the highlighted fields.",
+  "revisionNumber:unknown": "This revision does not exist. Reload the page.",
 };
 
 /** A readable name for a field path such as `content.sections.2.button.href`. */
@@ -29,6 +35,8 @@ export function describePath(path: string): string {
   if (m)
     return `section ${Number(m[1]) + 1}${m[2] ? ` (${m[2].replace(/\.(\d+)\./g, (_, i: string) => ` ${Number(i) + 1} `)})` : ""}`;
   if (path.startsWith("seo.")) return `SEO ${path.slice(4)}`;
+  if (path === "content.excerpt") return "summary";
+  if (path.startsWith("content.cover")) return "cover image";
   return path;
 }
 

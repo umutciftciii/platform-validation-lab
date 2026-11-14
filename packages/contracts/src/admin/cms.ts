@@ -57,6 +57,7 @@ export const CMS_RESERVED_SLUGS: readonly string[] = [
   "api",
   "demo",
   "lead-form",
+  "news",
   "preview",
   "privacy",
   "product-documents",
@@ -103,6 +104,11 @@ export type CmsField =
        * href:     an optional link target (null = a page that does not exist yet, shown as text).
        */
       format?: "anchor" | "position" | "href";
+      /**
+       * Required as soon as the sibling field with this key has a value (e.g. an image's alt
+       * text); the schema of the whole object checks it, the admin labels it accordingly.
+       */
+      requiredWith?: string;
       hint?: string;
     }
   | { type: "link"; key: string; label: string; required?: boolean; hint?: string }
@@ -126,6 +132,8 @@ export type CmsField =
       key: string;
       label: string;
       kinds: readonly CmsAssetKind[];
+      /** Default true. Optional assets (e.g. an article's cover) store null when none is chosen. */
+      required?: boolean;
       hint?: string;
     };
 
@@ -247,14 +255,20 @@ function fieldSchema(field: CmsField): z.ZodType {
     }
     case "group":
       return cmsFieldsSchema(field.fields);
-    case "asset":
-      return z.string().refine(
+    case "asset": {
+      const asset = z.string().refine(
         (src) => {
-          const asset = cmsAsset(src);
-          return Boolean(asset && field.kinds.includes(asset.kind));
+          const a = cmsAsset(src);
+          return Boolean(a && field.kinds.includes(a.kind));
         },
         { message: "asset" },
       );
+      if (field.required !== false) return asset;
+      return asset
+        .nullish()
+        .or(z.literal("").transform(() => null))
+        .transform((v) => v ?? null);
+    }
   }
 }
 
@@ -429,10 +443,11 @@ export const CMS_SECTIONS_MAX = 30;
 /** Client-generated section id (stable React key and later preview anchor). */
 const SectionIdSchema = z.string().regex(/^[a-z0-9-]{8,40}$/);
 
-const SectionSchema = z
-  .looseObject({ id: SectionIdSchema, type: z.string() })
-  .transform((value, ctx) => {
-    const def = CMS_SECTION_TYPES.find((s) => s.type === value.type);
+const sectionSchema = (allowed: readonly string[]) =>
+  z.looseObject({ id: SectionIdSchema, type: z.string() }).transform((value, ctx) => {
+    const def = allowed.includes(value.type)
+      ? CMS_SECTION_TYPES.find((s) => s.type === value.type)
+      : undefined;
     if (!def) {
       ctx.addIssue({ code: "custom", path: ["type"], message: "unknown_section" });
       return z.NEVER;
@@ -451,15 +466,116 @@ const SectionSchema = z
 
 export type CmsSection = { id: string; type: string } & Record<string, unknown>;
 
-export const CmsTemplateContentSchema = z.strictObject({
-  sections: z
-    .array(SectionSchema)
+const sectionList = (allowed: readonly string[]) =>
+  z
+    .array(sectionSchema(allowed))
     .max(CMS_SECTIONS_MAX)
     .refine((list) => new Set(list.map((s) => s.id)).size === list.length, {
       message: "duplicate_section_id",
-    }),
+    });
+
+export const CmsTemplateContentSchema = z.strictObject({
+  sections: sectionList(CMS_SECTION_TYPE_KEYS),
 });
 export type CmsTemplateContent = { sections: CmsSection[] };
+
+// --- articles (DP-020: Blog / News) -------------------------------------------------------------
+
+/**
+ * A news article is a TEMPLATE page with the template key "article" at `/news/<slug>` (ADR-020
+ * addendum, DP-020): the same draft, revision, preview and publication model as every CMS page.
+ * Its own fields are a summary and an optional cover image; its body is a list of the text-like
+ * section types. Categories, tags, comments and a rich-text editor are out of scope (phase 1).
+ * The date shown on the site is the first publication (revision 1), so republishing a correction
+ * does not move an article up the list.
+ */
+export const CMS_ARTICLE_TEMPLATE = "article";
+export const CMS_NEWS_PATH = "/news";
+
+export const CMS_ARTICLE_FIELDS: readonly CmsField[] = [
+  {
+    type: "text",
+    key: "excerpt",
+    label: "Summary",
+    max: 400,
+    required: true,
+    multiline: true,
+    hint: "Shown on the news list and under the article title.",
+  },
+  {
+    type: "asset",
+    key: "coverImage",
+    label: "Cover image",
+    kinds: ["image"],
+    required: false,
+    hint: "Optional. A registered site image; uploads arrive with the media library.",
+  },
+  {
+    type: "text",
+    key: "coverAlt",
+    label: "Cover image alt text",
+    max: 300,
+    multiline: true,
+    requiredWith: "coverImage",
+    hint: "Required when a cover image is chosen: what the image shows.",
+  },
+];
+
+/** Section types an article body may use (no page hero, no contact form). */
+export const CMS_ARTICLE_SECTION_TYPES: readonly string[] = [
+  "text",
+  "split",
+  "quote",
+  "specList",
+  "cards",
+  "cta",
+];
+
+export const CmsArticleContentSchema = z
+  .strictObject({
+    ...(Object.fromEntries(CMS_ARTICLE_FIELDS.map((f) => [f.key, fieldSchema(f)])) as Record<
+      string,
+      z.ZodType
+    >),
+    sections: sectionList(CMS_ARTICLE_SECTION_TYPES),
+  })
+  .superRefine((value, ctx) => {
+    const v = value as Record<string, unknown>;
+    if (v["coverImage"] && !v["coverAlt"]) {
+      ctx.addIssue({ code: "custom", path: ["coverAlt"], message: "required_with_image" });
+    }
+  });
+
+export interface CmsArticleContent {
+  excerpt: string;
+  coverImage: string | null;
+  coverAlt: string | null;
+  sections: CmsSection[];
+}
+
+/** One lower-case kebab-case segment; the article lives at `/news/<slug>`. */
+export const CmsArticleSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(80)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, { message: "format" });
+
+export function cmsArticlePath(slug: string): string {
+  return `${CMS_NEWS_PATH}/${slug}`;
+}
+
+/** Whether a page is a news article (TEMPLATE page with the article template). */
+export function cmsIsArticle(page: { kind: string; templateKey: string }): boolean {
+  return page.kind === "TEMPLATE" && page.templateKey === CMS_ARTICLE_TEMPLATE;
+}
+
+/** The slug of a page path: `/about-us` → about-us, `/news/x` → x (articles). */
+export function cmsSlugOfPath(path: string): string {
+  return path.startsWith(`${CMS_NEWS_PATH}/`)
+    ? path.slice(CMS_NEWS_PATH.length + 1)
+    : path.slice(1);
+}
 
 // --- the site registry: every page of the two apps and who manages it -------------------------
 
@@ -506,6 +622,17 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     managedBy: "cms_pending",
     stage: "S2",
     note: "Heading, intro and SEO. The products themselves stay in the catalogue.",
+  },
+  {
+    key: "bv.news-index",
+    site: "BV",
+    kind: "DESIGN",
+    title: "News",
+    path: "/news",
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "Heading, introduction and empty state of the news list (DP-153). The articles are under News.",
+    importable: true,
   },
   {
     key: "bv.site-nav",
@@ -668,8 +795,17 @@ export type CmsSeo = z.infer<typeof CmsSeoSchema>;
 export const CmsPageCreateRequestSchema = z.strictObject({
   title: requiredText(200),
   slug: CmsSlugSchema,
+  template: z.literal(CMS_STANDARD_TEMPLATE).optional(),
 });
 export type CmsPageCreateRequest = z.input<typeof CmsPageCreateRequestSchema>;
+
+/** DP-020: creates an empty news article (a draft at `/news/<slug>`). */
+export const CmsArticleCreateRequestSchema = z.strictObject({
+  title: requiredText(200),
+  slug: CmsArticleSlugSchema,
+  template: z.literal(CMS_ARTICLE_TEMPLATE),
+});
+export type CmsArticleCreateRequest = z.input<typeof CmsArticleCreateRequestSchema>;
 
 /** Saves the whole draft of a TEMPLATE page. DESIGN pages and fragments arrive with S2. */
 export const CmsPageDraftRequestSchema = z.strictObject({
@@ -680,6 +816,16 @@ export const CmsPageDraftRequestSchema = z.strictObject({
   content: CmsTemplateContentSchema,
 });
 export type CmsPageDraftRequest = z.input<typeof CmsPageDraftRequestSchema>;
+
+/** DP-020: saves the whole draft of a news article. */
+export const CmsArticleDraftRequestSchema = z.strictObject({
+  version: VersionSchema,
+  title: requiredText(200),
+  slug: CmsArticleSlugSchema,
+  seo: CmsSeoSchema,
+  content: CmsArticleContentSchema,
+});
+export type CmsArticleDraftRequest = z.input<typeof CmsArticleDraftRequestSchema>;
 
 // --- responses -------------------------------------------------------------------------------
 

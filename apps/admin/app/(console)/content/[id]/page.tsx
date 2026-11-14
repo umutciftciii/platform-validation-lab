@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { CMS_SITE_REGISTRY, CmsPageResponseSchema, cmsDesignTemplate } from "@dream/contracts";
+import {
+  CMS_SITE_REGISTRY,
+  CmsHistoryResponseSchema,
+  CmsPageResponseSchema,
+  cmsDesignTemplate,
+  cmsIsArticle,
+} from "@dream/contracts";
 import { NoticeProvider } from "../../../../components/catalog/notices";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { PageEditor } from "../../../../components/cms/page-editor";
@@ -38,7 +44,14 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
   }
   const { page, site } = res.data;
   const sp = site.key.toLowerCase();
-  const back = { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
+  const article = cmsIsArticle(page);
+  const back = article
+    ? { href: `/content/news?site=${sp}`, label: `All articles of ${SITE_SHORT[site.key]}` }
+    : { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
+  const history = await serverRead(
+    `/api/v1/admin/cms/pages/${page.id}/history`,
+    CmsHistoryResponseSchema,
+  );
   const registry = CMS_SITE_REGISTRY.find((e) => e.key === page.templateKey);
   const editable = page.kind === "TEMPLATE" || Boolean(cmsDesignTemplate(page.templateKey));
   const state = publicationState(page);
@@ -52,7 +65,11 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
           back={back}
           description={
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <CmsKindPill kind={page.kind} />
+              {article ? (
+                <StatusPill tone="petrol">News article</StatusPill>
+              ) : (
+                <CmsKindPill kind={page.kind} />
+              )}
               <StatusPill tone={state.tone}>{state.label}</StatusPill>
               <span className="font-mono text-ink-3">{page.path ?? "Site-wide part"}</span>
               <span className="text-ink-3">
@@ -62,7 +79,10 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
           }
         />
         {editable ? (
+          // Remounted per draft version: a restore or a save from elsewhere shows the new draft.
           <PageEditor
+            key={page.version}
+            history={history.ok ? history.data : null}
             page={page}
             canEdit={site.canEdit}
             canPublish={site.canPublish}

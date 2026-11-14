@@ -41,6 +41,12 @@ const link = (key: string, label: string): CmsField => ({
   label,
   required: true,
 });
+const group = (key: string, label: string, fields: CmsField[]): CmsField => ({
+  type: "group",
+  key,
+  label,
+  fields,
+});
 /** A label with an optional target: empty = the page does not exist yet (shown as plain text). */
 const pendingLink = (): CmsField[] => [
   text("label", "Label", 80),
@@ -461,6 +467,31 @@ export interface BvFooterContent {
   pendingNote: string;
 }
 
+// --- bv.news-index (DP-153) -----------------------------------------------------------------------
+
+/**
+ * The heading of the news list at /news: the articles themselves are TEMPLATE pages (DP-020); the
+ * list's eyebrow, title, introduction and empty state are this designed page, so an editor changes
+ * them through the same draft, preview and publication flow. The page title and SEO fields of the
+ * page give the browser title and description.
+ */
+export const BV_NEWS_INDEX_FIELDS: readonly CmsField[] = [
+  text("eyebrow", "Eyebrow", 40),
+  text("title", "Heading", 120),
+  long("intro", "Introduction", 400),
+  group("empty", "When no article is published", [
+    text("title", "Heading", 120),
+    long("text", "Text", 400),
+  ]),
+];
+
+export interface BvNewsIndexContent {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  empty: { title: string; text: string };
+}
+
 // --- registry of designed templates --------------------------------------------------------------
 
 export interface CmsDesignTemplate {
@@ -489,6 +520,14 @@ export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
     title: "Footer",
     path: null,
     fields: BV_FOOTER_FIELDS,
+  },
+  {
+    key: "bv.news-index",
+    site: "BV",
+    kind: "DESIGN",
+    title: "News",
+    path: "/news",
+    fields: BV_NEWS_INDEX_FIELDS,
   },
 ];
 
