@@ -11,6 +11,7 @@ import {
   categoryLabel,
   chipRows,
   filterProducts,
+  packSize,
   PAGE_SIZE,
   paginate,
   parseBrowse,
@@ -130,5 +131,23 @@ describe("DP-163 strip and chips", () => {
   it("labels a card with the category path", () => {
     assert.equal(categoryLabel(CATS, PRODUCTS[2]!.category), "Base Oil · Group III+");
     assert.equal(categoryLabel([], { slug: "x", name: "X" }), "X");
+  });
+});
+
+describe("DP-169 pack size", () => {
+  it("reads the pack size at the end of the name, as written", () => {
+    assert.equal(packSize("Pharmaceutical Grade White Petroleum Jelly 50 g"), "50 g");
+    assert.equal(packSize("Pharmaceutical Grade White Petroleum Jelly 500 g"), "500 g");
+    assert.equal(packSize("Pharmaceutical Grade White Petroleum Jelly 16 kg"), "16 kg");
+    assert.equal(packSize("Pharmaceutical Grade Yellow Petroleum Jelly 25 kg"), "25 kg");
+    assert.equal(packSize("Cosmetic Grade Petroleum Jelly 165 kg"), "165 kg");
+    assert.equal(packSize("Sample 5kg"), "5 kg");
+  });
+  it("ignores grades and names without a pack size", () => {
+    assert.equal(packSize("White Oil 150#"), null);
+    assert.equal(packSize("Transformer Oil -45#"), null);
+    assert.equal(packSize("Group I Base Oil SN 150"), null);
+    assert.equal(packSize("ICCSYN 6 (CTL Technology) Group III+"), null);
+    assert.equal(packSize("Cosmetic Grade Petroleum Jelly"), null);
   });
 });
