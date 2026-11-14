@@ -40,6 +40,7 @@ import {
 } from "./document-delivery.js";
 import { GLOBAL_PRODUCT_INCLUDE } from "./global-catalog.service.js";
 import { liveRows, type LiveRow } from "./live.js";
+import { compareProductNames } from "./product-order.js";
 import { currentSpecHash, factsOf } from "./xrefs.service.js";
 import { publicRelation } from "./xref-rules.js";
 import { MEDIA_STORAGE } from "../media/media.module.js";
@@ -89,7 +90,8 @@ export class PublicCatalogService {
           sortOrder: s.sortOrder,
         });
     }
-    items.sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, "en"));
+    // DP-160: names compare naturally ("White Oil 15#" before "White Oil 100#", "50 g" before "25 kg")
+    items.sort((x, y) => x.sortOrder - y.sortOrder || compareProductNames(x.name, y.name));
     return { items: items.map(({ sortOrder: _s, ...rest }) => (void _s, rest)) };
   }
 
