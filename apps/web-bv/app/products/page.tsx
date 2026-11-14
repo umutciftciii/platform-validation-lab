@@ -282,13 +282,20 @@ function ProductGrid({ products, categories }: { products: PublicProductSummary[
                 ) : null}
               </div>
               <div className="flex min-w-0 flex-col gap-1.5 p-3 sm:p-4 md:gap-2.5 md:p-6">
-                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber sm:text-xs">
+                {/* DP-167: on phones the category path takes exactly two lines (ellipsis after), so
+                    the codes of a row line up; the full path stays in the DOM and the title. */}
+                <p
+                  title={categoryLabel(categories, p.category)}
+                  className="line-clamp-2 min-h-[calc(1.4em*2)] text-[0.65rem] font-semibold uppercase leading-[1.4] tracking-[0.12em] text-amber sm:text-xs md:line-clamp-none md:min-h-0"
+                >
                   {categoryLabel(categories, p.category)}
                 </p>
                 <h2 className="line-clamp-3 min-h-[calc(1.35em*3)] text-sm font-medium leading-[1.35] text-glass [font-stretch:108%] sm:text-base md:min-h-0 md:text-xl md:leading-snug">
                   {p.name}
                 </h2>
-                <p className="mt-auto pt-1 font-mono text-[0.7rem] text-steel/80 sm:text-xs md:mt-0 md:pt-0 md:text-sm md:text-steel">
+                {/* DP-167: long codes (PJ-PHARMA-YELLOW-165KG) wrap on phones; two reserved lines keep the
+                    codes of a row on the same top line. The code is never cut. */}
+                <p className="mt-auto min-h-[calc(1.35em*2+0.25rem)] break-words pt-1 font-mono text-[0.7rem] leading-[1.35] text-steel/80 sm:text-xs md:mt-0 md:min-h-0 md:pt-0 md:text-sm md:text-steel">
                   {p.code}
                 </p>
                 {p.summary ? (
