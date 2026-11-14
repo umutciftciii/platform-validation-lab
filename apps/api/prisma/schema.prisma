@@ -806,6 +806,9 @@ model ProductImage {
   altText          String?  @db.VarChar(300)
   sortOrder        Int      @default(0)
   isCover          Boolean  @default(false)
+  /// DP-166: shown to visitors once published. A hidden image stays in the admin and is left out
+  /// of the next publication snapshot; the cover is always public (CHECK).
+  isPublic         Boolean  @default(true)
   /// Derived WebP variants: { display: { key, width, height, bytes }, thumb: { ... } }.
   variants         Json     @default("{}")
   version          Int      @default(1)

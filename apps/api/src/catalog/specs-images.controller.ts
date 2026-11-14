@@ -120,6 +120,12 @@ export class SpecsImagesController {
     return this.images.setCover(ctx, id, body);
   }
 
+  @Post("images/:imageId/visibility")
+  @HttpCode(200)
+  setVisibility(@Ctx() ctx: RequestContext, @Param("imageId") id: string, @Body() body: unknown) {
+    return this.images.setVisibility(ctx, id, body);
+  }
+
   @Delete("images/:imageId")
   @HttpCode(204)
   async removeImage(@Ctx() ctx: RequestContext, @Param("imageId") id: string): Promise<void> {

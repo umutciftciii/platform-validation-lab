@@ -23,6 +23,7 @@ import {
   IMAGE_MAX_BYTES,
   IMAGES_PER_PRODUCT_MAX,
   ImageCoverRequestSchema,
+  ImageVisibilityRequestSchema,
   ImageOrderRequestSchema,
   ImageUpdateRequestSchema,
   UPLOAD_FILENAME_HEADER,
@@ -61,6 +62,7 @@ interface ImageRow {
   altText: string | null;
   sortOrder: number;
   isCover: boolean;
+  isPublic: boolean;
   variants: unknown;
   version: number;
   createdAt: Date;
@@ -80,6 +82,7 @@ function toImage(r: ImageRow): ProductImage {
     altText: r.altText,
     sortOrder: r.sortOrder,
     isCover: r.isCover,
+    isPublic: r.isPublic,
     version: r.version,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
@@ -394,6 +397,10 @@ export class ImagesService {
         if (!row) throw new ApiError("NOT_FOUND");
         if (row.version !== version) throw staleVersion();
         if (row.isCover) return row.productId;
+        // DP-166: the cover is what visitors see first; a hidden image must be shown first.
+        if (!row.isPublic) {
+          throw new ApiError("CONFLICT_STATE", [{ path: "isPublic", rule: "hidden_image" }]);
+        }
         await changeMaster(tx, a, row.productId, { cause: "image_cover_set" });
         const previous = await tx.productImage.findFirst({
           where: { productId: row.productId, isCover: true },
@@ -415,6 +422,53 @@ export class ImagesService {
           siteId: null,
           permission: MASTER,
           metadata: { productId: row.productId, previousCoverId: previous?.id ?? null },
+        });
+        return row.productId;
+      });
+      return this.listAfterChange(db, productId);
+    } catch (e) {
+      return mapDbError(e);
+    }
+  }
+
+  /**
+   * DP-166: show or hide an image on the sites. Hidden images stay here (list, file, alt text)
+   * and are left out of the next publication; live snapshots do not change until a new approval
+   * and publication. Like every image change it is part of the reviewed content (changeMaster).
+   * The cover cannot be hidden. Showing it again is the rollback.
+   */
+  async setVisibility(
+    ctx: RequestContext,
+    rawId: string,
+    body: unknown,
+  ): Promise<{ items: ProductImage[] }> {
+    const a = await this.access.begin(ctx);
+    const { id, db } = await ImagesService.editable(a, rawId);
+    const { isPublic, version } = parseBody(ImageVisibilityRequestSchema, body);
+    try {
+      const productId = await db.$transaction(async (tx) => {
+        const row = await tx.productImage.findUnique({ where: { id } });
+        if (!row) throw new ApiError("NOT_FOUND");
+        if (row.version !== version) throw staleVersion();
+        if (row.isPublic === isPublic) return row.productId;
+        if (!isPublic && row.isCover) {
+          throw new ApiError("CONFLICT_STATE", [
+            { path: "isPublic", rule: "cover_cannot_be_hidden" },
+          ]);
+        }
+        await changeMaster(tx, a, row.productId, { cause: "image_visibility_set" });
+        const res = await tx.productImage.updateMany({
+          where: { id, version },
+          data: { isPublic, version: { increment: 1 } },
+        });
+        if (res.count !== 1) throw staleVersion();
+        await a.audit(tx, {
+          action: "catalog.image_visibility_set",
+          resourceType: "product_image",
+          resourceId: id,
+          siteId: null,
+          permission: MASTER,
+          metadata: { productId: row.productId, isPublic },
         });
         return row.productId;
       });
@@ -487,7 +541,7 @@ export class ImagesService {
         let promoted: string | null = null;
         if (row.isCover) {
           const next = await tx.productImage.findFirst({
-            where: { productId: row.productId },
+            where: { productId: row.productId, isPublic: true },
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
             select: { id: true },
           });

@@ -1491,3 +1491,181 @@ describe("8. database rules", () => {
     }
   });
 });
+
+// ------------------------------------------------------------------------------------------
+// 9. DP-166: image visibility (hide without deleting)
+// ------------------------------------------------------------------------------------------
+
+describe("9. DP-166 image visibility", () => {
+  async function addImage(id: string, alt: string): Promise<string> {
+    const up = await pm.upload(id, await jpeg(1200, 900, 60 + Math.floor(Math.random() * 120)));
+    expect(up.status, JSON.stringify(up.body)).toBe(201);
+    const res = await pm.post(`/images/${up.body.image.id}`, {
+      altText: alt,
+      version: up.body.image.version,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return up.body.image.id as string;
+  }
+  const imgVersion = async (imageId: string) =>
+    (await owner.productImage.findUniqueOrThrow({ where: { id: imageId } })).version;
+  async function approveAndPublishBv(id: string): Promise<void> {
+    const v = await version(id);
+    expect((await pm.post(`/products/${id}/submit`, { version: v })).status).toBe(200);
+    expect((await reviewer.post(`/products/${id}/approve`, { version: v + 1 })).status).toBe(200);
+    const res = await bvPublisher.post(`/products/${id}/publications/${BV}/publish`, {
+      version: v + 2,
+      listingVersion: await listingVersion(id, BV),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+
+  it("keeps every image public by default; hides others, never the cover; audited", async () => {
+    const id = await completeProduct("vis", "WF-VIS");
+    const second = await addImage(id, "Second view");
+    const list = await pm.get(`/products/${id}/images`);
+    expect(list.body.items.map((i: { isPublic: boolean }) => i.isPublic)).toEqual([true, true]);
+    const cover = list.body.items.find((i: { isCover: boolean }) => i.isCover).id as string;
+
+    expectError(
+      await pm.post(`/images/${cover}/visibility`, {
+        isPublic: false,
+        version: await imgVersion(cover),
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "isPublic", rule: "cover_cannot_be_hidden" },
+    );
+    // Readers and other sites' staff cannot change it.
+    expectError(
+      await bvReader.post(`/images/${second}/visibility`, {
+        isPublic: false,
+        version: await imgVersion(second),
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    // A stale version is a conflict, never a silent overwrite.
+    expectError(
+      await pm.post(`/images/${second}/visibility`, {
+        isPublic: false,
+        version: (await imgVersion(second)) + 5,
+      }),
+      409,
+      "CONFLICT_STATE",
+    );
+
+    const before = await version(id);
+    const res = await pm.post(`/images/${second}/visibility`, {
+      isPublic: false,
+      version: await imgVersion(second),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.items.map((i: { id: string; isPublic: boolean }) => [i.id === second, i.isPublic]),
+    ).toEqual(
+      expect.arrayContaining([
+        [true, false],
+        [false, true],
+      ]),
+    );
+    // Part of the reviewed content: the master revision moves on.
+    expect(await version(id)).toBeGreaterThan(before);
+    expect(await lastAudit("catalog.image_visibility_set")).toMatchObject({
+      resourceId: second,
+      metadata: expect.objectContaining({ productId: id, isPublic: false }),
+    });
+    // Idempotent: the same state changes nothing.
+    const v = await version(id);
+    expect(
+      (
+        await pm.post(`/images/${second}/visibility`, {
+          isPublic: false,
+          version: await imgVersion(second),
+        })
+      ).status,
+    ).toBe(200);
+    expect(await version(id)).toBe(v);
+
+    // A hidden image cannot become the cover; the database refuses a hidden cover from any writer.
+    expectError(
+      await pm.post(`/images/${second}/cover`, { version: await imgVersion(second) }),
+      409,
+      "CONFLICT_STATE",
+      { path: "isPublic", rule: "hidden_image" },
+    );
+    await rejectsDb(
+      owner.productImage.update({ where: { id: cover }, data: { isPublic: false } }),
+      /ProductImage_cover_public/,
+    );
+    // The hidden image stays in the admin: its file is still served to catalogue readers.
+    expect((await pm.get(`/images/${second}/thumb`)).status).toBe(200);
+  });
+
+  it("publication leaves hidden images out; live content waits for a new publication", async () => {
+    const id = P["vis"]!;
+    const hidden = (
+      await owner.productImage.findFirstOrThrow({
+        where: { productId: id, isPublic: false },
+      })
+    ).id;
+    await approveAndPublishBv(id);
+    const pubRow = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+    expect(pubRow.imageIds).not.toContain(hidden);
+    expect(pubRow.imageIds).toHaveLength(1);
+    const live = PublicProductResponseSchema.parse((await pub("bv", "/products/wf-vis")).body);
+    expect(live.product.images.map((i) => i.id)).toEqual([pubRow.imageIds[0]]);
+    expect((await pubBytes("bv", `/images/${hidden}/thumb`)).status).toBe(404);
+    expect((await pubBytes("bv", `/images/${pubRow.imageIds[0]}/thumb`)).status).toBe(200);
+
+    // Showing it again (the rollback) does not change the live page until it is republished.
+    const show = await pm.post(`/images/${hidden}/visibility`, {
+      isPublic: true,
+      version: await imgVersion(hidden),
+    });
+    expect(show.status, JSON.stringify(show.body)).toBe(200);
+    expect(
+      PublicProductResponseSchema.parse((await pub("bv", "/products/wf-vis")).body).product.images,
+    ).toHaveLength(1);
+    expect((await owner.product.findUniqueOrThrow({ where: { id } })).status).toBe("DRAFT");
+
+    await approveAndPublishBv(id);
+    const after = PublicProductResponseSchema.parse((await pub("bv", "/products/wf-vis")).body);
+    expect(after.product.images.map((i) => i.id)).toContain(hidden);
+    expect((await pubBytes("bv", `/images/${hidden}/thumb`)).status).toBe(200);
+
+    // Hiding a published image keeps the live snapshot (and its file) until the next publication.
+    const hide = await pm.post(`/images/${hidden}/visibility`, {
+      isPublic: false,
+      version: await imgVersion(hidden),
+    });
+    expect(hide.status, JSON.stringify(hide.body)).toBe(200);
+    expect(
+      PublicProductResponseSchema.parse((await pub("bv", "/products/wf-vis")).body).product.images,
+    ).toHaveLength(2);
+    expect((await pubBytes("bv", `/images/${hidden}/thumb`)).status).toBe(200);
+  });
+
+  it("removing the cover promotes the next public image, never a hidden one", async () => {
+    const id = await completeProduct("vis2", "WF-VIS2");
+    const hidden = await addImage(id, "Hidden view");
+    const visible = await addImage(id, "Visible view");
+    expect(
+      (
+        await pm.post(`/images/${hidden}/visibility`, {
+          isPublic: false,
+          version: await imgVersion(hidden),
+        })
+      ).status,
+    ).toBe(200);
+    const cover = (
+      await owner.productImage.findFirstOrThrow({ where: { productId: id, isCover: true } })
+    ).id;
+    expect((await pm.del(`/images/${cover}`)).status).toBe(204);
+    const rows = await owner.productImage.findMany({ where: { productId: id } });
+    expect(rows.find((r) => r.id === visible)).toMatchObject({ isCover: true, isPublic: true });
+    expect(rows.find((r) => r.id === hidden)).toMatchObject({ isCover: false, isPublic: false });
+  });
+});

@@ -77,4 +77,13 @@ describe("catalogue database errors", () => {
     const other = new TypeError("boom");
     expect(caught(other)).toBe(other);
   });
+
+  it("DP-166: a hidden cover refused by the database is a conflict on isPublic", () => {
+    const e = new Error(
+      'new row for relation "ProductImage" violates check constraint "ProductImage_cover_public"',
+    );
+    const out = caught(e) as ApiError;
+    expect(out.code).toBe("CONFLICT_STATE");
+    expect(out.details).toEqual([{ path: "isPublic", rule: "cover_cannot_be_hidden" }]);
+  });
 });

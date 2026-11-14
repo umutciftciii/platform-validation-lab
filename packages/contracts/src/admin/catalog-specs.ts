@@ -226,6 +226,8 @@ export const ProductImageSchema = z.strictObject({
   altText: z.string().nullable(),
   sortOrder: z.number().int(),
   isCover: z.boolean(),
+  /** DP-166: false hides the image from visitors (kept in the admin; never the cover). */
+  isPublic: z.boolean(),
   version: z.number().int(),
   createdAt: IsoDate,
   updatedAt: IsoDate,
@@ -252,6 +254,13 @@ export const ImageUpdateRequestSchema = z.strictObject({
 export type ImageUpdateRequest = z.input<typeof ImageUpdateRequestSchema>;
 
 export const ImageCoverRequestSchema = z.strictObject({ version: VersionSchema });
+
+/** DP-166: show or hide an image on the sites; the cover cannot be hidden. */
+export const ImageVisibilityRequestSchema = z.strictObject({
+  isPublic: z.boolean(),
+  version: VersionSchema,
+});
+export type ImageVisibilityRequest = z.infer<typeof ImageVisibilityRequestSchema>;
 
 /** The full gallery order: exactly the product's image ids, each once. */
 export const ImageOrderRequestSchema = z.strictObject({
