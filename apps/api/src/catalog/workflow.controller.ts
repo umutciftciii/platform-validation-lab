@@ -10,6 +10,7 @@ import type {
   ProductWorkflowResponse,
   PublicCrossReferenceListResponse,
   PublicDocumentListResponse,
+  PublicCategoryListResponse,
   PublicProductListResponse,
   PublicProductResponse,
   ReviewQueueResponse,
@@ -86,6 +87,12 @@ export class PublicCatalogController {
   @Get("products")
   list(@Ctx() ctx: RequestContext): Promise<PublicProductListResponse> {
     return this.catalog.list(ctx);
+  }
+
+  /** DP-160: the category tree of the live products, with their counts. */
+  @Get("categories")
+  categories(@Ctx() ctx: RequestContext): Promise<PublicCategoryListResponse> {
+    return this.catalog.categories(ctx);
   }
 
   @Get("products/:slug")

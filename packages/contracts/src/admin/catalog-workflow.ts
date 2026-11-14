@@ -173,9 +173,10 @@ const fromValidation = (i: ValidationIssue): PublicationIssue => ({ ...i });
 
 /**
  * Whether a product may be published on one site. BLOCKING: the master is not APPROVED (or is
- * archived), the site has no listing or it is hidden, there is no cover image, no summary (the
- * listing's or the master's), or the validation engine reports a BLOCKING issue. WARNING: every
- * engine warning, and a missing description. Used by the API to refuse, and by the console to
+ * archived), the site has no listing or it is hidden, there is no cover image, or the validation
+ * engine reports a BLOCKING issue. WARNING: every engine warning (DP-161: also "no technical
+ * data"), a missing summary (DP-161: the catalogue source has none, so it is content to add, not
+ * a gate) and a missing description. Used by the API to refuse, and by the console to
  * show the same list before the publisher clicks.
  */
 export function checkPublication(input: ReadinessInput): PublicationReadiness {
@@ -207,8 +208,13 @@ export function checkPublication(input: ReadinessInput): PublicationReadiness {
     blocking.push(pub("BLOCKING", "cover_missing", "images", "A cover image is required."));
   }
   if (!(listing?.text?.summary ?? product.summary)) {
-    blocking.push(
-      pub("BLOCKING", "summary_missing", "summary", "A summary (listing or master) is required."),
+    warnings.push(
+      pub(
+        "WARNING",
+        "summary_missing",
+        "summary",
+        "No summary (listing or master): the product card and page show none.",
+      ),
     );
   }
   blocking.push(...input.validation.blocking.map(fromValidation));
@@ -323,7 +329,8 @@ export const PublishedSnapshotSchema = z.strictObject({
   slug: z.string(),
   code: z.string(),
   name: z.string(),
-  summary: z.string(),
+  /** DP-161: null when the product has no summary (no longer required for publication). */
+  summary: z.string().nullable(),
   description: z.string().nullable(),
   category: z.strictObject({ slug: z.string(), name: z.string() }),
   sortOrder: z.number().int(),
@@ -372,12 +379,32 @@ export const PublicProductSummarySchema = z.strictObject({
   slug: z.string(),
   code: z.string(),
   name: z.string(),
-  summary: z.string(),
+  /** DP-161: null when the product has no summary (no longer required for publication). */
+  summary: z.string().nullable(),
   category: z.strictObject({ slug: z.string(), name: z.string() }),
   cover: PublicImageSchema.nullable(),
   publishedAt: IsoDate,
 });
 export type PublicProductSummary = z.infer<typeof PublicProductSummarySchema>;
+
+/**
+ * DP-160: a category of the public catalogue tree. Only categories with live products in them or
+ * below them are listed; `count` includes the products of the sub-categories. The category of a
+ * product is the one its published snapshot names.
+ */
+export const PublicCategorySchema = z.strictObject({
+  slug: z.string(),
+  name: z.string(),
+  parentSlug: z.string().nullable(),
+  sortOrder: z.number().int(),
+  count: z.number().int().min(1),
+});
+export type PublicCategory = z.infer<typeof PublicCategorySchema>;
+
+export const PublicCategoryListResponseSchema = z.strictObject({
+  items: z.array(PublicCategorySchema).max(1000),
+});
+export type PublicCategoryListResponse = z.infer<typeof PublicCategoryListResponseSchema>;
 
 export const PublicProductListResponseSchema = z.strictObject({
   items: z.array(PublicProductSummarySchema).max(500),
