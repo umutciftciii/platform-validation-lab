@@ -18,9 +18,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import {
   BV_FOOTER_FIELDS,
   CmsContextResponseSchema,
+  CmsHistoryResponseSchema,
   CmsImportResponseSchema,
   CmsPreviewResponseSchema,
   CmsPublicBundleSchema,
+  CmsPublicNewsSchema,
   cmsFieldsSchema,
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
@@ -1229,5 +1231,358 @@ describe("12. content pages from code (DP-135)", () => {
       "VALIDATION_FAILED",
       { path: "key", rule: "unknown_template" },
     );
+  });
+});
+
+describe("13. news articles (DP-020)", () => {
+  const COVER = "/media/services-showcase/logistics-desktop.webp";
+  const body = (version: number, slug: string, over: Record<string, unknown> = {}) => ({
+    version,
+    title: `Article ${slug}`,
+    slug,
+    seo: { title: null, description: "About the markets.", noindex: false },
+    content: {
+      excerpt: `Summary of ${slug}.`,
+      coverImage: COVER,
+      coverAlt: "Tank terminal at dusk",
+      sections: [{ id: "sec-text-0001", type: "text", title: null, body: "One.\n\nTwo." }],
+      ...over,
+    },
+  });
+  async function create(slug: string) {
+    const res = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: `Article ${slug}`,
+      slug,
+      template: "article",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return CmsPageResponseSchema.parse(res.body).page;
+  }
+  async function save(id: string, version: number, slug: string, over = {}) {
+    return bvEditor.post(`/pages/${id}/draft`, body(version, slug, over));
+  }
+
+  it("keeps article paths under /news/ and /news itself away from template pages (CHECK)", async () => {
+    const article = await row({ templateKey: "article", path: "/news/probe-article" });
+    expect(article.path).toBe("/news/probe-article");
+    await rejectsDb(row({ path: "/news" }), /CmsPage_template_path/);
+    await rejectsDb(row({ path: "/news/x" }), /CmsPage_path_format/);
+    await rejectsDb(row({ templateKey: "article", path: "/x" }), /CmsPage_template_path/);
+    await rejectsDb(row({ templateKey: "article", path: "/news/A" }), /CmsPage_path_format/);
+    await rejectsDb(row({ templateKey: "article", path: "/news/a/b" }), /CmsPage_path_format/);
+    expectError(
+      await bvEditor.post(`/sites/${BV}/pages`, { title: "News", slug: "news" }),
+      400,
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("creates an article draft at /news/<slug>, audited, and lists it with the pages", async () => {
+    const a = await create("market-update");
+    expect(a).toMatchObject({
+      kind: "TEMPLATE",
+      templateKey: "article",
+      path: "/news/market-update",
+      slug: "market-update",
+      content: { excerpt: "", coverImage: null, coverAlt: null, sections: [] },
+      publication: null,
+    });
+    expect((await lastAudit("cms.page_created"))?.metadata).toMatchObject({
+      templateKey: "article",
+      path: "/news/market-update",
+    });
+    // The same slug as a page is fine: articles live under /news/.
+    expect((await create("about-us-news")).path).toBe("/news/about-us-news");
+    expectError(
+      await bvEditor.post(`/sites/${BV}/pages`, {
+        title: "Dup",
+        slug: "market-update",
+        template: "article",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "slug", rule: "unique" },
+    );
+    expectError(
+      await bvReader.post(`/sites/${BV}/pages`, { title: "X", slug: "x", template: "article" }),
+      403,
+      "FORBIDDEN",
+    );
+    const list = CmsPageListResponseSchema.parse((await bvEditor.get(`/sites/${BV}/pages`)).body);
+    expect(list.items.some((p) => p.path === "/news/market-update")).toBe(true);
+  });
+
+  it("validates the article fields and allows only body section types", async () => {
+    const a = await create("validation-check");
+    expectError(
+      await save(a.id, a.version, "validation-check", { excerpt: "" }),
+      400,
+      "VALIDATION_FAILED",
+      {
+        path: "content.excerpt",
+        rule: "too_small",
+      },
+    );
+    expectError(
+      await save(a.id, a.version, "validation-check", { coverAlt: null }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "content.coverAlt", rule: "custom" },
+    );
+    expectError(
+      await save(a.id, a.version, "validation-check", { coverImage: "https://evil.test/x.png" }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await save(a.id, a.version, "validation-check", {
+        sections: [{ id: "sec-hero-0001", type: "hero", title: "No hero in articles" }],
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    // No cover is fine: both cover fields are null.
+    const ok = await save(a.id, a.version, "validation-check", { coverImage: "", coverAlt: "" });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(CmsPageResponseSchema.parse(ok.body).page.content).toMatchObject({
+      coverImage: null,
+      coverAlt: null,
+    });
+  });
+
+  it("publishes only complete articles; the site lists them newest first by first publication", async () => {
+    const empty = await create("empty-article");
+    expectError(
+      await bvPublisher.post(`/pages/${empty.id}/publish`, { version: empty.version }),
+      409,
+      "CONFLICT_STATE",
+      { path: "content", rule: "article_incomplete" },
+    );
+
+    const before = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(before.articles).toEqual([]);
+    // DP-153: no list heading until bv.news-index is imported and published.
+    expect(before.page).toBeNull();
+
+    const older = await create("older-article");
+    const olderSaved = CmsPageResponseSchema.parse(
+      (await save(older.id, older.version, "older-article")).body,
+    ).page;
+    expect(
+      (await bvPublisher.post(`/pages/${older.id}/publish`, { version: olderSaved.version }))
+        .status,
+    ).toBe(200);
+    await new Promise((r) => setTimeout(r, 20));
+    const newer = await create("newer-article");
+    const newerSaved = CmsPageResponseSchema.parse(
+      (await save(newer.id, newer.version, "newer-article", { coverImage: null, coverAlt: null }))
+        .body,
+    ).page;
+    expect(
+      (await bvPublisher.post(`/pages/${newer.id}/publish`, { version: newerSaved.version }))
+        .status,
+    ).toBe(200);
+
+    // Republishing a correction of the older article does not move it up the list.
+    const corrected = CmsPageResponseSchema.parse(
+      (
+        await save(older.id, olderSaved.version, "older-article", {
+          excerpt: "Corrected summary.",
+        })
+      ).body,
+    ).page;
+    expect(
+      (await bvPublisher.post(`/pages/${older.id}/publish`, { version: corrected.version })).status,
+    ).toBe(200);
+
+    const news = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(news.articles.map((x) => x.slug)).toEqual(["newer-article", "older-article"]);
+    expect(news.articles[1]).toMatchObject({
+      path: "/news/older-article",
+      title: "Article older-article",
+      excerpt: "Corrected summary.",
+      coverImage: COVER,
+      coverAlt: "Tank terminal at dusk",
+    });
+    expect(news.articles[1]!.firstPublishedAt < news.articles[1]!.publishedAt).toBe(true);
+    expect(news.articles[0]).toMatchObject({ coverImage: null, coverAlt: null });
+    expect(news.fragments).toHaveProperty("bv.site-nav");
+    // Drafts and other sites never show.
+    expect(news.articles.some((x) => x.slug === "market-update")).toBe(false);
+    expect(
+      CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body).articles,
+    ).toEqual([]);
+    expect((await fetch(`${base}/api/v1/public/cms/news`)).status).toBe(404);
+
+    const live = CmsPublicBundleSchema.parse((await pub("/page?path=/news/older-article")).body);
+    expect(live.page).toMatchObject({
+      templateKey: "article",
+      path: "/news/older-article",
+      revisionNumber: 2,
+      firstPublishedAt: news.articles[1]!.firstPublishedAt,
+      seo: { description: "About the markets.", noindex: false },
+    });
+  });
+
+  it("manages the list heading as the designed page bv.news-index at /news (DP-153)", async () => {
+    const res = await bvEditor.post(`/sites/${BV}/import`, { key: "bv.news-index", dryRun: false });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const id = CmsImportResponseSchema.parse(res.body).pageId!;
+    const imported = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect(imported).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "bv.news-index",
+      path: "/news",
+      publication: null,
+    });
+    expect(imported.content).toMatchObject({ eyebrow: "News", title: "News and insights" });
+    // A draft never reaches the site.
+    expect(CmsPublicNewsSchema.parse((await pub("/news")).body).page).toBeNull();
+
+    // Editor changes the heading; the template refuses an empty heading.
+    const content = { ...(imported.content as Record<string, unknown>) };
+    const draft = (version: number, over: Record<string, unknown>) =>
+      bvEditor.post(`/pages/${id}/draft`, {
+        version,
+        title: "News",
+        seo: { title: "News · Dream Petroleum BV", description: "Market notes.", noindex: false },
+        content: { ...content, ...over },
+      });
+    expectError(await draft(imported.version, { title: "" }), 400, "VALIDATION_FAILED");
+    const saved = CmsPageResponseSchema.parse(
+      (await draft(imported.version, { title: "Market notes" })).body,
+    ).page;
+
+    // Preview shows the draft heading before the first publication.
+    const preview = await bvEditor.post(`/pages/${id}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(preview.body).url.split("/preview/")[1]!;
+    expect(CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body).page).toMatchObject({
+      templateKey: "bv.news-index",
+      path: "/news",
+      content: { title: "Market notes" },
+    });
+
+    expect(
+      (await bvPublisher.post(`/pages/${id}/publish`, { version: saved.version })).status,
+    ).toBe(200);
+    const news = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(news.page).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "bv.news-index",
+      revisionNumber: 1,
+      seo: { title: "News · Dream Petroleum BV", description: "Market notes." },
+      content: { eyebrow: "News", title: "Market notes" },
+    });
+    // The other site has no heading of its own.
+    expect(
+      CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body).page,
+    ).toBeNull();
+  });
+
+  it("previews an article draft and says when a published article was taken off the site", async () => {
+    const a = await create("to-be-removed");
+    const saved = CmsPageResponseSchema.parse(
+      (await save(a.id, a.version, "to-be-removed")).body,
+    ).page;
+    const preview = await bvEditor.post(`/pages/${a.id}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(preview.body).url.split("/preview/")[1]!;
+    expect(CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body).page).toMatchObject({
+      templateKey: "article",
+      path: "/news/to-be-removed",
+      revisionNumber: null,
+      firstPublishedAt: null,
+    });
+
+    expectError(await pub("/page?path=/news/to-be-removed"), 404, "NOT_FOUND");
+    expect((await pub("/page?path=/news/to-be-removed")).body.error.details).toEqual([]);
+    await bvPublisher.post(`/pages/${a.id}/publish`, { version: saved.version });
+    const live = CmsPageResponseSchema.parse((await page(a.id)).body).page;
+    expect(
+      (
+        await bvPublisher.post(`/pages/${a.id}/unpublish`, {
+          publicationVersion: live.publication!.version,
+        })
+      ).status,
+    ).toBe(200);
+    expectError(await pub("/page?path=/news/to-be-removed"), 404, "NOT_FOUND", {
+      path: "path",
+      rule: "unpublished",
+    });
+    expect(
+      CmsPublicNewsSchema.parse((await pub("/news")).body).articles.some(
+        (x) => x.slug === "to-be-removed",
+      ),
+    ).toBe(false);
+    expectError(await pub("/page?path=/news/never-existed"), 404, "NOT_FOUND");
+    expectError(await pub("/page?path=/news/Bad"), 404, "NOT_FOUND");
+  });
+
+  it("lists the publication history and restores a revision into the draft", async () => {
+    const a = await create("history-article");
+    let p = CmsPageResponseSchema.parse((await save(a.id, a.version, "history-article")).body).page;
+    expect(
+      CmsHistoryResponseSchema.parse((await bvReader.get(`/pages/${a.id}/history`)).body),
+    ).toEqual({
+      revisions: [],
+    });
+    await bvPublisher.post(`/pages/${a.id}/publish`, { version: p.version });
+    p = CmsPageResponseSchema.parse(
+      (await save(a.id, p.version, "history-article", { excerpt: "Second version." })).body,
+    ).page;
+    await bvPublisher.post(`/pages/${a.id}/publish`, { version: p.version });
+    p = CmsPageResponseSchema.parse(
+      (await save(a.id, p.version, "history-article", { excerpt: "Unpublished draft." })).body,
+    ).page;
+
+    const history = CmsHistoryResponseSchema.parse(
+      (await bvReader.get(`/pages/${a.id}/history`)).body,
+    );
+    expect(history.revisions.map((r) => [r.revisionNumber, r.live])).toEqual([
+      [2, true],
+      [1, false],
+    ]);
+    expect(history.revisions[0]).toMatchObject({
+      title: "Article history-article",
+      path: "/news/history-article",
+      publishedBy: { id: bvPublisher.userId },
+    });
+
+    // Restoring needs content:edit and the current draft version.
+    expectError(
+      await bvReader.post(`/pages/${a.id}/restore`, { version: p.version, revisionNumber: 1 }),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(
+      await bvEditor.post(`/pages/${a.id}/restore`, { version: p.version - 1, revisionNumber: 1 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    expectError(
+      await bvEditor.post(`/pages/${a.id}/restore`, { version: p.version, revisionNumber: 9 }),
+      404,
+      "NOT_FOUND",
+    );
+    const restored = await bvEditor.post(`/pages/${a.id}/restore`, {
+      version: p.version,
+      revisionNumber: 1,
+    });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    const r = CmsPageResponseSchema.parse(restored.body).page;
+    expect(r.version).toBe(p.version + 1);
+    expect(r.content["excerpt"]).toBe("Summary of history-article.");
+    // The site still shows revision 2 until the restored draft is published.
+    expect(
+      CmsPublicBundleSchema.parse((await pub("/page?path=/news/history-article")).body).page
+        .content["excerpt"],
+    ).toBe("Second version.");
+    expect((await lastAudit("cms.page_revision_restored"))?.metadata).toMatchObject({
+      revisionNumber: 1,
+      changed: ["content"],
+      version: p.version + 1,
+    });
+    // History of a page outside the caller's sites: not found.
+    expectError(await comEditor.get(`/pages/${a.id}/history`), 404, "NOT_FOUND");
   });
 });

@@ -64,7 +64,7 @@ export function toContent(fields: readonly CmsField[], values: ItemValue): Recor
               : "";
         break;
       case "asset":
-        out[f.key] = typeof v === "string" ? v : "";
+        out[f.key] = typeof v === "string" && v ? v : f.required === false ? null : "";
         break;
       case "link": {
         const link = (v as LinkValue | null) ?? { label: "", href: "" };
@@ -117,7 +117,10 @@ export function Fields({
         const fieldPath = `${path}.${f.key}`;
         if (f.type === "text") {
           const v = (values[f.key] as string) ?? "";
-          const optional = !f.required && !f.format;
+          // DP-020: a field required together with a sibling (an image's alt text) is never
+          // labelled optional; it is required while the sibling has a value.
+          const requiredNow = f.requiredWith ? Boolean(values[f.requiredWith]) : false;
+          const optional = !f.required && !f.format && !f.requiredWith;
           const hint =
             f.hint ??
             (f.format === "href"
@@ -139,6 +142,7 @@ export function Fields({
                   rows={f.max > 1000 ? 8 : 3}
                   value={v}
                   readOnly={readOnly}
+                  aria-required={requiredNow || undefined}
                   aria-invalid={invalid(fieldPath)}
                   onChange={(e) => set(f.key, e.currentTarget.value)}
                   className={TEXTAREA}
@@ -150,6 +154,7 @@ export function Fields({
                   value={v}
                   readOnly={readOnly}
                   spellCheck={f.format ? false : undefined}
+                  aria-required={requiredNow || undefined}
                   aria-invalid={invalid(fieldPath)}
                   onChange={(e) => set(f.key, e.currentTarget.value)}
                   className={cx(FIELD, f.format ? "font-mono text-sm" : undefined)}
@@ -184,7 +189,10 @@ export function Fields({
                 onChange={(e) => set(f.key, e.currentTarget.value)}
                 className={cx(FIELD, "font-mono text-sm")}
               >
-                {!chosen ? <option value={v}>{v || "Choose…"}</option> : null}
+                {f.required === false ? <option value="">No image</option> : null}
+                {!chosen && !(f.required === false && !v) ? (
+                  <option value={v}>{v || "Choose…"}</option>
+                ) : null}
                 {options.map((a) => (
                   <option key={a.src} value={a.src}>
                     {a.src.replace(/^\/media\//, "")}
