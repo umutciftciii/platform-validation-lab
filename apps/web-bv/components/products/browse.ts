@@ -141,3 +141,17 @@ export function categoryLabel(
   const path = trail(items, category.slug);
   return path.length ? path.map((c) => c.name).join(" · ") : category.name;
 }
+
+// --- DP-169: pack size on phone cards ---------------------------------------------------------
+
+const PACK_SIZE = /(?:^|\s)(\d+(?:[.,]\d+)?)\s?(kg|g|ml|l)$/i;
+
+/**
+ * The pack size at the end of a product name ("… 50 g", "… 165 kg"), exactly as written, or null.
+ * Grades such as "White Oil 150#" are not pack sizes. Used on phone cards, where a long name is
+ * cut after four lines and variants sharing one image must stay distinguishable.
+ */
+export function packSize(name: string): string | null {
+  const m = PACK_SIZE.exec(name.trim());
+  return m ? `${m[1]} ${m[2]}` : null;
+}
