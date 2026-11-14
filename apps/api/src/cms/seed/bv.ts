@@ -369,7 +369,7 @@ export const BV_NAV_SEED: BvNavContent = {
     },
     {
       label: "Products",
-      href: "/#product-groups",
+      href: "/products",
     },
     {
       label: "Services",

@@ -73,6 +73,9 @@ describe("BV import seeds", () => {
     // DP-153: "Blogs" leads to the news list.
     expect(BV_NAV_SEED.items.filter((i) => i.href === null)).toEqual([]);
     expect(BV_NAV_SEED.items.find((i) => i.label === "Blogs")?.href).toBe("/news");
+    // DP-155: "Products" leads to the catalogue, with and without JavaScript.
+    expect(BV_NAV_SEED.items.find((i) => i.label === "Products")?.href).toBe("/products");
+    expect(BV_NAV_SEED.noScriptLinks.find((i) => i.label === "Products")?.href).toBe("/products");
     expect(
       BV_NAV_SEED.noScriptLinks.every((l) => l.href?.startsWith("/") || l.href === "#top"),
     ).toBe(true);
