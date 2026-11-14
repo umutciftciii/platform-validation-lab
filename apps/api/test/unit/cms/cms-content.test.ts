@@ -1,7 +1,14 @@
 // CMS S2 (DP-134, ADR-020 D7): the import seeds of the BV site and the signed preview tokens.
 import { describe, expect, it } from "vitest";
 import {
+  CMS_ARTICLE_SECTION_TYPES,
   CMS_DESIGN_TEMPLATES,
+  CMS_RESERVED_SLUGS,
+  CmsArticleContentSchema,
+  CmsArticleSlugSchema,
+  cmsArticlePath,
+  cmsIsArticle,
+  cmsSlugOfPath,
   CMS_SITE_REGISTRY,
   CmsSlugSchema,
   CmsTemplateContentSchema,
@@ -63,7 +70,9 @@ describe("BV import seeds", () => {
   it("keeps the official contact details and pending pages as plain text", () => {
     expect(BV_FOOTER_SEED.contact.phone.href).toBe("tel:+31202101350");
     expect(BV_FOOTER_SEED.contact.email.href).toBe("mailto:info@dreampetroleumbv.com");
-    expect(BV_NAV_SEED.items.filter((i) => i.href === null).map((i) => i.label)).toEqual(["Blogs"]);
+    // DP-153: "Blogs" leads to the news list.
+    expect(BV_NAV_SEED.items.filter((i) => i.href === null)).toEqual([]);
+    expect(BV_NAV_SEED.items.find((i) => i.label === "Blogs")?.href).toBe("/news");
     expect(
       BV_NAV_SEED.noScriptLinks.every((l) => l.href?.startsWith("/") || l.href === "#top"),
     ).toBe(true);
@@ -152,5 +161,52 @@ describe("preview tokens", () => {
     const longer = token.replace(/\.(\d+)\./, (_m, exp: string) => `.${Number(exp) + 86_400_000}.`);
     expect(verifyPreviewToken(key, longer, "BV", now)).toBeNull();
     expect(verifyPreviewToken(key, "v1.x", "BV", now)).toBeNull();
+  });
+});
+
+describe("news articles (DP-020)", () => {
+  const text = { id: "sec-text-0001", type: "text", title: null, body: "Body." };
+  const valid = {
+    excerpt: "Summary.",
+    coverImage: "/media/services-showcase/logistics-desktop.webp",
+    coverAlt: "Tank terminal",
+    sections: [text],
+  };
+
+  it("accepts an article with or without a cover; blank optional fields become null", () => {
+    expect(CmsArticleContentSchema.parse(valid)).toEqual(valid);
+    expect(
+      CmsArticleContentSchema.parse({ ...valid, coverImage: "", coverAlt: " ", sections: [] }),
+    ).toEqual({ excerpt: "Summary.", coverImage: null, coverAlt: null, sections: [] });
+  });
+
+  it("requires a summary, alt text with a cover, registered images and body section types", () => {
+    expect(CmsArticleContentSchema.safeParse({ ...valid, excerpt: " " }).success).toBe(false);
+    expect(CmsArticleContentSchema.safeParse({ ...valid, coverAlt: null }).success).toBe(false);
+    expect(
+      CmsArticleContentSchema.safeParse({ ...valid, coverImage: "/media/unknown.webp" }).success,
+    ).toBe(false);
+    for (const type of ["hero", "contact"]) {
+      expect(CMS_ARTICLE_SECTION_TYPES).not.toContain(type);
+      expect(
+        CmsArticleContentSchema.safeParse({ ...valid, sections: [{ id: "sec-x-00001", type }] })
+          .success,
+      ).toBe(false);
+    }
+    expect(CmsArticleContentSchema.safeParse({ ...valid, category: "x" }).success).toBe(false);
+  });
+
+  it("puts articles under /news/ and keeps news away from template page slugs", () => {
+    expect(cmsArticlePath(CmsArticleSlugSchema.parse(" Market-Update "))).toBe(
+      "/news/market-update",
+    );
+    expect(CmsArticleSlugSchema.safeParse("a/b").success).toBe(false);
+    expect(cmsSlugOfPath("/news/market-update")).toBe("market-update");
+    expect(cmsSlugOfPath("/about-us")).toBe("about-us");
+    expect(CMS_RESERVED_SLUGS).toContain("news");
+    expect(CmsSlugSchema.safeParse("news").success).toBe(false);
+    expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "article" })).toBe(true);
+    expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "standard" })).toBe(false);
+    expect(validateContent("TEMPLATE", "article", valid)).toEqual(valid);
   });
 });

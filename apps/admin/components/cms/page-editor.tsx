@@ -1,11 +1,16 @@
 "use client";
 
 import {
+  CMS_ARTICLE_FIELDS,
+  CMS_ARTICLE_SECTION_TYPES,
   CMS_SECTION_TYPES,
   CMS_SECTIONS_MAX,
   cmsDesignTemplate,
+  cmsIsArticle,
+  type CmsArticleDraftRequest,
   type CmsField,
   type CmsFixedDraftRequest,
+  type CmsHistoryResponse,
   type CmsPage,
   type CmsPageDraftRequest,
   type CmsPageResponse,
@@ -16,6 +21,7 @@ import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { callCms, type FieldIssue } from "../../lib/cms-client";
 import { Field, FIELD, FormMessage, TEXTAREA } from "../catalog/parts";
 import { Fields, IconButton, move, toContent, toValues, type ItemValue } from "./field-form";
+import { HistoryPanel } from "./history-panel";
 import { PublicationPanel } from "./publication-panel";
 import { useNotice } from "../catalog/notices";
 import { Icon } from "../icons";
@@ -28,6 +34,9 @@ interface SectionValue {
 }
 
 const SECTION_BY_TYPE = new Map(CMS_SECTION_TYPES.map((s) => [s.type, s]));
+const ARTICLE_SECTIONS = CMS_SECTION_TYPES.filter((s) =>
+  CMS_ARTICLE_SECTION_TYPES.includes(s.type),
+);
 
 function newSectionId(): string {
   return `sec-${crypto.randomUUID().slice(0, 8)}`;
@@ -49,8 +58,11 @@ function fromPage(page: CmsPage): SectionValue[] {
  *    contracts field descriptors.
  *  - DESIGN pages and fragments: title, SEO and the fixed fields of their template; the layout,
  *    the order of the blocks and the motion stay in the site's code.
+ *  - News articles (DP-020): title, slug under /news/, SEO, the summary and cover image, and the
+ *    body as sections of the text-like types.
  * Saving replaces the whole draft and names the version it was based on. Publication, preview
- * and unpublishing are in the side panel (PublicationPanel).
+ * and unpublishing are in the side panel (PublicationPanel); the publication history and the
+ * restore of a revision below it (HistoryPanel).
  */
 export function PageEditor({
   page,
@@ -58,14 +70,18 @@ export function PageEditor({
   canPublish,
   siteLabel,
   siteKey,
+  history,
 }: {
   page: CmsPage;
   canEdit: boolean;
   canPublish: boolean;
   siteLabel: string;
   siteKey: "BV" | "CORPORATE";
+  history: CmsHistoryResponse | null;
 }) {
   const template = page.kind === "TEMPLATE" ? null : cmsDesignTemplate(page.templateKey);
+  const article = cmsIsArticle(page);
+  const sectionTypes = article ? ARTICLE_SECTIONS : CMS_SECTION_TYPES;
   const router = useRouter();
   const notify = useNotice();
   const readOnly = !canEdit;
@@ -78,6 +94,9 @@ export function PageEditor({
   const [sections, setSections] = useState<SectionValue[]>(() => fromPage(page));
   const [design, setDesign] = useState<ItemValue>(() =>
     template ? toValues(template.fields, page.content) : {},
+  );
+  const [articleValues, setArticleValues] = useState<ItemValue>(() =>
+    article ? toValues(CMS_ARTICLE_FIELDS, page.content) : {},
   );
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
@@ -104,25 +123,34 @@ export function PageEditor({
   }
   const updateSections = change(setSections);
   const updateDesign = change(setDesign);
+  const updateArticle = change(setArticleValues);
 
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (readOnly) return;
     const seo = { title: seoTitle, description: seoDescription, noindex };
-    const body: CmsPageDraftRequest | CmsFixedDraftRequest = template
+    const sectionContent = sections.map((s) => {
+      const def = SECTION_BY_TYPE.get(s.type);
+      return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values) : {}) };
+    });
+    const body: CmsPageDraftRequest | CmsFixedDraftRequest | CmsArticleDraftRequest = template
       ? { version, title, seo, content: toContent(template.fields, design) }
-      : {
-          version,
-          title,
-          slug,
-          seo,
-          content: {
-            sections: sections.map((s) => {
-              const def = SECTION_BY_TYPE.get(s.type);
-              return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values) : {}) };
-            }),
-          },
-        };
+      : article
+        ? {
+            version,
+            title,
+            slug,
+            seo,
+            content: {
+              ...(toContent(CMS_ARTICLE_FIELDS, articleValues) as {
+                excerpt: string;
+                coverImage: string | null;
+                coverAlt: string | null;
+              }),
+              sections: sectionContent,
+            },
+          }
+        : { version, title, slug, seo, content: { sections: sectionContent } };
     setPending(true);
     setError(null);
     setIssues([]);
@@ -150,7 +178,7 @@ export function PageEditor({
       <div className="min-w-0 space-y-6">
         <Panel id="page-details" title="Page" description={`On ${siteLabel}, in ${page.locale}.`}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Page title" htmlFor="title">
+            <Field label={article ? "Article title" : "Page title"} htmlFor="title">
               <input
                 id="title"
                 required
@@ -179,7 +207,7 @@ export function PageEditor({
               <Field label="Address" htmlFor="slug" hint="Changing it changes the page URL.">
                 <div className="flex items-center">
                   <span className="inline-flex h-10 items-center rounded-l-lg border border-r-0 border-line-strong bg-surface-2 px-3 font-mono text-sm text-ink-3">
-                    /
+                    {article ? "/news/" : "/"}
                   </span>
                   <input
                     id="slug"
@@ -198,6 +226,27 @@ export function PageEditor({
           </div>
         </Panel>
 
+        {article ? (
+          <Panel
+            id="article-fields"
+            title="Summary and cover"
+            description="Shown on the news list and at the top of the article."
+          >
+            <div className="space-y-4">
+              <Fields
+                fields={CMS_ARTICLE_FIELDS}
+                values={articleValues}
+                path="content"
+                idPrefix="article"
+                readOnly={readOnly}
+                invalid={invalid}
+                onChange={(v) => updateArticle({ ...articleValues, ...v })}
+                site={siteKey}
+              />
+            </div>
+          </Panel>
+        ) : null}
+
         {template ? (
           <DesignFields
             fields={template.fields}
@@ -210,12 +259,14 @@ export function PageEditor({
         ) : (
           <Panel
             id="sections"
-            title="Sections"
-            description={`${sectionCount} of at most ${CMS_SECTIONS_MAX}. Shown on the page in this order.`}
+            title={article ? "Article body" : "Sections"}
+            description={`${sectionCount} of at most ${CMS_SECTIONS_MAX}. Shown on the ${article ? "article" : "page"} in this order.`}
           >
             {sections.length === 0 ? (
               <p className="rounded-xl border border-dashed border-line-strong px-4 py-6 text-center text-sm text-ink-3">
-                No sections yet. Add the first one below; a page usually opens with a hero.
+                {article
+                  ? "No body yet. Add a Text section below; an article needs at least one section to be published."
+                  : "No sections yet. Add the first one below; a page usually opens with a hero."}
               </p>
             ) : (
               <ol className="space-y-4">
@@ -238,6 +289,7 @@ export function PageEditor({
             )}
             {!readOnly ? (
               <AddSection
+                types={sectionTypes}
                 disabled={sections.length >= CMS_SECTIONS_MAX}
                 onAdd={(def) =>
                   updateSections([
@@ -287,6 +339,14 @@ export function PageEditor({
           dirty={dirty}
           canPublish={canPublish}
           previewable={siteKey === "BV"}
+        />
+
+        <HistoryPanel
+          pageId={page.id}
+          version={version}
+          dirty={dirty}
+          canEdit={canEdit}
+          history={history}
         />
 
         <Panel id="seo" title="SEO" description="Search results and link previews.">
@@ -423,9 +483,11 @@ function SectionCard({
 }
 
 function AddSection({
+  types,
   disabled,
   onAdd,
 }: {
+  types: readonly CmsSectionType[];
   disabled: boolean;
   onAdd: (def: CmsSectionType) => void;
 }) {
@@ -436,7 +498,7 @@ function AddSection({
         Add a section
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {CMS_SECTION_TYPES.map((def) => (
+        {types.map((def) => (
           <button
             key={def.type}
             type="button"

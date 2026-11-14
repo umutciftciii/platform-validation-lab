@@ -181,6 +181,33 @@ try {
 } catch (e) {
   record("bv-route", "/<unknown slug>", false, String(e));
 }
+// DP-020: /news renders the list (or its empty state) from the CMS, or its unavailable state
+// where the site cannot reach the public CMS API (as "/" above); an unknown article is the
+// not-found page with noindex.
+try {
+  const res = await get(base("web-bv") + "/news");
+  const html = await res.text();
+  record(
+    "bv-route",
+    "/news list",
+    res.status === 200 && /(news-grid|No articles yet|cannot be shown right now)/.test(html),
+    `HTTP ${res.status}`,
+  );
+} catch (e) {
+  record("bv-route", "/news", false, String(e));
+}
+try {
+  const res = await get(base("web-bv") + "/news/cms-smoke-no-such-article");
+  const html = await res.text();
+  record(
+    "bv-route",
+    "/news/<unknown> not found, noindex",
+    /This page could not be found/.test(html) && /<meta name="robots" content="noindex"/.test(html),
+    `HTTP ${res.status}`,
+  );
+} catch (e) {
+  record("bv-route", "/news/<unknown>", false, String(e));
+}
 // The public CMS API answers only with a site proxy key.
 try {
   const res = await get(base("api") + "/api/v1/public/cms/page?path=/");

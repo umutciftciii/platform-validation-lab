@@ -1,6 +1,10 @@
 "use client";
 
-import type { CmsPageCreateRequest, CmsPageResponse } from "@dream/contracts";
+import type {
+  CmsArticleCreateRequest,
+  CmsPageCreateRequest,
+  CmsPageResponse,
+} from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCms, type FieldIssue } from "../../lib/cms-client";
@@ -9,16 +13,22 @@ import { Field, FIELD, FormMessage } from "../catalog/parts";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 
-/** Creates an empty TEMPLATE page (content:edit of the site); the editor opens next. */
+/**
+ * Creates an empty TEMPLATE page, or a news article with `template="article"` (DP-020), as a draft
+ * (content:edit of the site); the editor opens next.
+ */
 export function PageCreateForm({
   siteId,
   siteParam,
   siteLabel,
+  template = "standard",
 }: {
   siteId: string;
   siteParam: string;
   siteLabel: string;
+  template?: "standard" | "article";
 }) {
+  const article = template === "article";
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +40,10 @@ export function PageCreateForm({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const body: CmsPageCreateRequest = { title: String(form.get("title") ?? ""), slug };
+    const title = String(form.get("title") ?? "");
+    const body: CmsPageCreateRequest | CmsArticleCreateRequest = article
+      ? { title, slug, template: "article" }
+      : { title, slug };
     setPending(true);
     setError(null);
     setIssues([]);
@@ -47,9 +60,13 @@ export function PageCreateForm({
   return (
     <form onSubmit={submit} noValidate className="space-y-4">
       <Field
-        label="Page title"
+        label={article ? "Article title" : "Page title"}
         htmlFor="title"
-        hint="The name of the page in the admin and its default heading."
+        hint={
+          article
+            ? "The headline of the article on the site and in the news list."
+            : "The name of the page in the admin and its default heading."
+        }
       >
         <input
           id="title"
@@ -67,11 +84,15 @@ export function PageCreateForm({
       <Field
         label="Address"
         htmlFor="slug"
-        hint="Lower case and hyphens. Products, privacy and two-letter codes are reserved."
+        hint={
+          article
+            ? "Lower case and hyphens, for example why-oil-prices-fell."
+            : "Lower case and hyphens. Products, privacy, news and two-letter codes are reserved."
+        }
       >
         <div className="flex items-center rounded-lg">
           <span className="inline-flex h-10 items-center rounded-l-lg border border-r-0 border-line-strong bg-surface-2 px-3 font-mono text-sm text-ink-3">
-            /
+            {article ? "/news/" : "/"}
           </span>
           <input
             id="slug"
@@ -90,8 +111,8 @@ export function PageCreateForm({
         </div>
       </Field>
       <p className="text-sm text-ink-3">
-        The page is created as a draft on {siteLabel}. Nothing is shown on the site until it is
-        published.
+        The {article ? "article" : "page"} is created as a draft on {siteLabel}. Nothing is shown on
+        the site until it is published.
       </p>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       <div className="flex justify-end">

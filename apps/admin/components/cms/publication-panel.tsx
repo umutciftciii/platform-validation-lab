@@ -182,7 +182,7 @@ export function PublicationPanel({
   );
 }
 
-function ConfirmBox({
+export function ConfirmBox({
   text,
   action,
   danger = false,

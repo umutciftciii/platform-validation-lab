@@ -14,15 +14,21 @@ import {
   BV_FOOTER_FIELDS,
   BV_HOME_FIELDS,
   BV_NAV_FIELDS,
+  BV_NEWS_INDEX_FIELDS,
+  CmsArticleContentSchema,
   CmsPublicBundleSchema,
+  CmsPublicNewsSchema,
   CmsTemplateContentSchema,
   PUBLIC_CMS_API,
   cmsAsset,
   cmsFieldsSchema,
+  cmsIsArticle,
   type BvFooterContent,
   type BvHomeContent,
   type BvNavContent,
+  type BvNewsIndexContent,
   type CmsLink,
+  type CmsPublicArticle,
   type CmsPublicPage,
 } from "@dream/contracts";
 
@@ -108,9 +114,51 @@ export interface TemplatePageView {
   preview: boolean;
 }
 
+/** DP-020: a news article (TEMPLATE page with the article template at /news/<slug>). */
+export interface ArticleView {
+  path: string;
+  title: string;
+  seo: CmsPublicPage["seo"];
+  excerpt: string;
+  coverImage: string | null;
+  coverAlt: string | null;
+  sections: TemplateSection[];
+  /** The first publication; null in a preview of a draft that was never published. */
+  firstPublishedAt: string | null;
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+  preview: boolean;
+}
+
+/** DP-153: the heading of the news list, from the designed page `bv.news-index`. */
+export interface NewsHeading {
+  title: string;
+  seo: CmsPublicPage["seo"];
+  copy: BvNewsIndexContent;
+}
+
+/** DP-020: the published articles, newest first, with the list heading, navigation and footer. */
+export interface NewsView {
+  heading: NewsHeading;
+  articles: CmsPublicArticle[];
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+  preview: boolean;
+}
+
+/** DP-153: a preview of the list heading's draft (the route adds the published articles). */
+export interface NewsIndexView {
+  heading: NewsHeading;
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+  preview: boolean;
+}
+
 export type AnyPageView =
   | ({ kind: "home" } & CmsPageView)
-  | ({ kind: "template" } & TemplatePageView);
+  | ({ kind: "template" } & TemplatePageView)
+  | ({ kind: "article" } & ArticleView)
+  | ({ kind: "newsIndex" } & NewsIndexView);
 
 export interface CmsPageView {
   title: string;
@@ -124,6 +172,15 @@ export interface CmsPageView {
 const HOME = cmsFieldsSchema(BV_HOME_FIELDS);
 const NAV = cmsFieldsSchema(BV_NAV_FIELDS);
 const FOOTER = cmsFieldsSchema(BV_FOOTER_FIELDS);
+const NEWS_INDEX = cmsFieldsSchema(BV_NEWS_INDEX_FIELDS);
+
+/** The list heading of a `bv.news-index` page; null when it is another page or does not validate. */
+function newsHeading(page: CmsPublicPage | null): NewsHeading | null {
+  if (!page || page.kind !== "DESIGN" || page.templateKey !== "bv.news-index") return null;
+  const parsed = NEWS_INDEX.safeParse(page.content);
+  if (!parsed.success) return null;
+  return { title: page.title, seo: page.seo, copy: parsed.data as unknown as BvNewsIndexContent };
+}
 
 function size(src: string): { width: number; height: number } {
   const asset = cmsAsset(src);
@@ -300,6 +357,29 @@ export function pageView(json: unknown): AnyPageView | null {
       preview,
     };
   }
+  if (page.kind === "DESIGN" && page.templateKey === "bv.news-index") {
+    const heading = newsHeading(page);
+    return heading ? { kind: "newsIndex", heading, nav, footer, preview } : null;
+  }
+  if (cmsIsArticle(page)) {
+    const content = CmsArticleContentSchema.safeParse(page.content);
+    if (!content.success) return null;
+    const c = content.data as Record<string, unknown>;
+    return {
+      kind: "article",
+      path,
+      title: page.title,
+      seo: page.seo,
+      excerpt: c["excerpt"] as string,
+      coverImage: (c["coverImage"] as string | null) ?? null,
+      coverAlt: (c["coverAlt"] as string | null) ?? null,
+      sections: c["sections"] as TemplateSection[],
+      firstPublishedAt: page.firstPublishedAt,
+      nav,
+      footer,
+      preview,
+    };
+  }
   if (page.kind === "TEMPLATE") {
     const content = CmsTemplateContentSchema.safeParse(page.content);
     if (!content.success) return null;
@@ -323,7 +403,21 @@ export function homeView(json: unknown): CmsPageView | null {
   return view?.kind === "home" ? view : null;
 }
 
-async function read(path: string): Promise<Read<AnyPageView>> {
+/** A read that can also say the page was taken off the site (DP-020). */
+export type PageRead<T> = Read<T> | { ok: false; reason: "unpublished" };
+
+/** Whether a 404 body says the page was published here and has been unpublished. */
+function unpublished(body: unknown): boolean {
+  const details = (body as { error?: { details?: unknown } } | null)?.error?.details;
+  return (
+    Array.isArray(details) &&
+    details.some(
+      (d) => typeof d === "object" && d !== null && (d as { rule?: unknown }).rule === "unpublished",
+    )
+  );
+}
+
+async function read(path: string): Promise<PageRead<AnyPageView>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
   let res: Response;
@@ -337,7 +431,10 @@ async function read(path: string): Promise<Read<AnyPageView>> {
     console.error("public cms: request failed (network)");
     return { ok: false, reason: "unavailable" };
   }
-  if (res.status === 404) return { ok: false, reason: "not_found" };
+  if (res.status === 404) {
+    const body: unknown = await res.json().catch(() => null);
+    return { ok: false, reason: unpublished(body) ? "unpublished" : "not_found" };
+  }
   if (!res.ok) return { ok: false, reason: "unavailable" };
   const view = pageView(await res.json().catch(() => null));
   if (!view) {
@@ -350,7 +447,7 @@ async function read(path: string): Promise<Read<AnyPageView>> {
 /** The published home page with its navigation and footer. */
 export async function getPublishedHome(): Promise<Read<CmsPageView>> {
   const res = await read(`/page?path=${encodeURIComponent("/")}`);
-  if (!res.ok) return res;
+  if (!res.ok) return { ok: false, reason: res.reason === "unavailable" ? "unavailable" : "not_found" };
   return res.data.kind === "home" ? { ok: true, data: res.data } : { ok: false, reason: "unavailable" };
 }
 
@@ -360,14 +457,108 @@ const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export async function getPublishedPage(slug: string): Promise<Read<TemplatePageView>> {
   if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
   const res = await read(`/page?path=${encodeURIComponent(`/${slug}`)}`);
-  if (!res.ok) return res;
+  if (!res.ok) return { ok: false, reason: res.reason === "unavailable" ? "unavailable" : "not_found" };
   return res.data.kind === "template" ? { ok: true, data: res.data } : { ok: false, reason: "not_found" };
+}
+
+/**
+ * DP-020: a published news article at `/news/<slug>`. Unknown: not_found; taken off the site:
+ * unpublished (the page says so); anything else: unavailable.
+ */
+export async function getPublishedArticle(slug: string): Promise<PageRead<ArticleView>> {
+  if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
+  const res = await read(`/page?path=${encodeURIComponent(`/news/${slug}`)}`);
+  if (!res.ok) return res;
+  return res.data.kind === "article" ? { ok: true, data: res.data } : { ok: false, reason: "not_found" };
+}
+
+/** DP-020/DP-153: one read of the public news list, before the heading is required. */
+interface NewsRead {
+  heading: NewsHeading | null;
+  articles: CmsPublicArticle[];
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+}
+
+async function readNews(): Promise<Read<NewsRead>> {
+  const config = catalogConfig();
+  if (!config) return { ok: false, reason: "unavailable" };
+  let res: Response;
+  try {
+    res = await fetch(`${config.apiUrl}${PUBLIC_CMS_API}/news`, {
+      headers: { "X-DP-Proxy-Key": config.proxyKey, Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch {
+    console.error("public cms: news request failed (network)");
+    return { ok: false, reason: "unavailable" };
+  }
+  if (!res.ok) return { ok: false, reason: "unavailable" };
+  const parsed = CmsPublicNewsSchema.safeParse(await res.json().catch(() => null));
+  if (!parsed.success) {
+    console.error("public cms: the news response does not match the contract; not rendered");
+    return { ok: false, reason: "unavailable" };
+  }
+  const { page, articles, fragments } = parsed.data;
+  const heading = newsHeading(page);
+  if (page && !heading) {
+    console.error("public cms: the news heading does not match the contract; not rendered");
+  }
+  const nav = fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
+    toNavProps(c, "/news"),
+  ) as SiteNavContent | null;
+  const footer = fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+    | SiteFooterContent
+    | null;
+  return { ok: true, data: { heading, articles, nav, footer } };
+}
+
+/**
+ * DP-020: the published articles for /news (an empty list is a normal answer). DP-153: the heading
+ * comes from the published `bv.news-index` page; without it the list is unavailable (no fallback
+ * to text in code).
+ */
+export async function getNews(): Promise<Read<NewsView>> {
+  const res = await readNews();
+  if (!res.ok) return res;
+  const { heading, articles, nav, footer } = res.data;
+  if (!heading) return { ok: false, reason: "unavailable" };
+  return { ok: true, data: { heading, articles, nav, footer, preview: false } };
+}
+
+/** The published navigation and footer around a news page (also without a published heading). */
+export async function getNewsChrome(): Promise<{
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+}> {
+  const res = await readNews();
+  return res.ok ? { nav: res.data.nav, footer: res.data.footer } : { nav: null, footer: null };
+}
+
+/**
+ * DP-153: the preview of the list heading's draft, with the published articles under it (also
+ * before the heading was ever published).
+ */
+export async function newsPreview(view: NewsIndexView): Promise<Read<NewsView>> {
+  const res = await readNews();
+  if (!res.ok) return res;
+  return {
+    ok: true,
+    data: {
+      heading: view.heading,
+      articles: res.data.articles,
+      nav: view.nav,
+      footer: view.footer,
+      preview: true,
+    },
+  };
 }
 
 const TOKEN = /^v1\.[0-9a-f-]{36}\.(BV|CORPORATE)\.\d{10,13}\.[0-9a-f]{64}$/;
 
 /** The draft a preview link shows (the API checks the signature, expiry and site). */
-export function getPreview(token: string): Promise<Read<AnyPageView>> {
+export function getPreview(token: string): Promise<PageRead<AnyPageView>> {
   if (!TOKEN.test(token)) return Promise.resolve({ ok: false, reason: "not_found" });
   return read(`/preview/${token}`);
 }

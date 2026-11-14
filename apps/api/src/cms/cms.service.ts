@@ -15,16 +15,23 @@
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
+  CMS_ARTICLE_TEMPLATE,
   CMS_STANDARD_TEMPLATE,
+  CmsArticleCreateRequestSchema,
+  CmsArticleDraftRequestSchema,
   CmsFixedDraftRequestSchema,
   CmsImportRequestSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
   CmsPublishRequestSchema,
+  CmsRestoreRequestSchema,
   CmsUnpublishRequestSchema,
+  cmsArticlePath,
   cmsDesignTemplate,
+  cmsIsArticle,
   cmsPathForSlug,
   type CmsContextResponse,
+  type CmsHistoryResponse,
   type CmsImportResponse,
   type CmsPageListResponse,
   type CmsPageResponse,
@@ -45,6 +52,7 @@ import {
   stableJson,
   toPage,
   toSummary,
+  userRef,
   validateContent,
   type PageBase,
   type PageRow,
@@ -190,7 +198,30 @@ export class CmsService {
   ): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
     const siteId = await CmsService.requireSite(a, EDIT, rawSiteId);
-    const input = parseBody(CmsPageCreateRequestSchema, body);
+    // DP-020: `template: "article"` creates a news article at /news/<slug>; otherwise a page.
+    const article =
+      typeof body === "object" &&
+      body !== null &&
+      (body as { template?: unknown }).template === CMS_ARTICLE_TEMPLATE;
+    const plan = article
+      ? (() => {
+          const input = parseBody(CmsArticleCreateRequestSchema, body);
+          return {
+            title: input.title,
+            templateKey: CMS_ARTICLE_TEMPLATE,
+            path: cmsArticlePath(input.slug),
+            content: { excerpt: "", coverImage: null, coverAlt: null, sections: [] },
+          };
+        })()
+      : (() => {
+          const input = parseBody(CmsPageCreateRequestSchema, body);
+          return {
+            title: input.title,
+            templateKey: CMS_STANDARD_TEMPLATE,
+            path: cmsPathForSlug(input.slug),
+            content: { sections: [] },
+          };
+        })();
     const site = await CmsService.site(a, siteId);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     try {
@@ -199,11 +230,11 @@ export class CmsService {
           data: {
             siteId,
             kind: "TEMPLATE",
-            templateKey: CMS_STANDARD_TEMPLATE,
-            path: cmsPathForSlug(input.slug),
+            templateKey: plan.templateKey,
+            path: plan.path,
             locale: site.locale,
-            title: input.title,
-            content: { sections: [] },
+            title: plan.title,
+            content: plan.content,
             createdById: a.userId,
             updatedById: a.userId,
           },
@@ -215,7 +246,7 @@ export class CmsService {
           resourceId: created.id,
           siteId,
           permission: EDIT,
-          metadata: { kind: created.kind, path: created.path },
+          metadata: { kind: created.kind, templateKey: plan.templateKey, path: created.path },
         });
         return created.id;
       });
@@ -241,7 +272,18 @@ export class CmsService {
       noindex: boolean;
       content: Record<string, unknown>;
     };
-    if (before.kind === "TEMPLATE") {
+    if (cmsIsArticle(before)) {
+      const input = parseBody(CmsArticleDraftRequestSchema, body);
+      version = input.version;
+      data = {
+        title: input.title,
+        path: cmsArticlePath(input.slug),
+        seoTitle: input.seo.title,
+        seoDescription: input.seo.description,
+        noindex: input.seo.noindex,
+        content: input.content as Record<string, unknown>,
+      };
+    } else if (before.kind === "TEMPLATE") {
       const input = parseBody(CmsPageDraftRequestSchema, body);
       version = input.version;
       data = {
@@ -425,6 +467,16 @@ export class CmsService {
     const { row, db } = await CmsService.pageIn(a, PUBLISH, rawId);
     const input = parseBody(CmsPublishRequestSchema, body);
     if (input.version !== row.version) throw staleVersion();
+    // DP-020: an article needs its summary and at least one body section before it goes live
+    // (checked first: a new article's empty summary is "incomplete", not "invalid").
+    if (cmsIsArticle(row)) {
+      const draft = (row.content ?? {}) as Record<string, unknown>;
+      const excerpt = typeof draft["excerpt"] === "string" ? draft["excerpt"].trim() : "";
+      const sections = Array.isArray(draft["sections"]) ? draft["sections"] : [];
+      if (!excerpt || sections.length === 0) {
+        throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "article_incomplete" }]);
+      }
+    }
     let content: Record<string, unknown>;
     try {
       content = validateContent(row.kind, row.templateKey, row.content);
@@ -498,6 +550,107 @@ export class CmsService {
     }
   }
 
+  /**
+   * DP-020: the publication history of a page, newest first (one immutable revision per
+   * publication; `live` marks the one the site shows). `content:read`.
+   */
+  async history(ctx: RequestContext, rawId: string): Promise<CmsHistoryResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, READ, rawId);
+    const [revisions, pub] = await Promise.all([
+      db.cmsPageRevision.findMany({
+        where: { pageId: row.id },
+        orderBy: { revisionNumber: "desc" },
+        select: {
+          id: true,
+          revisionNumber: true,
+          pageVersion: true,
+          title: true,
+          path: true,
+          createdAt: true,
+          createdBy: USER_REF,
+        },
+      }),
+      db.cmsPagePublication.findUnique({
+        where: { pageId: row.id },
+        select: { revisionId: true, status: true },
+      }),
+    ]);
+    return {
+      revisions: revisions.map((r) => ({
+        revisionNumber: r.revisionNumber,
+        pageVersion: r.pageVersion,
+        title: r.title,
+        path: r.path,
+        publishedAt: r.createdAt.toISOString(),
+        publishedBy: userRef(r.createdBy),
+        live: pub?.status === "PUBLISHED" && pub.revisionId === r.id,
+      })),
+    };
+  }
+
+  /**
+   * DP-020: copies a published revision (title, address, SEO, content) back into the draft. A
+   * normal draft save (`content:edit`, names the draft version, audited); nothing is published.
+   * The content is validated again, so a revision of an older schema is refused (409).
+   */
+  async restore(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, EDIT, rawId);
+    const input = parseBody(CmsRestoreRequestSchema, body);
+    if (input.version !== row.version) throw staleVersion();
+    const revision = await db.cmsPageRevision.findFirst({
+      where: { pageId: row.id, revisionNumber: input.revisionNumber },
+      select: {
+        title: true,
+        path: true,
+        seoTitle: true,
+        seoDescription: true,
+        noindex: true,
+        content: true,
+      },
+    });
+    if (!revision) throw new ApiError("NOT_FOUND", [{ path: "revisionNumber", rule: "unknown" }]);
+    let content: Record<string, unknown>;
+    try {
+      content = validateContent(row.kind, row.templateKey, revision.content);
+    } catch {
+      throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "invalid" }]);
+    }
+    const data = {
+      title: revision.title,
+      path: revision.path,
+      seoTitle: revision.seoTitle,
+      seoDescription: revision.seoDescription,
+      noindex: revision.noindex,
+      content,
+    };
+    try {
+      await db.$transaction(async (tx) => {
+        const res = await tx.cmsPage.updateMany({
+          where: { id: row.id, version: input.version },
+          data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,
+        });
+        if (res.count !== 1) throw staleVersion();
+        await a.audit(tx, {
+          action: "cms.page_revision_restored",
+          resourceType: RESOURCE,
+          resourceId: row.id,
+          siteId: row.siteId,
+          permission: EDIT,
+          metadata: {
+            revisionNumber: input.revisionNumber,
+            changed: changedFields(row, { ...data, content: stableJson(content) }),
+            version: input.version + 1,
+          },
+        });
+      });
+      return this.response(a, db, row.id);
+    } catch (e) {
+      return mapCmsDbError(e);
+    }
+  }
+
   /** Takes the page off the site. Its revisions stay; publishing again brings the draft back. */
   async unpublish(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
@@ -537,3 +690,5 @@ export class CmsService {
 }
 
 type StaffDb = ReturnType<StaffAccess["db"]>;
+
+const USER_REF = { select: { id: true, displayName: true } } as const;
