@@ -5,18 +5,26 @@
  *
  *   node dist/catalog/import/cli.js --mapping <file> [--report <file>] [--only CODE,CODE]
  *        [--resume-partial] [--apply --confirm <n>]
+ *   node dist/catalog/import/cli.js --media <manifest.json> [--media-root <dir>] [same options]
+ *
+ * The media stage (DP-158) runs on its own: it reads the verified DP-158 manifest and uploads
+ * images and PDFs through the existing admin API (media.ts). It never links a document to a site.
  *
  * Environment (never on the command line): DP_IMPORT_API_URL, DP_PROXY_KEY_ADMIN,
  * DP_IMPORT_SESSION_TOKEN (the operator's own admin session), DP_IMPORT_ORIGIN (default
  * DP_ADMIN_BASE_URL). Images and documents are never imported by this tool.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { CatalogMappingSchema } from "@dream/contracts";
+import path from "node:path";
+import { CatalogMappingSchema, MediaManifestSchema } from "@dream/contracts";
 import { adminApi } from "./client.js";
+import { runMedia, type MediaReport } from "./media.js";
 import { runImport, type ImportReport } from "./run.js";
 
 interface Args {
   mapping: string;
+  media: string;
+  mediaRoot: string | null;
   report: string | null;
   only: Set<string> | null;
   resumePartial: boolean;
@@ -27,6 +35,8 @@ interface Args {
 export function parseArgs(argv: readonly string[]): Args {
   const a: Args = {
     mapping: "",
+    media: "",
+    mediaRoot: null,
     report: null,
     only: null,
     resumePartial: false,
@@ -43,6 +53,12 @@ export function parseArgs(argv: readonly string[]): Args {
     switch (arg) {
       case "--mapping":
         a.mapping = next();
+        break;
+      case "--media":
+        a.media = next();
+        break;
+      case "--media-root":
+        a.mediaRoot = next();
         break;
       case "--report":
         a.report = next();
@@ -71,7 +87,9 @@ export function parseArgs(argv: readonly string[]): Args {
         throw new Error(`unknown argument ${arg}`);
     }
   }
-  if (!a.mapping) throw new Error("--mapping <file> is required");
+  if (!a.mapping && !a.media) throw new Error("--mapping <file> or --media <manifest> is required");
+  if (a.mapping && a.media) throw new Error("--mapping and --media are separate stages; run one");
+  if (a.mediaRoot && !a.media) throw new Error("--media-root is only used with --media");
   if (a.confirm !== undefined && !a.apply) throw new Error("--confirm is only used with --apply");
   return a;
 }
@@ -106,6 +124,28 @@ export function summary(r: ImportReport): string {
   return lines.join("\n");
 }
 
+export function mediaSummary(r: MediaReport): string {
+  const c = r.plan.counts;
+  const lines = [
+    `mode: ${r.mode} (media stage, site BV)`,
+    `files: ${c.images} image(s), ${c.pdfs} PDF(s) | create ${c.CREATE} | resume ${c.RESUME} | already imported ${c.ALREADY_IMPORTED} | partial ${c.PARTIAL} | conflict ${c.CONFLICT}`,
+    ...r.plan.items
+      .filter((i) => i.action === "CONFLICT" || i.action === "PARTIAL")
+      .map((i) => `${i.action.toLowerCase()} ${i.kind} ${i.code}: ${i.reason}`),
+  ];
+  if (r.mode === "dry-run") {
+    lines.push(
+      r.plan.confirmCount > 0
+        ? `nothing written. To apply this plan: --apply --confirm ${r.plan.confirmCount}`
+        : "nothing written; nothing to apply",
+    );
+  } else {
+    lines.push(`written: ${r.written.length} record(s)`);
+    if (r.error) lines.push(`STOPPED: ${r.error}`);
+  }
+  return lines.join("\n");
+}
+
 function env(name: string, fallback?: string): string {
   const v = process.env[name]?.trim() || fallback;
   if (!v) throw new Error(`${name} is not set`);
@@ -120,20 +160,28 @@ async function main(argv: readonly string[]): Promise<number> {
     process.stderr.write(`${(e as Error).message}\n`);
     return 2;
   }
-  const mapping = CatalogMappingSchema.parse(JSON.parse(readFileSync(args.mapping, "utf8")));
   const api = adminApi({
     baseUrl: env("DP_IMPORT_API_URL"),
     proxyKey: env("DP_PROXY_KEY_ADMIN"),
     sessionToken: env("DP_IMPORT_SESSION_TOKEN"),
     origin: env("DP_IMPORT_ORIGIN", process.env["DP_ADMIN_BASE_URL"]),
   });
-  const report = await runImport(api, mapping, {
+  const common = {
     apply: args.apply,
     ...(args.confirm !== undefined ? { confirm: args.confirm } : {}),
     ...(args.only ? { only: args.only } : {}),
     resumePartial: args.resumePartial,
-    log: (l) => process.stderr.write(`${l}\n`),
-  });
+    log: (l: string) => process.stderr.write(`${l}\n`),
+  };
+  if (args.media) {
+    const manifest = MediaManifestSchema.parse(JSON.parse(readFileSync(args.media, "utf8")));
+    const media = await runMedia(api, manifest, args.mediaRoot ?? path.dirname(args.media), common);
+    if (args.report) writeFileSync(args.report, `${JSON.stringify(media, null, 2)}\n`);
+    process.stdout.write(`${mediaSummary(media)}\n`);
+    return media.error ? 3 : 0;
+  }
+  const mapping = CatalogMappingSchema.parse(JSON.parse(readFileSync(args.mapping, "utf8")));
+  const report = await runImport(api, mapping, common);
   if (args.report) writeFileSync(args.report, `${JSON.stringify(report, null, 2)}\n`);
   process.stdout.write(`${summary(report)}\n`);
   return report.error ? 3 : 0;
