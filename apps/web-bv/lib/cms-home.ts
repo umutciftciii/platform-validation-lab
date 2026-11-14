@@ -290,6 +290,13 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
   };
 }
 
+/** DP-155: a site path link is current on that path and below it; in-page links never are. */
+export function isCurrentPath(href: string | null, currentPath: string): boolean {
+  if (!href || !href.startsWith("/") || href === "/" || href.includes("#")) return false;
+  const path = href.split("?")[0] as string;
+  return currentPath === path || currentPath.startsWith(`${path}/`);
+}
+
 export function toNavProps(c: BvNavContent, currentPath: string): SiteNavContent {
   const home = currentPath === "/";
   // The navigation's in-page links ("#top", "#services") belong to the home page: on any other
@@ -298,8 +305,13 @@ export function toNavProps(c: BvNavContent, currentPath: string): SiteNavContent
   return {
     ...SITE_NAV_UI,
     homeHref: home ? SITE_NAV_UI.homeHref : "/",
-    // The home page marks its own item as current (an in-page link, "#top").
-    items: c.items.map((i) => ({ ...i, href: target(i.href), current: home && i.href === "#top" })),
+    // The home page marks its own item as current (an in-page link, "#top"); DP-155: any other
+    // page marks the item whose path it is, or is under ("/products" on "/products/<slug>").
+    items: c.items.map((i) => ({
+      ...i,
+      href: target(i.href),
+      current: home ? i.href === "#top" : isCurrentPath(i.href, currentPath),
+    })),
     contact: { ...c.contact, href: target(c.contact.href) },
     noScriptLinks: c.noScriptLinks
       .filter((l): l is { label: string; href: string } => l.href !== null)
@@ -480,7 +492,7 @@ interface NewsRead {
   footer: SiteFooterContent | null;
 }
 
-async function readNews(): Promise<Read<NewsRead>> {
+async function readNews(currentPath = "/news"): Promise<Read<NewsRead>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
   let res: Response;
@@ -506,7 +518,7 @@ async function readNews(): Promise<Read<NewsRead>> {
     console.error("public cms: the news heading does not match the contract; not rendered");
   }
   const nav = fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
-    toNavProps(c, "/news"),
+    toNavProps(c, currentPath),
   ) as SiteNavContent | null;
   const footer = fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
     | SiteFooterContent
@@ -528,6 +540,19 @@ export async function getNews(): Promise<Read<NewsView>> {
 }
 
 /** The published navigation and footer around a news page (also without a published heading). */
+/**
+ * DP-155: the published site navigation and footer for a page outside the CMS (the product
+ * catalogue), with the navigation's current item for `path`. Both are null while unavailable;
+ * the page then shows its own minimal frame.
+ */
+export async function getSiteChrome(path: string): Promise<{
+  nav: SiteNavContent | null;
+  footer: SiteFooterContent | null;
+}> {
+  const res = await readNews(path);
+  return res.ok ? { nav: res.data.nav, footer: res.data.footer } : { nav: null, footer: null };
+}
+
 export async function getNewsChrome(): Promise<{
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
