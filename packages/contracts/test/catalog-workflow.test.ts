@@ -13,7 +13,8 @@ import {
   type ReadinessInput,
 } from "../src/index.js";
 
-const ok = validateProductData({ definitions: [], values: [], images: [] });
+// A master with technical data and nothing to report.
+const ok: ReadinessInput["validation"] = { ok: true, blocking: [], warnings: [] };
 const base: ReadinessInput = {
   product: { status: "APPROVED", summary: "Synthetic base oil", description: "Long text" },
   listing: { visibility: "VISIBLE", text: null },
@@ -39,7 +40,7 @@ describe("checkPublication", () => {
     ).toEqual(["archived"]);
   });
 
-  it("needs a visible listing, a cover image and a summary", () => {
+  it("needs a visible listing and a cover image; a missing summary only warns (DP-161)", () => {
     expect(codes(checkPublication({ ...base, listing: null }))).toEqual(["listing_missing"]);
     expect(
       codes(checkPublication({ ...base, listing: { visibility: "HIDDEN", text: null } })),
@@ -48,9 +49,13 @@ describe("checkPublication", () => {
       codes(checkPublication({ ...base, images: [{ ...base.images[0]!, isCover: false }] })),
     ).toEqual(["cover_missing"]);
     expect(codes(checkPublication({ ...base, images: [] }))).toEqual(["cover_missing"]);
-    expect(
-      codes(checkPublication({ ...base, product: { ...base.product, summary: null } })),
-    ).toEqual(["summary_missing"]);
+    const noSummary = checkPublication({ ...base, product: { ...base.product, summary: null } });
+    expect(codes(noSummary)).toEqual([]);
+    expect(noSummary.ok).toBe(true);
+    expect(noSummary.warnings.map((i) => [i.severity, i.code])).toContainEqual([
+      "WARNING",
+      "summary_missing",
+    ]);
   });
 
   it("accepts the listing's own summary and description instead of the master's", () => {
@@ -115,6 +120,13 @@ describe("checkPublication", () => {
       "alt_text_missing",
       "test_method_missing",
     ]);
+  });
+
+  it("DP-161: a product without any technical data is published with a warning", () => {
+    const none = validateProductData({ definitions: [], values: [], images: [] });
+    const r = checkPublication({ ...base, validation: none });
+    expect(r.ok).toBe(true);
+    expect(r.warnings.map((i) => i.code)).toEqual(["specs_missing"]);
   });
 
   it("warns, but does not block, when there is no description", () => {
@@ -191,6 +203,11 @@ describe("public view of a snapshot", () => {
       "slug",
       "summary",
     ]);
+  });
+
+  it("DP-161: a product without a summary is published with summary null", () => {
+    const none = PublishedSnapshotSchema.parse({ ...snapshot, summary: null });
+    expect(toPublicSummary(none, "2026-11-11T10:00:00.000Z").summary).toBeNull();
   });
 
   it("refuses snapshots with unexpected fields (strict)", () => {

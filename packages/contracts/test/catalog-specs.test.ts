@@ -282,7 +282,7 @@ describe("validation engine", () => {
     });
   });
 
-  it("reports required as BLOCKING, optional and alt text as WARNING, ignores archived", () => {
+  it("reports required as BLOCKING, no technical data and alt text as WARNING, ignores archived", () => {
     const empty = validateProductData({
       definitions: defs,
       values: [],
@@ -295,10 +295,9 @@ describe("validation engine", () => {
     expect(empty.blocking.map((i) => [i.code, i.target])).toEqual([
       ["required_missing", "spec:kv100"],
     ]);
+    // DP-161: no warning per unused optional definition; one for "no technical data at all"
     expect(empty.warnings.map((i) => [i.code, i.target])).toEqual([
-      ["optional_missing", "spec:pour_point"],
-      ["optional_missing", "spec:appearance"],
-      ["optional_missing", "spec:food_grade"],
+      ["specs_missing", "spec:*"],
       ["alt_text_missing", "image:i1"],
     ]);
     const full = validateProductData({

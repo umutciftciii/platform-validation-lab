@@ -89,7 +89,7 @@ describe("live specification validation (unsaved values)", () => {
     expect(half.ok).toBe(false);
   });
 
-  it("uses the engine's own rules for typed values (precision, unit) and optional warnings", () => {
+  it("uses the engine's own rules for typed values (precision, unit); no optional noise", () => {
     const v = liveValidation(
       [KV, FLASH],
       {
@@ -100,7 +100,7 @@ describe("live specification validation (unsaved values)", () => {
     );
     expect(codes(v)).toEqual({
       blocking: ["too_precise@spec:kv100"],
-      warnings: ["optional_missing@spec:flash"],
+      warnings: [],
     });
   });
 

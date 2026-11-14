@@ -14,6 +14,8 @@
  */
 import {
   PUBLIC_CATALOG_API,
+  PublicCategoryListResponseSchema,
+  type PublicCategory,
   PublicCrossReferenceListResponseSchema,
   PublicDocumentListResponseSchema,
   PublicProductListResponseSchema,
@@ -74,6 +76,18 @@ export async function listProducts(config = catalogConfig()): Promise<Read<Publi
   if (res?.status === 404) return { ok: true, data: [] };
   if (!res || !res.ok) return { ok: false, reason: "unavailable" };
   const parsed = PublicProductListResponseSchema.safeParse(await res.json().catch(() => null));
+  return parsed.success ? { ok: true, data: parsed.data.items } : { ok: false, reason: "unavailable" };
+}
+
+/**
+ * DP-160: the category tree of the live products. A failure is not fatal for the list: the page
+ * then shows the products without the category filter.
+ */
+export async function listCategories(config = catalogConfig()): Promise<Read<PublicCategory[]>> {
+  const res = await get("/categories", config);
+  if (res?.status === 404) return { ok: true, data: [] };
+  if (!res || !res.ok) return { ok: false, reason: "unavailable" };
+  const parsed = PublicCategoryListResponseSchema.safeParse(await res.json().catch(() => null));
   return parsed.success ? { ok: true, data: parsed.data.items } : { ok: false, reason: "unavailable" };
 }
 
