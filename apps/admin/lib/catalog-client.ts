@@ -43,6 +43,10 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "images:cover_missing": "Add a cover image first.",
   "summary:summary_missing": "Add a summary (master or listing) first.",
   "(root):image_published": "This image is shown on a live site. Unpublish the product first.",
+  // DP-166 image visibility.
+  "isPublic:cover_cannot_be_hidden":
+    "The cover cannot be hidden. Make another image the cover first.",
+  "isPublic:hidden_image": "Show this image on the site before making it the cover.",
   "file:busy": "Image processing is busy. Try again in a moment.",
   // PM-5 technical documents.
   "status:document_archived": "This document is archived. Restore it first.",
