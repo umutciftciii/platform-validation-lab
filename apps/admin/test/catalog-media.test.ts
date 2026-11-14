@@ -240,3 +240,15 @@ describe("spec editor parsing", () => {
     expect(splitList(" mm²/s, cSt ,,")).toEqual(["mm²/s", "cSt"]);
   });
 });
+
+describe("DP-166 image visibility messages", () => {
+  it("explains why the cover cannot be hidden and why a hidden image cannot be the cover", async () => {
+    const { messageForIssues } = await import("../lib/catalog-client");
+    expect(
+      messageForIssues("CONFLICT_STATE", [{ path: "isPublic", rule: "cover_cannot_be_hidden" }]),
+    ).toMatch(/cover cannot be hidden/i);
+    expect(
+      messageForIssues("CONFLICT_STATE", [{ path: "isPublic", rule: "hidden_image" }]),
+    ).toMatch(/Show this image/);
+  });
+});

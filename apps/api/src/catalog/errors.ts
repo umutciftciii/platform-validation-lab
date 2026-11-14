@@ -88,6 +88,10 @@ export function mapDbError(error: unknown): never {
   if (/catalog: a published image cannot be deleted/.test(text)) {
     throw new ApiError("CONFLICT_STATE", [{ path: "(root)", rule: "image_published" }]);
   }
+  // DP-166 (migration 20261201090000_dp_166_image_visibility): the cover is always public.
+  if (/ProductImage_cover_public/.test(text)) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "isPublic", rule: "cover_cannot_be_hidden" }]);
+  }
   // PM-5 document guards (migration 20261114090000_pm_5_technical_documents).
   if (/catalog: documents of an archived product cannot change/.test(text)) {
     throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "archived" }]);

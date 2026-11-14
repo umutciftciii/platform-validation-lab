@@ -206,6 +206,21 @@ export function ImageManager({
       "Cover image changed.",
     );
 
+  // DP-166: hide from (or show again on) the sites; the image stays here, nothing is deleted.
+  const setVisibility = (img: ProductImage, isPublic: boolean) =>
+    act(
+      img.id,
+      () =>
+        callCatalog<{ items: ProductImage[] }>("POST", `/images/${img.id}/visibility`, {
+          isPublic,
+          version: img.version,
+        }),
+      (d) => setImages(d.items),
+      isPublic
+        ? "Image shown on the sites again (after the next publication)."
+        : "Image hidden from the sites (after the next publication). It stays here.",
+    );
+
   const remove = (img: ProductImage) => {
     if (!window.confirm(`Remove “${img.originalFilename}”? The file is deleted.`)) return;
     void act(
@@ -380,6 +395,7 @@ export function ImageManager({
                 "overflow-hidden rounded-xl border bg-surface transition-shadow",
                 img.isCover ? "border-petrol ring-2 ring-petrol/20" : "border-line",
                 dragId === img.id && "opacity-50",
+                !img.isPublic && "border-dashed",
               )}
             >
               <div className="relative aspect-[4/3] bg-surface-2">
@@ -388,13 +404,14 @@ export function ImageManager({
                   src={src(img.id, "thumb")}
                   alt={img.altText ?? ""}
                   loading="lazy"
-                  className="size-full object-contain"
+                  className={cx("size-full object-contain", !img.isPublic && "opacity-45")}
                 />
                 <span className="absolute left-2 top-2 flex gap-1">
                   <span className="tabular rounded-md bg-surface/90 px-1.5 py-0.5 text-xs font-medium text-ink ring-1 ring-line">
                     {index + 1}
                   </span>
                   {img.isCover ? <StatusPill tone="petrol">Cover</StatusPill> : null}
+                  {!img.isPublic ? <StatusPill tone="neutral">Hidden from site</StatusPill> : null}
                 </span>
                 {editable ? (
                   <Icon
@@ -446,7 +463,7 @@ export function ImageManager({
                 {editable ? (
                   <div className="flex flex-wrap items-center gap-1">
                     {busy === img.id ? <Spinner /> : null}
-                    {!img.isCover ? (
+                    {!img.isCover && img.isPublic ? (
                       <button
                         type="button"
                         disabled={busy !== null}
@@ -455,6 +472,18 @@ export function ImageManager({
                       >
                         <Icon name="star" size={16} />
                         Make cover
+                        <span className="sr-only"> (image {index + 1})</span>
+                      </button>
+                    ) : null}
+                    {!img.isCover ? (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => setVisibility(img, !img.isPublic)}
+                        className={buttonStyles.ghost}
+                      >
+                        <Icon name="eye" size={16} />
+                        {img.isPublic ? "Hide from site" : "Show on site"}
                         <span className="sr-only"> (image {index + 1})</span>
                       </button>
                     ) : null}
