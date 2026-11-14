@@ -181,9 +181,12 @@ describe("spec editor parsing", () => {
   const def = (dataType: SpecDefinition["dataType"]) => ({ dataType }) as SpecDefinition;
   const draft = {
     on: true,
+    basis: "SPECIFICATION" as const,
     number: "",
     min: "",
     max: "",
+    minExclusive: false,
+    maxExclusive: false,
     text: "",
     bool: "" as const,
     unit: "",
@@ -200,8 +203,30 @@ describe("spec editor parsing", () => {
       type: "RANGE",
       min: -45,
       max: -36,
+      minExclusive: false,
+      maxExclusive: false,
     });
-    expect(draftValue(def("RANGE"), { ...draft, min: "1" })).toBe("empty");
+    // DP-156: one-sided and open-ended limits; both ends empty is still "empty".
+    expect(draftValue(def("RANGE"), { ...draft, min: "200" })).toEqual({
+      type: "RANGE",
+      min: 200,
+      max: null,
+      minExclusive: false,
+      maxExclusive: false,
+    });
+    expect(
+      draftValue(def("RANGE"), { ...draft, min: "3,8", max: "4.5", maxExclusive: true }),
+    ).toEqual({ type: "RANGE", min: 3.8, max: 4.5, minExclusive: false, maxExclusive: true });
+    // an open flag without its end is dropped, not sent
+    expect(draftValue(def("RANGE"), { ...draft, max: "1800", minExclusive: true })).toEqual({
+      type: "RANGE",
+      min: null,
+      max: 1800,
+      minExclusive: false,
+      maxExclusive: false,
+    });
+    expect(draftValue(def("RANGE"), draft)).toBe("empty");
+    expect(draftValue(def("RANGE"), { ...draft, max: "x" })).toBe("not_a_number");
     expect(draftValue(def("TEXT"), { ...draft, text: "  Clear " })).toEqual({
       type: "TEXT",
       text: "Clear",

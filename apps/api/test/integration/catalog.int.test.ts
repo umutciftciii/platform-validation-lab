@@ -1309,7 +1309,7 @@ describe("9. specification values (master data, product version)", () => {
     expect(
       r.body.values.find((v: { definitionId: string }) => v.definitionId === defs["pour_point"]!.id)
         .value,
-    ).toEqual({ type: "RANGE", min: -45, max: -36 });
+    ).toEqual({ type: "RANGE", min: -45, max: -36, minExclusive: false, maxExclusive: false });
     products["syn6"]!.version = 3;
     const audit = await lastAudit("catalog.spec_values_saved");
     expect(audit).toMatchObject({ scopeType: "PLATFORM", siteId: null, resourceId: id });
@@ -1363,6 +1363,112 @@ describe("9. specification values (master data, product version)", () => {
     products["syn6"]!.version = 5;
   });
 
+  it("DP-156: one-sided and open limits, and a typical value beside the specification", async () => {
+    const id = products["syn6"]!.id;
+    const kv = value("kv100", { type: "NUMBER", number: 5.85 }, "mm²/s", "ASTM D445");
+    const pourLimit = {
+      ...value("pour_point", { type: "RANGE", min: null, max: -30 }, "°C", "ASTM D97"),
+      basis: "SPECIFICATION",
+    };
+    const pourTypical = {
+      ...value("pour_point", { type: "RANGE", min: -42, max: -42 }, "°C"),
+      basis: "TYPICAL",
+    };
+    const appearanceTypical = {
+      ...value("appearance", { type: "TEXT", text: "Clear" }),
+      basis: "TYPICAL",
+    };
+    const save = (values: object[], version: number) =>
+      pm.post(`/products/${id}/specs`, { version, values });
+    // shape problems are BLOCKING invalid_range on the value's own target
+    expectError(
+      await save([kv, { ...pourLimit, value: { type: "RANGE", min: null, max: null } }], 5),
+      400,
+      "VALIDATION_FAILED",
+      { path: "spec:pour_point", rule: "invalid_range" },
+    );
+    expectError(
+      await save(
+        [
+          kv,
+          {
+            ...pourTypical,
+            value: { type: "RANGE", min: -42, max: -42, minExclusive: true },
+          },
+        ],
+        5,
+      ),
+      400,
+      "VALIDATION_FAILED",
+      { path: "spec:pour_point:typical", rule: "invalid_range" },
+    );
+    expectError(await save([kv, pourLimit, { ...pourLimit }], 5), 400, "VALIDATION_FAILED", {
+      path: "spec:pour_point",
+      rule: "duplicate",
+    });
+    const r = await save([kv, pourLimit, pourTypical, appearanceTypical], 5);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.productVersion).toBe(6);
+    products["syn6"]!.version = 6;
+    const pour = r.body.values.filter(
+      (v: { definitionId: string }) => v.definitionId === defs["pour_point"]!.id,
+    );
+    expect(pour.map((v: { basis: string; value: unknown }) => [v.basis, v.value])).toEqual(
+      expect.arrayContaining([
+        [
+          "SPECIFICATION",
+          { type: "RANGE", min: null, max: -30, minExclusive: false, maxExclusive: false },
+        ],
+        [
+          "TYPICAL",
+          { type: "RANGE", min: -42, max: -42, minExclusive: false, maxExclusive: false },
+        ],
+      ]),
+    );
+    // a typical appearance does not stand in for anything; warnings name the typical target
+    expect(
+      r.body.validation.warnings.map((i: { code: string; target: string }) => [i.code, i.target]),
+    ).toEqual(expect.arrayContaining([["test_method_missing", "spec:pour_point:typical"]]));
+    expect((await lastAudit("catalog.spec_values_saved"))?.metadata).toMatchObject({
+      changed: ["pour_point", "pour_point:typical", "appearance:typical"],
+      removed: ["appearance"],
+    });
+    // an open end is stored as such; saving the same set again changes nothing
+    const open = await save(
+      [
+        kv,
+        { ...pourLimit, value: { type: "RANGE", min: -45, max: -30, maxExclusive: true } },
+        pourTypical,
+        appearanceTypical,
+      ],
+      6,
+    );
+    expect(open.status, JSON.stringify(open.body)).toBe(200);
+    products["syn6"]!.version = 7;
+    const row = await owner.productSpecValue.findUniqueOrThrow({
+      where: {
+        productId_definitionId_basis: {
+          productId: id,
+          definitionId: defs["pour_point"]!.id,
+          basis: "SPECIFICATION",
+        },
+      },
+    });
+    expect([row.rangeMin?.toString(), row.rangeMax?.toString(), row.rangeMaxExclusive]).toEqual([
+      "-45",
+      "-30",
+      true,
+    ]);
+    // back to the earlier set: kv100 + appearance (other tests rely on it)
+    const back = await save(
+      [kv, value("appearance", { type: "TEXT", text: "Clear and bright" })],
+      7,
+    );
+    expect(back.status).toBe(200);
+    expect(await owner.productSpecValue.count({ where: { productId: id } })).toBe(2);
+    products["syn6"]!.version = 8;
+  });
+
   it("archived products keep their values read-only", async () => {
     const p = products["WAX-10"]!;
     const arch = await pm.post(`/products/${p.id}/archive`, { version: 3 });
@@ -1403,6 +1509,57 @@ describe("9. specification values (master data, product version)", () => {
       }),
       /ProductSpecValue_range_order/,
     );
+    // DP-156: an open end needs that end, and [x, x) is empty
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: {
+          productId,
+          definitionId: defs["pour_point"]!.id,
+          rangeMax: -10,
+          rangeMinExclusive: true,
+          unit: "°C",
+        },
+      }),
+      /ProductSpecValue_range_open_end/,
+    );
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: {
+          productId,
+          definitionId: defs["pour_point"]!.id,
+          rangeMin: -10,
+          rangeMax: -10,
+          rangeMaxExclusive: true,
+          unit: "°C",
+        },
+      }),
+      /ProductSpecValue_range_open_end/,
+    );
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: { productId, definitionId: defs["pour_point"]!.id, unit: "°C", textValue: null },
+      }),
+      /ProductSpecValue_one_shape|does not match the specification data type/,
+    );
+    // a value cannot change its basis (it would silently turn a typical value into a limit)
+    const typical = await owner.productSpecValue.create({
+      data: {
+        productId,
+        definitionId: defs["pour_point"]!.id,
+        basis: "TYPICAL",
+        rangeMin: -40,
+        rangeMax: -40,
+        unit: "°C",
+      },
+    });
+    await rejectsDb(
+      asApp.productSpecValue.update({
+        where: { id: typical.id },
+        data: { basis: "SPECIFICATION" },
+      }),
+      /cannot move to another product, definition or basis/,
+    );
+    await owner.productSpecValue.delete({ where: { id: typical.id } });
     await rejectsDb(
       asApp.productSpecValue.create({
         data: {
