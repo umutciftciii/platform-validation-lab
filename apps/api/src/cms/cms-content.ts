@@ -4,8 +4,11 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  CmsArticleContentSchema,
   CmsTemplateContentSchema,
   cmsDesignTemplate,
+  cmsIsArticle,
+  cmsSlugOfPath,
   cmsFieldsSchema,
   type CmsPage,
   type CmsPageSummary,
@@ -68,6 +71,8 @@ export async function attachPublications(db: CmsDb, rows: PageBase[]): Promise<P
 export interface LiveRow {
   pageId: string;
   publishedAt: Date;
+  /** DP-020: when revision 1 was published (the date an article shows). */
+  firstPublishedAt: Date;
   page: { kind: CmsPage["kind"]; templateKey: string };
   revision: {
     revisionNumber: number;
@@ -87,7 +92,7 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
     select: { pageId: true, revisionId: true, publishedAt: true },
   });
   if (pubs.length === 0) return [];
-  const [revisions, pages] = await Promise.all([
+  const [revisions, pages, firsts] = await Promise.all([
     db.cmsPageRevision.findMany({
       where: { id: { in: pubs.map((p) => p.revisionId) } },
       select: {
@@ -105,6 +110,10 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
       where: { id: { in: pubs.map((p) => p.pageId) } },
       select: { id: true, kind: true, templateKey: true },
     }),
+    db.cmsPageRevision.findMany({
+      where: { pageId: { in: pubs.map((p) => p.pageId) }, revisionNumber: 1 },
+      select: { pageId: true, createdAt: true },
+    }),
   ]);
   const out: LiveRow[] = [];
   for (const p of pubs) {
@@ -113,7 +122,14 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
     if (r && page) {
       const { id: _id, ...revision } = r;
       void _id;
-      out.push({ pageId: p.pageId, publishedAt: p.publishedAt, page, revision });
+      const first = firsts.find((x) => x.pageId === p.pageId)?.createdAt ?? p.publishedAt;
+      out.push({
+        pageId: p.pageId,
+        publishedAt: p.publishedAt,
+        firstPublishedAt: first,
+        page,
+        revision,
+      });
     }
   }
   return out;
@@ -227,7 +243,7 @@ export function toSummary(row: PageRow): CmsPageSummary {
 export function toPage(row: PageRow): CmsPage {
   return {
     ...toSummary(row),
-    slug: row.kind === "TEMPLATE" && row.path ? row.path.slice(1) : null,
+    slug: row.kind === "TEMPLATE" && row.path ? cmsSlugOfPath(row.path) : null,
     seo: { title: row.seoTitle, description: row.seoDescription, noindex: row.noindex },
     content: asObject(row.content),
     createdAt: row.createdAt.toISOString(),
@@ -235,8 +251,12 @@ export function toPage(row: PageRow): CmsPage {
   };
 }
 
-/** The schema of a page's content: the section list of TEMPLATE pages, else its template. */
+/**
+ * The schema of a page's content: news articles (DP-020) their article fields and sections, other
+ * TEMPLATE pages their section list, designed pages and fragments their template.
+ */
 function schemaFor(kind: CmsPage["kind"], templateKey: string) {
+  if (cmsIsArticle({ kind, templateKey })) return CmsArticleContentSchema;
   if (kind === "TEMPLATE") return CmsTemplateContentSchema;
   const template = cmsDesignTemplate(templateKey);
   return template ? cmsFieldsSchema(template.fields) : null;
@@ -296,7 +316,7 @@ export function publicPage(
     noindex: boolean;
     content: unknown;
   },
-  revision: { revisionNumber: number; publishedAt: Date } | null,
+  revision: { revisionNumber: number; publishedAt: Date; firstPublishedAt: Date } | null,
 ): CmsPublicPage {
   return {
     kind: row.kind,
@@ -307,6 +327,7 @@ export function publicPage(
     content: asObject(row.content),
     revisionNumber: revision?.revisionNumber ?? null,
     publishedAt: revision?.publishedAt.toISOString() ?? null,
+    firstPublishedAt: revision?.firstPublishedAt.toISOString() ?? null,
   };
 }
 

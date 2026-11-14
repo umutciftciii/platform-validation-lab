@@ -9,7 +9,12 @@
  * One change against the files: the phone links without JavaScript point at "/" instead of the
  * former demo route.
  */
-import type { BvFooterContent, BvHomeContent, BvNavContent } from "@dream/contracts";
+import type {
+  BvFooterContent,
+  BvHomeContent,
+  BvNavContent,
+  BvNewsIndexContent,
+} from "@dream/contracts";
 
 export const BV_HOME_SEED: BvHomeContent = {
   hero: {
@@ -346,7 +351,7 @@ export const BV_NAV_SEED: BvNavContent = {
     },
     {
       label: "Blogs",
-      href: null,
+      href: "/news",
     },
     {
       label: "Contact Us",
@@ -491,9 +496,23 @@ export const BV_FOOTER_SEED: BvFooterContent = {
   pendingNote: "page not available yet",
 };
 
+/**
+ * DP-153: the heading of the news list, as the site showed it in code during DP-020 (its NEWS_UI).
+ */
+export const BV_NEWS_INDEX_SEED: BvNewsIndexContent = {
+  eyebrow: "News",
+  title: "News and insights",
+  intro: "Updates from Dream Petroleum BV on energy trading, logistics and the markets we serve.",
+  empty: {
+    title: "No articles yet",
+    text: "Our first articles are on their way. Please check back soon.",
+  },
+};
+
 /** Import seeds by registry key, with the page title the import gives them. */
 export const CMS_SEEDS: Readonly<Record<string, { title: string; content: unknown }>> = {
   "bv.home": { title: "Home", content: BV_HOME_SEED },
   "bv.site-nav": { title: "Navigation", content: BV_NAV_SEED },
   "bv.site-footer": { title: "Footer", content: BV_FOOTER_SEED },
+  "bv.news-index": { title: "News", content: BV_NEWS_INDEX_SEED },
 };

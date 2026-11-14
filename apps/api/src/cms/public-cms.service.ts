@@ -14,7 +14,16 @@
  * served (logged, 404), so a schema change can never break the site with half-valid content.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
-import { BV_FRAGMENT_KEYS, type CmsPublicBundle, type CmsPublicPage } from "@dream/contracts";
+import {
+  BV_FRAGMENT_KEYS,
+  cmsIsArticle,
+  cmsSlugOfPath,
+  type CmsArticleContent,
+  type CmsPublicArticle,
+  type CmsPublicBundle,
+  type CmsPublicNews,
+  type CmsPublicPage,
+} from "@dream/contracts";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError } from "../iam/http/api-error.js";
 import { Clock } from "../iam/http/clock.js";
@@ -28,7 +37,10 @@ import {
   type LiveRow,
 } from "./cms-content.js";
 
-const PATH = /^\/([a-z0-9]+(-[a-z0-9]+)*)?$/;
+/** "/", "/<slug>" or a news article "/news/<slug>" (DP-020). */
+const PATH = /^\/(news\/[a-z0-9]+(-[a-z0-9]+)*|([a-z0-9]+(-[a-z0-9]+)*)?)$/;
+/** DP-153: the designed page that holds the heading of the news list. */
+const NEWS_INDEX_KEY = "bv.news-index";
 const FRAGMENTS: Readonly<Record<"BV" | "CORPORATE", readonly string[]>> = {
   BV: BV_FRAGMENT_KEYS,
   CORPORATE: [],
@@ -52,7 +64,11 @@ export class PublicCmsService {
     }
     return publicPage(
       { kind, templateKey, ...row.revision },
-      { revisionNumber: row.revision.revisionNumber, publishedAt: row.publishedAt },
+      {
+        revisionNumber: row.revision.revisionNumber,
+        publishedAt: row.publishedAt,
+        firstPublishedAt: row.firstPublishedAt,
+      },
     );
   }
 
@@ -72,8 +88,72 @@ export class PublicCmsService {
     const live = await liveRows(site.db, site.siteId);
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === path);
     const page = row ? this.served(row) : null;
-    if (!page) throw new ApiError("NOT_FOUND");
+    if (!page) {
+      // DP-020: a page that was live at this address and has been taken off the site answers
+      // 404 with the detail `unpublished`, so the site can say so instead of "not found".
+      if (!row && (await this.wasUnpublished(site, path))) {
+        throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
+      }
+      throw new ApiError("NOT_FOUND");
+    }
     return { page, fragments: this.liveFragments(site, live), preview: false };
+  }
+
+  /** Whether the page last published at `path` is UNPUBLISHED now. */
+  private async wasUnpublished(site: PublicSite, path: string): Promise<boolean> {
+    const revisions = await site.db.cmsPageRevision.findMany({
+      where: { siteId: site.siteId, path },
+      select: { id: true },
+    });
+    if (revisions.length === 0) return false;
+    const pub = await site.db.cmsPagePublication.findFirst({
+      where: {
+        siteId: site.siteId,
+        status: "UNPUBLISHED",
+        revisionId: { in: revisions.map((r) => r.id) },
+      },
+      select: { id: true },
+    });
+    return Boolean(pub);
+  }
+
+  /**
+   * DP-020: the site's published news articles, newest first by their first publication (title
+   * as the tie-break), with the site-wide fragments. Only valid revisions are listed. DP-153: with
+   * the published heading page of the list (`bv.news-index`), or null while it is not published.
+   */
+  async news(ctx: RequestContext): Promise<CmsPublicNews> {
+    const site = await this.sites.begin(ctx);
+    const live = await liveRows(site.db, site.siteId);
+    const articles: CmsPublicArticle[] = [];
+    for (const row of live) {
+      if (!cmsIsArticle(row.page) || !row.revision.path) continue;
+      const page = this.served(row);
+      if (!page) continue;
+      const c = page.content as unknown as CmsArticleContent;
+      articles.push({
+        path: row.revision.path,
+        slug: cmsSlugOfPath(row.revision.path),
+        title: page.title,
+        excerpt: c.excerpt,
+        coverImage: c.coverImage,
+        coverAlt: c.coverAlt,
+        firstPublishedAt: row.firstPublishedAt.toISOString(),
+        publishedAt: row.publishedAt.toISOString(),
+      });
+    }
+    articles.sort(
+      (x, y) =>
+        y.firstPublishedAt.localeCompare(x.firstPublishedAt) || x.title.localeCompare(y.title),
+    );
+    const index = live.find(
+      (r) => r.page.kind === "DESIGN" && r.page.templateKey === NEWS_INDEX_KEY,
+    );
+    return {
+      page: index ? this.served(index) : null,
+      articles,
+      fragments: this.liveFragments(site, live),
+    };
   }
 
   async preview(ctx: RequestContext, rawToken: string): Promise<CmsPublicBundle> {

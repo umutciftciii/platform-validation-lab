@@ -4,9 +4,11 @@ import {
   CMS_SITE_REGISTRY,
   CmsContextResponseSchema,
   CmsPageListResponseSchema,
+  cmsIsArticle,
   type CmsRegistryEntry,
   type CmsSite,
 } from "@dream/contracts";
+import { ContentTabs } from "../../../components/cms/content-tabs";
 import { ImportButton } from "../../../components/cms/import-button";
 import {
   CmsKindPill,
@@ -60,7 +62,8 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
   const list = await serverRead(`${CMS}/sites/${site.id}/pages`, CmsPageListResponseSchema);
   // A registry entry leaves the list once its page exists in the CMS: designed pages and
   // fragments by their key, content pages by their path.
-  const pages = list.ok ? list.data.items : [];
+  // News articles (DP-020) have their own list under /content/news.
+  const pages = list.ok ? list.data.items.filter((p) => !cmsIsArticle(p)) : [];
   const imported = new Set(pages.filter((p) => p.kind !== "TEMPLATE").map((p) => p.templateKey));
   const paths = new Set(pages.map((p) => p.path));
   const routes = CMS_SITE_REGISTRY.filter(
@@ -84,6 +87,8 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
         }
       />
 
+      <ContentTabs current="pages" siteParam={sp} />
+
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <SiteSwitcher
           sites={sites}
@@ -100,7 +105,7 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
       <Panel
         id="cms-pages"
         title="CMS pages"
-        description={list.ok ? countLabel(list.data.items.length) : undefined}
+        description={list.ok ? countLabel(pages.length) : undefined}
         bodyClassName="px-0! pb-2! pt-3!"
       >
         {!list.ok ? (
@@ -109,7 +114,7 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
               ? "You are not allowed to read content on this site."
               : "Try again in a moment."}
           </ErrorState>
-        ) : list.data.items.length === 0 ? (
+        ) : pages.length === 0 ? (
           <EmptyState
             icon="content"
             title="No CMS pages on this site yet"
@@ -126,7 +131,7 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
             className="divide-y divide-line border-t border-line"
             aria-label={`CMS pages of ${site.name}`}
           >
-            {list.data.items.map((p) => (
+            {pages.map((p) => (
               <li
                 key={p.id}
                 className="group relative transition-colors hover:bg-surface-2/70 focus-within:bg-surface-2/70"

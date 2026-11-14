@@ -17,11 +17,13 @@ import {
 } from "@nestjs/common";
 import type {
   CmsContextResponse,
+  CmsHistoryResponse,
   CmsImportResponse,
   CmsPageListResponse,
   CmsPageResponse,
   CmsPreviewResponse,
   CmsPublicBundle,
+  CmsPublicNews,
 } from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { CmsService } from "./cms.service.js";
@@ -95,6 +97,21 @@ export class CmsController {
     return this.cms.publish(ctx, id, body);
   }
 
+  @Get("pages/:id/history")
+  history(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<CmsHistoryResponse> {
+    return this.cms.history(ctx, id);
+  }
+
+  @Post("pages/:id/restore")
+  @HttpCode(200)
+  restore(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ): Promise<CmsPageResponse> {
+    return this.cms.restore(ctx, id, body);
+  }
+
   @Post("pages/:id/unpublish")
   @HttpCode(200)
   unpublish(
@@ -119,6 +136,13 @@ export class PublicCmsController {
   @Header("Cache-Control", "no-store")
   page(@Ctx() ctx: RequestContext, @Query("path") path: unknown): Promise<CmsPublicBundle> {
     return this.cms.page(ctx, path);
+  }
+
+  /** DP-020: the published news articles, newest first. */
+  @Get("news")
+  @Header("Cache-Control", "no-store")
+  news(@Ctx() ctx: RequestContext): Promise<CmsPublicNews> {
+    return this.cms.news(ctx);
   }
 
   @Get("preview/:token")
