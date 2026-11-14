@@ -29,6 +29,7 @@ import {
 } from "./catalog.js";
 import {
   ProductValidationSchema,
+  SpecValueBasisSchema,
   SpecValueDataSchema,
   type ProductValidation,
   type ValidationIssue,
@@ -331,6 +332,8 @@ export const PublishedSnapshotSchema = z.strictObject({
       z.strictObject({
         key: z.string(),
         name: z.string(),
+        /** DP-156; snapshots taken before it hold specification values only. */
+        basis: SpecValueBasisSchema.default("SPECIFICATION"),
         value: SpecValueDataSchema,
         unit: z.string().nullable(),
         testMethod: z.string().nullable(),

@@ -751,26 +751,40 @@ model SpecDefinition {
   @@index([archived, sortOrder])
 }
 
-/// One product's value for one specification. Exactly one value shape per data type (CHECK and
-/// trigger against the definition).
+/// DP-156 (K1): what a value states. SPECIFICATION = a specification limit or value (binding for
+/// the product); TYPICAL = a typical value given for information. Measured results are not a
+/// basis: they belong to a batch and are kept as a certificate of analysis (K2).
+enum SpecValueBasis {
+  SPECIFICATION
+  TYPICAL
+}
+
+/// One product's value for one specification and basis. Exactly one value shape per data type
+/// (CHECK and trigger against the definition). DP-156: a RANGE may have one end only (a one-sided
+/// limit) and open ends (rangeMinExclusive / rangeMaxExclusive); a typical value is [x, x].
 model ProductSpecValue {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  productId    String   @db.Uuid
-  definitionId String   @db.Uuid
-  numberValue  Decimal? @db.Decimal(20, 6)
-  rangeMin     Decimal? @db.Decimal(20, 6)
-  rangeMax     Decimal? @db.Decimal(20, 6)
-  textValue    String?  @db.VarChar(2000)
-  booleanValue Boolean?
-  unit         String?  @db.VarChar(32)
-  testMethod   String?  @db.VarChar(64)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+  id                String         @id @default(uuid(7)) @db.Uuid
+  productId         String         @db.Uuid
+  definitionId      String         @db.Uuid
+  basis             SpecValueBasis @default(SPECIFICATION)
+  numberValue       Decimal?       @db.Decimal(20, 6)
+  rangeMin          Decimal?       @db.Decimal(20, 6)
+  rangeMax          Decimal?       @db.Decimal(20, 6)
+  /// The range excludes rangeMin ("> x"); only with rangeMin (CHECK).
+  rangeMinExclusive Boolean        @default(false)
+  /// The range excludes rangeMax ("< x"); only with rangeMax (CHECK).
+  rangeMaxExclusive Boolean        @default(false)
+  textValue         String?        @db.VarChar(2000)
+  booleanValue      Boolean?
+  unit              String?        @db.VarChar(32)
+  testMethod        String?        @db.VarChar(64)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
 
   product    Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
   definition SpecDefinition @relation(fields: [definitionId], references: [id], onDelete: Restrict)
 
-  @@unique([productId, definitionId])
+  @@unique([productId, definitionId, basis])
   @@index([definitionId])
 }
 
