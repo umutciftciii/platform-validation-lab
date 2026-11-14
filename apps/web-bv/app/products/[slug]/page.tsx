@@ -3,28 +3,41 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { formatSpecValue } from "@/components/products/format";
+import { browseHref, trail } from "@/components/products/browse";
 import {
   documentHref,
   getProduct,
   getProductCrossReferences,
   getProductDocuments,
   imageSrc,
+  listCategories,
+  listProducts,
 } from "@/lib/catalog-api";
 import {
   XREF_PUBLIC_LABELS,
   xrefPublicNotice,
   type PublicCrossReference,
   type PublicDocument,
+  type PublicProduct,
+  type PublicProductSummary,
 } from "@dream/contracts";
 
-export const metadata: Metadata = {
-  title: "Product | Dream Petroleum BV",
-  robots: { index: false, follow: false },
-};
+const product = cache(getProduct);
+
+/** The product's own browser title; the catalogue stays out of search engines until launch. */
+export async function generateMetadata({ params }: PageProps<"/products/[slug]">): Promise<Metadata> {
+  await connection();
+  const res = await product((await params).slug);
+  return {
+    title: res.ok ? `${res.data.name} | Dream Petroleum BV` : "Product | Dream Petroleum BV",
+    ...(res.ok && res.data.summary ? { description: res.data.summary } : {}),
+    robots: { index: false, follow: false },
+  };
+}
 
 /**
  * One published BV product (PM-3): the approved snapshot from the platform API. Unknown,
@@ -32,118 +45,224 @@ export const metadata: Metadata = {
  */
 export default function ProductPage({ params }: PageProps<"/products/[slug]">) {
   return (
-    <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products", href: "/products" }]}>
-      <Suspense fallback={<DetailSkeleton />}>
-        <ProductDetail params={params} />
-      </Suspense>
-    </CatalogShell>
+    <Suspense
+      fallback={
+        <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products", href: "/products" }]}>
+          <DetailSkeleton />
+        </CatalogShell>
+      }
+    >
+      <ProductDetail params={params} />
+    </Suspense>
   );
 }
 
 async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">["params"] }) {
   await connection();
   const { slug } = await params;
-  const [result, docs, xrefs] = await Promise.all([
-    getProduct(slug),
+  const [result, docs, xrefs, cats, list] = await Promise.all([
+    product(slug),
     getProductDocuments(slug),
     getProductCrossReferences(slug),
+    listCategories(),
+    listProducts(),
   ]);
   if (!result.ok && result.reason === "not_found") notFound();
+  const home = { label: "Home", href: "/" };
+  const products = { label: "Products", href: "/products" };
   if (!result.ok) {
     return (
-      <CatalogNotice title="This product is not available right now">
-        Please try again in a moment, or go back to{" "}
-        <Link href="/products" className="underline">
-          all products
-        </Link>
-        .
-      </CatalogNotice>
+      <CatalogShell crumbs={[home, products]}>
+        <div className="pt-8">
+          <CatalogNotice title="This product is not available right now">
+            Please try again in a moment, or go back to{" "}
+            <Link href="/products" className="underline">
+              all products
+            </Link>
+            .
+          </CatalogNotice>
+        </div>
+      </CatalogShell>
     );
   }
   const p = result.data;
+  // DP-162: Home / Products / <category chain> / <product>, each category a filtered list
+  const chain = trail(cats.ok ? cats.data : [], p.category.slug);
+  const categoryCrumbs = (chain.length ? chain : [{ slug: p.category.slug, name: p.category.name }]).map(
+    (c) => ({ label: c.name, href: browseHref({ category: c.slug }) }),
+  );
+  const related = list.ok
+    ? list.data.filter((x) => x.category.slug === p.category.slug && x.slug !== p.slug).slice(0, 4)
+    : [];
   const [cover, ...gallery] = p.images;
+  const spec = p.specs.filter((s) => s.basis !== "TYPICAL");
+  const typical = p.specs.filter((s) => s.basis === "TYPICAL");
   return (
-    <article className="grid grid-cols-1 gap-10 pt-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-14 lg:pt-10">
-      <div className="space-y-3">
-        <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border border-glass/10 bg-navy/60">
-          {cover ? (
-            <Image
-              src={imageSrc(cover.id, "display")}
-              alt={cover.altText ?? p.name}
-              fill
-              unoptimized
-              priority
-              sizes="(min-width: 1024px) 55vw, 100vw"
-              className="object-cover"
-            />
+    <CatalogShell crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}>
+      <article className="grid grid-cols-1 gap-10 pt-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-16 lg:pt-12">
+        <div className="space-y-3 lg:sticky lg:top-24 lg:self-start">
+          <div className="relative aspect-square overflow-hidden rounded-2xl border border-glass/10 bg-navy/60">
+            {cover ? (
+              <Image
+                src={imageSrc(cover.id, "display")}
+                alt={cover.altText ?? p.name}
+                fill
+                unoptimized
+                priority
+                sizes="(min-width: 1024px) 45vw, 100vw"
+                className="object-cover"
+              />
+            ) : null}
+          </div>
+          {gallery.length ? (
+            <ul className="grid grid-cols-4 gap-3">
+              {gallery.map((img) => (
+                <li
+                  key={img.id}
+                  className="relative aspect-square overflow-hidden rounded-xl border border-glass/10 bg-navy/60"
+                >
+                  <Image
+                    src={imageSrc(img.id, "thumb")}
+                    alt={img.altText ?? ""}
+                    fill
+                    unoptimized
+                    sizes="25vw"
+                    className="object-cover"
+                  />
+                </li>
+              ))}
+            </ul>
           ) : null}
         </div>
-        {gallery.length ? (
-          <ul className="grid grid-cols-4 gap-3">
-            {gallery.map((img) => (
-              <li
-                key={img.id}
-                className="relative aspect-square overflow-hidden rounded-xl border border-glass/10 bg-navy/60"
-              >
-                <Image
-                  src={imageSrc(img.id, "thumb")}
-                  alt={img.altText ?? ""}
-                  fill
-                  unoptimized
-                  sizes="25vw"
-                  className="object-cover"
-                />
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
 
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber">{p.category.name}</p>
-        <h1 className="mt-3 text-[clamp(2rem,4.5vw,3.25rem)] font-medium leading-[1.05] [font-stretch:115%]">
-          {p.name}
-        </h1>
-        <p className="mt-2 font-mono text-sm text-steel">{p.code}</p>
-        <p className="mt-6 text-lg leading-relaxed text-glass/90">{p.summary}</p>
-        {p.description ? (
-          <p className="mt-4 whitespace-pre-line leading-relaxed text-steel">{p.description}</p>
-        ) : null}
+        <div className="min-w-0">
+          <Link href={browseHref({ category: p.category.slug })} className="tp-eyebrow hover:underline">
+            {p.category.name}
+          </Link>
+          <h1 className="mt-3 text-[clamp(2rem,4vw,3.25rem)] font-medium leading-[1.05] [font-stretch:108%] [text-wrap:balance]">
+            {p.name}
+          </h1>
+          <p className="mt-3 font-mono text-sm text-steel">{p.code}</p>
+          {p.summary ? <p className="tp-lead">{p.summary}</p> : null}
+          {p.description ? (
+            <p className="mt-4 whitespace-pre-line leading-relaxed text-[#cdd8e2]">{p.description}</p>
+          ) : null}
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link
+              href="/contact"
+              className="inline-flex h-11 items-center rounded-full bg-amber px-6 text-sm font-medium text-ink transition-colors hover:bg-amber/90"
+            >
+              Ask about this product
+            </Link>
+          </div>
 
-        {p.specs.length ? (
-          <section aria-labelledby="specs" className="mt-10">
-            <h2 id="specs" className="text-sm font-medium uppercase tracking-[0.16em] text-steel">
+          <section aria-labelledby="specs" className="mt-12">
+            <h2 id="specs" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
               Technical data
             </h2>
-            <dl className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
-              {p.specs.map((s) => (
-                <div key={`${s.key}:${s.basis}`} className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[1fr_auto] sm:gap-6">
-                  <dt className="text-sm text-steel">
-                    {s.name}
-                    {s.basis === "TYPICAL" ? <span className="text-steel/70"> (typical)</span> : null}
-                    {s.testMethod ? (
-                      <span className="block text-xs text-steel/70">{s.testMethod}</span>
-                    ) : null}
-                  </dt>
-                  <dd className="tabular-nums text-glass sm:text-right">{formatSpecValue(s)}</dd>
-                </div>
-              ))}
-            </dl>
+            {spec.length || typical.length ? (
+              <>
+                {spec.length ? <SpecTable title="Specification" note={null} specs={spec} /> : null}
+                {typical.length ? (
+                  <SpecTable
+                    title="Typical values"
+                    note="Typical values are for information only; they are not specification limits."
+                    specs={typical}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <div className="mt-3 rounded-2xl border border-glass/10 bg-glass/[0.03] px-5 py-6">
+                <p className="text-glass">Technical data for this product is available on request.</p>
+                <p className="mt-1 text-sm text-steel">
+                  Our team will share the current specification and documents for your application.
+                </p>
+              </div>
+            )}
           </section>
-        ) : null}
 
-        {docs.ok && docs.data.length ? <Documents slug={slug} items={docs.data} /> : null}
+          {docs.ok && docs.data.length ? <Documents slug={slug} items={docs.data} /> : null}
 
-        {xrefs.ok && xrefs.data.length ? <CrossReferences items={xrefs.data} /> : null}
+          {xrefs.ok && xrefs.data.length ? <CrossReferences items={xrefs.data} /> : null}
+        </div>
+      </article>
 
-        <Link
-          href="/products"
-          className="mt-10 inline-flex items-center gap-2 text-sm text-steel hover:text-glass"
-        >
-          <span aria-hidden="true">←</span> All products
+      {related.length ? <Related items={related} category={p.category} /> : null}
+    </CatalogShell>
+  );
+}
+
+type Spec = PublicProduct["specs"][number];
+
+/** One table per kind of value (DP-156): specification limits, then typical values. */
+function SpecTable({ title, note, specs }: { title: string; note: string | null; specs: Spec[] }) {
+  return (
+    <div className="mt-5">
+      <h3 className="text-sm font-medium text-glass">{title}</h3>
+      {note ? <p className="mt-1 text-xs text-steel">{note}</p> : null}
+      <dl className="mt-2 divide-y divide-glass/10 border-y border-glass/10">
+        {specs.map((s) => (
+          <div
+            key={`${s.key}:${s.basis}`}
+            className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-0.5 py-3"
+          >
+            <dt className="text-sm text-[#cdd8e2]">{s.name}</dt>
+            <dd className="text-right tabular-nums text-glass">{formatSpecValue(s)}</dd>
+            {s.testMethod ? (
+              <dd className="col-span-2 text-xs text-steel/80">Test method: {s.testMethod}</dd>
+            ) : null}
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function Related({
+  items,
+  category,
+}: {
+  items: PublicProductSummary[];
+  category: { slug: string; name: string };
+}) {
+  return (
+    <section aria-labelledby="related" className="mt-20 border-t border-glass/10 pt-10">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 id="related" className="tp-title">
+          More in {category.name}
+        </h2>
+        <Link href={browseHref({ category: category.slug })} className="text-sm text-amber hover:underline">
+          View all
         </Link>
       </div>
-    </article>
+      <ul className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {items.map((r) => (
+          <li key={r.slug}>
+            <Link
+              href={`/products/${r.slug}`}
+              className="group flex h-full flex-col overflow-hidden rounded-2xl border border-glass/10 bg-glass/[0.03] transition-colors hover:border-amber/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber"
+            >
+              <div className="relative aspect-square bg-navy/60">
+                {r.cover ? (
+                  <Image
+                    src={imageSrc(r.cover.id, "thumb")}
+                    alt={r.cover.altText ?? ""}
+                    fill
+                    unoptimized
+                    sizes="(min-width: 1024px) 20vw, 45vw"
+                    className="object-cover"
+                  />
+                ) : null}
+              </div>
+              <div className="p-4">
+                <p className="text-sm font-medium leading-snug text-glass">{r.name}</p>
+                <p className="mt-1 font-mono text-xs text-steel/80">{r.code}</p>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -164,8 +283,8 @@ function sizeLabel(bytes: number): string {
  */
 function Documents({ slug, items }: { slug: string; items: PublicDocument[] }) {
   return (
-    <section aria-labelledby="documents" className="mt-10">
-      <h2 id="documents" className="text-sm font-medium uppercase tracking-[0.16em] text-steel">
+    <section aria-labelledby="documents" className="mt-12">
+      <h2 id="documents" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
         Documents
       </h2>
       <ul className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
@@ -226,8 +345,8 @@ const VERIFIED_DATE = new Intl.DateTimeFormat("en-GB", {
  */
 function CrossReferences({ items }: { items: PublicCrossReference[] }) {
   return (
-    <section aria-labelledby="cross-references" className="mt-10">
-      <h2 id="cross-references" className="text-sm font-medium uppercase tracking-[0.16em] text-steel">
+    <section aria-labelledby="cross-references" className="mt-12">
+      <h2 id="cross-references" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
         Cross-references
       </h2>
       <ul className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
@@ -264,8 +383,8 @@ function CrossReferences({ items }: { items: PublicCrossReference[] }) {
 
 function DetailSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-10 pt-6 lg:grid-cols-2" aria-busy="true">
-      <div className="aspect-[4/3] animate-pulse rounded-2xl bg-glass/[0.05]" />
+    <div className="grid grid-cols-1 gap-10 pt-8 lg:grid-cols-2" aria-busy="true">
+      <div className="aspect-square animate-pulse rounded-2xl bg-glass/[0.05]" />
       <div className="space-y-4">
         <div className="h-4 w-32 animate-pulse rounded bg-glass/[0.08]" />
         <div className="h-12 w-3/4 animate-pulse rounded bg-glass/[0.08]" />
