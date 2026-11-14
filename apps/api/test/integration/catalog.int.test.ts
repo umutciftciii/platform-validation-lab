@@ -36,6 +36,9 @@ import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
+import { adminApi } from "../../src/catalog/import/client.js";
+import { runImport } from "../../src/catalog/import/run.js";
+import { CatalogMappingSchema } from "@dream/contracts";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CLI = path.join(API_DIR, "dist/iam/iam-cli.js");
@@ -93,7 +96,7 @@ class Staff {
   constructor(
     readonly name: string,
     readonly userId: string,
-    private readonly token: string,
+    readonly token: string,
   ) {}
 
   async call(method: string, p: string, body?: unknown): Promise<Res> {
@@ -1309,7 +1312,7 @@ describe("9. specification values (master data, product version)", () => {
     expect(
       r.body.values.find((v: { definitionId: string }) => v.definitionId === defs["pour_point"]!.id)
         .value,
-    ).toEqual({ type: "RANGE", min: -45, max: -36 });
+    ).toEqual({ type: "RANGE", min: -45, max: -36, minExclusive: false, maxExclusive: false });
     products["syn6"]!.version = 3;
     const audit = await lastAudit("catalog.spec_values_saved");
     expect(audit).toMatchObject({ scopeType: "PLATFORM", siteId: null, resourceId: id });
@@ -1363,6 +1366,112 @@ describe("9. specification values (master data, product version)", () => {
     products["syn6"]!.version = 5;
   });
 
+  it("DP-156: one-sided and open limits, and a typical value beside the specification", async () => {
+    const id = products["syn6"]!.id;
+    const kv = value("kv100", { type: "NUMBER", number: 5.85 }, "mm²/s", "ASTM D445");
+    const pourLimit = {
+      ...value("pour_point", { type: "RANGE", min: null, max: -30 }, "°C", "ASTM D97"),
+      basis: "SPECIFICATION",
+    };
+    const pourTypical = {
+      ...value("pour_point", { type: "RANGE", min: -42, max: -42 }, "°C"),
+      basis: "TYPICAL",
+    };
+    const appearanceTypical = {
+      ...value("appearance", { type: "TEXT", text: "Clear" }),
+      basis: "TYPICAL",
+    };
+    const save = (values: object[], version: number) =>
+      pm.post(`/products/${id}/specs`, { version, values });
+    // shape problems are BLOCKING invalid_range on the value's own target
+    expectError(
+      await save([kv, { ...pourLimit, value: { type: "RANGE", min: null, max: null } }], 5),
+      400,
+      "VALIDATION_FAILED",
+      { path: "spec:pour_point", rule: "invalid_range" },
+    );
+    expectError(
+      await save(
+        [
+          kv,
+          {
+            ...pourTypical,
+            value: { type: "RANGE", min: -42, max: -42, minExclusive: true },
+          },
+        ],
+        5,
+      ),
+      400,
+      "VALIDATION_FAILED",
+      { path: "spec:pour_point:typical", rule: "invalid_range" },
+    );
+    expectError(await save([kv, pourLimit, { ...pourLimit }], 5), 400, "VALIDATION_FAILED", {
+      path: "spec:pour_point",
+      rule: "duplicate",
+    });
+    const r = await save([kv, pourLimit, pourTypical, appearanceTypical], 5);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.productVersion).toBe(6);
+    products["syn6"]!.version = 6;
+    const pour = r.body.values.filter(
+      (v: { definitionId: string }) => v.definitionId === defs["pour_point"]!.id,
+    );
+    expect(pour.map((v: { basis: string; value: unknown }) => [v.basis, v.value])).toEqual(
+      expect.arrayContaining([
+        [
+          "SPECIFICATION",
+          { type: "RANGE", min: null, max: -30, minExclusive: false, maxExclusive: false },
+        ],
+        [
+          "TYPICAL",
+          { type: "RANGE", min: -42, max: -42, minExclusive: false, maxExclusive: false },
+        ],
+      ]),
+    );
+    // a typical appearance does not stand in for anything; warnings name the typical target
+    expect(
+      r.body.validation.warnings.map((i: { code: string; target: string }) => [i.code, i.target]),
+    ).toEqual(expect.arrayContaining([["test_method_missing", "spec:pour_point:typical"]]));
+    expect((await lastAudit("catalog.spec_values_saved"))?.metadata).toMatchObject({
+      changed: ["pour_point", "pour_point:typical", "appearance:typical"],
+      removed: ["appearance"],
+    });
+    // an open end is stored as such; saving the same set again changes nothing
+    const open = await save(
+      [
+        kv,
+        { ...pourLimit, value: { type: "RANGE", min: -45, max: -30, maxExclusive: true } },
+        pourTypical,
+        appearanceTypical,
+      ],
+      6,
+    );
+    expect(open.status, JSON.stringify(open.body)).toBe(200);
+    products["syn6"]!.version = 7;
+    const row = await owner.productSpecValue.findUniqueOrThrow({
+      where: {
+        productId_definitionId_basis: {
+          productId: id,
+          definitionId: defs["pour_point"]!.id,
+          basis: "SPECIFICATION",
+        },
+      },
+    });
+    expect([row.rangeMin?.toString(), row.rangeMax?.toString(), row.rangeMaxExclusive]).toEqual([
+      "-45",
+      "-30",
+      true,
+    ]);
+    // back to the earlier set: kv100 + appearance (other tests rely on it)
+    const back = await save(
+      [kv, value("appearance", { type: "TEXT", text: "Clear and bright" })],
+      7,
+    );
+    expect(back.status).toBe(200);
+    expect(await owner.productSpecValue.count({ where: { productId: id } })).toBe(2);
+    products["syn6"]!.version = 8;
+  });
+
   it("archived products keep their values read-only", async () => {
     const p = products["WAX-10"]!;
     const arch = await pm.post(`/products/${p.id}/archive`, { version: 3 });
@@ -1403,6 +1512,57 @@ describe("9. specification values (master data, product version)", () => {
       }),
       /ProductSpecValue_range_order/,
     );
+    // DP-156: an open end needs that end, and [x, x) is empty
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: {
+          productId,
+          definitionId: defs["pour_point"]!.id,
+          rangeMax: -10,
+          rangeMinExclusive: true,
+          unit: "°C",
+        },
+      }),
+      /ProductSpecValue_range_open_end/,
+    );
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: {
+          productId,
+          definitionId: defs["pour_point"]!.id,
+          rangeMin: -10,
+          rangeMax: -10,
+          rangeMaxExclusive: true,
+          unit: "°C",
+        },
+      }),
+      /ProductSpecValue_range_open_end/,
+    );
+    await rejectsDb(
+      asApp.productSpecValue.create({
+        data: { productId, definitionId: defs["pour_point"]!.id, unit: "°C", textValue: null },
+      }),
+      /ProductSpecValue_one_shape|does not match the specification data type/,
+    );
+    // a value cannot change its basis (it would silently turn a typical value into a limit)
+    const typical = await owner.productSpecValue.create({
+      data: {
+        productId,
+        definitionId: defs["pour_point"]!.id,
+        basis: "TYPICAL",
+        rangeMin: -40,
+        rangeMax: -40,
+        unit: "°C",
+      },
+    });
+    await rejectsDb(
+      asApp.productSpecValue.update({
+        where: { id: typical.id },
+        data: { basis: "SPECIFICATION" },
+      }),
+      /cannot move to another product, definition or basis/,
+    );
+    await owner.productSpecValue.delete({ where: { id: typical.id } });
     await rejectsDb(
       asApp.productSpecValue.create({
         data: {
@@ -1805,5 +1965,255 @@ describe("12. storage failures leave no orphans", () => {
     rmSync(path.join(MEDIA_DIR, row.storageKey));
     expect((await pm.file(imgs["jpeg"]!.id, "original")).status).toBe(404);
     expect((await pm.file(imgs["jpeg"]!.id, "display")).status).toBe(200);
+  });
+});
+
+describe("13. DP-157 catalogue import (dry run, apply, idempotence, conflicts)", () => {
+  const range = (min: number | null, max: number | null) => ({
+    type: "RANGE",
+    min,
+    max,
+    minExclusive: false,
+    maxExclusive: false,
+  });
+  const item = (code: string, slug: string, category: string, specs: object[] = []) => ({
+    liveSlug: slug,
+    sourceUrl: `https://example.test/en/products/${slug}`,
+    code,
+    slug,
+    name: `Imported ${code}`,
+    readiness: specs.length ? "READY" : "READY_NO_SPECS",
+    import: {
+      master: { code, slug, name: `Imported ${code}`, status: "DRAFT" },
+      listing: {
+        site: "BV",
+        categorySlug: category,
+        visibility: "HIDDEN",
+        sortOrder: 10,
+        texts: { en: { title: `Imported ${code}` } },
+      },
+      specs,
+    },
+  });
+  const mapping = CatalogMappingSchema.parse({
+    schemaVersion: 1,
+    site: "BV",
+    definitions: [
+      { key: "imp_vi", name: "VI", dataType: "RANGE", units: [], testMethods: [], decimals: 0 },
+      // existing RANGE °C definition: reused
+      {
+        key: "pour_point",
+        name: "Pour",
+        dataType: "RANGE",
+        units: ["°C"],
+        testMethods: [],
+        decimals: 0,
+      },
+      // existing NUMBER definition: incompatible, so IMP-3's technical set is skipped
+      {
+        key: "kv100",
+        name: "KV",
+        dataType: "RANGE",
+        units: ["mm²/s"],
+        testMethods: [],
+        decimals: 2,
+      },
+    ],
+    categories: [
+      { slug: "imp-oil", name: "Imported oil", parentSlug: null, sortOrder: 10 },
+      { slug: "imp-oil-g1", name: "Group I", parentSlug: "imp-oil", sortOrder: 20 },
+    ],
+    products: [
+      item("IMP-1", "imp-1", "imp-oil-g1", [
+        {
+          key: "imp_vi",
+          basis: "SPECIFICATION",
+          value: range(95, null),
+          unit: null,
+          testMethod: null,
+        },
+        {
+          key: "pour_point",
+          basis: "SPECIFICATION",
+          value: range(null, -9),
+          unit: "°C",
+          testMethod: "ASTM D97",
+        },
+        {
+          key: "pour_point",
+          basis: "TYPICAL",
+          value: range(-12, -12),
+          unit: "°C",
+          testMethod: null,
+        },
+      ]),
+      item("IMP-2", "imp-2", "imp-oil"),
+      item("IMP-3", "imp-3", "imp-oil", [
+        {
+          key: "kv100",
+          basis: "SPECIFICATION",
+          value: range(4, 5),
+          unit: "mm²/s",
+          testMethod: null,
+        },
+      ]),
+      // the code of an existing product with another slug: never touched
+      item("SN-500", "sn-500-live", "imp-oil"),
+      item("IMP-4", "imp-4", "imp-oil"),
+    ],
+  });
+  let importer: Staff;
+  const api = () =>
+    adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: importer.token,
+      origin: ADMIN_ORIGIN,
+    });
+  const footprint = async () => ({
+    products: await owner.product.count(),
+    categories: await owner.productCategory.count(),
+    definitions: await owner.specDefinition.count(),
+    listings: await owner.productSiteListing.count(),
+    values: await owner.productSpecValue.count(),
+  });
+
+  beforeAll(async () => {
+    importer = await staff(
+      "importer",
+      [{ role: "platform_product_manager" }, { role: "product_editor", site: BV }],
+      admin.userId,
+    );
+  });
+
+  it("a dry run reads only and reports the plan; a reader cannot apply", async () => {
+    const before = await footprint();
+    const sn500 = await owner.product.findUniqueOrThrow({ where: { code: "SN-500" } });
+    const r = await runImport(api(), mapping, { apply: false });
+    expect(r.mode).toBe("dry-run");
+    expect(r.written).toEqual([]);
+    expect(r.plan.products.map((p) => [p.code, p.action, p.specs, p.specsSkipped])).toEqual([
+      ["IMP-1", "CREATE", 3, 0],
+      ["IMP-2", "CREATE", 0, 0],
+      ["IMP-3", "CREATE", 0, 1],
+      ["SN-500", "CONFLICT", 0, 0],
+      ["IMP-4", "CREATE", 0, 0],
+    ]);
+    expect(r.plan.definitions.map((d) => [d.key, d.action])).toEqual([
+      ["imp_vi", "CREATE"],
+      ["pour_point", "REUSE"],
+      ["kv100", "CONFLICT"],
+    ]);
+    expect(r.plan.confirmCount).toBe(4);
+    expect(await footprint()).toEqual(before);
+    // an apply without the dry run's count is refused before anything is written
+    await expect(runImport(api(), mapping, { apply: true, confirm: 3 })).rejects.toThrow(
+      /does not match the plan \(4 product/,
+    );
+    expect(await footprint()).toEqual(before);
+    expect(
+      (await owner.product.findUniqueOrThrow({ where: { code: "SN-500" } })).updatedAt,
+    ).toEqual(sn500.updatedAt);
+    // the session's own permissions apply: a BV reader cannot create anything
+    const reader = adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: bvReader.token,
+      origin: ADMIN_ORIGIN,
+    });
+    const denied = await runImport(reader, mapping, { apply: true, confirm: 4 });
+    expect(denied.error).toMatch(/403/);
+    expect(denied.written).toEqual([]);
+    expect(await footprint()).toEqual(before);
+  });
+
+  it("apply creates DRAFT masters, HIDDEN BV listings and only the importable values", async () => {
+    const before = await footprint();
+    const sn500 = await owner.product.findUniqueOrThrow({ where: { code: "SN-500" } });
+    // IMP-4 was started by hand earlier: same code, slug and name, no listing (PARTIAL)
+    const partial = await pm.post("/products", {
+      code: "IMP-4",
+      slug: "imp-4",
+      name: "Imported IMP-4",
+    });
+    expect(partial.status).toBe(201);
+    const dry = await runImport(api(), mapping, { apply: false });
+    expect(dry.plan.products.find((p) => p.code === "IMP-4")?.action).toBe("PARTIAL");
+    expect(dry.plan.confirmCount).toBe(3);
+    const r = await runImport(api(), mapping, { apply: true, confirm: 3 });
+    expect(r.error).toBeNull();
+    expect(r.written.map((w) => `${w.kind}:${w.ref}`)).toEqual([
+      "definition:imp_vi",
+      "category:imp-oil",
+      "category:imp-oil-g1",
+      "product:IMP-1",
+      "listing:IMP-1",
+      "specs:IMP-1",
+      "product:IMP-2",
+      "listing:IMP-2",
+      "product:IMP-3",
+      "listing:IMP-3",
+    ]);
+    const created = await owner.product.findMany({
+      where: { code: { in: ["IMP-1", "IMP-2", "IMP-3"] } },
+      include: { listings: true, specValues: true },
+      orderBy: { code: "asc" },
+    });
+    expect(
+      created.map((p) => [p.code, p.status, p.listings.map((l) => [l.siteId, l.visibility])]),
+    ).toEqual([
+      ["IMP-1", "DRAFT", [[BV, "HIDDEN"]]],
+      ["IMP-2", "DRAFT", [[BV, "HIDDEN"]]],
+      ["IMP-3", "DRAFT", [[BV, "HIDDEN"]]],
+    ]);
+    expect(created.map((p) => p.specValues.length)).toEqual([3, 0, 0]);
+    const typical = created[0]!.specValues.find((v) => v.basis === "TYPICAL")!;
+    expect([typical.rangeMin?.toString(), typical.rangeMax?.toString()]).toEqual(["-12", "-12"]);
+    const limit = created[0]!.specValues.find(
+      (v) => v.basis === "SPECIFICATION" && v.rangeMin === null,
+    )!;
+    expect([limit.rangeMax?.toString(), limit.testMethod]).toEqual(["-9", "ASTM D97"]);
+    // the hand-made IMP-4 and the conflicting SN-500 are untouched
+    const imp4 = await owner.product.findUniqueOrThrow({
+      where: { code: "IMP-4" },
+      include: { listings: true },
+    });
+    expect(imp4.listings).toEqual([]);
+    expect(
+      (await owner.product.findUniqueOrThrow({ where: { code: "SN-500" } })).updatedAt,
+    ).toEqual(sn500.updatedAt);
+    const after = await footprint();
+    expect(after.products - before.products).toBe(4); // 3 imported + IMP-4 by hand
+    expect(after.definitions - before.definitions).toBe(1);
+    // the import acted as the operator: audit events carry the importer
+    const audit = await owner.auditEvent.findMany({
+      where: { actorUserId: importer.userId, action: "catalog.product_created" },
+    });
+    expect(audit).toHaveLength(3);
+  });
+
+  it("re-running writes nothing; a partial product is completed only on request", async () => {
+    const before = await footprint();
+    const again = await runImport(api(), mapping, { apply: false });
+    expect(again.plan.products.map((p) => [p.code, p.action])).toEqual([
+      ["IMP-1", "ALREADY_IMPORTED"],
+      ["IMP-2", "ALREADY_IMPORTED"],
+      ["IMP-3", "ALREADY_IMPORTED"],
+      ["SN-500", "CONFLICT"],
+      ["IMP-4", "PARTIAL"],
+    ]);
+    expect(again.plan.counts.definitionsToCreate + again.plan.counts.categoriesToCreate).toBe(0);
+    const noop = await runImport(api(), mapping, { apply: true, confirm: 0 });
+    expect(noop.written).toEqual([]);
+    expect(await footprint()).toEqual(before);
+    const resume = await runImport(api(), mapping, {
+      apply: true,
+      confirm: 1,
+      resumePartial: true,
+    });
+    expect(resume.error).toBeNull();
+    expect(resume.written.map((w) => `${w.kind}:${w.ref}`)).toEqual(["listing:IMP-4"]);
+    const final = await runImport(api(), mapping, { apply: false, resumePartial: true });
+    expect(final.plan.confirmCount).toBe(0);
   });
 });

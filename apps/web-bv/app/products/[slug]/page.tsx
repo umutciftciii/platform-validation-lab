@@ -117,9 +117,10 @@ async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">
             </h2>
             <dl className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
               {p.specs.map((s) => (
-                <div key={s.key} className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[1fr_auto] sm:gap-6">
+                <div key={`${s.key}:${s.basis}`} className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[1fr_auto] sm:gap-6">
                   <dt className="text-sm text-steel">
                     {s.name}
+                    {s.basis === "TYPICAL" ? <span className="text-steel/70"> (typical)</span> : null}
                     {s.testMethod ? (
                       <span className="block text-xs text-steel/70">{s.testMethod}</span>
                     ) : null}

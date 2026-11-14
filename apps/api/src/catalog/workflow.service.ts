@@ -95,6 +95,7 @@ async function loadContent(db: Db, productIds: readonly string[]) {
       definitions: rules,
       values: v.map((x) => ({
         definitionId: x.definitionId,
+        basis: x.basis,
         value: valueData(x),
         unit: x.unit,
         testMethod: x.testMethod,
@@ -551,10 +552,17 @@ export class WorkflowService {
           specs: values
             .map((v) => ({ v, d: defsById.get(v.definitionId) }))
             .filter((x): x is { v: (typeof values)[number]; d: NonNullable<typeof x.d> } => !!x.d)
-            .sort((x, y) => x.d.sortOrder - y.d.sortOrder || x.d.name.localeCompare(y.d.name))
+            .sort(
+              (x, y) =>
+                x.d.sortOrder - y.d.sortOrder ||
+                x.d.name.localeCompare(y.d.name) ||
+                // DP-156: the specification value before the typical value of the same property
+                (x.v.basis === y.v.basis ? 0 : x.v.basis === "SPECIFICATION" ? -1 : 1),
+            )
             .map(({ v, d }) => ({
               key: d.key,
               name: d.name,
+              basis: v.basis,
               value: valueData(v),
               unit: v.unit,
               testMethod: v.testMethod,

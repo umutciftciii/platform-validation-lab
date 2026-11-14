@@ -1,6 +1,7 @@
 /**
  * Technical specifications and product images (PM-2). Both belong to the platform-wide product
- * master: one value per product and definition, never copied per site. Changing them needs the
+ * master: one value per product, definition and basis (DP-156: SPECIFICATION or TYPICAL), never
+ * copied per site. Changing them needs the
  * PLATFORM permission `product_master:edit`; reading them needs `product:read` on any site.
  *
  * The validation engine at the end of this file is shared by the API (refuses value-level
@@ -132,9 +133,34 @@ export const SpecDefinitionResponseSchema = z.strictObject({ definition: SpecDef
 
 // --- values --------------------------------------------------------------------------------
 
+/**
+ * DP-156 (K1): what a value states. SPECIFICATION (the default) is a specification limit or
+ * value; TYPICAL is a typical value given for information. Measured results are never a product
+ * value (K2): they belong to a batch and are kept as a certificate of analysis.
+ */
+export const SPEC_VALUE_BASES = ["SPECIFICATION", "TYPICAL"] as const;
+export const SpecValueBasisSchema = z.enum(SPEC_VALUE_BASES);
+export type SpecValueBasis = z.infer<typeof SpecValueBasisSchema>;
+
+/**
+ * RANGE (DP-156): an interval. Either end may be null (a one-sided limit: "≥ 200" is
+ * { min: 200, max: null }), and an end may be open ("< 1800": max 1800, maxExclusive). A value
+ * stated as a single number of a RANGE definition is [x, x]. Ranges stored before DP-156 have
+ * both ends and both closed, which the defaults keep. Shape problems (no end, an open end
+ * without that end, min above max, an empty interval) are BLOCKING `invalid_range` issues of
+ * the shared engine, not parse errors.
+ */
+export const SpecRangeSchema = z.strictObject({
+  type: z.literal("RANGE"),
+  min: SpecNumberSchema.nullable(),
+  max: SpecNumberSchema.nullable(),
+  minExclusive: z.boolean().default(false),
+  maxExclusive: z.boolean().default(false),
+});
+
 export const SpecValueDataSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("NUMBER"), number: SpecNumberSchema }),
-  z.strictObject({ type: z.literal("RANGE"), min: SpecNumberSchema, max: SpecNumberSchema }),
+  SpecRangeSchema,
   z.strictObject({ type: z.literal("TEXT"), text: z.string().trim().min(1).max(SPEC_TEXT_MAX) }),
   z.strictObject({ type: z.literal("BOOLEAN"), boolean: z.boolean() }),
 ]);
@@ -142,6 +168,7 @@ export type SpecValueData = z.infer<typeof SpecValueDataSchema>;
 
 export const SpecValueInputSchema = z.strictObject({
   definitionId: UuidSchema,
+  basis: SpecValueBasisSchema.default("SPECIFICATION"),
   value: SpecValueDataSchema,
   unit: UnitSchema.nullable().default(null),
   testMethod: TestMethodSchema.nullable().default(null),
@@ -151,7 +178,8 @@ export type SpecValueInput = z.input<typeof SpecValueInputSchema>;
 /**
  * Replace the product's specification values. `version` is the product master's version: the
  * values are part of the master, so saving them bumps it (and a stale version is a conflict).
- * A definition left out has no value afterwards.
+ * A definition and basis left out has no value afterwards; each definition takes at most one
+ * value per basis.
  */
 export const SpecValuesSaveRequestSchema = z.strictObject({
   version: VersionSchema,
@@ -161,6 +189,7 @@ export type SpecValuesSaveRequest = z.input<typeof SpecValuesSaveRequestSchema>;
 
 export const SpecValueSchema = z.strictObject({
   definitionId: UuidSchema,
+  basis: SpecValueBasisSchema,
   value: SpecValueDataSchema,
   unit: z.string().nullable(),
   testMethod: z.string().nullable(),
@@ -282,6 +311,8 @@ export interface DefinitionRule {
 
 export interface ValueForCheck {
   definitionId: string;
+  /** DP-156; SPECIFICATION when absent. Only a SPECIFICATION value satisfies "required". */
+  basis?: SpecValueBasis;
   value: SpecValueData;
   unit: string | null;
   testMethod: string | null;
@@ -302,9 +333,26 @@ function decimalsOf(n: number): number {
   return s.split(".")[1]?.length ?? 0;
 }
 
+/** The issue target of a value: "spec:<key>", or "spec:<key>:typical" for a TYPICAL value. */
+export function specTarget(key: string, basis: SpecValueBasis = "SPECIFICATION"): string {
+  return basis === "TYPICAL" ? `spec:${key}:typical` : `spec:${key}`;
+}
+
+/** Shape problem of a range (DP-156), or null: no end, open end without it, empty interval. */
+export function rangeProblem(r: Extract<SpecValueData, { type: "RANGE" }>): string | null {
+  if (r.min === null && r.max === null) return "enter a minimum, a maximum or both";
+  if (r.minExclusive && r.min === null) return "an open minimum needs a minimum";
+  if (r.maxExclusive && r.max === null) return "an open maximum needs a maximum";
+  if (r.min !== null && r.max !== null) {
+    if (r.min > r.max) return "minimum is above maximum";
+    if (r.min === r.max && (r.minExclusive || r.maxExclusive)) return "the range is empty";
+  }
+  return null;
+}
+
 /** Problems of one value against its definition (all BLOCKING except the test method). */
 export function checkSpecValue(def: DefinitionRule, v: ValueForCheck): ValidationIssue[] {
-  const target = `spec:${def.key}`;
+  const target = specTarget(def.key, v.basis);
   const out: ValidationIssue[] = [];
   if (v.value.type !== def.dataType) {
     return [
@@ -328,14 +376,15 @@ export function checkSpecValue(def: DefinitionRule, v: ValueForCheck): Validatio
       ),
     );
   }
-  const numbers =
+  const numbers: number[] =
     v.value.type === "NUMBER"
       ? [v.value.number]
       : v.value.type === "RANGE"
-        ? [v.value.min, v.value.max]
+        ? [v.value.min, v.value.max].filter((n): n is number => n !== null)
         : [];
-  if (v.value.type === "RANGE" && v.value.min > v.value.max) {
-    out.push(issue("BLOCKING", "invalid_range", target, `${def.name}: minimum is above maximum.`));
+  const shape = v.value.type === "RANGE" ? rangeProblem(v.value) : null;
+  if (shape) {
+    out.push(issue("BLOCKING", "invalid_range", target, `${def.name}: ${shape}.`));
   }
   if (
     numbers.some(
@@ -387,7 +436,12 @@ export function validateProductData(input: {
   images: readonly { id: string; altText: string | null }[];
 }): ProductValidation {
   const byId = new Map(input.definitions.map((d) => [d.id, d]));
-  const valued = new Set(input.values.map((v) => v.definitionId));
+  // A typical value is information, not a specification: it never satisfies "required".
+  const valued = new Set(
+    input.values
+      .filter((v) => (v.basis ?? "SPECIFICATION") === "SPECIFICATION")
+      .map((v) => v.definitionId),
+  );
   const all: ValidationIssue[] = [];
   for (const d of input.definitions) {
     if (d.archived || valued.has(d.id)) continue;
