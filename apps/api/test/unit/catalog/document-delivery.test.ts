@@ -6,6 +6,7 @@ import {
   DOCUMENT_ACCESS_CAPABILITIES,
   DocumentStampers,
   IDENTITY_STAMPER,
+  offeredToVisitors,
   StamperMissing,
   type DeliveryContext,
 } from "../../../src/catalog/document-delivery.js";
@@ -113,5 +114,22 @@ describe("documentDisposition", () => {
       `attachment; filename="TDS _ICCSYN_ 6 _ EN.pdf"; filename*=UTF-8''TDS%20%22ICCSYN%22%206%20%E2%80%93%20EN.pdf`,
     );
     expect(documentDisposition("inline", "a.pdf")).toMatch(/^inline; /);
+  });
+});
+
+describe("offeredToVisitors (DP-163 list indicator)", () => {
+  it("counts PUBLIC and LEAD_REQUIRED only; MEMBERS_ONLY and INTERNAL never", () => {
+    expect(offeredToVisitors("PUBLIC")).toBe(true);
+    expect(offeredToVisitors("LEAD_REQUIRED")).toBe(true);
+    expect(offeredToVisitors("MEMBERS_ONLY")).toBe(false);
+    expect(offeredToVisitors("INTERNAL")).toBe(false);
+  });
+  it("follows the capability switches (fail-closed)", () => {
+    const off = { memberAccounts: false, leadGrants: false };
+    expect(offeredToVisitors("LEAD_REQUIRED", off)).toBe(false);
+    // member sessions open MEMBERS_ONLY downloads, but not to an anonymous visitor of the list
+    expect(offeredToVisitors("MEMBERS_ONLY", { memberAccounts: true, leadGrants: true })).toBe(
+      false,
+    );
   });
 });

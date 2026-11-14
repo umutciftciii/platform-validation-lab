@@ -13,6 +13,7 @@
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
+  DOCUMENT_ACCESS_POLICIES,
   PUBLIC_IMAGE_VARIANTS,
   PublishedSnapshotSchema,
   SlugSchema,
@@ -34,6 +35,7 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import { PublicSiteService, type PublicSite } from "../iam/public-site.js";
 import {
   decideDocumentAccess,
+  offeredToVisitors,
   DocumentStampers,
   StamperMissing,
   type DeliveryContext,
@@ -81,18 +83,48 @@ export class PublicCatalogService {
   async list(ctx: RequestContext): Promise<PublicProductListResponse> {
     const site = await this.sites.begin(ctx);
     const rows = await PublicCatalogService.live(site);
+    const withDocuments = await PublicCatalogService.productsWithOfferedDocuments(
+      site,
+      rows.map((r) => r.productId),
+    );
     const items: (PublicProductSummary & { sortOrder: number })[] = [];
     for (const row of rows) {
       const s = this.parse(row);
       if (s)
         items.push({
-          ...toPublicSummary(s, row.publishedAt.toISOString()),
+          ...toPublicSummary(s, row.publishedAt.toISOString(), {
+            hasDocuments: withDocuments.has(row.productId),
+          }),
           sortOrder: s.sortOrder,
         });
     }
     // DP-160: names compare naturally ("White Oil 15#" before "White Oil 100#", "50 g" before "25 kg")
     items.sort((x, y) => x.sortOrder - y.sortOrder || compareProductNames(x.name, y.name));
     return { items: items.map(({ sortOrder: _s, ...rest }) => (void _s, rest)) };
+  }
+
+  /**
+   * DP-163: the live products that have at least one document a visitor can obtain on this site:
+   * shown here with a pinned revision, ACTIVE, and of a policy that is open (PUBLIC, or
+   * LEAD_REQUIRED through the request form). Two queries for the whole list, no per-product calls.
+   */
+  private static async productsWithOfferedDocuments(
+    site: PublicSite,
+    productIds: string[],
+  ): Promise<Set<string>> {
+    const policies = DOCUMENT_ACCESS_POLICIES.filter((p) => offeredToVisitors(p));
+    if (productIds.length === 0 || policies.length === 0) return new Set();
+    const docs = await site.db.productDocument.findMany({
+      where: { productId: { in: productIds }, status: "ACTIVE", accessPolicy: { in: policies } },
+      select: { id: true, productId: true },
+    });
+    if (docs.length === 0) return new Set();
+    const shown = await site.db.productDocumentSite.findMany({
+      where: { siteId: site.siteId, documentId: { in: docs.map((d) => d.id) } },
+      select: { documentId: true },
+    });
+    const shownIds = new Set(shown.map((s) => s.documentId));
+    return new Set(docs.filter((d) => shownIds.has(d.id)).map((d) => d.productId));
   }
 
   /**
