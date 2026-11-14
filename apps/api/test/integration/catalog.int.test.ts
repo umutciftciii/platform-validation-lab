@@ -2379,14 +2379,14 @@ describe("14. DP-158 media stage (images and compiled PDFs, no site link)", () =
       [
         "OTHER",
         "LEAD_REQUIRED",
-        "Imported IMP-1 — technical summary compiled from source documents",
+        "IMP-1 · Imported IMP-1 — technical summary compiled from source documents",
         [sha(files.pdf1)],
         [],
       ],
       [
         "OTHER",
         "LEAD_REQUIRED",
-        "Imported IMP-2 — technical summary compiled from source documents",
+        "IMP-2 · Imported IMP-2 — technical summary compiled from source documents",
         [sha(files.pdf2)],
         [],
       ],
@@ -2442,7 +2442,7 @@ describe("14. DP-158 media stage (images and compiled PDFs, no site link)", () =
     const imp3 = await owner.product.findUniqueOrThrow({ where: { code: "IMP-3" } });
     const made = await pm.post(`/products/${imp3.id}/documents`, {
       type: "OTHER",
-      title: "Imported IMP-3 — technical summary compiled from source documents",
+      title: "IMP-3 · Imported IMP-3 — technical summary compiled from source documents",
       accessPolicy: "LEAD_REQUIRED",
     });
     expect(made.status).toBe(201);
