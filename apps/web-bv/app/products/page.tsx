@@ -6,14 +6,16 @@ import { Suspense, type ReactNode } from "react";
 
 import {
   browseHref,
-  buildTree,
+  categoryLabel,
+  chipRows,
   filterProducts,
   paginate,
   parseBrowse,
+  topCategories,
   trail,
   type BrowseParams,
-  type CategoryNode,
 } from "@/components/products/browse";
+import { cardImage, categoryArt } from "@/components/products/catalog-visuals";
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { imageSrc, listCategories, listProducts } from "@/lib/catalog-api";
 import type { PublicCategory, PublicProductSummary } from "@dream/contracts";
@@ -28,6 +30,8 @@ export const metadata: Metadata = {
  * Published BV products (PM-3), live from the platform API: only products approved, published
  * on BV and listed as visible appear. DP-160: browse by category (with its sub-categories),
  * search by name, code or category, and page through the results; every state is a URL.
+ * DP-163: category cards with art and sub-category chips above the list, large horizontal
+ * product cards from md, two compact cards per row on phones.
  */
 export default function ProductsPage({ searchParams }: PageProps<"/products">) {
   return (
@@ -73,144 +77,143 @@ async function Browse({ searchParams }: { searchParams: PageProps<"/products">["
   const path = trail(categories, p.category);
   const current = path.at(-1) ?? null;
   return (
-    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-12">
-      {categories.length ? (
-        <CategoryFilter tree={buildTree(categories)} params={p} total={list.data.length} open={path} />
-      ) : null}
-      <div className={categories.length ? "" : "lg:col-span-2"}>
-        <SearchBar params={p} />
-        <p className="mt-4 text-sm text-steel" role="status">
-          {result.total === 1 ? "1 product" : `${result.total} products`}
-          {current ? ` in ${current.name}` : ""}
-          {p.q ? ` matching “${p.q}”` : ""}
-        </p>
-        {result.total === 0 ? (
-          <div className="mt-6">
-            <CatalogNotice title="No products match">
-              Try another word or{" "}
-              <Link href={browseHref({ category: p.category })} className="underline">
-                clear the search
-              </Link>
-              .
-            </CatalogNotice>
-          </div>
-        ) : (
-          <>
-            <ProductGrid products={result.items} />
-            <Pager params={p} page={result.page} pages={result.pages} />
-          </>
-        )}
-      </div>
+    <div>
+      {categories.length ? <CategoryStrip categories={categories} params={p} active={path} /> : null}
+      <SearchBar params={p} />
+      <p className="mt-4 text-sm text-steel" role="status">
+        {result.total === 1 ? "1 product" : `${result.total} products`}
+        {current ? ` in ${current.name}` : ""}
+        {p.q ? ` matching “${p.q}”` : ""}
+      </p>
+      {result.total === 0 ? (
+        <div className="mt-6">
+          <CatalogNotice title="No products match">
+            Try another word or{" "}
+            <Link href={browseHref({ category: p.category })} className="underline">
+              clear the search
+            </Link>
+            .
+          </CatalogNotice>
+        </div>
+      ) : (
+        <>
+          <ProductGrid products={result.items} categories={categories} />
+          <Pager params={p} page={result.page} pages={result.pages} />
+        </>
+      )}
     </div>
   );
 }
 
-/** Desktop: a tree in the side column. Mobile: the same links in a closed disclosure. */
-function CategoryFilter({
-  tree,
+/**
+ * DP-163: the top-level categories as image cards in one row (scrolls sideways on narrow screens),
+ * then, while a category is chosen, its sub-categories as chips. Names and counts are the public
+ * API's (live products only); long names stop after two lines and keep their full text in the
+ * accessible name.
+ */
+function CategoryStrip({
+  categories,
   params,
-  total,
-  open,
+  active,
 }: {
-  tree: CategoryNode[];
+  categories: PublicCategory[];
   params: BrowseParams;
-  total: number;
-  open: PublicCategory[];
+  active: PublicCategory[];
 }) {
-  const openSlugs = new Set(open.map((c) => c.slug));
-  const label = open.at(-1)?.name ?? "All products";
-  const list = (
-    <ul className="space-y-0.5 text-sm">
-      <li>
-        <CategoryLink href={browseHref({ q: params.q })} active={!params.category} count={total}>
-          All products
-        </CategoryLink>
-      </li>
-      {tree.map((n) => (
-        <CategoryItem key={n.slug} node={n} params={params} openSlugs={openSlugs} depth={0} />
-      ))}
-    </ul>
-  );
+  const activeSlugs = new Set(active.map((c) => c.slug));
+  const rows = chipRows(categories, params.category);
+  const countLabel = (n: number) => (n === 1 ? "1 product" : `${n} products`);
   return (
-    <aside aria-label="Product categories">
-      <details className="group rounded-2xl border border-glass/10 bg-glass/[0.03] lg:hidden">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm text-glass">
-          <span>
-            <span className="text-steel">Category: </span>
-            {label}
-          </span>
-          <span aria-hidden="true" className="text-steel transition-transform group-open:rotate-180">
-            ▾
-          </span>
-        </summary>
-        <div className="border-t border-glass/10 px-2 py-2">{list}</div>
-      </details>
-      <div className="hidden lg:sticky lg:top-24 lg:block">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-steel">Categories</p>
-        {list}
+    <nav aria-label="Product categories" className="mb-8">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">Categories</h2>
+        {params.category ? (
+          <Link
+            href={browseHref({ q: params.q })}
+            className="text-sm text-amber underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-amber"
+          >
+            All products
+          </Link>
+        ) : null}
       </div>
-    </aside>
-  );
-}
-
-function CategoryItem({
-  node,
-  params,
-  openSlugs,
-  depth,
-}: {
-  node: CategoryNode;
-  params: BrowseParams;
-  openSlugs: Set<string>;
-  depth: number;
-}) {
-  const active = params.category === node.slug;
-  const expanded = openSlugs.has(node.slug);
-  return (
-    <li>
-      <CategoryLink
-        href={browseHref({ category: node.slug, q: params.q })}
-        active={active}
-        count={node.count}
-        depth={depth}
-      >
-        {node.name}
-      </CategoryLink>
-      {node.children.length && expanded ? (
-        <ul>
-          {node.children.map((c) => (
-            <CategoryItem key={c.slug} node={c} params={params} openSlugs={openSlugs} depth={depth + 1} />
+      <ul className="-mx-4 flex snap-x snap-mandatory scroll-px-4 gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:scroll-px-0 sm:gap-2.5 sm:px-0">
+        {topCategories(categories).map((c) => {
+          const art = categoryArt(c.slug);
+          const on = activeSlugs.has(c.slug);
+          return (
+            <li key={c.slug} className="w-24 shrink-0 snap-start sm:w-28">
+              <Link
+                href={browseHref({ category: c.slug, q: params.q })}
+                aria-current={params.category === c.slug ? "page" : undefined}
+                aria-label={`${c.name}, ${countLabel(c.count)}`}
+                title={c.name}
+                className={`flex h-full flex-col overflow-hidden rounded-xl border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber ${
+                  on ? "border-amber/70 bg-amber/[0.06]" : "border-glass/10 bg-glass/[0.03] hover:border-amber/40"
+                }`}
+              >
+                <span className="relative block aspect-square bg-navy">
+                  {art ? (
+                    <Image
+                      src={art}
+                      alt=""
+                      fill
+                      unoptimized
+                      loading="eager"
+                      sizes="112px"
+                      className="object-cover"
+                    />
+                  ) : (
+                    <span className="absolute inset-0 bg-gradient-to-br from-[#0f2338] to-navy" />
+                  )}
+                </span>
+                <span className="flex flex-1 flex-col justify-between gap-0.5 px-2 pb-2 pt-1.5 sm:px-2.5">
+                  <span
+                    aria-hidden="true"
+                    className={`line-clamp-2 min-h-[2.5em] text-[0.7rem] font-medium leading-[1.25] sm:text-xs ${on ? "text-amber" : "text-glass"}`}
+                  >
+                    {c.name}
+                  </span>
+                  <span aria-hidden="true" className="font-mono text-[0.6rem] tabular-nums text-steel sm:text-[0.65rem]">
+                    {c.count}
+                  </span>
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {rows.map((r) => (
+        <ul key={r.parent.slug} aria-label={`${r.parent.name} sub-categories`} className="mt-3 flex flex-wrap gap-2">
+          <li>
+            <Chip href={browseHref({ category: r.parent.slug, q: params.q })} on={params.category === r.parent.slug}>
+              All {r.parent.name}
+              <span className="font-mono text-xs text-steel">{r.parent.count}</span>
+            </Chip>
+          </li>
+          {r.children.map((c) => (
+            <li key={c.slug}>
+              <Chip href={browseHref({ category: c.slug, q: params.q })} on={activeSlugs.has(c.slug)}>
+                {c.name}
+                <span className="font-mono text-xs text-steel">{c.count}</span>
+              </Chip>
+            </li>
           ))}
         </ul>
-      ) : null}
-    </li>
+      ))}
+    </nav>
   );
 }
 
-function CategoryLink({
-  href,
-  active,
-  count,
-  depth = 0,
-  children,
-}: {
-  href: string;
-  active: boolean;
-  count: number;
-  depth?: number;
-  children: ReactNode;
-}) {
+function Chip({ href, on, children }: { href: string; on: boolean; children: ReactNode }) {
   return (
     <Link
       href={href}
-      aria-current={active ? "page" : undefined}
-      style={{ paddingLeft: `${0.75 + depth * 0.9}rem` }}
-      className={`flex items-center justify-between gap-3 rounded-lg py-2 pr-3 transition-colors focus-visible:outline-2 focus-visible:outline-amber ${
-        active ? "bg-amber/10 text-amber" : "text-glass/85 hover:bg-glass/[0.05] hover:text-glass"
+      aria-current={on ? "page" : undefined}
+      className={`inline-flex h-9 items-center gap-2 rounded-full border px-3.5 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber ${
+        on ? "border-amber bg-amber/10 text-amber" : "border-glass/15 text-glass/85 hover:border-amber/60 hover:text-glass"
       }`}
     >
-      <span className="min-w-0 truncate">{children}</span>
-      <span className="shrink-0 font-mono text-xs tabular-nums text-steel">{count}</span>
+      {children}
     </Link>
   );
 }
@@ -241,42 +244,76 @@ function SearchBar({ params }: { params: BrowseParams }) {
   );
 }
 
-function ProductGrid({ products }: { products: PublicProductSummary[] }) {
+/**
+ * DP-163: mobile, two narrow cards per row (image above, title reserved for three lines so the
+ * codes line up); from md, large horizontal cards (bottle left, information right), two per row
+ * from lg. The whole card links to the product page.
+ */
+function ProductGrid({ products, categories }: { products: PublicProductSummary[]; categories: PublicCategory[] }) {
   return (
-    <ul className="mt-5 grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-3">
-      {products.map((p) => (
-        <li key={p.slug}>
-          <Link
-            href={`/products/${p.slug}`}
-            className="group flex h-full flex-col overflow-hidden rounded-2xl border border-glass/10 bg-glass/[0.03] transition-colors hover:border-amber/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber"
-          >
-            <div className="relative aspect-square bg-navy/60">
-              {p.cover ? (
-                <Image
-                  src={imageSrc(p.cover.id, "thumb")}
-                  alt={p.cover.altText ?? ""}
-                  fill
-                  unoptimized
-                  sizes="(min-width: 1280px) 25vw, 45vw"
-                  className="object-cover transition-transform duration-500 group-hover:scale-[1.03]"
-                />
-              ) : null}
-            </div>
-            <div className="flex flex-1 flex-col gap-1.5 p-3 sm:gap-2 sm:p-5">
-              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber sm:text-xs">
-                {p.category.name}
-              </p>
-              <h2 className="text-sm font-medium leading-snug text-glass [font-stretch:108%] sm:text-lg">{p.name}</h2>
-              {p.summary ? (
-                <p className="hidden text-sm leading-relaxed text-steel sm:line-clamp-3">{p.summary}</p>
-              ) : null}
-              <p className="mt-auto pt-1 font-mono text-[0.7rem] text-steel/80 sm:pt-2 sm:text-xs">{p.code}</p>
-            </div>
-          </Link>
-        </li>
-      ))}
+    <ul className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-5 lg:grid-cols-2">
+      {products.map((p) => {
+        const img = cardImage(p);
+        return (
+          <li key={p.slug} className="flex">
+            <Link
+              href={`/products/${p.slug}`}
+              className="group grid w-full grid-rows-[auto_1fr] overflow-hidden rounded-2xl border border-glass/10 bg-glass/[0.03] transition-colors hover:border-amber/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber md:grid-cols-[42%_minmax(0,1fr)] md:grid-rows-1"
+            >
+              <div className="relative aspect-[4/5] bg-navy/60">
+                {img.kind === "cover" ? (
+                  <Image
+                    src={imageSrc(img.id, "thumb")}
+                    alt={img.altText ?? ""}
+                    fill
+                    unoptimized
+                    sizes="(min-width: 1024px) 22vw, (min-width: 768px) 40vw, 45vw"
+                    className="object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                  />
+                ) : img.kind === "sample" ? (
+                  <Image
+                    src={img.src}
+                    alt=""
+                    fill
+                    unoptimized
+                    sizes="(min-width: 1024px) 22vw, (min-width: 768px) 40vw, 45vw"
+                    className="object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                  />
+                ) : null}
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5 p-3 sm:p-4 md:gap-2.5 md:p-6">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-amber sm:text-xs">
+                  {categoryLabel(categories, p.category)}
+                </p>
+                <h2 className="line-clamp-3 min-h-[calc(1.35em*3)] text-sm font-medium leading-[1.35] text-glass [font-stretch:108%] sm:text-base md:min-h-0 md:text-xl md:leading-snug">
+                  {p.name}
+                </h2>
+                <p className="mt-auto pt-1 font-mono text-[0.7rem] text-steel/80 sm:text-xs md:mt-0 md:pt-0 md:text-sm md:text-steel">
+                  {p.code}
+                </p>
+                {p.summary ? (
+                  <p className="hidden text-sm leading-relaxed text-steel md:line-clamp-3">{p.summary}</p>
+                ) : null}
+                {p.hasTechnicalData || p.hasDocuments ? (
+                  <ul aria-label="Available content" className="mt-1 hidden flex-wrap gap-1.5 md:flex">
+                    {p.hasTechnicalData ? <Indicator>Technical data</Indicator> : null}
+                    {p.hasDocuments ? <Indicator>Documents</Indicator> : null}
+                  </ul>
+                ) : null}
+                <span aria-hidden="true" className="mt-auto hidden pt-2 text-sm font-medium text-amber md:block">
+                  View product →
+                </span>
+              </div>
+            </Link>
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+function Indicator({ children }: { children: ReactNode }) {
+  return <li className="rounded-full border border-glass/15 px-2.5 py-1 text-xs text-glass">{children}</li>;
 }
 
 function Pager({ params, page, pages }: { params: BrowseParams; page: number; pages: number }) {
@@ -313,9 +350,9 @@ function Pager({ params, page, pages }: { params: BrowseParams; page: number; pa
 
 function ListSkeleton() {
   return (
-    <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+    <ul className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-5 lg:grid-cols-2" aria-busy="true">
       {Array.from({ length: 3 }, (_, i) => (
-        <li key={i} className="h-80 animate-pulse rounded-2xl border border-glass/10 bg-glass/[0.04]" />
+        <li key={i} className="h-72 animate-pulse rounded-2xl border border-glass/10 bg-glass/[0.04]" />
       ))}
     </ul>
   );

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkPublication,
   PublicProductSchema,
+  PublicProductSummarySchema,
   PublishedSnapshotSchema,
   RequestChangesRequestSchema,
   SubmitReviewRequestSchema,
@@ -198,11 +199,26 @@ describe("public view of a snapshot", () => {
       "category",
       "code",
       "cover",
+      "hasDocuments",
+      "hasTechnicalData",
       "name",
       "publishedAt",
       "slug",
       "summary",
     ]);
+    // the product page carries no list flags
+    expect(Object.keys(p)).not.toContain("hasDocuments");
+  });
+
+  it("DP-163: flags technical data from the snapshot and documents from the caller", () => {
+    const at = "2026-11-11T10:00:00.000Z";
+    const withSpecs = toPublicSummary(snapshot, at, { hasDocuments: true });
+    expect(PublicProductSummarySchema.parse(withSpecs)).toMatchObject({
+      hasTechnicalData: true,
+      hasDocuments: true,
+    });
+    const bare = toPublicSummary(PublishedSnapshotSchema.parse({ ...snapshot, specs: [] }), at);
+    expect(bare).toMatchObject({ hasTechnicalData: false, hasDocuments: false });
   });
 
   it("DP-161: a product without a summary is published with summary null", () => {

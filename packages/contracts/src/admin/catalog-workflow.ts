@@ -375,7 +375,8 @@ export const PublicImageSchema = z.strictObject({
 });
 export type PublicImage = z.infer<typeof PublicImageSchema>;
 
-export const PublicProductSummarySchema = z.strictObject({
+/** The fields a list entry and the product page share. */
+const PublicProductBaseSchema = z.strictObject({
   slug: z.string(),
   code: z.string(),
   name: z.string(),
@@ -384,6 +385,17 @@ export const PublicProductSummarySchema = z.strictObject({
   category: z.strictObject({ slug: z.string(), name: z.string() }),
   cover: PublicImageSchema.nullable(),
   publishedAt: IsoDate,
+});
+
+/**
+ * One entry of the public list. DP-163: the two flags drive the card indicators and are true only
+ * for content a visitor can actually reach: `hasTechnicalData` when the published snapshot holds
+ * at least one value, `hasDocuments` when at least one document shown on this site can be
+ * downloaded or requested (never INTERNAL, never a policy that is still closed).
+ */
+export const PublicProductSummarySchema = PublicProductBaseSchema.extend({
+  hasTechnicalData: z.boolean(),
+  hasDocuments: z.boolean(),
 });
 export type PublicProductSummary = z.infer<typeof PublicProductSummarySchema>;
 
@@ -411,7 +423,7 @@ export const PublicProductListResponseSchema = z.strictObject({
 });
 export type PublicProductListResponse = z.infer<typeof PublicProductListResponseSchema>;
 
-export const PublicProductSchema = PublicProductSummarySchema.extend({
+export const PublicProductSchema = PublicProductBaseSchema.extend({
   description: z.string().nullable(),
   specs: PublishedSnapshotSchema.shape.specs,
   images: z.array(PublicImageSchema).max(100),
@@ -444,7 +456,15 @@ export function toPublicProduct(s: PublishedSnapshot, publishedAt: string): Publ
   };
 }
 
-export function toPublicSummary(s: PublishedSnapshot, publishedAt: string): PublicProductSummary {
+/**
+ * The list entry of a snapshot. `hasDocuments` needs the site's document rows, so the caller
+ * passes it (DP-163); the technical-data flag comes from the snapshot itself.
+ */
+export function toPublicSummary(
+  s: PublishedSnapshot,
+  publishedAt: string,
+  site: { hasDocuments: boolean } = { hasDocuments: false },
+): PublicProductSummary {
   const p = toPublicProduct(s, publishedAt);
   return {
     slug: p.slug,
@@ -454,5 +474,7 @@ export function toPublicSummary(s: PublishedSnapshot, publishedAt: string): Publ
     category: p.category,
     cover: p.cover,
     publishedAt: p.publishedAt,
+    hasTechnicalData: s.specs.length > 0,
+    hasDocuments: site.hasDocuments,
   };
 }
