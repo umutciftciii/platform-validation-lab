@@ -23,6 +23,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import sharp from "sharp";
 import {
   ErrorBodySchema,
+  ProposalListResponseSchema,
+  ProposalResponseSchema,
   ProductWorkflowResponseSchema,
   PublicCategoryListResponseSchema,
   PublicProductListResponseSchema,
@@ -120,6 +122,10 @@ class Staff {
   }
   get(p: string) {
     return this.call("GET", p);
+  }
+  /** DP-171: a GET outside the catalogue routes (e.g. /api/v1/admin/leads). */
+  async getAbs(p: string): Promise<Res> {
+    return parse(await fetch(`${base}${p}`, { headers: this.headers() }));
   }
   post(p: string, body?: unknown) {
     return this.call("POST", p, body);
@@ -1667,5 +1673,436 @@ describe("9. DP-166 image visibility", () => {
     const rows = await owner.productImage.findMany({ where: { productId: id } });
     expect(rows.find((r) => r.id === visible)).toMatchObject({ isCover: true, isPublic: true });
     expect(rows.find((r) => r.id === hidden)).toMatchObject({ isCover: false, isPublic: false });
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 10. DP-171 (ADR-022): content proposals and the company review
+// ------------------------------------------------------------------------------------------
+
+describe("10. DP-171 content proposals", () => {
+  let companyBv: Staff; // company_content_reviewer @ BV
+  let companyCom: Staff; // company_content_reviewer @ CORPORATE
+  let productId: string;
+  let unlisted: string; // a product without a BV listing
+  let proposalId: string;
+  let before: string; // product, listing, texts, specs, images and publications before section 10
+
+  const reviewData = {
+    schemaVersion: 1,
+    family: "Group II base oil",
+    items: [
+      {
+        kind: "DP002_HELD",
+        field: "spec:pour_point",
+        text: "Two pour point limits on one page.",
+        sourceIds: ["S1"],
+        heldValue: {
+          definition: "pour_point",
+          basis: "SPECIFICATION",
+          raw: "Pour point, max: Minus 15 °C [GOST 20287]",
+          conflict: true,
+          finding: null,
+        },
+      },
+      {
+        kind: "CONFIRM",
+        field: "packaging",
+        text: "Packaging options.",
+        sourceIds: [],
+        heldValue: null,
+      },
+    ],
+    sources: [{ id: "S1", title: "GOST 20287-91", url: null, level: "B", documentDate: "1991" }],
+  };
+  const body = (extra: Record<string, unknown> = {}) => ({
+    productId,
+    locale: "en",
+    summary: "Group II base oil for lubricant blending.",
+    description: "A base oil offered as a blending component for lubricant manufacturers.",
+    reviewData,
+    sourceRef: "docs/catalog/proposals/test.json",
+    sourceSha256: "b".repeat(64),
+    ...extra,
+  });
+
+  async function fingerprint(): Promise<string> {
+    const ids = [productId, unlisted];
+    const [products, listings, texts, specs, images, publications, reviews] = await Promise.all([
+      owner.product.findMany({ where: { id: { in: ids } }, orderBy: { id: "asc" } }),
+      owner.productSiteListing.findMany({
+        where: { productId: { in: ids } },
+        orderBy: { id: "asc" },
+      }),
+      owner.productListingText.findMany({ orderBy: [{ listingId: "asc" }, { locale: "asc" }] }),
+      owner.productSpecValue.findMany({
+        where: { productId: { in: ids } },
+        orderBy: { id: "asc" },
+      }),
+      owner.productImage.findMany({ where: { productId: { in: ids } }, orderBy: { id: "asc" } }),
+      owner.productPublication.findMany({ orderBy: { id: "asc" } }),
+      owner.productReviewEvent.findMany({
+        where: { productId: { in: ids } },
+        orderBy: { id: "asc" },
+      }),
+    ]);
+    return createHash("sha256")
+      .update(JSON.stringify({ products, listings, texts, specs, images, publications, reviews }))
+      .digest("hex");
+  }
+
+  async function proposal(who: Staff = bvEditor) {
+    const res = await who.get(`/proposals/${proposalId}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return ProposalResponseSchema.parse(res.body);
+  }
+
+  beforeAll(async () => {
+    companyBv = await staff(
+      "company-bv",
+      [{ role: "company_content_reviewer", site: BV }],
+      root.userId,
+    );
+    companyCom = await staff(
+      "company-com",
+      [{ role: "company_content_reviewer", site: COM }],
+      root.userId,
+    );
+    productId = await completeProduct("proposal", "DP171-A");
+    const u = await pm.post("/products", { code: "DP171-B", slug: "dp171-b", name: "Unlisted" });
+    expect(u.status, JSON.stringify(u.body)).toBe(201);
+    unlisted = u.body.product.id;
+    before = await fingerprint();
+  });
+
+  it("creates a proposal with product:edit only; CREATED event, audit, one per product and locale", async () => {
+    expectError(await companyBv.post(`/sites/${BV}/proposals`, body()), 403, "FORBIDDEN");
+    expectError(await bvReader.post(`/sites/${BV}/proposals`, body()), 403, "FORBIDDEN");
+    expectError(await bvEditor.post(`/sites/${COM}/proposals`, body()), 403, "FORBIDDEN");
+    const bad = await bvEditor.post(
+      `/sites/${BV}/proposals`,
+      body({ summary: "Text [CONFIRM: TDS]" }),
+    );
+    expectError(bad, 400, "VALIDATION_FAILED");
+    expectError(
+      await bvEditor.post(`/sites/${BV}/proposals`, body({ productId: unlisted })),
+      409,
+      "CONFLICT_STATE",
+      { path: "productId", rule: "listing_missing" },
+    );
+    const res = await bvEditor.post(`/sites/${BV}/proposals`, body());
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const p = ProposalResponseSchema.parse(res.body);
+    proposalId = p.proposal.id;
+    expect(p.proposal).toMatchObject({
+      status: "REVIEW_PENDING",
+      version: 1,
+      productCode: "DP171-A",
+    });
+    expect(p.proposal.authors.map((a) => a.id)).toEqual([bvEditor.userId]);
+    expect(p.events.map((e) => [e.action, e.proposalVersion])).toEqual([["CREATED", 1]]);
+    expect(p.canDecide).toBe(false);
+    expect(p.decisionBlocked).toBe("no_permission");
+    expect((await lastAudit("catalog.proposal_created"))?.actorUserId).toBe(bvEditor.userId);
+    expectError(await bvEditor.post(`/sites/${BV}/proposals`, body()), 409, "CONFLICT_STATE", {
+      path: "productId",
+      rule: "unique",
+    });
+  });
+
+  it("reads proposals only within the reader's sites", async () => {
+    const list = await companyBv.get(`/proposals?siteId=${BV}`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    const parsed = ProposalListResponseSchema.parse(list.body);
+    expect(parsed.proposals.map((p) => p.productCode)).toEqual(["DP171-A"]);
+    expect(parsed.proposals[0]?.itemCounts.DP002_HELD).toBe(1);
+    expect(parsed.counts.REVIEW_PENDING).toBe(1);
+    const own = await proposal(companyBv);
+    expect(own.canDecide).toBe(true);
+    expect(own.canRevise).toBe(false);
+    expectError(await companyCom.get(`/proposals/${proposalId}`), 404, "NOT_FOUND");
+    const comList = await companyCom.get(`/proposals`);
+    expect(ProposalListResponseSchema.parse(comList.body).proposals).toEqual([]);
+    expectError(await companyCom.get(`/proposals?siteId=${BV}`), 403, "FORBIDDEN");
+    expectError(await nobody.get(`/proposals`), 403, "FORBIDDEN");
+  });
+
+  it("requests changes with a reason, the editor revises, the company approves", async () => {
+    expectError(
+      await companyBv.post(`/proposals/${proposalId}/request-changes`, {
+        version: 1,
+        comment: " ",
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const rc = await companyBv.post(`/proposals/${proposalId}/request-changes`, {
+      version: 1,
+      comment: "Please drop the second sentence.",
+    });
+    expect(rc.status, JSON.stringify(rc.body)).toBe(200);
+    expect(ProposalResponseSchema.parse(rc.body).proposal).toMatchObject({
+      status: "CHANGES_REQUESTED",
+      version: 2,
+    });
+    expectError(
+      await companyBv.post(`/proposals/${proposalId}/approve`, { version: 2 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "status", rule: "not_in_review" },
+    );
+    expectError(
+      await companyBv.post(`/proposals/${proposalId}/revise`, {
+        ...body(),
+        productId: undefined,
+        version: 2,
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    const rev = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: 2,
+      summary: "Group II base oil for lubricant blending.",
+      description: "A base oil for lubricant manufacturers.",
+      reviewData,
+      sourceRef: "docs/catalog/proposals/test.json",
+      sourceSha256: "b".repeat(64),
+      comment: "Second sentence removed.",
+    });
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    const revised = ProposalResponseSchema.parse(rev.body);
+    expect(revised.proposal).toMatchObject({
+      status: "REVIEW_PENDING",
+      version: 3,
+      decidedBy: null,
+    });
+    expectError(
+      await companyBv.post(`/proposals/${proposalId}/approve`, { version: 2 }),
+      409,
+      "CONFLICT_STATE",
+    );
+    const ok = await companyBv.post(`/proposals/${proposalId}/approve`, { version: 3 });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const approved = ProposalResponseSchema.parse(ok.body);
+    expect(approved.proposal).toMatchObject({ status: "APPROVED", version: 4 });
+    expect(approved.proposal.decidedBy?.id).toBe(companyBv.userId);
+    expect(approved.events.map((e) => e.action)).toEqual([
+      "CREATED",
+      "CHANGES_REQUESTED",
+      "REVISED",
+      "APPROVED",
+    ]);
+    expect(approved.events.every((e) => e.createdAt && e.actor.id)).toBe(true);
+    const audit = await lastAudit("catalog.proposal_approved");
+    expect(audit).toMatchObject({ actorUserId: companyBv.userId, siteId: BV, outcome: "SUCCESS" });
+  });
+
+  it("an author cannot decide on the revision (403, audited); the database refuses it too", async () => {
+    const rev = await root.post(`/proposals/${proposalId}/revise`, {
+      version: 4,
+      summary: "Group II base oil for lubricant blending.",
+      description: "A base oil for lubricant manufacturers and blenders.",
+      reviewData,
+      sourceRef: "manual",
+      sourceSha256: "c".repeat(64),
+    });
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    expect(ProposalResponseSchema.parse(rev.body).proposal.status).toBe("REVIEW_PENDING");
+    expectError(
+      await root.post(`/proposals/${proposalId}/approve`, { version: 5 }),
+      403,
+      "FORBIDDEN",
+      {
+        path: "(root)",
+        rule: "own_change",
+      },
+    );
+    const denied = await owner.auditEvent.findFirst({
+      where: {
+        action: "catalog.access_denied",
+        actorUserId: root.userId,
+        reason: "separation_of_duties",
+      },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(denied?.resourceId).toBe(proposalId);
+    await rejectsDb(
+      asApp.productContentProposal.update({
+        where: { id: proposalId },
+        data: {
+          status: "APPROVED",
+          version: 6,
+          decidedAt: new Date(),
+          decidedById: bvEditor.userId,
+        },
+      }),
+      /separation of duties/,
+    );
+    await rejectsDb(
+      asApp.productContentProposalEvent.create({
+        data: {
+          proposalId,
+          siteId: BV,
+          action: "APPROVED",
+          proposalVersion: 6,
+          actorUserId: root.userId,
+          contentSha256: "d".repeat(64),
+        },
+      }),
+      /separation of duties/,
+    );
+    const p = await proposal();
+    expect(p.proposal.status).toBe("REVIEW_PENDING");
+  });
+
+  it("a company approval changes nothing in the product, its listing, data or publications", async () => {
+    const ok = await companyBv.post(`/proposals/${proposalId}/approve`, { version: 5 });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(await fingerprint()).toBe(before);
+    const wf = await bvEditor.workflow(productId);
+    expect(wf.status).toBe("DRAFT");
+    const live = await pub("bv", "/products");
+    expect(live.body.items.map((p: { code: string }) => p.code)).not.toContain("DP171-A");
+  });
+
+  it("the company reviewer cannot edit, approve technical data, publish or reach other modules", async () => {
+    const v = await version(productId);
+    expectError(
+      await companyBv.post(`/products/${productId}/submit`, { version: v }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await companyBv.post(`/products/${productId}/approve`, { version: v }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await companyBv.post(`/products/${productId}/publications/${BV}/publish`, {
+        version: v,
+        listingVersion: await listingVersion(productId, BV),
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await companyBv.post(`/products/${productId}/listings/${BV}`, {
+        version: await listingVersion(productId, BV),
+        categoryId: bvCategory,
+        visibility: "VISIBLE",
+        title: "Changed",
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    // Lead/CRM data, staff administration and CMS pages are refused; the CMS context lists no site.
+    for (const p of [
+      "/api/v1/admin/leads",
+      "/api/v1/admin/staff",
+      `/api/v1/admin/cms/sites/${BV}/pages`,
+    ]) {
+      const r = await companyBv.getAbs(p);
+      expect(r.status, `${p} -> ${r.status}`).toBe(403);
+    }
+    const cms = await companyBv.getAbs("/api/v1/admin/cms/context");
+    expect(cms.body.sites).toEqual([]);
+    expect(await fingerprint()).toBe(before);
+  });
+
+  it("keeps the history append-only and proposals undeletable; formats are checked", async () => {
+    await rejectsDb(
+      asApp.productContentProposalEvent.updateMany({
+        where: { proposalId },
+        data: { comment: "x" },
+      }),
+      /permission denied/,
+    );
+    await rejectsDb(
+      owner.productContentProposalEvent.updateMany({
+        where: { proposalId },
+        data: { comment: "x" },
+      }),
+      /append-only/,
+    );
+    await rejectsDb(
+      owner.productContentProposalEvent.deleteMany({ where: { proposalId } }),
+      /append-only/,
+    );
+    await rejectsDb(
+      asApp.productContentProposal.delete({ where: { id: proposalId } }),
+      /permission denied/,
+    );
+    // A pending revision, so that the guards pass and the CHECK itself refuses the event.
+    const cur = await proposal();
+    const rev = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: cur.proposal.version,
+      summary: cur.proposal.summary,
+      description: "A base oil for lubricant manufacturers.",
+      reviewData,
+      sourceRef: "manual",
+      sourceSha256: "c".repeat(64),
+    });
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    await rejectsDb(
+      owner.productContentProposalEvent.create({
+        data: {
+          proposalId,
+          siteId: BV,
+          action: "CHANGES_REQUESTED",
+          proposalVersion: cur.proposal.version + 2,
+          actorUserId: companyBv.userId,
+          contentSha256: "e".repeat(64),
+        },
+      }),
+      /changes_need_comment|check constraint/,
+    );
+    await rejectsDb(
+      owner.productContentProposal.create({
+        data: {
+          productId: unlisted,
+          siteId: BV,
+          locale: "en",
+          proposedSummary: "Hidden [CONFIRM: x]",
+          reviewData: {},
+          sourceRef: "manual",
+          sourceSha256: "f".repeat(64),
+          authorIds: [root.userId],
+          createdById: root.userId,
+        },
+      }),
+      /no_review_markers|check constraint/,
+    );
+    const events = await owner.productContentProposalEvent.count({ where: { proposalId } });
+    expect(events).toBe(7);
+  });
+
+  it("resubmits unchanged content after a request for changes, then the company approves", async () => {
+    const pending = await proposal();
+    expect(pending.proposal.status).toBe("REVIEW_PENDING");
+    const rc = await companyBv.post(`/proposals/${proposalId}/request-changes`, {
+      version: pending.proposal.version,
+      comment: "Please check the wording once more.",
+    });
+    expect(rc.status, JSON.stringify(rc.body)).toBe(200);
+    const asked = ProposalResponseSchema.parse(rc.body).proposal;
+    const same = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: asked.version,
+      summary: asked.summary,
+      description: asked.description,
+      reviewData: asked.reviewData,
+      sourceRef: asked.sourceRef,
+      sourceSha256: asked.sourceSha256,
+      comment: "Wording checked; no change needed.",
+    });
+    expect(same.status, JSON.stringify(same.body)).toBe(200);
+    const resubmitted = ProposalResponseSchema.parse(same.body);
+    expect(resubmitted.proposal).toMatchObject({ status: "REVIEW_PENDING", decidedBy: null });
+    expect(resubmitted.events.at(-1)?.contentSha256).toBe(resubmitted.events.at(-2)?.contentSha256);
+    const ok = await companyBv.post(`/proposals/${proposalId}/approve`, {
+      version: resubmitted.proposal.version,
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ProposalResponseSchema.parse(ok.body).proposal.status).toBe("APPROVED");
+    expect(await fingerprint()).toBe(before);
   });
 });

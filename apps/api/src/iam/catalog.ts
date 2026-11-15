@@ -302,6 +302,14 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   perm("product", "publish", "catalog", "Publish products to the site", {
     delegableVia: "publisher_role:grant",
   }),
+  // DP-171 (ADR-022): the company's review of proposed listing content. Deciding on a proposal
+  // changes nothing in the product; it is neither a technical approval nor a publication.
+  perm(
+    "product_proposal",
+    "review",
+    "catalog",
+    "Approve or request changes on proposed product content (no product change)",
+  ),
   // Leads and members (customer data stays inside its site by default, K-02).
   perm("lead", "read", "leads", "Read leads and document requests", { customerData: true }),
   perm("lead", "manage", "leads", "Update lead status and notes", { customerData: true }),
@@ -466,6 +474,18 @@ export const ROLES: readonly RoleDef[] = [
     audience: "STAFF",
     scopeType: "SITE",
     permissions: ["content:read", "content:review", "product:read", "audit:read"],
+  },
+  {
+    // DP-171 (ADR-022): Dream Petroleum staff who review proposed catalogue content. Reads the
+    // catalogue and decides on proposals; no editing, technical approval, publishing, customer
+    // data or administration.
+    key: "company_content_reviewer",
+    name: "Company Content Reviewer",
+    description:
+      "Reads one site's products and approves or requests changes on proposed content; cannot edit, approve technical data or publish.",
+    audience: "STAFF",
+    scopeType: "SITE",
+    permissions: ["product:read", "product_proposal:review"],
   },
   {
     key: "read_only",
