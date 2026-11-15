@@ -68,6 +68,8 @@ export class StaffAccess {
     private readonly ctx: RequestContext,
     private readonly now: Date,
     private readonly sessionToken: string,
+    /** DP-173: the id of this staff session (never its token), e.g. to bind a preview link. */
+    readonly sessionId: string = "",
   ) {}
 
   allows(permission: string, target: Target): boolean {
@@ -224,6 +226,15 @@ export class StaffAccessService {
       select: { id: true, key: true, name: true },
       orderBy: { key: "asc" },
     });
-    return new StaffAccess(session.userId, sites, snapshot, this.prisma, ctx, now, token);
+    return new StaffAccess(
+      session.userId,
+      sites,
+      snapshot,
+      this.prisma,
+      ctx,
+      now,
+      token,
+      session.id,
+    );
   }
 }

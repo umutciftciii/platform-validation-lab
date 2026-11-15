@@ -22,6 +22,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import sharp from "sharp";
 import {
+  CatalogPreviewLinkResponseSchema,
+  CatalogPreviewListResponseSchema,
+  CatalogPreviewProductResponseSchema,
   ErrorBodySchema,
   ProposalContextResponseSchema,
   ProposalListResponseSchema,
@@ -35,6 +38,8 @@ import {
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client.js";
+import { issueCatalogPreviewToken } from "../../src/catalog/preview-token.js";
+import { parseHmacKey } from "../../src/iam/auth/secrets.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -2130,5 +2135,239 @@ describe("10. DP-171 content proposals", () => {
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ProposalResponseSchema.parse(ok.body).proposal.status).toBe("APPROVED");
     expect(await fingerprint()).toBe(before);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 11. DP-173 (ADR-022 D5): the company catalogue preview
+// ------------------------------------------------------------------------------------------
+
+describe("11. DP-173 catalogue preview", () => {
+  let company: Staff; // company_content_reviewer @ BV
+  let companyCom: Staff; // company_content_reviewer @ CORPORATE
+  let productId: string;
+  let token: string;
+  let before: string;
+
+  const heldItem = {
+    kind: "DP002_HELD",
+    field: "spec:pour_point",
+    text: "DP-002: held value.",
+    sourceIds: [],
+    heldValue: {
+      definition: "pour_point",
+      basis: "SPECIFICATION",
+      raw: "Pour Point, max: Minus 15 °C [GOST 20287]",
+      conflict: true,
+      finding: "Method letter not stated.",
+    },
+  };
+
+  async function fingerprint(): Promise<string> {
+    const [products, listings, texts, specs, images, publications, reviews, proposals] =
+      await Promise.all([
+        owner.product.findMany({ orderBy: { id: "asc" } }),
+        owner.productSiteListing.findMany({ orderBy: { id: "asc" } }),
+        owner.productListingText.findMany({ orderBy: [{ listingId: "asc" }, { locale: "asc" }] }),
+        owner.productSpecValue.findMany({ orderBy: { id: "asc" } }),
+        owner.productImage.findMany({ orderBy: { id: "asc" } }),
+        owner.productPublication.findMany({ orderBy: { id: "asc" } }),
+        owner.productReviewEvent.findMany({ orderBy: { id: "asc" } }),
+        owner.productContentProposal.findMany({ orderBy: { id: "asc" } }),
+      ]);
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          products,
+          listings,
+          texts,
+          specs,
+          images,
+          publications,
+          reviews,
+          proposals,
+        }),
+      )
+      .digest("hex");
+  }
+
+  const preview = (site: Site, p: string) =>
+    fetch(`${base}/api/v1/public/catalog-preview${p}`, {
+      headers: { "x-dp-proxy-key": KEY[site] },
+    });
+  const previewJson = async (site: Site, p: string) => parse(await preview(site, p));
+
+  beforeAll(async () => {
+    company = await staff(
+      "company-preview",
+      [{ role: "company_content_reviewer", site: BV }],
+      root.userId,
+    );
+    companyCom = await staff(
+      "company-preview-com",
+      [{ role: "company_content_reviewer", site: COM }],
+      root.userId,
+    );
+    productId = await completeProduct("preview", "DP173-A");
+    const created = await bvEditor.post(`/sites/${BV}/proposals`, {
+      productId,
+      locale: "en",
+      summary: "Proposed short text for DP173-A.",
+      description: "Proposed long text for DP173-A.",
+      reviewData: {
+        schemaVersion: 1,
+        language: "en",
+        family: null,
+        items: [heldItem],
+        sources: [],
+      },
+      sourceRef: "docs/catalog/proposals/test.json",
+      sourceSha256: "d".repeat(64),
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    before = await fingerprint();
+  });
+
+  it("issues a link only to a reviewer of the site, for BV only, audited", async () => {
+    expectError(await bvReader.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await bvEditor.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await companyCom.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await companyCom.post(`/sites/${COM}/preview-link`), 409, "CONFLICT_STATE", {
+      path: "site",
+      rule: "no_preview",
+    });
+    const res = await company.post(`/sites/${BV}/preview-link`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const link = CatalogPreviewLinkResponseSchema.parse(res.body);
+    const m = /^https:\/\/dreampetroleumbv\.com\/preview\/catalog\/([^/]+)\/products$/.exec(
+      link.url,
+    );
+    expect(m, link.url).not.toBeNull();
+    token = m![1]!;
+    // the link names the session and user ids, never a session token
+    const session = await owner.session.findFirstOrThrow({
+      where: { userId: company.userId, revokedAt: null },
+    });
+    expect(token.split(".")[1]).toBe(session.id);
+    expect(token).not.toContain(session.tokenHash);
+    expect(new Date(link.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(30 * 60_000);
+    expect((await lastAudit("catalog.preview_link_issued"))?.actorUserId).toBe(company.userId);
+  });
+
+  it("lists every listed product with its current data; proposals and held values stay apart", async () => {
+    const res = await preview("bv", `/${token}/products`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-robots-tag")).toContain("noindex");
+    const list = CatalogPreviewListResponseSchema.parse(await res.json());
+    const item = list.items.find((i) => i.code === "DP173-A");
+    expect(item).toMatchObject({
+      unpublished: true,
+      proposalStatus: "REVIEW_PENDING",
+      hasProposalText: true,
+      hasDocuments: false,
+    });
+    // the CURRENT master text, never the proposal
+    expect(item?.summary).toBe("Summary of DP173-A");
+    expect(list.items.length).toBeGreaterThanOrEqual(2);
+    expect(list.categories.length).toBeGreaterThan(0);
+    const detail = await previewJson("bv", `/${token}/products/dp173-a`);
+    expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+    const d = CatalogPreviewProductResponseSchema.parse(detail.body);
+    expect(d.product.summary).toBe("Summary of DP173-A");
+    expect(d.product.description).toBe("Description of DP173-A");
+    expect(JSON.stringify(d.product)).not.toContain("Proposed");
+    expect(d.proposal).toMatchObject({
+      summary: "Proposed short text for DP173-A.",
+      status: "REVIEW_PENDING",
+    });
+    expect(d.product.specs.map((x) => x.key)).toEqual(["kv100"]);
+    expect(JSON.stringify(d.product)).not.toContain("Minus 15");
+    expect(d.held).toEqual([
+      {
+        kind: "DP002_HELD",
+        raw: "Pour Point, max: Minus 15 °C [GOST 20287]",
+        conflict: true,
+        finding: "Method letter not stated.",
+      },
+    ]);
+    const cover = d.product.cover!;
+    const img = await preview("bv", `/${token}/images/${cover.id}/thumb`);
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/webp");
+    expect(img.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("refuses forged, expired and foreign links, other keys and writes", async () => {
+    const parts = token.split(".");
+    const tampered = [
+      ...parts.slice(0, 5),
+      parts[5]!.replace(/.$/, (c) => (c === "0" ? "1" : "0")),
+    ].join(".");
+    const key = parseHmacKey(process.env["IAM_HMAC_KEY"]);
+    const expired = issueCatalogPreviewToken(
+      key,
+      { sessionId: parts[1]!, userId: parts[2]!, siteKey: "BV" },
+      new Date(Date.now() - 31 * 60_000),
+    ).token;
+    const corporateToken = issueCatalogPreviewToken(
+      key,
+      { sessionId: parts[1]!, userId: parts[2]!, siteKey: "CORPORATE" },
+      new Date(),
+    ).token;
+    for (const t of [tampered, expired, "v1.nope", corporateToken]) {
+      expect((await preview("bv", `/${t}/products`)).status).toBe(404);
+    }
+    expect((await preview("com", `/${token}/products`)).status).toBe(404);
+    expect((await preview("admin", `/${token}/products`)).status).toBe(404);
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      const r = await fetch(`${base}/api/v1/public/catalog-preview/${token}/products`, {
+        method,
+        headers: { "x-dp-proxy-key": KEY.bv, "content-type": "application/json" },
+        body: method === "DELETE" ? undefined : "{}",
+      });
+      expect(r.status, method).toBeGreaterThanOrEqual(400);
+    }
+    expect((await previewJson("bv", `/${token}/products/not-a-product`)).status).toBe(404);
+  });
+
+  it("ends at once when the role is revoked or the session ends", async () => {
+    const ok = await company.post(`/sites/${BV}/preview-link`);
+    const t2 = /\/catalog\/([^/]+)\//.exec(
+      CatalogPreviewLinkResponseSchema.parse(ok.body).url,
+    )![1]!;
+    expect((await preview("bv", `/${t2}/products`)).status).toBe(200);
+    const role = await owner.role.findUniqueOrThrow({ where: { key: "company_content_reviewer" } });
+    const assignment = await owner.roleAssignment.findFirstOrThrow({
+      where: { userId: company.userId, roleId: role.id, siteId: BV, revokedAt: null },
+    });
+    await owner.roleAssignment.update({
+      where: { id: assignment.id },
+      data: { revokedAt: new Date(), revokedById: root.userId },
+    });
+    expect((await preview("bv", `/${t2}/products`)).status).toBe(404);
+    // a reviewer whose session is revoked loses the preview too
+    const second = await staff(
+      "company-preview-2",
+      [{ role: "company_content_reviewer", site: BV }],
+      root.userId,
+    );
+    const link = await second.post(`/sites/${BV}/preview-link`);
+    const t3 = /\/catalog\/([^/]+)\//.exec(
+      CatalogPreviewLinkResponseSchema.parse(link.body).url,
+    )![1]!;
+    expect((await preview("bv", `/${t3}/products`)).status).toBe(200);
+    await owner.session.updateMany({
+      where: { userId: second.userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: "USER_REVOKED" },
+    });
+    expect((await preview("bv", `/${t3}/products`)).status).toBe(404);
+  });
+
+  it("changes nothing: product data, proposals and publications are as before; the live site shows nothing new", async () => {
+    expect(await fingerprint()).toBe(before);
+    const live = await pub("bv", "/products");
+    expect(live.body.items.map((p: { code: string }) => p.code)).not.toContain("DP173-A");
   });
 });

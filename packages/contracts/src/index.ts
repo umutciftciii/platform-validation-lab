@@ -10,6 +10,7 @@ export * from "./admin/catalog-workflow.js";
 export * from "./admin/catalog-documents.js";
 export * from "./admin/catalog-xrefs.js";
 export * from "./admin/catalog-proposals.js";
+export * from "./admin/catalog-preview.js";
 export * from "./admin/staff-roles.js";
 export * from "./admin/owner.js";
 export * from "./admin/cms.js";

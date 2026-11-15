@@ -7,6 +7,7 @@ import {
   type ProposalStatus,
 } from "@dream/contracts";
 import { PageHeader } from "../../../components/catalog/parts";
+import { PreviewLinkButton } from "../../../components/catalog/preview-link-button";
 import { ProposalStatusPill } from "../../../components/catalog/proposal-review";
 import { EmptyState, ErrorState, Panel, StatusPill, cx } from "../../../components/ui";
 import { attentionCount, COMPANY_REVIEW_PATH, STATUS_META } from "../../../lib/proposals-view";
@@ -55,6 +56,9 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
       <PageHeader
         icon="inbox"
         title="Company review"
+        actions={
+          site.canReview && site.key === "BV" ? <PreviewLinkButton siteId={site.id} /> : undefined
+        }
         description={
           <>
             Proposed English texts for the {site.name} catalogue, prepared from research. For each

@@ -26,6 +26,15 @@ const nextConfig: NextConfig = {
           { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
         ],
       },
+      // DP-173: the company catalogue preview (list, categories, products, images).
+      {
+        source: "/preview/catalog/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      },
     ];
   },
   turbopack: {
