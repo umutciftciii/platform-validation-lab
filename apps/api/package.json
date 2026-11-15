@@ -19,7 +19,8 @@
     "iam:matrix": "node dist/iam/iam-cli.js matrix",
     "iam:sync": "node dist/iam/iam-cli.js sync",
     "iam:bootstrap": "node dist/iam/iam-cli.js bootstrap",
-    "catalog:import": "node dist/catalog/import/cli.js"
+    "catalog:import": "node dist/catalog/import/cli.js",
+    "catalog:proposals": "node dist/catalog/proposals/cli.js"
   },
   "dependencies": {
     "@dream/contracts": "workspace:*",
