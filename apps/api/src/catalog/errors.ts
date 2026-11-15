@@ -25,6 +25,8 @@ const UNIQUE_FIELDS: ReadonlyArray<[string, string]> = [
   ["GlobalProduct_brandId_nameKey_key", "name"],
   ["ProductCrossReference_productId_globalProductId_key", "globalProductId"],
   ["ProductCrossReferenceSite_crossReferenceId_siteId_key", "site"],
+  // DP-171: one proposal per product, site and locale.
+  ["ProductContentProposal_productId_siteId_locale_key", "productId"],
 ];
 
 function errorText(error: unknown): string {
@@ -91,6 +93,25 @@ export function mapDbError(error: unknown): never {
   // DP-166 (migration 20261201090000_dp_166_image_visibility): the cover is always public.
   if (/ProductImage_cover_public/.test(text)) {
     throw new ApiError("CONFLICT_STATE", [{ path: "isPublic", rule: "cover_cannot_be_hidden" }]);
+  }
+  // DP-171 proposal guards (migration 20261202090000_dp_171_content_proposals). Separation of
+  // duties ("catalog: separation of duties") is mapped above with the PM-3 rule.
+  if (/catalog: a decision needs a proposal in review/.test(text)) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "not_in_review" }]);
+  }
+  if (
+    /catalog: (every proposal change increments its version|an event records the version)/.test(
+      text,
+    )
+  ) {
+    throw staleVersion();
+  }
+  if (
+    /catalog: (a new proposal starts|the creator of a proposal|a proposal keeps|a changed proposal returns|a proposal change is either|the CREATED event)/.test(
+      text,
+    )
+  ) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "transition" }]);
   }
   // PM-5 document guards (migration 20261114090000_pm_5_technical_documents).
   if (/catalog: documents of an archived product cannot change/.test(text)) {

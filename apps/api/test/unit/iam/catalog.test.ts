@@ -131,6 +131,24 @@ describe("catalogue consistency", () => {
     expect(pm).not.toContain("product:publish");
   });
 
+  it("keeps the company content reviewer to reading and proposal decisions (DP-171)", () => {
+    const role = ROLES.find((r) => r.key === "company_content_reviewer");
+    expect(role?.scopeType).toBe("SITE");
+    expect(role?.audience).toBe("STAFF");
+    expect([...(role?.permissions ?? [])].sort()).toEqual([
+      "product:read",
+      "product_proposal:review",
+    ]);
+    expect(role?.customerDataAccess).toBeUndefined();
+    const perm = PERMISSIONS.find((p) => p.key === "product_proposal:review");
+    expect(perm).toMatchObject({ scopeType: "SITE", module: "catalog", customerData: false });
+    expect(perm?.delegableVia).toBeUndefined();
+    // Deciding on a proposal is not a technical approval and not a publication.
+    expect(role?.permissions.some((p) => p.endsWith(":approve") || p.endsWith(":publish"))).toBe(
+      false,
+    );
+  });
+
   it("detects broken catalogues", () => {
     const bad: RoleDef = {
       key: "bad_role",
