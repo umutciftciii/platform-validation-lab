@@ -23,6 +23,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import sharp from "sharp";
 import {
   ErrorBodySchema,
+  ProposalContextResponseSchema,
   ProposalListResponseSchema,
   ProposalResponseSchema,
   ProductWorkflowResponseSchema,
@@ -1808,6 +1809,31 @@ describe("10. DP-171 content proposals", () => {
       path: "productId",
       rule: "unique",
     });
+  });
+
+  it("DP-172: tells the console who is a review-only company reviewer", async () => {
+    const ctx = async (who: Staff) => {
+      const r = await who.get("/proposals/context");
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      return ProposalContextResponseSchema.parse(r.body);
+    };
+    const company = await ctx(companyBv);
+    expect(company.reviewOnly).toBe(true);
+    expect(company.sites.find((x) => x.id === BV)).toMatchObject({
+      canRead: true,
+      canReview: true,
+      canRevise: false,
+    });
+    expect(company.sites.find((x) => x.id === COM)).toMatchObject({
+      canRead: false,
+      canReview: false,
+    });
+    expect((await ctx(bvEditor)).reviewOnly).toBe(false);
+    expect((await ctx(bvReader)).reviewOnly).toBe(false);
+    expect((await ctx(root)).reviewOnly).toBe(false);
+    const none = await ctx(nobody);
+    expect(none.reviewOnly).toBe(false);
+    expect(none.sites.every((x) => !x.canRead && !x.canReview)).toBe(true);
   });
 
   it("reads proposals only within the reader's sites", async () => {

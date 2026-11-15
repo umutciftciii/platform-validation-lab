@@ -60,6 +60,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         ready: true,
       },
       {
+        // DP-172 (ADR-022): proposed product texts for the company's approval.
+        slug: "company-review",
+        href: "/company-review",
+        label: "Company review",
+        icon: "inbox",
+        summary: "Proposed product texts for the company's approval.",
+        ready: true,
+      },
+      {
         slug: "leads",
         href: "/leads",
         label: "Leads",
@@ -125,8 +134,17 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 
 export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
-/** The navigation a viewer sees: owner-only items (and empty groups) are left out for staff. */
-export function navGroupsFor(isOwner: boolean): readonly NavGroup[] {
+/**
+ * The navigation a viewer sees: owner-only items (and empty groups) are left out for staff. A
+ * review-only user (DP-172: the company reviewer) sees the company review only.
+ */
+export function navGroupsFor(isOwner: boolean, reviewOnly = false): readonly NavGroup[] {
+  if (reviewOnly) {
+    return NAV_GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter((i) => i.slug === "company-review"),
+    })).filter((g) => g.items.length > 0);
+  }
   return NAV_GROUPS.map((g) => ({
     ...g,
     items: g.items.filter((i) => isOwner || !i.ownerOnly),
