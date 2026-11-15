@@ -4,13 +4,23 @@
  * proxy forwards, and name the version they were based on.
  */
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query } from "@nestjs/common";
-import type { ProposalListResponse, ProposalResponse } from "@dream/contracts";
+import type {
+  ProposalContextResponse,
+  ProposalListResponse,
+  ProposalResponse,
+} from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { ProposalsService } from "./proposals.service.js";
 
 @Controller("api/v1/admin/catalog")
 export class ProposalsController {
   constructor(@Inject(ProposalsService) private readonly proposals: ProposalsService) {}
+
+  // Declared before "proposals/:id" so that "context" is never read as an id.
+  @Get("proposals/context")
+  context(@Ctx() ctx: RequestContext): Promise<ProposalContextResponse> {
+    return this.proposals.context(ctx);
+  }
 
   @Get("proposals")
   list(

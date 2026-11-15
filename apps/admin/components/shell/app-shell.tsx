@@ -17,11 +17,14 @@ export function AppShell({
   user,
   environmentLabel,
   isOwner = false,
+  reviewOnly = false,
   children,
 }: {
   user: ShellUser;
   environmentLabel: string;
   isOwner?: boolean;
+  /** DP-172: a company reviewer sees only the company review. */
+  reviewOnly?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -58,10 +61,15 @@ export function AppShell({
 
       {/* Tablet rail and desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[76px] md:block lg:hidden">
-        <Sidebar isOwner={isOwner} compact environmentLabel={environmentLabel} />
+        <Sidebar
+          isOwner={isOwner}
+          reviewOnly={reviewOnly}
+          compact
+          environmentLabel={environmentLabel}
+        />
       </aside>
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] lg:block">
-        <Sidebar isOwner={isOwner} environmentLabel={environmentLabel} />
+        <Sidebar isOwner={isOwner} reviewOnly={reviewOnly} environmentLabel={environmentLabel} />
       </aside>
 
       {/* Phone drawer */}
@@ -91,6 +99,7 @@ export function AppShell({
         >
           <Sidebar
             isOwner={isOwner}
+            reviewOnly={reviewOnly}
             environmentLabel={environmentLabel}
             onNavigate={() => setDrawerOpen(false)}
           />

@@ -23,7 +23,9 @@ import {
   ProposalStatusSchema,
   RequestProposalChangesRequestSchema,
   REVIEW_ITEM_KINDS,
+  REVIEW_ONLY_PERMISSIONS,
   ReviseProposalRequestSchema,
+  type ProposalContextResponse,
   type ProposalListResponse,
   type ProposalResponse,
   type ProposalStatus,
@@ -78,6 +80,32 @@ export class ProposalsService {
   constructor(@Inject(StaffAccessService) private readonly access: StaffAccessService) {}
 
   // --- reading ---------------------------------------------------------------------------------
+
+  /**
+   * DP-172: what the caller may do with proposals per site, and whether the console should show
+   * only the company review (`reviewOnly`: no permission beyond reading products and reviewing
+   * proposals). Never refused: a user without any of these gets empty rights.
+   */
+  async context(ctx: RequestContext): Promise<ProposalContextResponse> {
+    const a = await this.access.begin(ctx);
+    const held = a.heldAnywhere();
+    const reviewOnly =
+      held.has(REVIEW) && [...held].every((p) => REVIEW_ONLY_PERMISSIONS.includes(p));
+    return {
+      sites: a.sites.map((s) => {
+        const t = { scope: "site" as const, siteId: s.id };
+        return {
+          id: s.id,
+          key: s.key,
+          name: s.name,
+          canRead: a.allows(READ, t),
+          canReview: a.allows(REVIEW, t),
+          canRevise: a.allows(EDIT, t),
+        };
+      }),
+      reviewOnly,
+    };
+  }
 
   async list(
     ctx: RequestContext,

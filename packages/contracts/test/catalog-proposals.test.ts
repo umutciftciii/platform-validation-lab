@@ -95,6 +95,18 @@ describe("content proposal requests", () => {
     expect(CreateProposalRequestSchema.safeParse({ ...create, locale: "tr" }).success).toBe(false);
   });
 
+  it("DP-172: accepts English review data with origin references, and only short hex refs", () => {
+    const item = { ...reviewData.items[1], originRef: "0123456789abcdef" };
+    const en = { ...reviewData, language: "en", items: [item] };
+    expect(ProposalReviewDataSchema.parse(en).language).toBe("en");
+    expect(ProposalReviewDataSchema.safeParse({ ...en, language: "de" }).success).toBe(false);
+    expect(
+      ProposalReviewDataSchema.safeParse({ ...en, items: [{ ...item, originRef: "a".repeat(64) }] })
+        .success,
+    ).toBe(false);
+    expect(ProposalReviewDataSchema.safeParse(reviewData).success).toBe(true);
+  });
+
   it("needs a reason to request changes", () => {
     expect(
       RequestProposalChangesRequestSchema.safeParse({ version: 2, comment: " " }).success,
