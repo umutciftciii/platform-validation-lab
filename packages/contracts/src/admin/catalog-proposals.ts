@@ -107,6 +107,15 @@ export const ReviewItemSchema = z.strictObject({
   /** Ids into `sources` below. */
   sourceIds: z.array(Short(40)).max(20),
   heldValue: HeldValueSchema.nullable(),
+  /**
+   * DP-172: the first 16 hex digits of the SHA-256 of the Turkish research text this item was
+   * translated from (key prefix in docs/catalog/proposals/review-translations.en.json); absent
+   * when the item was written in English. Short on purpose: a proposal must fit one 16 KiB request.
+   */
+  originRef: z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .optional(),
 });
 export type ReviewItem = z.infer<typeof ReviewItemSchema>;
 
@@ -122,8 +131,12 @@ export const ReviewSourceSchema = z.strictObject({
 });
 export type ReviewSource = z.infer<typeof ReviewSourceSchema>;
 
+export const REVIEW_LANGUAGES = ["en", "tr"] as const;
+
 export const ProposalReviewDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  /** DP-172: language of the review texts; English for the company review. */
+  language: z.enum(REVIEW_LANGUAGES).optional(),
   /** Research family, e.g. "Group II base oil". */
   family: Short(120).nullable(),
   items: z.array(ReviewItemSchema).max(200),
@@ -248,6 +261,32 @@ export const ProposalResponseSchema = z.strictObject({
   decisionBlocked: z.enum(PROPOSAL_DECISION_BLOCKS).nullable(),
 });
 export type ProposalResponse = z.infer<typeof ProposalResponseSchema>;
+
+/**
+ * DP-172: what the signed-in user may do with proposals, per site. `reviewOnly` is true when the
+ * user's permissions are limited to reading products and reviewing proposals (the company
+ * reviewer): the console then shows only the company review.
+ */
+export const ProposalContextResponseSchema = z.strictObject({
+  sites: z.array(
+    z.strictObject({
+      id: UuidSchema,
+      key: z.enum(["BV", "CORPORATE"]),
+      name: z.string(),
+      canRead: z.boolean(),
+      canReview: z.boolean(),
+      canRevise: z.boolean(),
+    }),
+  ),
+  reviewOnly: z.boolean(),
+});
+export type ProposalContextResponse = z.infer<typeof ProposalContextResponseSchema>;
+
+/** Permissions a company reviewer holds; anything beyond them means a full console. */
+export const REVIEW_ONLY_PERMISSIONS: readonly string[] = [
+  "product:read",
+  "product_proposal:review",
+];
 
 /** SHA-256 input of a proposal's text: summary and description, NUL-separated (null -> empty). */
 export function proposalContentKey(summary: string | null, description: string | null): string {

@@ -3,7 +3,7 @@
 // a cookie is valid (lib/server-session.ts); this file never reads or forwards its value.
 import { ADMIN_SESSION_COOKIE } from "@dream/contracts";
 import { NextResponse, type NextRequest } from "next/server";
-import { LOGIN_PATH, needsLoginRedirect } from "./lib/route-guard";
+import { LOGIN_PATH, needsLoginRedirect, PATHNAME_HEADER } from "./lib/route-guard";
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -13,7 +13,10 @@ export function proxy(request: NextRequest) {
     url.search = "";
     return NextResponse.redirect(url);
   }
-  return NextResponse.next();
+  // DP-172: the console layout needs the path (review-only users); always our own value.
+  const forwarded = new Headers(request.headers);
+  forwarded.set(PATHNAME_HEADER, pathname);
+  return NextResponse.next({ request: { headers: forwarded } });
 }
 
 export const config = {

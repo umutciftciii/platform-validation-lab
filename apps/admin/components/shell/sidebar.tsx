@@ -15,12 +15,15 @@ export function Sidebar({
   environmentLabel,
   onNavigate,
   isOwner = false,
+  reviewOnly = false,
 }: {
   compact?: boolean;
   environmentLabel: string;
   onNavigate?: () => void;
   /** DP-110: the system owner also sees the owner console. */
   isOwner?: boolean;
+  /** DP-172: a company reviewer sees only the company review. */
+  reviewOnly?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -56,7 +59,7 @@ export function Sidebar({
       </div>
 
       <nav aria-label="Main" className="mt-1 flex-1 overflow-y-auto px-3 pb-4">
-        {navGroupsFor(isOwner).map((group) => (
+        {navGroupsFor(isOwner, reviewOnly).map((group) => (
           <div key={group.label} className="mb-5">
             {compact ? (
               <div className="mx-auto mb-2 h-px w-6 bg-rail-line" aria-hidden="true" />

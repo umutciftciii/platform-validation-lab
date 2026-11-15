@@ -33,11 +33,12 @@ describe("navigation", () => {
     expect(new Set(NAV_ITEMS.map((i) => i.slug)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("marks the overview, content (CMS S1), products (PM-1), leads (DP-042), staff (DP-107) and the owner console (DP-110) as ready", () => {
+  it("marks the overview, content (CMS S1), products (PM-1), company review (DP-172), leads (DP-042), staff (DP-107) and the owner console (DP-110) as ready", () => {
     expect(NAV_ITEMS.filter((i) => i.ready).map((i) => i.href)).toEqual([
       "/",
       "/content",
       "/products",
+      "/company-review",
       "/leads",
       "/staff",
       "/owner",
@@ -50,6 +51,17 @@ describe("navigation", () => {
     expect(hrefs(true)).toContain("/owner");
     expect(hrefs(false)).not.toContain("/owner");
     expect(navGroupsFor(false).map((g) => g.label)).not.toContain("Owner");
+  });
+
+  it("shows a review-only user (DP-172 company reviewer) the company review and nothing else", () => {
+    const hrefs = navGroupsFor(false, true).flatMap((g) => g.items.map((i) => i.href));
+    expect(hrefs).toEqual(["/company-review"]);
+    expect(navGroupsFor(true, true).flatMap((g) => g.items.map((i) => i.href))).toEqual([
+      "/company-review",
+    ]);
+    expect(navGroupsFor(false).flatMap((g) => g.items.map((i) => i.href))).toContain(
+      "/company-review",
+    );
   });
 
   it("finds module sections but never the overview or unknown slugs", () => {
