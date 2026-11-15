@@ -6,6 +6,12 @@
 export const LOGIN_PATH = "/login";
 
 /**
+ * DP-172: request header with the page's path, set by proxy.ts for the console layout (which
+ * sends a review-only user to the company review). Any value a client sends is overwritten.
+ */
+export const PATHNAME_HEADER = "x-dp-pathname";
+
+/**
  * Paths that never need a session: sign-in, the single-use credential link pages (DP-114: the
  * link is the credential; a redirect to /login would carry its fragment along), API proxy and
  * health, framework and brand assets.

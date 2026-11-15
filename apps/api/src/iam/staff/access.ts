@@ -24,6 +24,7 @@ import {
   isGrantActive,
   type AuthorizationSnapshot,
   type Target,
+  heldPermissions,
 } from "../authorization.js";
 import { PERMISSION_BY_KEY, ROLE_BY_KEY } from "../catalog.js";
 import type { Db } from "../db.js";
@@ -71,6 +72,20 @@ export class StaffAccess {
 
   allows(permission: string, target: Target): boolean {
     return decide(this.snapshot, permission, target, this.now).allowed;
+  }
+
+  /**
+   * DP-172: every permission the user's active grants carry, platform-wide or on any site
+   * (no step-up or module gate: what the user holds, not what a request may use right now).
+   */
+  heldAnywhere(): Set<string> {
+    const held = heldPermissions(this.snapshot, { scope: "platform" }, this.now);
+    for (const s of this.sites) {
+      for (const p of heldPermissions(this.snapshot, { scope: "site", siteId: s.id }, this.now)) {
+        held.add(p);
+      }
+    }
+    return held;
   }
 
   /** Ids of the sites where the permission is allowed. */
