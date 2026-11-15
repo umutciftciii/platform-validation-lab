@@ -246,8 +246,12 @@ services:
 
   web-bv:
     <<: *dev-image
-    mem_limit: 1280m
-    memswap_limit: 1280m
+    # DP-118: Turbopack keeps every compiled route in native (non-V8) memory while its dev FS
+    # cache is off (DP-084), and image optimisation adds per viewport width. A full route walk with
+    # catalogue data at 320/375/1440 px peaked at ~1.8 GiB anon / ~2.0 GiB cgroup (1792m OOM-killed);
+    # NODE_OPTIONS below does not bound that. Revisit with DP-115.
+    mem_limit: 2304m
+    memswap_limit: 2304m
     cpus: 2.0
     environment:
       <<: *dev-env
