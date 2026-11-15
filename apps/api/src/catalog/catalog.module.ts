@@ -17,12 +17,17 @@ import { WorkflowService } from "./workflow.service.js";
 import { GlobalCatalogService } from "./global-catalog.service.js";
 import { CrossReferencesController } from "./xrefs.controller.js";
 import { CrossReferencesService } from "./xrefs.service.js";
+import {
+  CatalogPreviewLinkController,
+  PublicCatalogPreviewController,
+} from "./preview.controller.js";
+import { CatalogPreviewService } from "./preview.service.js";
 import { ProposalsController } from "./proposals.controller.js";
 import { ProposalsService } from "./proposals.service.js";
 
 // Product catalogue administration (PM-1, PM-2), review/publication and public content (PM-3),
 // technical documents (PM-5), global brands and cross-references (PM-6), content proposals and
-// their company review (DP-171).
+// their company review (DP-171), the company catalogue preview (DP-173).
 // Data access goes through IAM's StaffAccessService and PublicSiteService (site-scoped client,
 // audit); files through the MediaModule's storage. This module never holds the unscoped Prisma
 // client.
@@ -36,6 +41,8 @@ import { ProposalsService } from "./proposals.service.js";
     DocumentsController,
     CrossReferencesController,
     ProposalsController,
+    CatalogPreviewLinkController,
+    PublicCatalogPreviewController,
   ],
   providers: [
     CatalogService,
@@ -47,6 +54,7 @@ import { ProposalsService } from "./proposals.service.js";
     GlobalCatalogService,
     CrossReferencesService,
     ProposalsService,
+    CatalogPreviewService,
     // PM-5: one stamper registry per process; DP-043: the watermark stamper of LEAD_REQUIRED.
     {
       provide: DocumentStampers,
