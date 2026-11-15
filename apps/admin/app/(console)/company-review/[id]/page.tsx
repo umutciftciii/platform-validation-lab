@@ -9,6 +9,7 @@ import {
   ProposalResponseSchema,
 } from "@dream/contracts";
 import { PageHeader } from "../../../../components/catalog/parts";
+import { PreviewLinkButton } from "../../../../components/catalog/preview-link-button";
 import { ProposalDecision } from "../../../../components/catalog/proposal-decision";
 import {
   CurrentSiteData,
@@ -96,6 +97,16 @@ export default async function CompanyReviewProductPage({
           <SourcesPanel sources={proposal.reviewData.sources} />
         </div>
         <div className="space-y-6 xl:sticky xl:top-6">
+          <Panel
+            title="Catalogue preview"
+            id="preview"
+            description="This product in the BV catalogue design, with the current data and the proposal apart. Read-only; the link is short-lived."
+          >
+            <PreviewLinkButton
+              siteId={proposal.siteId}
+              productSlug={detail.ok ? detail.data.product.slug : undefined}
+            />
+          </Panel>
           <Panel title="Decision" id="decision">
             <ProposalDecision
               proposalId={proposal.id}

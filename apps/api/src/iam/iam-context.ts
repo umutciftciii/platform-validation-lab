@@ -126,6 +126,22 @@ export async function operatorAdminState(
   };
 }
 
+/**
+ * DP-173: whether the staff session that issued a catalogue preview link is still a live admin
+ * session of an ACTIVE user who holds `product_proposal:review` on the site (migration
+ * 20261203090000_dp_173_catalog_preview_access). Answers one boolean; never the session token.
+ */
+export async function catalogPreviewSessionAllowed(
+  db: Db,
+  sessionId: string,
+  userId: string,
+  siteId: string,
+): Promise<boolean> {
+  const rows = await db.$queryRaw<{ ok: boolean }[]>`
+    SELECT catalog_preview_session_allowed(${sessionId}::uuid, ${userId}::uuid, ${siteId}::uuid) AS ok`;
+  return rows[0]?.ok === true;
+}
+
 /** /enrol (MFA re-enrolment): whether this live link's password step was verified. */
 export async function enrolPasswordVerified(db: Db, rawToken: string): Promise<boolean> {
   const rows = await db.$queryRaw<{ ok: boolean }[]>`
