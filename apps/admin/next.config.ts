@@ -25,6 +25,14 @@ const nextConfig: NextConfig = {
     // the dev server was down (vercel/next.js#100267, fix pending in #100291). Dev only; `next build`
     // does not use this cache. Remove once a Next release carries the upstream fix.
     turbopackFileSystemCacheForDev: false,
+    // DP-181: temporary, dev only. In `next dev` 16.4.5 this flag (default true) sends React's
+    // debug info for each client navigation over the HMR WebSocket instead of inline in the RSC
+    // payload. If that socket is down when the request is served, the debug data never arrives and
+    // the navigation waits forever: two `?_rsc=` 200 responses, the URL stays (e.g. "Verifying…"
+    // after MFA). With false the debug info stays in the RSC payload. Production builds never load
+    // the debug channel, so `next build` output is unaffected. Remove once a Next release keeps
+    // navigations working while the HMR socket is disconnected (see DP-181, DP-115).
+    reactDebugChannel: false,
   },
   // Tailwind CSS 4 through the Turbopack loader, the same wiring as web-bv.
   turbopack: {
