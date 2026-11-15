@@ -315,6 +315,11 @@ services:
     mem_limit: 64m
     memswap_limit: 64m
     cpus: 0.25
+    # DP-182: busybox wget (healthcheck) runs TLS in an ssl_client child and exits without
+    # reaping it; the orphan is reparented to PID 1. Caddy never reaps children, so every check
+    # left one zombie and the kernel memory grew towards the 64m limit. docker-init as PID 1
+    # reaps them; the healthcheck itself (HTTPS through the proxy to admin) stays the same.
+    init: true
     ports:
       - "127.0.0.1:3114:443"
     volumes:
