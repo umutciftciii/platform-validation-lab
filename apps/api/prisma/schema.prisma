@@ -151,6 +151,10 @@ model User {
   cmsRevisionsCreated         CmsPageRevision[]
   cmsPublicationsPublished    CmsPagePublication[]         @relation("CmsPublicationPublishedBy")
   cmsPublicationsUnpublished  CmsPagePublication[]         @relation("CmsPublicationUnpublishedBy")
+  // DP-171 (ADR-022): content proposals this user started, decided and their review history.
+  contentProposalsCreated     ProductContentProposal[]      @relation("ProductContentProposalCreatedBy")
+  contentProposalsDecided     ProductContentProposal[]      @relation("ProductContentProposalDecidedBy")
+  contentProposalEvents       ProductContentProposalEvent[]
 
   @@index([kind, status])
 }
@@ -197,6 +201,9 @@ model Site {
   // CMS S2 (DP-017): published revisions and the current publication of each page.
   cmsPageRevisions           CmsPageRevision[]
   cmsPagePublications        CmsPagePublication[]
+  // DP-171 (ADR-022): proposed listing content of this site and its review history.
+  productContentProposals      ProductContentProposal[]
+  productContentProposalEvents ProductContentProposalEvent[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -630,6 +637,8 @@ model Product {
   crossReferences      ProductCrossReference[]
   /// DP-042: document requests left for this product (evidence; the product is never deleted).
   leadDocumentRequests LeadDocumentRequest[]
+  /// DP-171 (ADR-022): proposed listing content per site, reviewed separately; never the product.
+  contentProposals     ProductContentProposal[]
 
   @@index([status, name])
 }
@@ -1176,6 +1185,91 @@ model ProductCrossReferenceSite {
 
   @@unique([crossReferenceId, siteId])
   @@index([siteId])
+}
+
+// ===========================================================================================
+// DP-171 (ADR-022): content proposals. A proposal holds research-drafted listing text for one
+// product on one site and its company review. It is a layer of its own: nothing here changes a
+// product, a listing, its texts, specifications, images, documents or publications, and an
+// approval is neither a technical approval (PM-3) nor a publication. Rules Prisma cannot express
+// (formats, state rules, separation of duties, append-only history) are in migration
+// 20261202090000_dp_171_content_proposals, tested in test/integration/catalog-workflow.int.test.ts.
+// ===========================================================================================
+
+enum ProductContentProposalStatus {
+  REVIEW_PENDING
+  CHANGES_REQUESTED
+  APPROVED
+}
+
+enum ProductContentProposalAction {
+  CREATED
+  REVISED
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+/// Proposed customer-facing text (summary, description) for one product on one site and locale,
+/// with internal review data (reviewData: confirmation questions, inconsistencies, held DP-002
+/// values, claim risks, sources) that never reaches a public site. Text is null when nothing is
+/// proposed (placeholders). Every content change returns it to REVIEW_PENDING.
+model ProductContentProposal {
+  id                  String                       @id @default(uuid(7)) @db.Uuid
+  productId           String                       @db.Uuid
+  siteId              String                       @db.Uuid
+  /// BCP 47 language tag (CHECK); "en" only for now.
+  locale              String                       @db.VarChar(35)
+  proposedSummary     String?                      @db.VarChar(500)
+  /// Plain text, at most 8000 characters (CHECK in the migration).
+  proposedDescription String?
+  /// Internal review data (contracts ProposalReviewDataSchema); a JSON object (CHECK).
+  reviewData          Json
+  /// Where the proposal came from (research dataset path or "manual") and its SHA-256.
+  sourceRef           String                       @db.VarChar(200)
+  sourceSha256        String                       @db.Char(64)
+  status              ProductContentProposalStatus @default(REVIEW_PENDING)
+  version             Int                          @default(1)
+  /// Users who wrote the current revision; none of them may decide on it (trigger).
+  authorIds           String[]                     @default([]) @db.Uuid
+  decidedAt           DateTime?                    @db.Timestamptz(3)
+  decidedById         String?                      @db.Uuid
+  createdById         String                       @db.Uuid
+  createdAt           DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                     @updatedAt @db.Timestamptz(3)
+
+  product   Product                       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  site      Site                          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy User                          @relation("ProductContentProposalCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  decidedBy User?                         @relation("ProductContentProposalDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  events    ProductContentProposalEvent[]
+
+  @@unique([productId, siteId, locale])
+  /// Target of the events' composite foreign key.
+  @@unique([id, siteId])
+  @@index([siteId, status])
+}
+
+/// Append-only history of a proposal: who did what, when, on which version (trigger: no UPDATE,
+/// DELETE or TRUNCATE). A request for changes always carries a comment (CHECK).
+model ProductContentProposalEvent {
+  id              String                       @id @default(uuid(7)) @db.Uuid
+  proposalId      String                       @db.Uuid
+  siteId          String                       @db.Uuid
+  action          ProductContentProposalAction
+  /// The proposal version after the action.
+  proposalVersion Int
+  actorUserId     String                       @db.Uuid
+  comment         String?                      @db.VarChar(2000)
+  /// SHA-256 of the proposed text after the action (summary + description), for traceability.
+  contentSha256   String                       @db.Char(64)
+  createdAt       DateTime                     @default(now()) @db.Timestamptz(3)
+
+  proposal ProductContentProposal @relation(fields: [proposalId, siteId], references: [id, siteId], onDelete: Restrict)
+  site     Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  actor    User                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([proposalId, createdAt])
+  @@index([siteId, createdAt])
 }
 
 // ===========================================================================================

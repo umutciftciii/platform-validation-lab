@@ -71,6 +71,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // CMS S2 (DP-017): revisions and publications of a site's pages.
   CmsPageRevision: { nullable: false },
   CmsPagePublication: { nullable: false },
+  // DP-171 (ADR-022): a site's content proposals and their review history.
+  ProductContentProposal: { nullable: false },
+  ProductContentProposalEvent: { nullable: false },
 };
 
 export interface RelationDef {
@@ -117,6 +120,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     cmsRevisionsCreated: { model: "CmsPageRevision", list: true },
     cmsPublicationsPublished: { model: "CmsPagePublication", list: true },
     cmsPublicationsUnpublished: { model: "CmsPagePublication", list: true },
+    contentProposalsCreated: { model: "ProductContentProposal", list: true },
+    contentProposalsDecided: { model: "ProductContentProposal", list: true },
+    contentProposalEvents: { model: "ProductContentProposalEvent", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -150,6 +156,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     cmsPages: { model: "CmsPage", list: true },
     cmsPageRevisions: { model: "CmsPageRevision", list: true },
     cmsPagePublications: { model: "CmsPagePublication", list: true },
+    productContentProposals: { model: "ProductContentProposal", list: true },
+    productContentProposalEvents: { model: "ProductContentProposalEvent", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -220,6 +228,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     documents: { model: "ProductDocument", list: true },
     crossReferences: { model: "ProductCrossReference", list: true },
     leadDocumentRequests: { model: "LeadDocumentRequest", list: true },
+    contentProposals: { model: "ProductContentProposal", list: true },
   },
   // PM-2: platform-wide master data (no site).
   SpecDefinition: {
@@ -373,6 +382,18 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     publishedBy: { model: "User", list: false },
     unpublishedBy: { model: "User", list: false },
   },
+  ProductContentProposal: {
+    product: { model: "Product", list: false },
+    site: { model: "Site", list: false },
+    createdBy: { model: "User", list: false },
+    decidedBy: { model: "User", list: false },
+    events: { model: "ProductContentProposalEvent", list: true },
+  },
+  ProductContentProposalEvent: {
+    proposal: { model: "ProductContentProposal", list: false },
+    site: { model: "Site", list: false },
+    actor: { model: "User", list: false },
+  },
 };
 
 /** Json columns: their content is data, never relation arguments. */
@@ -382,6 +403,7 @@ const JSON_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ProductPublication: ["snapshot"],
   CmsPage: ["content"],
   CmsPageRevision: ["content"],
+  ProductContentProposal: ["reviewData"],
 };
 
 export const RAW_METHODS = [
