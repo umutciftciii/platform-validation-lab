@@ -11,6 +11,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { ApiError } from "./http/api-error.js";
 import type { RequestContext } from "./http/request-context.js";
+import { catalogPreviewSessionAllowed } from "./iam-context.js";
 import { inLeadContext } from "./lead-data.js";
 import { withSiteScope, type SiteScopedClient } from "./site-scope.js";
 
@@ -30,6 +31,11 @@ export interface PublicSite {
    * visitor's own key; row-level security opens only that lead or that grant (lead-data.ts).
    */
   leadData<T>(key: PublicLeadKey, fn: (db: SiteScopedClient) => Promise<T>): Promise<T>;
+  /**
+   * DP-173: whether the staff session named by a catalogue preview link is still live and its
+   * user still holds `product_proposal:review` on this site (checked on every preview request).
+   */
+  previewSessionAllowed(sessionId: string, userId: string): Promise<boolean>;
 }
 
 const SITE_OF_APP = { WEB_BV: "BV", WEB_CORPORATE: "CORPORATE" } as const;
@@ -61,6 +67,8 @@ export class PublicSiteService {
       db: withSiteScope(this.prisma, scope),
       leadData: (key, fn) =>
         inLeadContext(this.prisma, scope, { kind: "public", siteId: site, ...key }, fn),
+      previewSessionAllowed: (sessionId, userId) =>
+        catalogPreviewSessionAllowed(this.prisma, sessionId, userId, site),
     };
   }
 }

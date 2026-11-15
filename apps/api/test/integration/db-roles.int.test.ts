@@ -484,6 +484,8 @@ describe("DP-103: what can step around row-level security", () => {
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef ORDER BY 1`,
     );
     expect(rows).toEqual([
+      // DP-173: one boolean about one preview link's session (live, ACTIVE user, review role).
+      { f: "catalog_preview_session_allowed", owner: "dp_owner", lead: false },
       { f: "iam_audit_event_protected_stream", owner: "dp_owner", lead: false },
       // DP-125 (ADR-012B part 2): the legacy sweep (K3), /enrol by raw token, the guards that
       // need every assignment (B1), the operator CLI (K1), the session-bound IAM readers.
