@@ -8,7 +8,9 @@
  *   so a comment typed in the decision form survives a tab change;
  * - the active tab is in the URL (`?tab=`, replaced, not pushed), so a reload or a shared link
  *   opens the same tab; `#section` links open the tab that holds the section;
- * - arrow keys, Home and End move between tabs (WAI-ARIA tabs pattern).
+ * - arrow keys, Home and End move between tabs (WAI-ARIA tabs pattern);
+ * - DP-191: a tab with unsaved changes (the proposal text editor) carries a dot, and leaving the
+ *   page (link, reload, close) with unsaved changes asks first, as on the product page.
  */
 import {
   createContext,
@@ -32,14 +34,19 @@ import {
 } from "../../lib/review-tabs";
 import { cx } from "../ui";
 
+const LEAVE_TEXT =
+  "You have unsaved changes to the proposed text. Leave the page and discard them?";
+
 interface TabsState {
   active: ReviewTabId;
   select: (tab: ReviewTabId, section?: string) => void;
   proposalId: string;
   site: string | undefined;
+  setUnsaved: (id: string, tab: ReviewTabId | null, unsaved: boolean) => void;
 }
 
 const TabsContext = createContext<TabsState | null>(null);
+const PanelContext = createContext<ReviewTabId | null>(null);
 
 const tabDomId = (base: string, tab: ReviewTabId) => `${base}-tab-${tab}`;
 const panelDomId = (tab: ReviewTabId) => `review-tab-${tab}`;
@@ -75,6 +82,48 @@ export function ReviewTabs({
   const topRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const base = useId();
+  const [unsaved, setUnsavedMap] = useState<Readonly<Record<string, ReviewTabId | null>>>({});
+  const anyUnsaved = Object.keys(unsaved).length > 0;
+  const unsavedTabs = new Set(Object.values(unsaved));
+
+  const setUnsaved = useCallback((id: string, tab: ReviewTabId | null, value: boolean) => {
+    setUnsavedMap((map) => {
+      if (value === id in map) return map;
+      const next = { ...map };
+      if (value) next[id] = tab;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+
+  // Leaving with unsaved changes: reload/close, and in-app links (back link, menu, other pages).
+  useEffect(() => {
+    if (!anyUnsaved) return;
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    const click = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+        return;
+      const a = (e.target as Element | null)?.closest?.("a[href]");
+      if (!(a instanceof HTMLAnchorElement)) return;
+      if (a.dataset["tabLink"] !== undefined || a.hasAttribute("download")) return;
+      if (a.target && a.target !== "_self") return;
+      const url = new URL(a.href, window.location.href);
+      const here = window.location;
+      if (url.pathname === here.pathname && url.search === here.search) return;
+      if (!window.confirm(LEAVE_TEXT)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", click, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", click, true);
+    };
+  }, [anyUnsaved]);
 
   const select = useCallback(
     (tab: ReviewTabId, section?: string) => {
@@ -132,8 +181,8 @@ export function ReviewTabs({
   }
 
   const state = useMemo<TabsState>(
-    () => ({ active, select, proposalId, site }),
-    [active, select, proposalId, site],
+    () => ({ active, select, proposalId, site, setUnsaved }),
+    [active, select, proposalId, site, setUnsaved],
   );
 
   return (
@@ -150,6 +199,7 @@ export function ReviewTabs({
           {REVIEW_TABS.map((t) => {
             const selected = t.id === active;
             const badge = badges[t.id];
+            const dirty = unsavedTabs.has(t.id);
             return (
               <button
                 key={t.id}
@@ -181,6 +231,12 @@ export function ReviewTabs({
                     !<span className="sr-only">, {badge.alert}</span>
                   </span>
                 ) : null}
+                {dirty ? (
+                  <span className="inline-flex items-center" title="Unsaved changes">
+                    <span aria-hidden="true" className="size-2 rounded-full bg-amber" />
+                    <span className="sr-only">, unsaved changes</span>
+                  </span>
+                ) : null}
               </button>
             );
           })}
@@ -196,16 +252,33 @@ export function ReviewTabPanel({ tab, children }: { tab: ReviewTabId; children: 
   const tabs = useContext(TabsContext);
   const hidden = tabs ? tabs.active !== tab : false;
   return (
-    <div
-      id={panelDomId(tab)}
-      role="tabpanel"
-      aria-label={reviewTabLabel(tab)}
-      hidden={hidden}
-      className="space-y-6 sm:space-y-8"
-    >
-      {children}
-    </div>
+    <PanelContext.Provider value={tab}>
+      <div
+        id={panelDomId(tab)}
+        role="tabpanel"
+        aria-label={reviewTabLabel(tab)}
+        hidden={hidden}
+        className="space-y-6 sm:space-y-8"
+      >
+        {children}
+      </div>
+    </PanelContext.Provider>
   );
+}
+
+/**
+ * DP-191: reports whether the calling form has unsaved changes: marks its tab and guards leaving
+ * the page. A no-op outside the review tabs.
+ */
+export function useReviewUnsaved(unsaved: boolean): void {
+  const tabs = useContext(TabsContext);
+  const tab = useContext(PanelContext);
+  const id = useId();
+  const setUnsaved = tabs?.setUnsaved;
+  useEffect(() => {
+    setUnsaved?.(id, tab, unsaved);
+  }, [setUnsaved, id, tab, unsaved]);
+  useEffect(() => () => setUnsaved?.(id, tab, false), [setUnsaved, id, tab]);
 }
 
 /** A link to a tab (and a section in it) of this proposal page. */
@@ -226,6 +299,7 @@ export function ReviewTabLink({
   return (
     <a
       href={href}
+      data-tab-link=""
       className={className}
       onClick={(e: ReactMouseEvent<HTMLAnchorElement>) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;

@@ -167,14 +167,22 @@ export const CreateProposalRequestSchema = z.strictObject({
 });
 export type CreateProposalRequest = z.input<typeof CreateProposalRequestSchema>;
 
-/** A new revision: replaces the text and review data, returns the proposal to REVIEW_PENDING. */
+/**
+ * A new revision: returns the proposal to REVIEW_PENDING as version + 1.
+ *
+ * DP-191: every content field is optional. A field that is left out keeps its current value, so
+ * the admin editor sends only the text it changed and stays far below the 16 KiB request limit
+ * (the review data alone can take 15 KB). That is not the same as `null`: a `null` summary or
+ * description clears that text, while `null` review data, source reference or source hash is
+ * refused like any other invalid value. The import tool still sends the full body.
+ */
 export const ReviseProposalRequestSchema = z.strictObject({
   version: VersionSchema,
-  summary: customerText(PROPOSAL_SUMMARY_MAX),
-  description: customerText(PROPOSAL_DESCRIPTION_MAX),
-  reviewData: ProposalReviewDataSchema,
-  sourceRef: SourceRefSchema,
-  sourceSha256: Sha256,
+  summary: customerText(PROPOSAL_SUMMARY_MAX).optional(),
+  description: customerText(PROPOSAL_DESCRIPTION_MAX).optional(),
+  reviewData: ProposalReviewDataSchema.optional(),
+  sourceRef: SourceRefSchema.optional(),
+  sourceSha256: Sha256.optional(),
   comment: OptionalComment,
 });
 export type ReviseProposalRequest = z.input<typeof ReviseProposalRequestSchema>;
@@ -203,6 +211,15 @@ export const ProposalEventSchema = z.strictObject({
   actor: ActorSchema,
   comment: z.string().nullable(),
   contentSha256: Sha256,
+  /**
+   * DP-191: the proposed text of this version, kept with the event so that earlier texts are not
+   * lost. `textRecorded` is false only for events written before DP-191 whose text could not be
+   * verified against `contentSha256`; their text is unknown (never guessed), and `summary` and
+   * `description` are then null.
+   */
+  textRecorded: z.boolean(),
+  summary: z.string().nullable(),
+  description: z.string().nullable(),
   createdAt: IsoDate,
 });
 export type ProposalEvent = z.infer<typeof ProposalEventSchema>;
