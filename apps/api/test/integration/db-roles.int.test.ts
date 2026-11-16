@@ -484,6 +484,8 @@ describe("DP-103: what can step around row-level security", () => {
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef ORDER BY 1`,
     );
     expect(rows).toEqual([
+      // DP-193: one boolean — may this ACTIVE staff user publish directly on this site.
+      { f: "catalog_direct_publish_allowed", owner: "dp_owner", lead: false },
       // DP-173: one boolean about one preview link's session (live, ACTIVE user, review role).
       { f: "catalog_preview_session_allowed", owner: "dp_owner", lead: false },
       { f: "iam_audit_event_protected_stream", owner: "dp_owner", lead: false },

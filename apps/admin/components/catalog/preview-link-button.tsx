@@ -15,9 +15,12 @@ import { FormMessage } from "./parts";
 export function PreviewLinkButton({
   siteId,
   productSlug,
+  label = "Open catalogue preview",
 }: {
   siteId: string;
   productSlug?: string;
+  /** DP-193: the product page calls it "Preview". */
+  label?: string;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +57,7 @@ export function PreviewLinkButton({
         className={buttonStyles.secondary}
       >
         {pending ? <Spinner /> : <Icon name="eye" size={16} />}
-        Open catalogue preview
+        {label}
       </button>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
     </div>

@@ -120,6 +120,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
 
   // Publication: one red marker when no site can be published or republished as it stands.
   const blockedSites = workflow.ok ? workflow.data.sites.filter((s) => !s.readiness.ok).length : 0;
+  // DP-193: the site's research proposal, for "Copy into the form" on the listing.
+  const siteProposal = workflow.ok
+    ? (workflow.data.sites.find((s) => s.siteId === site.id)?.proposal ?? null)
+    : null;
   const tab = parseProductTab(query["tab"]);
 
   return (
@@ -219,20 +223,20 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                       categories={categories.ok ? categories.data.items : []}
                       canEdit={site.canEdit}
                       productArchived={archived}
+                      proposal={siteProposal}
                     />
                   )}
                 </Panel>
                 <p className="px-1 text-xs text-ink-3">
-                  Publication is a separate, approved step (see{" "}
+                  Saving changes nothing on the live site. Preview and publish on the{" "}
                   <TabLink
                     tab="publication"
                     section="publication"
                     className="font-medium text-petrol-strong underline underline-offset-2"
                   >
                     Publication
-                  </TabLink>
-                  ). A hidden listing takes a published product off this site at once; showing it
-                  again needs no new approval.
+                  </TabLink>{" "}
+                  tab. A hidden listing takes a published product off this site at once.
                 </p>
               </div>
             </div>
@@ -344,27 +348,27 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             {workflow.ok ? (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
                 <Panel
+                  id="publication"
+                  className="scroll-mt-32 xl:col-span-3"
+                  title="Publication"
+                  description="Preview, publish and unpublish per site. A live site shows the published snapshot, never the current draft; every blocker says where it is fixed."
+                >
+                  <PublicationPanel data={workflow.data} productSlug={product.slug} />
+                </Panel>
+                <Panel
                   id="review"
                   className="scroll-mt-32 xl:col-span-2"
-                  title="Review and approval"
-                  description="One approval covers the platform-wide master on every site."
+                  title="Second-person review"
+                  description="Optional when you can publish directly. Publishers without approval rights publish an approved master only."
                   action={<ProductStatusPill status={workflow.data.status} />}
                 >
                   <KeepUnsaved resetKey={`review-${workflow.data.version}`}>
                     <ReviewPanel data={workflow.data} />
                   </KeepUnsaved>
                 </Panel>
-                <Panel
-                  id="publication"
-                  className="scroll-mt-32 xl:col-span-3"
-                  title="Publication"
-                  description="Each site publishes on its own. A live site shows the approved snapshot, never the current draft. Every blocker says where it is fixed."
-                >
-                  <PublicationPanel data={workflow.data} />
-                </Panel>
               </div>
             ) : (
-              <ErrorState title="The review status could not be loaded">
+              <ErrorState title="The publication status could not be loaded">
                 Try again in a moment.
               </ErrorState>
             )}
