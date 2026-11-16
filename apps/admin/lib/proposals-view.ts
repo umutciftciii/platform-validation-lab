@@ -11,6 +11,7 @@
  *    DP-002 or withheld at import, which are NEVER product specifications.
  */
 import type {
+  ProposalResponse,
   ProposalStatus,
   ReviewItem,
   ReviewItemKind,
@@ -40,6 +41,38 @@ export const STATUS_META: Readonly<
     hint: "Approved by the company. Not published and not a technical approval.",
   },
 };
+
+/**
+ * Why the signed-in user cannot approve or request changes, in plain words (DP-189). Only
+ * explains the API's `decisionBlocked`; the API still decides every request.
+ */
+export function decisionBlockedText(reason: ProposalResponse["decisionBlocked"]): {
+  title: string;
+  body: string;
+} {
+  switch (reason) {
+    case "no_permission":
+      return {
+        title: "You can read this proposal but cannot decide on it",
+        body: "Your role can read this proposal but cannot decide on it. Approving or requesting changes needs the proposal review permission for this site; ask a site administrator if you should review proposals.",
+      };
+    case "not_in_review":
+      return {
+        title: "Nothing to decide right now",
+        body: "There is nothing to decide right now: the proposal is not waiting for review. It returns to review when the editor revises it.",
+      };
+    case "own_change":
+      return {
+        title: "Another reviewer must decide",
+        body: "You wrote this revision, so another reviewer must decide (separation of duties). This rule applies to every role.",
+      };
+    default:
+      return {
+        title: "You cannot decide on this proposal",
+        body: "You cannot decide on this proposal.",
+      };
+  }
+}
 
 export const KIND_META: Readonly<Record<ReviewItemKind, { label: string; tone: PillTone }>> = {
   CONFIRM: { label: "Question to confirm", tone: "petrol" },

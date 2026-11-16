@@ -11,16 +11,10 @@ import { REVIEW_COMMENT_MAX, type ProposalResponse } from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
+import { decisionBlockedText } from "../../lib/proposals-view";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, TEXTAREA } from "./parts";
-
-const BLOCKED: Readonly<Record<string, string>> = {
-  no_permission: "Your role can read this proposal but cannot decide on it.",
-  not_in_review:
-    "There is nothing to decide right now: the proposal is not waiting for review. It returns to review when the editor revises it.",
-  own_change: "You wrote this revision, so another reviewer must decide (separation of duties).",
-};
 
 /** The reason a request for changes is refused before it is sent, or null. */
 export function changeRequestProblem(comment: string): string | null {
@@ -50,11 +44,22 @@ export function ProposalDecision({
   const [done, setDone] = useState<string | null>(null);
 
   if (!canDecide) {
+    const why = decisionBlockedText(decisionBlocked);
     return (
-      <p className="flex items-start gap-2 text-sm text-ink-2">
-        <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-petrol-strong" />
-        {(decisionBlocked && BLOCKED[decisionBlocked]) ?? "You cannot decide on this proposal."}
-      </p>
+      <div
+        role="note"
+        data-decision-blocked={decisionBlocked ?? "unknown"}
+        className="flex items-start gap-2.5 rounded-lg bg-surface-2 px-3 py-3 text-sm ring-1 ring-inset ring-line-strong"
+      >
+        <Icon name="shield" size={17} className="mt-0.5 shrink-0 text-petrol-strong" />
+        <div className="min-w-0">
+          <p className="font-semibold text-ink">{why.title}</p>
+          <p className="mt-1 text-ink-2">{why.body}</p>
+          <p className="mt-2 text-xs text-ink-3">
+            Approve and Request changes are not available to you for this version.
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -105,7 +110,7 @@ export function ProposalDecision({
           }}
           rows={4}
           className={cx(TEXTAREA, "min-h-24")}
-          placeholder="What has to change, or answers to the questions below…"
+          placeholder="What has to change, or answers to the questions in Missing & Verification…"
         />
       </div>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
