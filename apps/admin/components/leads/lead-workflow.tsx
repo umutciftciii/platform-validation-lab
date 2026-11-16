@@ -153,7 +153,7 @@ export function LeadWorkflowForm({
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !dirty}>
         {busy ? <Spinner size={14} /> : null}
-        Save change
+        <span>Save change</span>
       </button>
     </form>
   );
@@ -271,7 +271,7 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !body.trim()}>
         {busy ? <Spinner size={14} /> : null}
-        {kind === "NOTE" ? "Add note" : "Record contact"}
+        <span>{kind === "NOTE" ? "Add note" : "Record contact"}</span>
       </button>
     </form>
   );

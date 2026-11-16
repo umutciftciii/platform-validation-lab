@@ -457,7 +457,7 @@ function NewDocumentForm({
         </button>
         <button type="submit" disabled={busy} className={buttonStyles.primary}>
           {busy ? <Spinner /> : <Icon name="upload" size={18} />}
-          Create and upload
+          <span>Create and upload</span>
         </button>
       </div>
     </form>
@@ -812,7 +812,7 @@ function DocumentCard({
             </button>
             <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
               {busy === "details" ? <Spinner /> : <Icon name="check" size={18} />}
-              Save details
+              <span>Save details</span>
             </button>
           </div>
         </form>
@@ -856,7 +856,7 @@ function DocumentCard({
             </button>
             <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
               {busy === "upload" ? <Spinner /> : <Icon name="upload" size={18} />}
-              Upload revision
+              <span>Upload revision</span>
             </button>
           </div>
         </form>
@@ -915,7 +915,7 @@ function DocumentCard({
                         className={cx(buttonStyles.ghost, "h-8")}
                       >
                         {busy === `rev-${rev.id}` ? <Spinner /> : <Icon name="check" size={15} />}
-                        Make active
+                        <span>Make active</span>
                       </button>
                     ) : null}
                     <FileLinks rev={rev} compact />

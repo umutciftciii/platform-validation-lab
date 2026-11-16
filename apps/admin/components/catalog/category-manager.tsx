@@ -327,7 +327,7 @@ export function CategoryManager({
                         className={buttonStyles.primary}
                       >
                         {busy === c.id ? <Spinner /> : null}
-                        Save category
+                        <span>Save category</span>
                       </button>
                     </div>
                   </form>
@@ -364,7 +364,7 @@ export function CategoryManager({
                 </button>
                 <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
                   {busy === "create" ? <Spinner /> : <Icon name="plus" size={17} />}
-                  Create category
+                  <span>Create category</span>
                 </button>
               </div>
             </form>

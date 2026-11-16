@@ -118,7 +118,7 @@ export function PageCreateForm({
       <div className="flex justify-end">
         <button type="submit" disabled={pending} className={buttonStyles.primary}>
           {pending ? <Spinner /> : <Icon name="plus" size={17} />}
-          Create draft
+          <span>Create draft</span>
         </button>
       </div>
     </form>

@@ -123,7 +123,7 @@ export function ProposalDecision({
           className={buttonStyles.primary}
         >
           {pending === "approve" ? <Spinner /> : <Icon name="check" size={17} />}
-          Approve
+          <span>Approve</span>
         </button>
         <button
           type="button"
@@ -132,7 +132,7 @@ export function ProposalDecision({
           className={buttonStyles.secondary}
         >
           {pending === "changes" ? <Spinner /> : <Icon name="edit" size={16} />}
-          Request changes
+          <span>Request changes</span>
         </button>
       </div>
       <p className="text-xs text-ink-3">

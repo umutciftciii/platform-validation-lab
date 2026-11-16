@@ -136,7 +136,7 @@ export function AssignRoleForm({
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !person || !role}>
         {busy ? <Spinner size={14} /> : null}
-        Give role
+        <span>Give role</span>
       </button>
     </form>
   );
@@ -171,7 +171,7 @@ export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string
             aria-label={`Confirm removing ${label}`}
           >
             {busy ? <Spinner size={12} /> : null}
-            Remove
+            <span>Remove</span>
           </button>
           <button
             type="button"
@@ -350,7 +350,7 @@ export function InviteForm({
         disabled={busy || (needCode && code.replace(/\s/g, "").length !== 6)}
       >
         {busy ? <Spinner size={14} /> : null}
-        {needCode ? "Confirm and invite" : "Invite"}
+        <span>{needCode ? "Confirm and invite" : "Invite"}</span>
       </button>
     </form>
   );

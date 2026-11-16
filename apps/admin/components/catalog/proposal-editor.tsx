@@ -258,7 +258,7 @@ export function ProposalTextEditor({
               className={cx(buttonStyles.primary, "flex-1 sm:flex-none")}
             >
               {pending ? <Spinner /> : <Icon name="check" size={17} />}
-              {pending ? "Saving…" : "Save"}
+              <span>{pending ? "Saving…" : "Save"}</span>
             </button>
           </div>
         </div>

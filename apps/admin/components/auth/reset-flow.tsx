@@ -205,7 +205,7 @@ export function ResetFlow() {
           className={cx(buttonStyles.primary, "h-11 w-full")}
         >
           {busy ? <Spinner /> : null}
-          {busy ? "Saving…" : "Change password"}
+          <span>{busy ? "Saving…" : "Change password"}</span>
         </button>
       </form>
     </div>
