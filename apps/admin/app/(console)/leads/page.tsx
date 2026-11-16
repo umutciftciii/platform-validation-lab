@@ -170,7 +170,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                           <span className={l.assignedTo.active ? "text-ink-2" : "line-through"}>
                             {l.assignedTo.displayName}
                           </span>
-                          {l.assignedTo.active ? null : " (no longer has access)"}
+                          {l.assignedTo.active ? null : <span>{" (no longer has access)"}</span>}
                         </>
                       ) : (
                         "Unassigned"

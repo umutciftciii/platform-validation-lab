@@ -108,7 +108,7 @@ export function PublicationPanel({
             className={cx(buttonStyles.secondary, "w-full")}
           >
             {pending === "preview" ? <Spinner /> : <Icon name="eye" size={17} />}
-            Preview draft
+            <span>Preview draft</span>
           </button>
         ) : (
           <p className="text-ink-3">
@@ -215,7 +215,7 @@ export function ConfirmBox({
           className={cx(buttonStyles.primary, "flex-1")}
         >
           {pending ? <Spinner /> : null}
-          {action}
+          <span>{action}</span>
         </button>
         <button
           type="button"

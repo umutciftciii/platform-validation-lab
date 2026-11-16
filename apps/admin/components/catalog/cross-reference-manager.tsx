@@ -152,7 +152,9 @@ export function CrossReferenceManager({
       {live.length === 0 && !adding ? (
         <p className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-sm text-ink-3">
           No cross-references yet.
-          {editable ? " Add one to relate this product to another brand's product." : null}
+          {editable ? (
+            <span>{" Add one to relate this product to another brand's product."}</span>
+          ) : null}
         </p>
       ) : (
         <ul className="space-y-3">

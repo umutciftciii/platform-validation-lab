@@ -63,7 +63,7 @@ export function ImportButton({
               className={cx(buttonStyles.primary, "h-9")}
             >
               {pending ? <Spinner /> : null}
-              Import as draft
+              <span>Import as draft</span>
             </button>
             <button
               type="button"
@@ -83,7 +83,7 @@ export function ImportButton({
           className={cx(buttonStyles.secondary, "h-9")}
         >
           {pending ? <Spinner /> : null}
-          Import into CMS
+          <span>Import into CMS</span>
         </button>
       )}
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}

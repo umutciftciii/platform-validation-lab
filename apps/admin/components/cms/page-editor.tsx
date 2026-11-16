@@ -323,7 +323,7 @@ export function PageEditor({
                 className={cx(buttonStyles.primary, "w-full")}
               >
                 {pending ? <Spinner /> : <Icon name="check" size={17} />}
-                Save draft
+                <span>Save draft</span>
               </button>
             ) : (
               <p className="rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
