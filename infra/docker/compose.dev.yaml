@@ -108,6 +108,12 @@ services:
   # The three tsc watchers run directly (same flags as each package's "dev" script): going
   # through `pnpm turbo run dev` added four pnpm wrapper processes of ~100 MB each. If one
   # watcher exits, the container exits and its restart policy brings all three back.
+  # DP-184: --incremental, so a watcher's first build re-emits nothing when the sources did not
+  # change. Without it every start rewrote all of packages/*/dist, the API's tsc watch then
+  # re-checked its whole program while the API was running, and the cold API hit its limit
+  # (OOM-killed 2026-11-15). The build info lives in the package's node_modules/.cache (a dev-nm-*
+  # volume, writable on Linux too), outside dist; it is dropped when dist is empty so a removed
+  # dist volume is always rebuilt.
   dev-packages:
     <<: *dev-image
     container_name: dream-platform-dev-packages
@@ -127,7 +133,11 @@ services:
       - -c
       - >-
         for p in contracts content-schema test-utils; do
-        (cd packages/$$p && exec node_modules/.bin/tsc -p tsconfig.json --watch --preserveWatchOutput $$TSC_WATCH_POLLING) &
+        (cd packages/$$p &&
+        bi=node_modules/.cache/tsbuildinfo/$$p.tsbuildinfo &&
+        mkdir -p node_modules/.cache/tsbuildinfo &&
+        { [ -n "$$(ls -A dist 2>/dev/null)" ] || rm -f "$$bi"; } &&
+        exec node_modules/.bin/tsc -p tsconfig.json --incremental --tsBuildInfoFile "$$bi" --watch --preserveWatchOutput $$TSC_WATCH_POLLING) &
         done;
         wait -n; exit 1
 
@@ -229,18 +239,33 @@ services:
     # tsc --watch recompiles src/ into dist/; node --watch restarts the server on dist changes.
     # tsc polls the bind-mounted sources: per-file inotify watches are lost when an editor saves
     # by rename (atomic save), which made later edits invisible. Polling a small tree is cheap.
-    # --incremental on both runs: without it the watcher's first build rewrites every file in
-    # dist/ although nothing changed, and node --watch restarted the API seconds after it first
-    # answered /health/ready (F1-001D). The build info is kept in dist/ (volume dev-dist-api):
-    # tsc's default puts it next to the tsconfig, in the bind mount, which is not writable on
-    # Linux, and in dist/ it goes away together with the output it describes. Source edits
-    # still re-emit and restart.
+    # --incremental: without it the watcher's first build rewrites every file in dist/ although
+    # nothing changed, and node --watch restarted the API seconds after it first answered
+    # /health/ready (F1-001D). Source edits still re-emit and restart.
+    # DP-184 (cold-start OOM at the 896 MiB limit, 2026-11-15): tsc runs directly, without the
+    # `pnpm exec` wrapper (~90 MiB that stayed resident next to the watcher). The full type check
+    # stays in the one-shot build: that process exits and frees its ~600 MiB, and the watcher then
+    # starts from valid build info, which is far cheaper than doing the full check in the
+    # long-lived watcher (measured: 711 vs 813-824 MiB container peak on a cold start). The API
+    # starts only after the watcher's first pass ("Watching for file changes."), so that pass never
+    # overlaps a running API. The build info lives in node_modules/.cache (volume dev-nm-api; the
+    # bind mount is not writable on Linux), not in dist/: node --watch-path=dist restarted the API
+    # whenever tsc rewrote it there. It is dropped when dist/main.js is missing, so an emptied dist
+    # volume is always rebuilt. A failing one-shot build, or a watcher that exits before its first
+    # pass, exits the container and its restart policy retries.
     command:
       - sh
       - -c
       - >-
-        pnpm exec tsc -p tsconfig.build.json --incremental --tsBuildInfoFile dist/.tsbuildinfo &&
-        { pnpm exec tsc -p tsconfig.build.json --incremental --tsBuildInfoFile dist/.tsbuildinfo --watch --preserveWatchOutput $$TSC_WATCH_POLLING & } &&
+        bi=node_modules/.cache/tsbuildinfo/api.tsbuildinfo; fifo=/tmp/dp-tsc-watch; ready=/tmp/dp-tsc-ready;
+        tsc="node node_modules/typescript/bin/tsc -p tsconfig.build.json --incremental --tsBuildInfoFile $$bi";
+        mkdir -p node_modules/.cache/tsbuildinfo; [ -f dist/main.js ] || rm -f "$$bi";
+        rm -f dist/.tsbuildinfo "$$fifo" "$$ready"; mkfifo "$$fifo";
+        $$tsc || exit 1;
+        { while IFS= read -r line; do printf '%s\n' "$$line"; case "$$line" in *"Watching for file changes."*) : > "$$ready";; esac; done < "$$fifo"; } &
+        $$tsc --watch --preserveWatchOutput $$TSC_WATCH_POLLING > "$$fifo" 2>&1 &
+        tsc_pid=$$!;
+        while [ ! -f "$$ready" ]; do kill -0 "$$tsc_pid" 2>/dev/null || { echo "tsc --watch exited before its first pass" >&2; exit 1; }; sleep 1; done;
         exec node --watch-path=dist --watch-preserve-output dist/main.js
     healthcheck: *dev-healthcheck
 
