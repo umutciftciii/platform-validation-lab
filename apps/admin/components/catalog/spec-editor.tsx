@@ -277,7 +277,7 @@ export function SpecEditor({
             className={buttonStyles.primary}
           >
             {pending ? <Spinner /> : <Icon name="check" size={17} />}
-            {pending ? "Saving…" : "Save specifications"}
+            <span>{pending ? "Saving…" : "Save specifications"}</span>
           </button>
         </div>
       )}

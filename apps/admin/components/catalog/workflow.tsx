@@ -90,7 +90,7 @@ function Stepper({ status }: { status: ProductWorkflowResponse["status"] }) {
               )}
             >
               {done ? <Icon name="check" size={13} /> : <span className="tabular">{i + 1}</span>}
-              {s.label}
+              <span>{s.label}</span>
             </span>
             {i < STEPS.length - 1 ? (
               <span
@@ -260,7 +260,7 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
               className={buttonStyles.primary}
             >
               {pending === "submit" ? <Spinner /> : <Icon name="publish" size={17} />}
-              Submit for review
+              <span>Submit for review</span>
             </button>
           ) : null}
           {p.canReview ? (
@@ -272,7 +272,7 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
                 className={buttonStyles.primary}
               >
                 {pending === "approve" ? <Spinner /> : <Icon name="check" size={17} />}
-                Approve
+                <span>Approve</span>
               </button>
               <button
                 type="button"
@@ -287,7 +287,7 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
                 className={buttonStyles.secondary}
               >
                 {pending === "changes" ? <Spinner /> : <Icon name="edit" size={16} />}
-                Request changes
+                <span>Request changes</span>
               </button>
             </>
           ) : null}
@@ -299,7 +299,7 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
               className={buttonStyles.ghost}
             >
               {pending === "withdraw" ? <Spinner /> : <Icon name="back" size={16} />}
-              Withdraw from review
+              <span>Withdraw from review</span>
             </button>
           ) : null}
         </div>
@@ -568,7 +568,7 @@ function SiteCard({
               className={buttonStyles.primary}
             >
               {pending === "publish" ? <Spinner /> : <Icon name="publish" size={17} />}
-              {live ? "Republish" : showsListing ? "Show and publish" : "Publish"}
+              <span>{live ? "Republish" : showsListing ? "Show and publish" : "Publish"}</span>
             </button>
             {live ? (
               <button
@@ -581,7 +581,7 @@ function SiteCard({
                 )}
               >
                 {pending === "unpublish" ? <Spinner /> : <Icon name="archive" size={16} />}
-                Unpublish
+                <span>Unpublish</span>
               </button>
             ) : null}
           </>

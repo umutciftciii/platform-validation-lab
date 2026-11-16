@@ -57,7 +57,7 @@ export function PreviewLinkButton({
         className={buttonStyles.secondary}
       >
         {pending ? <Spinner /> : <Icon name="eye" size={16} />}
-        {label}
+        <span>{label}</span>
       </button>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
     </div>

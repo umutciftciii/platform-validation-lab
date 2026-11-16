@@ -347,7 +347,7 @@ export function ListingForm({
           ) : null}
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={listing ? "edit" : "plus"} size={17} />}
-            {pending ? "Saving…" : listing ? "Save listing" : `List on ${siteName}`}
+            <span>{pending ? "Saving…" : listing ? "Save listing" : `List on ${siteName}`}</span>
           </button>
         </div>
       ) : (

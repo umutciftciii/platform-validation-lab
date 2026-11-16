@@ -202,7 +202,7 @@ export function ProductMasterForm({
         <div className="flex justify-end">
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={product ? "edit" : "plus"} size={17} />}
-            {pending ? "Saving…" : product ? "Save master" : "Create product"}
+            <span>{pending ? "Saving…" : product ? "Save master" : "Create product"}</span>
           </button>
         </div>
       )}
@@ -235,7 +235,7 @@ export function ProductStateButton({ product }: { product: Product }) {
     <div className="flex flex-col items-end gap-2">
       <button type="button" onClick={run} disabled={pending} className={buttonStyles.secondary}>
         {pending ? <Spinner /> : <Icon name={archive ? "archive" : "refresh"} size={17} />}
-        {archive ? "Archive" : "Restore"}
+        <span>{archive ? "Archive" : "Restore"}</span>
       </button>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
     </div>
