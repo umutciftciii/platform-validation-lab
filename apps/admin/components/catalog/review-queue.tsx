@@ -35,7 +35,7 @@ export function ReviewQueueList({
   siteParam?: string;
 }) {
   const href = (i: ReviewQueueItem) =>
-    `/products/${i.productId}${siteParam ? `?site=${siteParam}` : ""}#review`;
+    `/products/${i.productId}?${siteParam ? `site=${siteParam}&` : ""}tab=publication#review`;
   return (
     <>
       <div className="hidden md:block">
