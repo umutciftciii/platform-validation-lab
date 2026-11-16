@@ -173,6 +173,17 @@ function fixtures(opts: { canEditMaster: boolean }) {
         listing: { version: 2, visibility: "HIDDEN" },
         publication: null,
         outdated: { master: false, listing: false },
+        publishMode: "APPROVED",
+        canShowListing: false,
+        canPreview: false,
+        proposal: {
+          id: "0190a8c4-7c1e-7000-8000-0000000000f1",
+          status: "REVIEW_PENDING",
+          version: 3,
+          summary: "Research summary for BV.",
+          description: "Research description for BV.",
+          claimRisks: ["Food/cosmetic suitability should not be written."],
+        },
         readiness: {
           ok: false,
           blocking: [
@@ -207,6 +218,10 @@ function fixtures(opts: { canEditMaster: boolean }) {
         listing: null,
         publication: null,
         outdated: { master: false, listing: false },
+        publishMode: "APPROVED",
+        canShowListing: false,
+        canPreview: false,
+        proposal: null,
         readiness: {
           ok: false,
           blocking: [
@@ -322,6 +337,102 @@ describe("product page tabs", () => {
     expect(html).not.toContain("Save master");
     expect(html).toContain("Product masters are edited by the platform product team");
     expect(panel(html, "publication")).not.toContain("Submit for review");
+  });
+});
+
+// DP-193 (ADR-023): Preview / Publish / Unpublish, direct publication and the proposal copy.
+describe("DP-193 direct publication and the research proposal", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  function direct() {
+    const wf = reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+    const bv = wf.sites[0]!;
+    reads.set(`${C}/products/${PRODUCT}/workflow`, {
+      ...wf,
+      sites: [
+        {
+          ...bv,
+          publishMode: "DIRECT",
+          canShowListing: true,
+          canPreview: true,
+          readiness: {
+            ok: true,
+            blocking: [],
+            warnings: [
+              {
+                severity: "WARNING",
+                code: "not_reviewed",
+                target: "product",
+                message: "Published directly: no second person reviewed this version (optional).",
+              },
+              {
+                severity: "WARNING",
+                code: "listing_shown_on_publish",
+                target: "listing",
+                message: "The listing is hidden; publishing makes it visible on this site.",
+              },
+              {
+                severity: "WARNING",
+                code: "sensitive_claim",
+                target: "text:pharmaceutical",
+                message:
+                  "The public text mentions pharmaceutical or pharmacopoeia grade: publish it only with a certificate or source document.",
+              },
+              {
+                severity: "WARNING",
+                code: "alt_text_missing",
+                target: "image:x",
+                message: "An image has no alt text.",
+              },
+            ],
+          },
+        },
+        wf.sites[1]!,
+      ],
+    });
+  }
+
+  it("publishes directly with one button, shows warnings openly and needs no dialog", async () => {
+    direct();
+    const pub = panel(await render({ site: "bv", tab: "publication" }), "publication");
+    expect(pub).toContain("Show and publish");
+    expect(pub).toContain(">Preview<");
+    expect(pub).toContain("Check before publishing:");
+    expect(pub).toContain("pharmaceutical or pharmacopoeia grade");
+    expect(pub).toContain("1 more note (not blocking)");
+    expect(pub).toContain("You publish this version directly");
+    expect(pub).toContain("Second-person review");
+    expect(pub).not.toContain("Unpublish…");
+    // Publication comes before the optional review.
+    expect(pub.indexOf('id="publication"')).toBeLessThan(pub.indexOf('id="review"'));
+  });
+
+  it("keeps the approved path for a publisher without approval rights", async () => {
+    const pub = panel(await render({ site: "bv", tab: "publication" }), "publication");
+    expect(pub).toContain("Publishing needs an approved master (second-person review).");
+    expect(pub).not.toContain("Show and publish");
+    expect(pub).not.toContain(">Preview<");
+  });
+
+  it("offers to copy the research proposal into the listing and says when the texts differ", async () => {
+    const content = panel(await render({ site: "bv" }), "content");
+    expect(content).toContain("Research proposal for Dream Petroleum BV");
+    expect(content).toContain("not reviewed by the company (optional)");
+    expect(content).toContain("Copy into summary and description");
+    expect(content).toContain(
+      "The saved Dream Petroleum BV text differs from the research proposal.",
+    );
+    expect(content).toContain("1 claim note: wording that needs a certificate");
+    expect(content).toContain("Technical values held for verification stay in");
+    // The listing fields stay empty until the user copies and saves.
+    expect(content).not.toContain('value="Research summary for BV."');
+  });
+
+  it("offers no copy without product:edit on the site", async () => {
+    fixtures({ canEditMaster: false });
+    const content = panel(await render({ site: "bv" }), "content");
+    expect(content).toContain("Research proposal for Dream Petroleum BV");
+    expect(content).not.toContain("Copy into summary and description");
   });
 });
 

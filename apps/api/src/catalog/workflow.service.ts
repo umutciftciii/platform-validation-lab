@@ -11,6 +11,9 @@
  *  - approve / request changes: `product:approve` platform-wide, and not an editor or the
  *    submitter of the revision (separation of duties, 403 with rule own_change, audited);
  *  - publish / unpublish: `product:publish` of that site only; the other site is unaffected.
+ *  - DP-193 (ADR-023) direct publish (`approvalMode: DIRECT`): additionally `product:approve`
+ *    platform-wide (the database checks both again); showing a hidden listing in the same step
+ *    (`makeVisible`) needs `product:edit` of the site. The master status is never changed.
  *
  * Every transition names the version it was based on; each writes its history event and audit
  * event in the same transaction.
@@ -19,6 +22,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   ApproveRequestSchema,
   CATALOG_CONTENT_LOCALE,
+  ProposalReviewDataSchema,
   checkPublication,
   PublishedSnapshotSchema,
   PublishRequestSchema,
@@ -30,8 +34,10 @@ import {
   type Actor,
   type ProductValidation,
   type ProductWorkflowResponse,
+  type PublicationMode,
   type PublishedSnapshot,
   type ReviewQueueResponse,
+  type SiteProposal,
   type SitePublication,
 } from "@dream/contracts";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
@@ -39,13 +45,19 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
-import type { ScopedTx } from "./master.js";
+import { lockMaster, type ScopedTx } from "./master.js";
 import { requireMasterRead, toRule, uuidOr404, valueData } from "./specs.service.js";
 
 const MASTER = "product_master:edit";
 const READ = "product:read";
 const APPROVE = "product:approve";
 const PUBLISH = "product:publish";
+const EDIT = "product:edit";
+/** DP-173: the BV catalogue preview link (preview.service.ts). */
+const PREVIEW = "product_proposal:review";
+/** DP-193: the history note of a direct publication (append-only, shown in the console). */
+export const DIRECT_PUBLICATION_NOTE =
+  "Direct publication: published without a second-person technical review (DP-193).";
 const PLATFORM = { scope: "platform" } as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -124,6 +136,50 @@ function reviewBlock(
 const blockingDetails = (v: { blocking: { target: string; code: string }[] }) =>
   v.blocking.slice(0, 50).map((i) => ({ path: i.target, rule: i.code }));
 
+/** DP-193: the research proposals (DP-171) of one product on the given sites, by site. */
+async function loadProposals(
+  db: Db,
+  productId: string,
+  siteIds: readonly string[],
+): Promise<Map<string, SiteProposal>> {
+  if (siteIds.length === 0) return new Map();
+  const rows = await db.productContentProposal.findMany({
+    where: { productId, siteId: { in: [...siteIds] }, locale: CATALOG_CONTENT_LOCALE },
+    select: {
+      id: true,
+      siteId: true,
+      status: true,
+      version: true,
+      proposedSummary: true,
+      proposedDescription: true,
+      reviewData: true,
+    },
+  });
+  return new Map(
+    rows.map((r) => {
+      const review = ProposalReviewDataSchema.safeParse(r.reviewData);
+      // Only the claim-risk notes: held technical values (DP-002) never leave the company review.
+      const claimRisks = review.success
+        ? review.data.items
+            .filter((i) => i.kind === "CLAIM_RISK")
+            .map((i) => i.text)
+            .slice(0, 50)
+        : [];
+      return [
+        r.siteId,
+        {
+          id: r.id,
+          status: r.status,
+          version: r.version,
+          summary: r.proposedSummary,
+          description: r.proposedDescription,
+          claimRisks,
+        },
+      ];
+    }),
+  );
+}
+
 @Injectable()
 export class WorkflowService {
   constructor(@Inject(StaffAccessService) private readonly access: StaffAccessService) {}
@@ -141,7 +197,7 @@ export class WorkflowService {
       include: { submittedBy: USER, approvedBy: USER },
     });
     if (!product) throw new ApiError("NOT_FOUND");
-    const [content, listings, publications, history] = await Promise.all([
+    const [content, listings, publications, history, proposals] = await Promise.all([
       loadContent(db, [id]),
       db.productSiteListing.findMany({
         where: { productId: id },
@@ -165,19 +221,29 @@ export class WorkflowService {
         take: 100,
         include: { actor: USER },
       }),
+      loadProposals(db, id, readable),
     ]);
     const { validation, images } = content.of(id);
+    const approvesPlatform = a.allows(APPROVE, PLATFORM);
     const block = reviewBlock(a, product);
     const sites: SitePublication[] = a.sites
       .filter((s) => readable.includes(s.id))
       .map((s) => {
         const l = listings.find((x) => x.siteId === s.id) ?? null;
         const p = publications.find((x) => x.siteId === s.id) ?? null;
+        const site = { scope: "site", siteId: s.id } as const;
+        const canPublish = a.allows(PUBLISH, site);
+        // DP-193: the console publishes directly when the caller may and the master is not
+        // APPROVED; an APPROVED master keeps the PM-3 path.
+        const publishMode: PublicationMode =
+          canPublish && approvesPlatform && product.status !== "APPROVED" ? "DIRECT" : "APPROVED";
+        const canShowListing = publishMode === "DIRECT" && a.allows(EDIT, site);
+        const proposal = proposals.get(s.id) ?? null;
         return {
           siteId: s.id,
           siteKey: s.key,
           siteName: s.name,
-          canPublish: a.allows(PUBLISH, { scope: "site", siteId: s.id }),
+          canPublish,
           listing: l ? { version: l.version, visibility: l.visibility } : null,
           publication: p
             ? {
@@ -189,6 +255,7 @@ export class WorkflowService {
                 publishedBy: actor(p.publishedBy),
                 unpublishedAt: iso(p.unpublishedAt),
                 unpublishedBy: p.unpublishedBy ? actor(p.unpublishedBy) : null,
+                approvalMode: p.approvalMode,
                 version: p.version,
               }
             : null,
@@ -196,11 +263,18 @@ export class WorkflowService {
             master: p !== null && p.productVersion !== product.version,
             listing: p !== null && l !== null && p.listingVersion !== l.version,
           },
+          publishMode,
+          canShowListing,
+          canPreview: s.key === "BV" && a.allows(PREVIEW, site),
+          proposal,
           readiness: checkPublication({
             product,
             listing: l ? { visibility: l.visibility, text: l.texts[0] ?? null } : null,
             validation,
             images,
+            mode: publishMode,
+            canShowListing,
+            proposal,
           }),
         };
       });
@@ -505,13 +579,32 @@ export class WorkflowService {
     const a = await this.access.begin(ctx);
     const id = uuidOr404(rawId);
     const siteId = await WorkflowService.requireSite(a, rawSiteId, id);
-    const { version, listingVersion } = parseBody(PublishRequestSchema, body);
+    const { version, listingVersion, approvalMode, makeVisible } = parseBody(
+      PublishRequestSchema,
+      body,
+    );
+    const direct = approvalMode === "DIRECT";
+    if (makeVisible && !direct) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "makeVisible", rule: "direct_only" }]);
+    }
+    if (direct) {
+      // DP-193: publishing without a review needs the approver's right too (audited when
+      // refused); the database checks both rights again.
+      await a.require(APPROVE, PLATFORM, { type: "product_publication", id });
+      if (makeVisible) {
+        await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id });
+      }
+    }
     const db = a.db({ siteIds: [siteId], includePlatform: true });
     try {
       await db.$transaction(async (tx) => {
+        // DP-193: a direct publication locks the master first, so a concurrent edit waits and
+        // the snapshot is exactly the version checked here (the APPROVED path relies on the
+        // approval reset instead, as before).
+        if (direct && !(await lockMaster(tx, id))) throw new ApiError("NOT_FOUND");
         const product = await tx.product.findUnique({ where: { id } });
         if (!product) throw new ApiError("NOT_FOUND");
-        const listing = await tx.productSiteListing.findUnique({
+        let listing = await tx.productSiteListing.findUnique({
           where: { productId_siteId: { productId: id, siteId } },
           include: { texts: { where: { locale: CATALOG_CONTENT_LOCALE } } },
         });
@@ -526,14 +619,21 @@ export class WorkflowService {
         if (listing && listing.version !== listingVersion) {
           throw new ApiError("CONFLICT_STATE", [{ path: "listingVersion", rule: "stale" }]);
         }
-        const content = await loadContent(tx, [id]);
+        const [content, proposals] = await Promise.all([
+          loadContent(tx, [id]),
+          loadProposals(tx, id, [siteId]),
+        ]);
         const { validation, images, values } = content.of(id);
+        const proposal = proposals.get(siteId) ?? null;
         const text = listing?.texts[0] ?? null;
         const readiness = checkPublication({
           product,
           listing: listing ? { visibility: listing.visibility, text } : null,
           validation,
           images,
+          mode: approvalMode,
+          canShowListing: makeVisible,
+          proposal,
         });
         if (!readiness.ok || !listing || !category) {
           throw new ApiError(
@@ -541,6 +641,33 @@ export class WorkflowService {
             readiness.blocking.slice(0, 50).map((i) => ({ path: i.target, rule: i.code })),
           );
         }
+        // DP-193: show the hidden listing in the same transaction (its own version and audit).
+        const listingShown = makeVisible && listing.visibility !== "VISIBLE";
+        if (listingShown) {
+          const res = await tx.productSiteListing.updateMany({
+            where: { id: listing.id, version: listing.version, visibility: "HIDDEN" },
+            data: { visibility: "VISIBLE", version: { increment: 1 } },
+          });
+          if (res.count !== 1) {
+            throw new ApiError("CONFLICT_STATE", [{ path: "listingVersion", rule: "stale" }]);
+          }
+          listing = { ...listing, visibility: "VISIBLE", version: listing.version + 1 };
+          await a.audit(tx, {
+            action: "catalog.listing_updated",
+            resourceType: "product_listing",
+            resourceId: listing.id,
+            siteId,
+            permission: EDIT,
+            metadata: {
+              productId: id,
+              changed: ["visibility"],
+              visibility: "VISIBLE",
+              version: listing.version,
+              cause: "direct_publication",
+            },
+          });
+        }
+        const publishedListingVersion = listing.version;
         const defsById = new Map(content.defs.map((d) => [d.id, d]));
         const snapshot: PublishedSnapshot = PublishedSnapshotSchema.parse({
           schemaVersion: 1,
@@ -588,13 +715,14 @@ export class WorkflowService {
         const fields = {
           status: "PUBLISHED" as const,
           productVersion: version,
-          listingVersion,
+          listingVersion: publishedListingVersion,
           snapshot,
           imageIds: images.map((i) => i.id),
           publishedAt: new Date(),
           publishedById: a.userId,
           unpublishedAt: null,
           unpublishedById: null,
+          approvalMode,
         };
         if (existing) {
           const res = await tx.productPublication.updateMany({
@@ -614,21 +742,34 @@ export class WorkflowService {
             action: "PUBLISHED",
             productVersion: version,
             actorUserId: a.userId,
+            ...(direct ? { comment: DIRECT_PUBLICATION_NOTE } : {}),
           },
         });
+        const common = {
+          productVersion: version,
+          listingVersion,
+          republished: existing !== null,
+          images: fields.imageIds.length,
+          warnings: readiness.warnings.length,
+        };
         await a.audit(tx, {
-          action: "catalog.product_published",
+          action: direct ? "catalog.product_published_direct" : "catalog.product_published",
           resourceType: "product_publication",
           resourceId: id,
           siteId,
           permission: PUBLISH,
-          metadata: {
-            productVersion: version,
-            listingVersion,
-            republished: existing !== null,
-            images: fields.imageIds.length,
-            warnings: readiness.warnings.length,
-          },
+          metadata: direct
+            ? {
+                ...common,
+                listingVersion: publishedListingVersion,
+                approvalMode: "DIRECT",
+                productStatus: product.status,
+                listingShown,
+                sensitiveClaims: readiness.warnings.filter((w) => w.code === "sensitive_claim")
+                  .length,
+                companyReview: proposal?.status ?? null,
+              }
+            : common,
         });
       });
     } catch (e) {

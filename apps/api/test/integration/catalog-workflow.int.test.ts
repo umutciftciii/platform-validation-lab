@@ -2672,3 +2672,505 @@ describe("11. DP-173 catalogue preview", () => {
     expect(live.body.items.map((p: { code: string }) => p.code)).not.toContain("DP173-A");
   });
 });
+
+// ------------------------------------------------------------------------------------------
+// 12. DP-193 (ADR-023): direct publication by one authorised administrator
+// ------------------------------------------------------------------------------------------
+
+describe("12. DP-193 direct publication", () => {
+  let admin: Staff; // platform_super_admin + product_publisher @ BV: approve (platform) + publish
+  let d: string; // a complete DRAFT product, BV listing hidden
+  const NOTE = "Direct publication: published without a second-person technical review (DP-193).";
+  const publish = (who: Staff, id: string, body: Record<string, unknown>) =>
+    who.post(`/products/${id}/publications/${BV}/publish`, body);
+  const hide = async (id: string) => {
+    const res = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: await listingVersion(id, BV),
+      categoryId: bvCategory,
+      visibility: "HIDDEN",
+      title: "Direct product for BV",
+      summary: "Offered under the pharmaceutical grade designation.",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  };
+  const listingRow = (id: string) =>
+    owner.productSiteListing.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+
+  beforeAll(async () => {
+    admin = await staff(
+      "direct-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    d = await completeProduct("direct", "DP193-A");
+    await hide(d);
+  });
+
+  it("tells the console the mode: DIRECT for the administrator, APPROVED for a publisher", async () => {
+    const mine = (await admin.workflow(d)).sites.find((s) => s.siteKey === "BV")!;
+    expect(mine).toMatchObject({
+      canPublish: true,
+      publishMode: "DIRECT",
+      canShowListing: true,
+      canPreview: true,
+    });
+    expect(mine.readiness.ok).toBe(true);
+    expect(mine.readiness.warnings.map((w) => w.code)).toEqual(
+      expect.arrayContaining(["not_reviewed", "listing_shown_on_publish", "sensitive_claim"]),
+    );
+    const theirs = (await bvPublisher.workflow(d)).sites[0]!;
+    expect(theirs).toMatchObject({ publishMode: "APPROVED", canShowListing: false });
+    expect(theirs.canPreview).toBe(false);
+    expect(theirs.readiness.blocking.map((i) => i.code)).toEqual([
+      "not_approved",
+      "listing_hidden",
+    ]);
+  });
+
+  it("refuses DIRECT without both rights (publisher only, super admin only), audited", async () => {
+    const body = {
+      version: await version(d),
+      listingVersion: await listingVersion(d, BV),
+      approvalMode: "DIRECT",
+      makeVisible: true,
+    };
+    expectError(await publish(bvPublisher, d, body), 403, "FORBIDDEN");
+    const denied = await owner.auditEvent.findFirst({
+      where: { action: "catalog.access_denied", actorUserId: bvPublisher.userId },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(denied).toMatchObject({ outcome: "DENIED", resourceType: "product_publication" });
+    for (const s of [root, reviewer, pm, bvEditor, comPublisher, bvReader]) {
+      expectError(await publish(s, d, body), 403, "FORBIDDEN");
+    }
+    expect((await listingRow(d)).visibility).toBe("HIDDEN");
+  });
+
+  it("keeps the APPROVED mode as it was: a draft is refused even for the administrator", async () => {
+    const lv = await listingVersion(d, BV);
+    expectError(
+      await publish(admin, d, { version: await version(d), listingVersion: lv }),
+      409,
+      "CONFLICT_STATE",
+      { path: "product", rule: "not_approved" },
+    );
+    expectError(
+      await publish(admin, d, {
+        version: await version(d),
+        listingVersion: lv,
+        approvalMode: "APPROVED",
+        makeVisible: true,
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "makeVisible", rule: "direct_only" },
+    );
+  });
+
+  it("blocks a hidden listing unless asked to show it, and stale versions", async () => {
+    const v = await version(d);
+    const lv = await listingVersion(d, BV);
+    expectError(
+      await publish(admin, d, { version: v, listingVersion: lv, approvalMode: "DIRECT" }),
+      409,
+      "CONFLICT_STATE",
+      { path: "listing", rule: "listing_hidden" },
+    );
+    expectError(
+      await publish(admin, d, {
+        version: v - 1,
+        listingVersion: lv,
+        approvalMode: "DIRECT",
+        makeVisible: true,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    expectError(
+      await publish(admin, d, {
+        version: v,
+        listingVersion: lv - 1,
+        approvalMode: "DIRECT",
+        makeVisible: true,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "listingVersion", rule: "stale" },
+    );
+    expect(await listingRow(d)).toMatchObject({ visibility: "HIDDEN", version: lv });
+  });
+
+  it("is atomic: a missing cover refuses it and the listing stays hidden", async () => {
+    const id = await completeProduct("direct-nocover", "DP193-B");
+    await hide(id);
+    const img = await owner.productImage.findFirstOrThrow({ where: { productId: id } });
+    expect((await pm.del(`/images/${img.id}`)).status).toBe(204);
+    const lv = await listingVersion(id, BV);
+    expectError(
+      await publish(admin, id, {
+        version: await version(id),
+        listingVersion: lv,
+        approvalMode: "DIRECT",
+        makeVisible: true,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "images", rule: "cover_missing" },
+    );
+    expect(await listingRow(id)).toMatchObject({ visibility: "HIDDEN", version: lv });
+    expect(
+      await owner.productPublication.findUnique({
+        where: { productId_siteId: { productId: id, siteId: BV } },
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses invalid technical data and archived masters", async () => {
+    const id = await completeProduct("direct-invalid", "DP193-C");
+    // The database refuses wrong units outright; a required value removed past the API is a
+    // BLOCKING issue of the validation engine.
+    await owner.productSpecValue.deleteMany({ where: { productId: id } });
+    expectError(
+      await publish(admin, id, {
+        version: await version(id),
+        listingVersion: await listingVersion(id, BV),
+        approvalMode: "DIRECT",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "spec:kv100", rule: "required_missing" },
+    );
+    const a = await completeProduct("direct-archived", "DP193-D");
+    expect((await pm.post(`/products/${a}/archive`, { version: await version(a) })).status).toBe(
+      200,
+    );
+    expectError(
+      await publish(admin, a, {
+        version: await version(a),
+        listingVersion: await listingVersion(a, BV),
+        approvalMode: "DIRECT",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "product", rule: "archived" },
+    );
+  });
+
+  it("publishes the current draft, shows the listing in the same step, keeps it DRAFT", async () => {
+    const v = await version(d);
+    const lv = await listingVersion(d, BV);
+    const res = await publish(admin, d, {
+      version: v,
+      listingVersion: lv,
+      approvalMode: "DIRECT",
+      makeVisible: true,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const wf = ProductWorkflowResponseSchema.parse(res.body);
+    expect(wf.status).toBe("DRAFT");
+    expect(wf.approvedVersion).toBeNull();
+    const bv = wf.sites.find((s) => s.siteKey === "BV")!;
+    expect(bv.publication).toMatchObject({
+      status: "PUBLISHED",
+      approvalMode: "DIRECT",
+      productVersion: v,
+      listingVersion: lv + 1,
+      publishedBy: { id: admin.userId },
+    });
+    expect(bv.listing).toEqual({ version: lv + 1, visibility: "VISIBLE" });
+    expect(bv.outdated).toEqual({ master: false, listing: false });
+    // The master was not touched: same version, not approved, no review event of its own.
+    const p = await owner.product.findUniqueOrThrow({ where: { id: d } });
+    expect(p).toMatchObject({ status: "DRAFT", version: v, approvedById: null });
+    expect(wf.history[0]).toMatchObject({
+      action: "PUBLISHED",
+      siteId: BV,
+      productVersion: v,
+      comment: NOTE,
+      actor: { id: admin.userId },
+    });
+    const audit = await lastAudit("catalog.product_published_direct");
+    expect(audit).toMatchObject({
+      actorUserId: admin.userId,
+      siteId: BV,
+      resourceType: "product_publication",
+      resourceId: d,
+    });
+    expect(audit?.metadata).toMatchObject({
+      permission: "product:publish",
+      approvalMode: "DIRECT",
+      productStatus: "DRAFT",
+      listingShown: true,
+      listingVersion: lv + 1,
+      sensitiveClaims: 1,
+      republished: false,
+    });
+    const shown = await lastAudit("catalog.listing_updated");
+    expect(shown).toMatchObject({ actorUserId: admin.userId, resourceType: "product_listing" });
+    expect(shown?.metadata).toMatchObject({
+      permission: "product:edit",
+      cause: "direct_publication",
+      visibility: "VISIBLE",
+    });
+    // Live on BV with the draft's content; Corporate untouched.
+    const live = PublicProductResponseSchema.parse((await pub("bv", "/products/dp193-a")).body);
+    expect(live.product.summary).toBe("Offered under the pharmaceutical grade designation.");
+    expect((await pub("com", "/products/dp193-a")).status).toBe(404);
+  });
+
+  it("an edit after publication keeps the snapshot; republishing moves it, as DIRECT", async () => {
+    const before = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: d, siteId: BV } },
+    });
+    const edit = await pm.post(`/products/${d}`, {
+      version: await version(d),
+      code: "DP193-A",
+      slug: "dp193-a",
+      name: "Product DP193-A",
+      summary: "Summary of DP193-A",
+      description: "A new master description.",
+    });
+    expect(edit.status, JSON.stringify(edit.body)).toBe(200);
+    const after1 = await owner.productPublication.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after1.snapshot).toEqual(before.snapshot);
+    const wf = await admin.workflow(d);
+    expect(wf.sites.find((s) => s.siteKey === "BV")!.outdated.master).toBe(true);
+    const res = await publish(admin, d, {
+      version: await version(d),
+      listingVersion: await listingVersion(d, BV),
+      approvalMode: "DIRECT",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const after2 = await owner.productPublication.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after2).toMatchObject({
+      approvalMode: "DIRECT",
+      productVersion: await version(d),
+      version: before.version + 1,
+    });
+    expect((after2.snapshot as { description: string }).description).toBe(
+      "A new master description.",
+    );
+    expect((await lastAudit("catalog.product_published_direct"))?.metadata).toMatchObject({
+      republished: true,
+      listingShown: false,
+    });
+  });
+
+  it("unpublishes and republishes directly; the separation of duties is unchanged", async () => {
+    const row = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: d, siteId: BV } },
+    });
+    const off = await admin.post(`/products/${d}/publications/${BV}/unpublish`, {
+      version: row.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await pub("bv", "/products/dp193-a")).status).toBe(404);
+    const again = await publish(admin, d, {
+      version: await version(d),
+      listingVersion: await listingVersion(d, BV),
+      approvalMode: "DIRECT",
+    });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect((await pub("bv", "/products/dp193-a")).status).toBe(200);
+    // The administrator who edited the master still cannot approve their own revision.
+    const v = await version(d);
+    const edit = await admin.post(`/products/${d}`, {
+      version: v,
+      code: "DP193-A",
+      slug: "dp193-a",
+      name: "Product DP193-A",
+      summary: "Summary of DP193-A",
+      description: "Edited by the administrator.",
+    });
+    expect(edit.status, JSON.stringify(edit.body)).toBe(200);
+    expect((await admin.post(`/products/${d}/submit`, { version: v + 1 })).status).toBe(200);
+    expectError(await admin.post(`/products/${d}/approve`, { version: v + 2 }), 403, "FORBIDDEN", {
+      path: "(root)",
+      rule: "own_change",
+    });
+    // An IN_REVIEW master can still be published directly; it stays IN_REVIEW.
+    const inReview = await publish(admin, d, {
+      version: v + 2,
+      listingVersion: await listingVersion(d, BV),
+      approvalMode: "DIRECT",
+    });
+    expect(inReview.status, JSON.stringify(inReview.body)).toBe(200);
+    expect((await owner.product.findUniqueOrThrow({ where: { id: d } })).status).toBe("IN_REVIEW");
+    expect((await admin.post(`/products/${d}/withdraw`, { version: v + 2 })).status).toBe(200);
+  });
+
+  it("shows the site's research proposal and its claim notes, never its held values", async () => {
+    const res = await bvEditor.post(`/sites/${BV}/proposals`, {
+      productId: d,
+      locale: "en",
+      summary: "Research summary of DP193-A.",
+      description: "Research description of DP193-A.",
+      reviewData: {
+        schemaVersion: 1,
+        family: "White oil",
+        items: [
+          {
+            kind: "CLAIM_RISK",
+            field: "summary",
+            text: "Pharmaceutical suitability needs a manufacturer certificate.",
+            sourceIds: [],
+            heldValue: null,
+          },
+          {
+            kind: "DP002_HELD",
+            field: "spec:kv100",
+            text: "Two viscosity limits on one page.",
+            sourceIds: [],
+            heldValue: {
+              definition: "kv100",
+              basis: "SPECIFICATION",
+              raw: "KV100: 7.5 mm2/s [ASTM D445]",
+              conflict: true,
+              finding: null,
+            },
+          },
+        ],
+        sources: [],
+      },
+      sourceRef: "docs/catalog/proposals/dp193.json",
+      sourceSha256: "c".repeat(64),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const site = (await admin.workflow(d)).sites.find((s) => s.siteKey === "BV")!;
+    expect(site.proposal).toMatchObject({
+      status: "REVIEW_PENDING",
+      summary: "Research summary of DP193-A.",
+      description: "Research description of DP193-A.",
+      claimRisks: ["Pharmaceutical suitability needs a manufacturer certificate."],
+    });
+    expect(JSON.stringify(site.proposal)).not.toContain("7.5");
+    expect(site.readiness.warnings.map((w) => w.code)).toContain("company_review_pending");
+    expect(site.readiness.ok).toBe(true);
+    // Reading the proposal wrote nothing to the listing.
+    const text = await owner.productListingText.findFirstOrThrow({
+      where: { listingId: (await listingRow(d)).id },
+    });
+    expect(text.summary).toBe("Offered under the pharmaceutical grade designation.");
+  });
+
+  it("concurrent direct publications showing the listing: exactly one wins", async () => {
+    const id = await completeProduct("direct-race", "DP193-E");
+    await hide(id);
+    const body = {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+      makeVisible: true,
+    };
+    const results = await Promise.all([publish(admin, id, body), publish(admin, id, body)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    const rows = await owner.productPublication.findMany({ where: { productId: id } });
+    expect(rows).toHaveLength(1);
+    expect((await listingRow(id)).version).toBe(body.listingVersion + 1);
+  });
+
+  it("a master edit racing a direct publication: the snapshot is never newer content under an older version", async () => {
+    const id = await completeProduct("direct-race2", "DP193-F");
+    const v = await version(id);
+    const [pubRes, editRes] = await Promise.all([
+      publish(admin, id, {
+        version: v,
+        listingVersion: await listingVersion(id, BV),
+        approvalMode: "DIRECT",
+      }),
+      pm.post(`/products/${id}`, {
+        version: v,
+        code: "DP193-F",
+        slug: "dp193-f",
+        name: "Product DP193-F",
+        summary: "Raced summary",
+        description: "Description of DP193-F",
+      }),
+    ]);
+    expect(editRes.status, JSON.stringify(editRes.body)).toBe(200);
+    if (pubRes.status === 200) {
+      const row = await owner.productPublication.findUniqueOrThrow({
+        where: { productId_siteId: { productId: id, siteId: BV } },
+      });
+      expect(row.productVersion).toBe(v);
+      // The listing has no own summary, so the snapshot shows the master's version-v summary.
+      expect((row.snapshot as { summary: string }).summary).toBe("Summary of DP193-F");
+    } else {
+      expectError(pubRes, 409, "CONFLICT_STATE", { path: "version", rule: "stale" });
+    }
+  });
+
+  it("the database refuses a direct publication without both rights, of an old or archived version, and a mode change in place", async () => {
+    const id = await completeProduct("direct-db", "DP193-G");
+    const listing = await listingRow(id);
+    const row = (publishedById: string, productVersion: number) => ({
+      productId: id,
+      siteId: BV,
+      listingId: listing.id,
+      status: "PUBLISHED" as const,
+      approvalMode: "DIRECT" as const,
+      productVersion,
+      listingVersion: listing.version,
+      snapshot: { schemaVersion: 1 },
+      imageIds: [],
+      publishedAt: new Date(),
+      publishedById,
+    });
+    const v = await version(id);
+    for (const who of [bvPublisher, root, pm, comPublisher]) {
+      await rejectsDb(
+        owner.productPublication.create({ data: row(who.userId, v) }),
+        /direct publication needs product approval and publishing rights/,
+      );
+    }
+    await rejectsDb(
+      owner.productPublication.create({ data: row(admin.userId, v - 1) }),
+      /only the current version of an active product can be published directly/,
+    );
+    // The APPROVED mode still needs the approved version, whoever writes it.
+    await rejectsDb(
+      owner.productPublication.create({
+        data: { ...row(admin.userId, v), approvalMode: "APPROVED" },
+      }),
+      /only the approved version/,
+    );
+    const ok = await owner.productPublication.create({ data: row(admin.userId, v) });
+    await rejectsDb(
+      owner.productPublication.update({
+        where: { id: ok.id },
+        data: { approvalMode: "APPROVED" },
+      }),
+      /replaced only by publishing again/,
+    );
+    // A revoked publisher role ends the right at once.
+    await owner.roleAssignment.updateMany({
+      where: { userId: admin.userId, siteId: BV, revokedAt: null },
+      data: { revokedAt: new Date(), revokedById: root.userId },
+    });
+    await rejectsDb(
+      owner.productPublication.update({
+        where: { id: ok.id },
+        data: { publishedAt: new Date(Date.now() + 1000) },
+      }),
+      /direct publication needs product approval and publishing rights/,
+    );
+    const helper = await owner.$queryRaw<{ who: string | null }[]>`
+      SELECT string_agg(r.rolname, ',' ORDER BY r.rolname) FILTER (
+               WHERE has_function_privilege(r.oid, 'catalog_direct_publish_allowed(uuid, uuid)', 'EXECUTE')) AS who
+      FROM pg_roles r
+      WHERE r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'public')`;
+    expect(helper[0]?.who).toBe("dp_app");
+  });
+
+  it("the existing publications stayed APPROVED publications", async () => {
+    const modes = await owner.productPublication.groupBy({
+      by: ["approvalMode"],
+      where: { publishedById: { not: admin.userId } },
+      _count: true,
+    });
+    expect(modes.map((m) => m.approvalMode)).toEqual(["APPROVED"]);
+  });
+});
