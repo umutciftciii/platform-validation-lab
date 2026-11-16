@@ -12,6 +12,7 @@ import {
 import { PageHeader } from "../../../../components/catalog/parts";
 import { PreviewLinkButton } from "../../../../components/catalog/preview-link-button";
 import { ProposalDecision } from "../../../../components/catalog/proposal-decision";
+import { ProposalTextEditor } from "../../../../components/catalog/proposal-editor";
 import {
   ClaimRisks,
   ContentComparison,
@@ -23,6 +24,7 @@ import {
   ProposalHistory,
   ProposalStatusPill,
   ReviewItems,
+  SourceTag,
   SourcesPanel,
   VerificationNav,
 } from "../../../../components/catalog/proposal-review";
@@ -53,6 +55,9 @@ export const metadata: Metadata = { title: "Company review" };
  * review items keep their provenance tags; DP-002 held values have a block of their own and are
  * never shown as product specifications. The decision (approve, request changes) is in Content
  * Review; the API decides who may make it.
+ *
+ * DP-191: a user who may revise proposals on the site edits the proposed text in Content Review
+ * (the current site text stays next to it as the reference); everyone else sees the comparison.
  */
 export default async function CompanyReviewProductPage({
   params,
@@ -78,7 +83,7 @@ export default async function CompanyReviewProductPage({
       </div>
     );
   }
-  const { proposal, events, canDecide, decisionBlocked } = res.data;
+  const { proposal, events, canDecide, canRevise, decisionBlocked } = res.data;
   const pid = proposal.productId;
   const [detail, categories, specs, images, documents] = await Promise.all([
     serverRead(`${CATALOG}/products/${pid}?siteId=${proposal.siteId}`, ProductDetailResponseSchema),
@@ -158,7 +163,28 @@ export default async function CompanyReviewProductPage({
                 categories={categories.ok ? categories.data.items : []}
                 images={images.ok ? images.data : null}
               />
-              <ContentComparison detail={detail.ok ? detail.data : null} proposal={proposal} />
+              {canRevise && detail.ok ? (
+                <ProposalTextEditor
+                  proposalId={proposal.id}
+                  version={proposal.version}
+                  status={proposal.status}
+                  text={{ summary: proposal.summary, description: proposal.description }}
+                  current={{
+                    summary: detail.data.listing?.text?.summary ?? detail.data.product.summary,
+                    description:
+                      detail.data.listing?.text?.description ?? detail.data.product.description,
+                  }}
+                  placeholder={proposal.reviewData.items.some((i) => i.kind === "PLACEHOLDER")}
+                  tags={
+                    <>
+                      <SourceTag kind="site" />
+                      <SourceTag kind="proposal" />
+                    </>
+                  }
+                />
+              ) : (
+                <ContentComparison detail={detail.ok ? detail.data : null} proposal={proposal} />
+              )}
               <ClaimRisks proposal={proposal} />
             </div>
             <div className="min-w-0 space-y-6 xl:sticky xl:top-32">

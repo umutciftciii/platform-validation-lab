@@ -707,6 +707,56 @@ const ACTION_DOT: Readonly<Record<ProposalEvent["action"], string>> = {
   CHANGES_REQUESTED: "bg-danger",
 };
 
+/** The event before this one in the history (oldest first), or null. */
+function previousOf(events: readonly ProposalEvent[], e: ProposalEvent): ProposalEvent | null {
+  const i = events.indexOf(e);
+  return i > 0 ? (events[i - 1] ?? null) : null;
+}
+
+/**
+ * DP-191: the text of the version an event produced or decided on, folded away. A text equal to
+ * the previous event's is only named; a text written before DP-191 that could not be verified
+ * is marked as not recorded (never guessed).
+ */
+function EventText({ event, previous }: { event: ProposalEvent; previous: ProposalEvent | null }) {
+  if (!event.textRecorded) {
+    return (
+      <p className="mt-1.5 text-xs text-ink-3" data-event-text="unrecorded">
+        Text of this version not recorded (saved before the history kept texts).
+      </p>
+    );
+  }
+  if (previous && previous.contentSha256 === event.contentSha256) {
+    return (
+      <p className="mt-1.5 text-xs text-ink-3" data-event-text="unchanged">
+        Text unchanged.
+      </p>
+    );
+  }
+  return (
+    <details className="group mt-1.5" data-event-text="recorded">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-petrol-strong underline-offset-2 hover:underline [&::-webkit-details-marker]:hidden">
+        <Icon name="chevron" size={14} className="transition-transform group-open:rotate-90" />
+        Text of version {event.proposalVersion}
+      </summary>
+      <dl className="mt-2 space-y-2 rounded-lg bg-surface-2 px-3 py-2.5 text-sm ring-1 ring-line">
+        <div>
+          <dt className="text-xs font-semibold text-ink-3">Short description</dt>
+          <dd className="mt-0.5 whitespace-pre-line break-words text-ink">
+            {event.summary ?? <Missing>No text</Missing>}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs font-semibold text-ink-3">Description</dt>
+          <dd className="mt-0.5 whitespace-pre-line break-words text-ink">
+            {event.description ?? <Missing>No text</Missing>}
+          </dd>
+        </div>
+      </dl>
+    </details>
+  );
+}
+
 export function ProposalHistory({
   proposal,
   events,
@@ -765,6 +815,7 @@ export function ProposalHistory({
                   {e.comment}
                 </p>
               ) : null}
+              <EventText event={e} previous={previousOf(events, e)} />
             </li>
           ))}
         </ol>
