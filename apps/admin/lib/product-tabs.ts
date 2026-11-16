@@ -88,13 +88,6 @@ export function fixForIssue(code: string): IssueFix | null {
         section: "review",
         hint: "Optional: ask a second person to review it first.",
       };
-    case "listing_shown_on_publish":
-      return {
-        tab: "content",
-        section: "listing",
-        hint: "Nothing to do: publishing shows it. A hidden listing later takes it off the site again.",
-        perSite: true,
-      };
     case "company_review_pending":
       return {
         tab: "content",
@@ -120,13 +113,6 @@ export function fixForIssue(code: string): IssueFix | null {
         tab: "content",
         section: "listing",
         hint: "List the product on this site (site listing).",
-        perSite: true,
-      };
-    case "listing_hidden":
-      return {
-        tab: "content",
-        section: "listing",
-        hint: "Set the site listing to Visible and save it.",
         perSite: true,
       };
     case "cover_missing":

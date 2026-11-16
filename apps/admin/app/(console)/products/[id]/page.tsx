@@ -37,7 +37,7 @@ import {
   ProductStatusPill,
   SITE_SHORT,
   siteParam,
-  VisibilityPill,
+  SiteStatusPill,
 } from "../../../../components/catalog/parts";
 import {
   ProductMasterForm,
@@ -45,6 +45,7 @@ import {
 } from "../../../../components/catalog/product-master-form";
 import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
 import { parseProductTab } from "../../../../lib/product-tabs";
+import { planPublication, siteStatus } from "../../../../lib/publication-status";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
@@ -117,12 +118,53 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
       label: `${d.type} · ${d.title} · revision ${d.activeRevision!.revisionNumber}`,
     }));
   const siteKeys = Object.fromEntries(sites.map((s) => [s.id, s.key]));
+  // DP-197: Draft / Published / Unpublished per site (live = published and shown).
+  const statusOf = (s: {
+    publication: { status: "PUBLISHED" | "UNPUBLISHED" } | null;
+    listing: { visibility: "VISIBLE" | "HIDDEN" } | null;
+  }) =>
+    siteStatus({
+      publication: s.publication,
+      listing: s.listing?.visibility ?? null,
+      productStatus: product.status,
+    });
   const liveCount = workflow.ok
-    ? workflow.data.sites.filter((s) => s.publication?.status === "PUBLISHED").length
+    ? workflow.data.sites.filter((s) => statusOf(s) === "PUBLISHED").length
     : 0;
+  const currentSite = workflow.ok
+    ? (workflow.data.sites.find((s) => s.siteId === site.id) ?? null)
+    : null;
+  // DP-197: the Publication tab switches a listing on before publishing an approved master
+  // (APPROVED path), so it needs each site's saved listing and the caller's product:edit there.
+  const publicationListings = workflow.ok
+    ? Object.fromEntries(
+        await Promise.all(
+          workflow.data.sites.map(async (s) => {
+            if (s.siteId === site.id) return [s.siteId, listing] as const;
+            if (!s.listing) return [s.siteId, null] as const;
+            const other = await serverRead(
+              `${CATALOG}/products/${id}?siteId=${s.siteId}`,
+              ProductDetailResponseSchema,
+            );
+            return [s.siteId, other.ok ? other.data.listing : null] as const;
+          }),
+        ),
+      )
+    : {};
+  const editableSiteIds = sites.filter((s) => s.canEdit).map((s) => s.id);
 
   // Publication: one red marker when no site can be published or republished as it stands.
-  const blockedSites = workflow.ok ? workflow.data.sites.filter((s) => !s.readiness.ok).length : 0;
+  // DP-197: the same plan as the site cards (an approved master's listing the caller may switch
+  // on is not a blocker).
+  const blockedSites = workflow.ok
+    ? workflow.data.sites.filter(
+        (s) =>
+          planPublication(s, {
+            canEditListing: editableSiteIds.includes(s.siteId),
+            productStatus: workflow.data.status,
+          }).blocking.length > 0,
+      ).length
+    : 0;
   // DP-193: the site's research proposal, for "Copy into the form" on the listing.
   const siteProposal = workflow.ok
     ? (workflow.data.sites.find((s) => s.siteId === site.id)?.proposal ?? null)
@@ -148,7 +190,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
               </span>
               <ProductStatusPill status={product.status} />
               {workflow.ok ? (
-                <StatusPill tone={liveCount > 0 ? "success" : "neutral"}>
+                <StatusPill key={`live-${liveCount}`} tone={liveCount > 0 ? "success" : "neutral"}>
                   {liveCount > 0
                     ? `Live on ${liveCount} of ${workflow.data.sites.length} site${workflow.data.sites.length === 1 ? "" : "s"}`
                     : "Not live"}
@@ -202,7 +244,13 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                       ? `Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
                       : "This site does not list the product yet."
                   }
-                  action={<VisibilityPill visibility={listing?.visibility ?? null} />}
+                  action={
+                    !listing ? (
+                      <StatusPill tone="neutral">Not listed</StatusPill>
+                    ) : currentSite ? (
+                      <SiteStatusPill status={statusOf(currentSite)} />
+                    ) : undefined
+                  }
                 >
                   {categories.ok && categories.data.items.length === 0 && !listing ? (
                     <EmptyState
@@ -229,13 +277,13 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                       listing={listing}
                       categories={categories.ok ? categories.data.items : []}
                       canEdit={site.canEdit}
-                      productArchived={archived}
                       proposal={siteProposal}
                     />
                   )}
                 </Panel>
                 <p className="px-1 text-xs text-ink-3">
-                  Saving changes nothing on the live site. Preview and publish on the{" "}
+                  Saving never publishes, unpublishes or changes the live site. Preview and publish
+                  on the{" "}
                   <TabLink
                     tab="publication"
                     section="publication"
@@ -243,7 +291,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   >
                     Publication
                   </TabLink>{" "}
-                  tab. A hidden listing takes a published product off this site at once.
+                  tab.
                 </p>
               </div>
             </div>
@@ -389,7 +437,12 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   title="Publication"
                   description="Preview, publish and unpublish per site. A live site shows the published snapshot, never the current draft; every blocker says where it is fixed."
                 >
-                  <PublicationPanel data={workflow.data} productSlug={product.slug} />
+                  <PublicationPanel
+                    data={workflow.data}
+                    productSlug={product.slug}
+                    listings={publicationListings}
+                    editableSiteIds={editableSiteIds}
+                  />
                 </Panel>
                 <Panel
                   id="review"

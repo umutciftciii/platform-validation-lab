@@ -12,6 +12,7 @@
  */
 import {
   REVIEW_COMMENT_MAX,
+  type Listing,
   type ProductWorkflowResponse,
   type PublicationIssue,
   type ReviewAction,
@@ -22,9 +23,11 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
 import { fixForIssue, productTabLabel } from "../../lib/product-tabs";
+import { listingVisibilityBody } from "../../lib/listing-request";
+import { planPublication } from "../../lib/publication-status";
 import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
-import { FormMessage, PublicationPill, SITE_SHORT, TEXTAREA } from "./parts";
+import { FormMessage, SITE_SHORT, SiteStatusPill, TEXTAREA } from "./parts";
 import { PreviewLinkButton } from "./preview-link-button";
 import { useNotice } from "./notices";
 import { TabLink, useUnsavedChanges } from "./product-tabs";
@@ -59,7 +62,7 @@ function useWorkflowCall() {
     router.refresh();
     return true;
   }
-  return { pending, error, run, setError };
+  return { pending, error, run, setError, refresh: () => router.refresh() };
 }
 
 // --- review ------------------------------------------------------------------------------------
@@ -433,39 +436,91 @@ function SiteCard({
   site,
   data,
   productSlug,
+  listing,
+  canEditListing,
 }: {
   site: SitePublication;
   data: ProductWorkflowResponse;
   productSlug: string;
+  /** DP-197: the site's saved listing (for the APPROVED path's switch-on step). */
+  listing: Listing | null;
+  /** DP-197: product:edit on this site. */
+  canEditListing: boolean;
 }) {
-  const { pending, error, run } = useWorkflowCall();
+  const { pending, error, run, setError, refresh } = useWorkflowCall();
+  const [stepPending, setStepPending] = useState(false);
   const [reason, setReason] = useState("");
   const reasonId = useId();
   const pub = site.publication;
-  const live = pub?.status === "PUBLISHED";
-  const r = site.readiness;
+  const plan = planPublication(site, { canEditListing, productStatus: data.status });
+  const live = plan.status === "PUBLISHED";
   const base = `/products/${data.productId}/publications/${site.siteId}`;
   const name = SITE_SHORT[site.siteKey];
   const direct = site.publishMode === "DIRECT";
-  const showsListing = direct && site.canShowListing && site.listing?.visibility === "HIDDEN";
-  const attention = r.warnings.filter((w) => ATTENTION.has(w.code));
-  const notes = r.warnings.filter((w) => !ATTENTION.has(w.code));
+  const attention = plan.warnings.filter((w) => ATTENTION.has(w.code));
+  const notes = plan.warnings.filter((w) => !ATTENTION.has(w.code));
+  const busy = pending !== null || stepPending;
   // DP-187: a typed reason survives a tab change.
   useUnsavedChanges(reason.trim().length > 0);
 
   async function publish() {
     if (!site.listing) return;
-    await run(
+    const done = live ? `Republished on ${name}.` : `Published on ${name}.`;
+    if (plan.showListing !== "listing-first") {
+      await run(
+        "publish",
+        `${base}/publish`,
+        {
+          version: data.version,
+          listingVersion: site.listing.version,
+          approvalMode: site.publishMode,
+          makeVisible: plan.showListing === "direct",
+        },
+        done,
+      );
+      return;
+    }
+    // DP-197, APPROVED path: the API publishes a shown listing only, and refuses to show it in
+    // the same step. Show it with the listing API (product:edit, audited), publish, and switch
+    // it off again when publishing fails, so a failure leaves the site as it was.
+    if (!listing || listing.version !== site.listing.version) {
+      setError("The site listing changed meanwhile. Reload the page and check it again.");
+      return;
+    }
+    setStepPending(true);
+    setError(null);
+    const shown = await callCatalog<{ listing: Listing }>(
+      "POST",
+      `/products/${data.productId}/listings/${site.siteId}`,
+      listingVisibilityBody(listing, "VISIBLE", listing.version),
+    );
+    setStepPending(false);
+    if (!shown.ok) {
+      setError(shown.message);
+      return;
+    }
+    const ok = await run(
       "publish",
       `${base}/publish`,
       {
         version: data.version,
-        listingVersion: site.listing.version,
+        listingVersion: shown.data.listing.version,
         approvalMode: site.publishMode,
-        makeVisible: showsListing,
       },
-      live ? `Republished on ${name}.` : `Published on ${name}.`,
+      done,
     );
+    if (ok) return;
+    const back = await callCatalog<{ listing: Listing }>(
+      "POST",
+      `/products/${data.productId}/listings/${site.siteId}`,
+      listingVisibilityBody(listing, "HIDDEN", shown.data.listing.version),
+    );
+    refresh();
+    if (!back.ok) {
+      setError(
+        `Publishing failed, and the listing could not be taken back off ${name}: ${back.message} Reload the page and check the site.`,
+      );
+    }
   }
   async function unpublish() {
     if (!pub) return;
@@ -478,7 +533,6 @@ function SiteCard({
     if (ok) setReason("");
   }
 
-  const upToDate = live && !site.outdated.master && !site.outdated.listing;
   return (
     <article className="flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface-2/40 p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
@@ -486,29 +540,41 @@ function SiteCard({
           <Icon name="sites" size={16} className="text-ink-3" />
           {name}
         </h3>
-        <PublicationPill publication={pub} />
+        <SiteStatusPill status={plan.status} />
       </header>
 
+      {/* DP-197: one keyed line per state, each a single string, so a state change replaces the
+          lines instead of editing their text nodes (a translated page keeps no stale node). */}
       {pub ? (
         <p className="text-xs text-ink-3">
           {live ? (
             <>
-              Live: master version {pub.productVersion}, listing version {pub.listingVersion}
-              {pub.approvalMode === "DIRECT" ? " · published directly" : " · approved version"}
-              <br />
-              Published {when(pub.publishedAt)} by {pub.publishedBy.name}
+              <span key="live-1" className="block">
+                {`Live: master version ${pub.productVersion}, listing version ${pub.listingVersion}${pub.approvalMode === "DIRECT" ? " · published directly" : " · approved version"}`}
+              </span>
+              <span key="live-2" className="block">
+                {`Published ${when(pub.publishedAt)} by ${pub.publishedBy.name}`}
+              </span>
+            </>
+          ) : pub.status === "UNPUBLISHED" ? (
+            <>
+              <span key="off-1" className="block">
+                {`Unpublished${pub.unpublishedAt ? ` ${when(pub.unpublishedAt)}` : ""}${pub.unpublishedBy ? ` by ${pub.unpublishedBy.name}` : ""}`}
+              </span>
+              <span key="off-2" className="block">
+                {`Last live: master version ${pub.productVersion}`}
+              </span>
             </>
           ) : (
-            <>
-              Unpublished {pub.unpublishedAt ? when(pub.unpublishedAt) : ""}
-              {pub.unpublishedBy ? ` by ${pub.unpublishedBy.name}` : ""}
-              <br />
-              Last live: master version {pub.productVersion}
-            </>
+            <span key="hidden-1" className="block">
+              {`Not shown on this site at the moment. Last published: master version ${pub.productVersion}, ${when(pub.publishedAt)}.`}
+            </span>
           )}
         </p>
       ) : (
-        <p className="text-xs text-ink-3">Never published on this site.</p>
+        <p key="never" className="text-xs text-ink-3">
+          Never published on this site.
+        </p>
       )}
 
       {live && (site.outdated.master || site.outdated.listing) ? (
@@ -523,17 +589,19 @@ function SiteCard({
         </p>
       ) : null}
 
-      {r.blocking.length ? (
+      {plan.blocking.length ? (
         <div className="space-y-1">
           <p className="text-xs font-semibold text-danger">
             {live ? "Republishing is blocked:" : "Publishing is blocked:"}
           </p>
-          <IssueList issues={r.blocking} tone="danger" site={site.siteKey.toLowerCase()} />
+          <IssueList issues={plan.blocking} tone="danger" site={site.siteKey.toLowerCase()} />
         </div>
       ) : (
         <p className="flex items-center gap-1.5 text-xs font-medium text-success">
           <Icon name="check" size={13} />
-          {upToDate ? "Live and up to date." : `Ready to ${live ? "republish" : "publish"}.`}
+          <span key={`${plan.upToDate}-${live}`}>
+            {plan.upToDate ? "Live and up to date." : `Ready to ${live ? "republish" : "publish"}.`}
+          </span>
         </p>
       )}
       {attention.length ? (
@@ -563,17 +631,21 @@ function SiteCard({
           <>
             <button
               type="button"
-              disabled={pending !== null || !r.ok || upToDate}
+              disabled={busy || !plan.canPublish}
               onClick={publish}
               className={buttonStyles.primary}
             >
-              {pending === "publish" ? <Spinner /> : <Icon name="publish" size={17} />}
-              <span>{live ? "Republish" : showsListing ? "Show and publish" : "Publish"}</span>
+              {pending === "publish" || stepPending ? (
+                <Spinner />
+              ) : (
+                <Icon name="publish" size={17} />
+              )}
+              <span key={plan.publishLabel}>{plan.publishLabel}</span>
             </button>
-            {live ? (
+            {plan.canUnpublish ? (
               <button
                 type="button"
-                disabled={pending !== null}
+                disabled={busy}
                 onClick={unpublish}
                 className={cx(
                   buttonStyles.secondary,
@@ -587,7 +659,7 @@ function SiteCard({
           </>
         ) : null}
       </div>
-      {site.canPublish && live ? (
+      {plan.canUnpublish ? (
         <details className="text-xs">
           <summary className="cursor-pointer text-ink-3">
             Reason for unpublishing (optional)
@@ -605,16 +677,18 @@ function SiteCard({
       {site.canPublish ? (
         <p className="flex items-start gap-1.5 text-xs text-ink-3">
           <Icon name="shield" size={13} className="mt-px shrink-0" />
-          {direct
-            ? "You publish this version directly; no second review is needed. Unpublishing takes it off the site at once."
-            : data.status === "APPROVED"
-              ? "Publishes the approved version."
-              : "Publishing needs an approved master (second-person review)."}
+          <span>
+            {direct
+              ? "You publish this version directly; no second review is needed. Unpublishing takes it off the site at once."
+              : data.status === "APPROVED"
+                ? "Publishes the approved version. Unpublishing takes it off the site at once."
+                : "Publishing needs an approved master (second-person review)."}
+          </span>
         </p>
       ) : (
         <p className="flex items-center gap-1.5 text-xs text-ink-3">
           <Icon name="shield" size={13} />
-          Publishing on this site needs the publisher role of the site.
+          <span>Publishing on this site needs the publisher role of the site.</span>
         </p>
       )}
     </article>
@@ -624,9 +698,15 @@ function SiteCard({
 export function PublicationPanel({
   data,
   productSlug,
+  listings = {},
+  editableSiteIds = [],
 }: {
   data: ProductWorkflowResponse;
   productSlug: string;
+  /** DP-197: each site's saved listing, by site id. */
+  listings?: Readonly<Record<string, Listing | null>>;
+  /** DP-197: the sites where the caller has product:edit. */
+  editableSiteIds?: readonly string[];
 }) {
   if (data.sites.length === 0) {
     return <p className="text-sm text-ink-3">You cannot read any site of this product.</p>;
@@ -634,7 +714,14 @@ export function PublicationPanel({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {data.sites.map((s) => (
-        <SiteCard key={s.siteId} site={s} data={data} productSlug={productSlug} />
+        <SiteCard
+          key={s.siteId}
+          site={s}
+          data={data}
+          productSlug={productSlug}
+          listing={listings[s.siteId] ?? null}
+          canEditListing={editableSiteIds.includes(s.siteId)}
+        />
       ))}
     </div>
   );
