@@ -27,6 +27,7 @@ import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill } from "../ui";
 import { FIELD, FormMessage } from "./parts";
 import { useNotice } from "./notices";
+import { useUnsavedChanges } from "./product-tabs";
 
 function initialDraft(
   def: SpecDefinition,
@@ -90,8 +91,12 @@ export function SpecEditor({
   const [error, setError] = useState<string | null>(null);
   const readOnly = !canEdit || archived;
 
+  // DP-187: set once a save went through, so the editor remounts with the saved values.
+  const [justSaved, setJustSaved] = useState(false);
+
   const set = (slot: string, patch: Partial<Draft>) => {
     setServerIssues([]);
+    setJustSaved(false);
     setDrafts((all) => ({ ...all, [slot]: { ...(all[slot] as Draft), ...patch } }));
   };
 
@@ -134,6 +139,7 @@ export function SpecEditor({
     [data.definitions, data.validation, drafts],
   );
   const dirty = useMemo(() => draftsDiffer(saved, drafts), [saved, drafts]);
+  useUnsavedChanges(!readOnly && dirty && !justSaved);
 
   // Missing required values do not block saving a draft; a bad entered value does.
   const blockingFieldCount = data.definitions
@@ -171,6 +177,7 @@ export function SpecEditor({
       notify?.(result.message, "error");
       return;
     }
+    setJustSaved(true);
     notify?.("Technical specifications saved.");
     router.refresh();
   }

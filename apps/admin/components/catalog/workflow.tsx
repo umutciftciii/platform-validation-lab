@@ -16,10 +16,12 @@ import {
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
+import { fixForIssue, productTabLabel } from "../../lib/product-tabs";
 import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, PublicationPill, SITE_SHORT, TEXTAREA } from "./parts";
 import { useNotice } from "./notices";
+import { TabLink, useUnsavedChanges } from "./product-tabs";
 
 const DATE_TIME = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -114,6 +116,8 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
   const warnings = data.validation.warnings.length;
   const busy = pending !== null;
   const trimmed = comment.trim();
+  // DP-187: a typed note survives a tab change and a save in another tab.
+  useUnsavedChanges(trimmed.length > 0);
 
   async function act(key: string, path: string, done: string, withComment: boolean) {
     const ok = await run(
@@ -188,9 +192,13 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
             : warnings
               ? `No blocking issue in the saved data; ${warnings} warning${warnings === 1 ? "" : "s"} for the reviewer.`
               : "The saved data has no blocking issue and no warning."}{" "}
-          <a href="#specs" className="font-medium underline underline-offset-2">
-            Validation report
-          </a>
+          <TabLink
+            tab="technical"
+            section="specs"
+            className="font-medium underline underline-offset-2"
+          >
+            Validation report (Technical)
+          </TabLink>
         </span>
       </p>
 
@@ -360,21 +368,45 @@ export function ReviewHistory({
 
 // --- publication -------------------------------------------------------------------------------
 
+/**
+ * DP-187: each issue says what it means, what to do and links to the tab where it is fixed.
+ * The text only explains the API's readiness check (checkPublication); it decides nothing.
+ */
 function IssueList({
   issues,
   tone,
+  site,
 }: {
   issues: readonly PublicationIssue[];
   tone: "danger" | "amber";
+  site: string;
 }) {
   return (
-    <ul className={cx("space-y-0.5 text-xs", tone === "danger" ? "text-danger" : "text-amber-ink")}>
-      {issues.map((i) => (
-        <li key={`${i.target}-${i.code}`} className="flex items-start gap-1.5">
-          <Icon name="alert" size={13} className="mt-px shrink-0" />
-          {i.message}
-        </li>
-      ))}
+    <ul className={cx("space-y-1.5 text-xs", tone === "danger" ? "text-danger" : "text-amber-ink")}>
+      {issues.map((i) => {
+        const fix = fixForIssue(i.code);
+        return (
+          <li key={`${i.target}-${i.code}`} className="flex items-start gap-1.5">
+            <Icon name="alert" size={13} className="mt-px shrink-0" />
+            <span className="min-w-0">
+              {i.message}
+              {fix ? (
+                <span className="block text-ink-2">
+                  {fix.hint}{" "}
+                  <TabLink
+                    tab={fix.tab}
+                    section={fix.section}
+                    {...(fix.perSite ? { site } : {})}
+                    className="font-medium text-petrol-strong underline underline-offset-2"
+                  >
+                    Go to {productTabLabel(fix.tab)}
+                  </TabLink>
+                </span>
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -459,7 +491,7 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
           <p className="text-xs font-semibold text-danger">
             {live ? "Republishing is blocked:" : "Publishing is blocked:"}
           </p>
-          <IssueList issues={r.blocking} tone="danger" />
+          <IssueList issues={r.blocking} tone="danger" site={site.siteKey.toLowerCase()} />
         </div>
       ) : (
         <p className="flex items-center gap-1.5 text-xs font-medium text-success">
@@ -473,7 +505,7 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
             {r.warnings.length} warning{r.warnings.length === 1 ? "" : "s"} (shown, not blocking)
           </summary>
           <div className="mt-1.5">
-            <IssueList issues={r.warnings} tone="amber" />
+            <IssueList issues={r.warnings} tone="amber" site={site.siteKey.toLowerCase()} />
           </div>
         </details>
       ) : null}
