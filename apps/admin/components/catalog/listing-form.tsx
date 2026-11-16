@@ -11,10 +11,12 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
 import { flattenTree } from "../../lib/catalog-view";
+import { formHasChanges } from "../../lib/product-tabs";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { Field, FIELD, FormMessage, TEXTAREA } from "./parts";
 import { useNotice } from "./notices";
+import { useUnsavedChanges } from "./product-tabs";
 
 /**
  * The product's listing on one site (product:edit of that site): visibility, the site's category
@@ -48,6 +50,12 @@ export function ListingForm({
   const defaultCategory = categories.find((c) => c.isDefault);
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
   const id = (name: string) => `listing-${siteId}-${name}`;
+  // DP-187: unsaved edits mark the Content tab and are confirmed before a site switch.
+  const [fieldsChanged, setFieldsChanged] = useState(false);
+  const visibilityChanged = visibility !== (listing?.visibility ?? "HIDDEN");
+  useUnsavedChanges(canEdit && (fieldsChanged || visibilityChanged));
+  const track = (e: FormEvent<HTMLFormElement>) =>
+    setFieldsChanged(formHasChanges(e.currentTarget));
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -78,13 +86,14 @@ export function ListingForm({
       setIssues(result.issues);
       return;
     }
+    setFieldsChanged(false);
     if (notify) notify(listing ? "Listing saved." : `Listed on ${siteName}.`);
     else setSaved(true);
     router.refresh();
   }
 
   return (
-    <form onSubmit={submit} noValidate className="space-y-4">
+    <form onSubmit={submit} onInput={track} onChange={track} noValidate className="space-y-4">
       <fieldset disabled={!canEdit} className="space-y-4">
         <legend className="sr-only">Listing on {siteName}</legend>
         <div>
