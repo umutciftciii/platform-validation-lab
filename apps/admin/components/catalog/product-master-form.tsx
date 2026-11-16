@@ -9,10 +9,12 @@ import {
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
+import { formHasChanges } from "../../lib/product-tabs";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { Field, FIELD, FormMessage, TEXTAREA } from "./parts";
 import { useNotice } from "./notices";
+import { useUnsavedChanges } from "./product-tabs";
 
 /** "ICCSYN 6 Synthetic" -> "iccsyn-6-synthetic" (the user can still change it). */
 export function slugify(value: string): string {
@@ -49,6 +51,17 @@ export function ProductMasterForm({
   const archived = product?.status === "ARCHIVED";
   const readOnly = !canEdit || archived;
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
+  // DP-187: unsaved edits keep their tab marked and survive a save in another tab.
+  const [changed, setChanged] = useState(false);
+  useUnsavedChanges(Boolean(product) && !readOnly && changed);
+  const track = (e: FormEvent<HTMLFormElement>) => {
+    const form = e.currentTarget;
+    // The slug is controlled (its DOM default follows the state), so it is compared here.
+    const slugField = form.elements.namedItem("slug");
+    const slugChanged =
+      product !== null && slugField instanceof HTMLInputElement && slugField.value !== product.slug;
+    setChanged(formHasChanges(form) || slugChanged);
+  };
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -79,6 +92,7 @@ export function ProductMasterForm({
     }
     if (product) {
       // The provider's notice outlives this form's remount after the refresh (new version).
+      setChanged(false);
       if (notify) notify("Product master saved.");
       else setSaved(true);
       router.refresh();
@@ -88,7 +102,7 @@ export function ProductMasterForm({
   }
 
   return (
-    <form onSubmit={submit} noValidate className="space-y-4">
+    <form onSubmit={submit} onInput={track} onChange={track} noValidate className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label="Product name"

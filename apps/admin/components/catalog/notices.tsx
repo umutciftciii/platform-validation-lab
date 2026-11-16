@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -16,20 +17,44 @@ import { cx } from "../ui";
  * Save notifications of the product screens (PM-2). The provider sits above the forms, so a
  * notice survives the form's remount after `router.refresh()` (new version) instead of vanishing
  * with it. Notices stay 6 s, or until dismissed, in a polite live region.
+ *
+ * DP-187: a `NoticeScope` (one per product tab) names where the notice comes from, so a toast
+ * says "Technical · Technical specifications saved." and offers a way back to that tab.
  */
 type Tone = "success" | "error";
+export interface NoticeOrigin {
+  label: string;
+  /** Shows the origin again (e.g. switches back to its tab); omitted when always visible. */
+  open?: () => void;
+}
 interface Notice {
   id: number;
   tone: Tone;
   text: string;
+  origin?: NoticeOrigin;
 }
 type Notify = (text: string, tone?: Tone) => void;
+type NotifyFrom = (text: string, tone: Tone, origin?: NoticeOrigin) => void;
 
-const NoticeContext = createContext<Notify | null>(null);
+const NoticeContext = createContext<NotifyFrom | null>(null);
+const ScopeContext = createContext<NoticeOrigin | null>(null);
 
 /** The notifier of the surrounding provider, or null outside one. */
 export function useNotice(): Notify | null {
-  return useContext(NoticeContext);
+  const notify = useContext(NoticeContext);
+  const origin = useContext(ScopeContext);
+  return useMemo(
+    () =>
+      notify
+        ? (text: string, tone: Tone = "success") => notify(text, tone, origin ?? undefined)
+        : null,
+    [notify, origin],
+  );
+}
+
+/** Names the origin of every notice raised below it (a tab of the product page). */
+export function NoticeScope({ origin, children }: { origin: NoticeOrigin; children: ReactNode }) {
+  return <ScopeContext.Provider value={origin}>{children}</ScopeContext.Provider>;
 }
 
 export function NoticeProvider({ children }: { children: ReactNode }) {
@@ -44,10 +69,10 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     timers.current.delete(id);
   }, []);
 
-  const notify = useCallback<Notify>(
-    (text, tone = "success") => {
+  const notify = useCallback<NotifyFrom>(
+    (text, tone, origin) => {
       const id = ++seq.current;
-      setNotices((list) => [...list.slice(-2), { id, tone, text }]);
+      setNotices((list) => [...list.slice(-2), { id, tone, text, ...(origin ? { origin } : {}) }]);
       timers.current.set(
         id,
         setTimeout(() => dismiss(id), tone === "error" ? 9000 : 6000),
@@ -90,7 +115,24 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
             >
               <Icon name={n.tone === "success" ? "check" : "alert"} size={14} />
             </span>
-            <p className="min-w-0 flex-1">{n.text}</p>
+            <div className="min-w-0 flex-1">
+              {n.origin ? (
+                <p className="type-eyebrow mb-0.5 text-ink-3">
+                  {n.origin.open ? (
+                    <button
+                      type="button"
+                      onClick={n.origin.open}
+                      className="underline-offset-2 hover:text-ink hover:underline"
+                    >
+                      {n.origin.label}
+                    </button>
+                  ) : (
+                    n.origin.label
+                  )}
+                </p>
+              ) : null}
+              <p>{n.text}</p>
+            </div>
             <button
               type="button"
               onClick={() => dismiss(n.id)}
