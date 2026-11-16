@@ -37,6 +37,8 @@ export const SECTION_TAB: Readonly<Record<string, ProductTabId>> = {
   "listing-panel": "content",
   specs: "technical",
   "cross-references": "technical",
+  // DP-180: the research notes of the site's proposal.
+  research: "technical",
   images: "media",
   documents: "media",
   review: "publication",
