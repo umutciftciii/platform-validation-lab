@@ -6,12 +6,14 @@
  * Authorization:
  *  - read proposals and their history: `product:read` of the proposal's site;
  *  - create / revise: `product:edit` of the site (the writer becomes an author of the revision);
+ *    a revision may carry only the fields it changes (DP-191): the others keep their values;
  *  - approve / request changes: `product_proposal:review` of the site, and not an author of the
  *    revision (separation of duties, 403 with rule own_change, audited).
  *
  * This service never writes to a product, its listing or texts, specifications, images,
  * documents or publications. Every change names the version it was based on and writes its
- * history event and audit event in the same transaction.
+ * history event and audit event in the same transaction. Each history event keeps the text of
+ * the version it produced or decided on (DP-191), so earlier texts are never lost.
  */
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
@@ -54,6 +56,21 @@ const contentSha = (summary: string | null, description: string | null) =>
   sha256(proposalContentKey(summary, description));
 
 const PRODUCT_SELECT = { select: { id: true, code: true, name: true } } as const;
+
+/** DP-191: the text a history event keeps (the database checks it against contentSha256). */
+const eventText = (summary: string | null, description: string | null) => ({
+  textRecorded: true,
+  summary,
+  description,
+});
+
+const REVISE_FIELDS = [
+  "summary",
+  "description",
+  "reviewData",
+  "sourceRef",
+  "sourceSha256",
+] as const;
 
 function itemCounts(reviewData: unknown): Record<ReviewItemKind, number> {
   const counts = Object.fromEntries(REVIEW_ITEM_KINDS.map((k) => [k, 0])) as Record<
@@ -210,6 +227,9 @@ export class ProposalsService {
         actor: actor(e.actor),
         comment: e.comment,
         contentSha256: e.contentSha256,
+        textRecorded: e.textRecorded,
+        summary: e.textRecorded ? e.summary : null,
+        description: e.textRecorded ? e.description : null,
         createdAt: e.createdAt.toISOString(),
       })),
       canRevise: a.allows(EDIT, { scope: "site", siteId: p.siteId }),
@@ -261,6 +281,7 @@ export class ProposalsService {
             actorUserId: a.userId,
             comment: null,
             contentSha256: contentSha(req.summary, req.description),
+            ...eventText(req.summary, req.description),
           },
         });
         await a.audit(tx, {
@@ -291,6 +312,12 @@ export class ProposalsService {
     if (current.version !== req.version) throw staleVersion();
     const db = a.db({ siteIds: [current.siteId], includePlatform: false });
     const authors = current.authorIds ?? [];
+    // DP-191: a field that is left out keeps its value (`undefined` is not `null`). The version
+    // guard below makes sure the kept values are those of the version the editor saw.
+    const summary = req.summary === undefined ? current.proposedSummary : req.summary;
+    const description =
+      req.description === undefined ? current.proposedDescription : req.description;
+    const sourceRef = req.sourceRef ?? current.sourceRef;
     try {
       await db.$transaction(async (tx) => {
         await tx.productContentProposalEvent.create({
@@ -301,14 +328,16 @@ export class ProposalsService {
             proposalVersion: req.version + 1,
             actorUserId: a.userId,
             comment: req.comment,
-            contentSha256: contentSha(req.summary, req.description),
+            contentSha256: contentSha(summary, description),
+            ...eventText(summary, description),
           },
         });
         const res = await tx.productContentProposal.updateMany({
           where: { id, version: req.version },
           data: {
-            proposedSummary: req.summary,
-            proposedDescription: req.description,
+            proposedSummary: summary,
+            proposedDescription: description,
+            // Left out: unchanged (Prisma skips undefined fields).
             reviewData: req.reviewData,
             sourceRef: req.sourceRef,
             sourceSha256: req.sourceSha256,
@@ -326,7 +355,12 @@ export class ProposalsService {
           resourceId: id,
           siteId: current.siteId,
           permission: EDIT,
-          metadata: { version: req.version + 1, sourceRef: req.sourceRef },
+          metadata: {
+            version: req.version + 1,
+            sourceRef,
+            // Which fields this revision sent; the others kept their values.
+            fields: REVISE_FIELDS.filter((f) => req[f] !== undefined),
+          },
         });
       });
     } catch (e) {
@@ -377,6 +411,7 @@ export class ProposalsService {
             actorUserId: a.userId,
             comment,
             contentSha256: contentSha(current.proposedSummary, current.proposedDescription),
+            ...eventText(current.proposedSummary, current.proposedDescription),
           },
         });
         const res = await tx.productContentProposal.updateMany({
@@ -422,6 +457,7 @@ export class ProposalsService {
           authorIds: true,
           proposedSummary: true,
           proposedDescription: true,
+          sourceRef: true,
         },
       });
     if (!p) throw new ApiError("NOT_FOUND");

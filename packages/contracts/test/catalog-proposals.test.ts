@@ -82,6 +82,43 @@ describe("content proposal requests", () => {
     ).toBe(false);
   });
 
+  it("DP-191: a revision may carry only the changed text; left out is not null", () => {
+    const only = ReviseProposalRequestSchema.parse({ version: 3, description: "New text." });
+    expect(only).toEqual({ version: 3, description: "New text.", comment: null });
+    expect("summary" in only).toBe(false);
+    expect("reviewData" in only).toBe(false);
+    // null clears a text; it is not the same as leaving the field out.
+    expect(ReviseProposalRequestSchema.parse({ version: 3, summary: null }).summary).toBeNull();
+    // null is not a value for the review data, the source reference or the source hash.
+    for (const field of ["reviewData", "sourceRef", "sourceSha256"] as const) {
+      expect(ReviseProposalRequestSchema.safeParse({ version: 3, [field]: null }).success).toBe(
+        false,
+      );
+    }
+    // The full body of the import tool is still accepted, and the rules still apply.
+    const full = {
+      summary: create.summary,
+      description: create.description,
+      reviewData,
+      sourceRef: create.sourceRef,
+      sourceSha256: create.sourceSha256,
+    };
+    expect(ReviseProposalRequestSchema.safeParse({ ...full, version: 1 }).success).toBe(true);
+    expect(
+      ReviseProposalRequestSchema.safeParse({ version: 1, summary: "[CONFIRM: grade]" }).success,
+    ).toBe(false);
+    expect(ReviseProposalRequestSchema.safeParse({ version: 1, summary: "  " }).success).toBe(
+      false,
+    );
+    expect(
+      ReviseProposalRequestSchema.safeParse({ version: 1, description: "x".repeat(8001) }).success,
+    ).toBe(false);
+    expect(
+      ReviseProposalRequestSchema.safeParse({ version: 1, description: "x".repeat(8000) }).success,
+    ).toBe(true);
+    expect(ReviseProposalRequestSchema.safeParse({ description: "x" }).success).toBe(false);
+  });
+
   it("is strict about review data and limits", () => {
     expect(ProposalReviewDataSchema.safeParse({ ...reviewData, extra: 1 }).success).toBe(false);
     const badKind = { ...reviewData, items: [{ ...reviewData.items[1], kind: "OTHER" }] };

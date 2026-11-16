@@ -1262,6 +1262,12 @@ model ProductContentProposalEvent {
   comment         String?                      @db.VarChar(2000)
   /// SHA-256 of the proposed text after the action (summary + description), for traceability.
   contentSha256   String                       @db.Char(64)
+  /// DP-191: the proposed text after the action, so earlier versions are not lost. Every new
+  /// event records it (database guard); the CHECK ties it to contentSha256. False only for events
+  /// written before DP-191 whose text could not be verified (text unknown, both fields null).
+  textRecorded    Boolean                      @default(false)
+  summary         String?                      @db.VarChar(500)
+  description     String?
   createdAt       DateTime                     @default(now()) @db.Timestamptz(3)
 
   proposal ProductContentProposal @relation(fields: [proposalId, siteId], references: [id, siteId], onDelete: Restrict)

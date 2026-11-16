@@ -164,6 +164,10 @@ const proposal = (id: string, productId: string, over: Record<string, unknown> =
       actor: USER,
       comment: null,
       contentSha256: SHA,
+      // Written before DP-191 and not verifiable: its text is unknown.
+      textRecorded: false,
+      summary: null,
+      description: null,
       createdAt: AT,
     },
   ],
@@ -559,6 +563,9 @@ describe("company review product page", () => {
           actor: { id: "0190f2a1-0000-7000-8000-000000000202", name: "Company reviewer" },
           comment: "Please drop the blending claim.",
           contentSha256: SHA,
+          textRecorded: false,
+          summary: null,
+          description: null,
           createdAt: AT,
         },
       ],
@@ -592,6 +599,139 @@ describe("company review product page", () => {
     expect(html).toContain(`data-decision-blocked="${reason}"`);
     expect(html).toContain("data-decision-notice");
     expect(html).toContain(text);
+  });
+});
+
+describe("DP-191: editing the proposed text", () => {
+  const editable = (over: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({
+    ...proposal(P1, PR1, over),
+    canRevise: true,
+    canDecide: false,
+    decisionBlocked: "own_change",
+    ...extra,
+  });
+
+  it("an editor gets the text fields next to the current site text, with Save and Cancel", async () => {
+    reads.set(`${C}/proposals/${P1}`, editable());
+    reads.set(`${C}/products/${PR1}?siteId=${BV}`, {
+      ...product(PR1, "G2-HVI-6"),
+      listing: {
+        ...product(PR1, "G2-HVI-6").listing,
+        text: { title: "HVI 6", summary: "Current site summary.", description: null },
+      },
+    });
+    const c = tabPanel(await detailPage(P1), "content");
+    expect(c).toContain("data-proposal-editor");
+    expect(count(c, "<textarea")).toBe(2);
+    expect(c).toContain('name="summary"');
+    expect(c).toContain('name="description"');
+    expect(c).toContain("Group II base oil in the HVI 6 grade, for lubricant blending.</textarea>");
+    // The current site text is the reference, read-only and tagged as such.
+    expect(c).toContain("Current site summary.");
+    expect(c).toContain('data-provenance="site"');
+    expect(c).toContain('data-provenance="proposal"');
+    expect(c).toMatch(/>Cancel<\/button>/);
+    expect(c).toContain("Save");
+    expect(c).toContain('data-editor-state="saved"');
+    expect(c).toContain("Version 1 saved. Every version is kept in History.");
+    // No second, read-only comparison and no new warning or approval step.
+    expect(c).not.toContain("Research proposal against the current text");
+    // The author still cannot decide: the decision panel says why.
+    expect(c).toContain('data-decision-blocked="own_change"');
+    expect(c).not.toContain(">Approve<");
+  });
+
+  it("a company reviewer still sees the read-only comparison, never a text field", async () => {
+    const c = tabPanel(await detailPage(P1), "content");
+    expect(c).not.toContain("<textarea name=");
+    expect(c).not.toContain("data-proposal-editor");
+    expect(c).toContain("Research proposal against the current text");
+  });
+
+  it("a placeholder gets empty fields and a note, never a generated text", async () => {
+    reads.set(
+      `${C}/proposals/${P2}`,
+      editable(
+        {
+          productCode: "SAF",
+          summary: null,
+          description: null,
+          reviewData: {
+            ...reviewData,
+            items: [
+              {
+                kind: "PLACEHOLDER",
+                field: "name",
+                text: "The product is not defined well enough to describe.",
+                sourceIds: [],
+                heldValue: null,
+              },
+            ],
+          },
+        },
+        {},
+      ),
+    );
+    const c = tabPanel(await detailPage(P2), "content");
+    expect(c).toContain("data-placeholder-note");
+    expect(c).toContain("Write a text only from information the company has confirmed");
+    expect(c).toMatch(/<textarea[^>]*name="summary"[^>]*><\/textarea>/);
+    expect(c).toMatch(/<textarea[^>]*name="description"[^>]*><\/textarea>/);
+  });
+
+  it("the technical data stays apart: held values only in Missing & Verification", async () => {
+    reads.set(`${C}/proposals/${P1}`, editable());
+    const html = await detailPage(P1);
+    const c = tabPanel(html, "content");
+    expect(c).not.toContain("Minus 15");
+    // Missing documents are named in Content Review and listed in Missing & Verification.
+    expect(c).toContain("1 missing document");
+    const v = tabPanel(html, "verification");
+    expect(v).toContain("Held for verification");
+    expect(v).toContain("Minus 15");
+    expect(v).toContain("SDS (REACH/CLP)");
+  });
+
+  it("History shows the text of every version, unchanged texts once, and unknown texts as such", async () => {
+    const SHA2 = "b".repeat(64);
+    const editor = { id: "0190f2a1-0000-7000-8000-000000000203", name: "Owner (fixture)" };
+    reads.set(`${C}/proposals/${P1}`, {
+      ...editable({ version: 3 }),
+      events: [
+        ...proposal(P1, PR1).events,
+        {
+          id: "0190f2a1-0000-7000-8000-000000000703",
+          action: "REVISED",
+          proposalVersion: 2,
+          actor: editor,
+          comment: null,
+          contentSha256: SHA2,
+          textRecorded: true,
+          summary: "Edited summary of version two.",
+          description: null,
+          createdAt: AT,
+        },
+        {
+          id: "0190f2a1-0000-7000-8000-000000000704",
+          action: "CHANGES_REQUESTED",
+          proposalVersion: 3,
+          actor: { id: "0190f2a1-0000-7000-8000-000000000202", name: "Company reviewer" },
+          comment: "Add the packaging.",
+          contentSha256: SHA2,
+          textRecorded: true,
+          summary: "Edited summary of version two.",
+          description: null,
+          createdAt: AT,
+        },
+      ],
+    });
+    const h = tabPanel(await detailPage(P1), "history");
+    expect(count(h, 'data-event-text="recorded"')).toBe(1);
+    expect(h).toContain("Text of version 2");
+    expect(h).toContain("Edited summary of version two.");
+    expect(count(h, 'data-event-text="unchanged"')).toBe(1);
+    expect(count(h, 'data-event-text="unrecorded"')).toBe(1);
+    expect(h).toContain("Text of this version not recorded");
   });
 });
 
