@@ -205,6 +205,20 @@ export type ProductListResponse = z.infer<typeof ProductListResponseSchema>;
 // --- listings --------------------------------------------------------------------------------
 
 /**
+ * DP-180: where the saved summary and description came from, when they were taken from the
+ * site's research proposal (DP-171). The API checks that the proposal belongs to this product,
+ * site and locale, is still at this version, that `textSha256` is the SHA-256 of its text
+ * (contracts `proposalContentKey`) and that the request carries exactly that text; it then
+ * keeps the reference in the audit event. Nothing is stored on the listing itself.
+ */
+export const ListingTextSourceSchema = z.strictObject({
+  proposalId: UuidSchema,
+  proposalVersion: VersionSchema,
+  textSha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type ListingTextSource = z.infer<typeof ListingTextSourceSchema>;
+
+/**
  * Create or replace the product's listing on one site. `version` is null to create; then a
  * missing categoryId means the site's default category.
  */
@@ -216,6 +230,8 @@ export const ListingUpsertRequestSchema = z.strictObject({
   title: optionalText(200),
   summary: optionalText(500),
   description: optionalText(DESCRIPTION_MAX),
+  /** DP-180: optional provenance of summary and description (see above). */
+  source: ListingTextSourceSchema.nullish(),
 });
 export type ListingUpsertRequest = z.input<typeof ListingUpsertRequestSchema>;
 

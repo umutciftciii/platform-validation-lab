@@ -48,6 +48,7 @@ const CORP = "33333333-3333-4333-8333-333333333333";
 const CAT = "44444444-4444-4444-8444-444444444444";
 const DEF = "55555555-5555-4555-8555-555555555555";
 const T = "2026-11-16T10:00:00.000Z";
+const PROPOSAL = "0190a8c4-7c1e-7000-8000-0000000000f1";
 
 function fixtures(opts: { canEditMaster: boolean }) {
   reads.clear();
@@ -238,6 +239,109 @@ function fixtures(opts: { canEditMaster: boolean }) {
     ],
   };
   reads.set(`${C}/products/${PRODUCT}/workflow`, workflow);
+  // DP-180: the BV proposal's review items and sources (research notes on the Technical tab).
+  reads.set(`${C}/proposals/${PROPOSAL}`, {
+    proposal: {
+      id: PROPOSAL,
+      siteId: BV,
+      productId: PRODUCT,
+      productCode: "ICC-SYN-6",
+      productName: "ICCSYN 6 Synthetic",
+      locale: "en",
+      summary: "Research summary for BV.",
+      description: "Research description for BV.",
+      reviewData: {
+        schemaVersion: 1,
+        language: "en",
+        family: "Group III base oil",
+        items: [
+          {
+            kind: "CONFIRM",
+            field: "packaging",
+            text: "Which pack sizes are offered?",
+            sourceIds: [],
+            heldValue: null,
+          },
+          {
+            kind: "CONFIRM",
+            field: "name",
+            text: "Is the grade name final?",
+            sourceIds: ["S1"],
+            heldValue: null,
+          },
+          {
+            kind: "MISSING_DOCUMENT",
+            field: "documents",
+            text: "No original TDS.",
+            sourceIds: [],
+            heldValue: null,
+          },
+          {
+            kind: "CLASS_CONFLICT",
+            field: "category",
+            text: "VI below the class label.",
+            sourceIds: ["S1"],
+            heldValue: null,
+          },
+          {
+            kind: "CLAIM_RISK",
+            field: "summary",
+            text: "CTL origin needs a certificate.",
+            sourceIds: [],
+            heldValue: null,
+          },
+          {
+            kind: "DP002_HELD",
+            field: "spec:viscosity_index",
+            text: "Two VI values on one page.",
+            sourceIds: ["S1"],
+            heldValue: {
+              definition: "viscosity_index",
+              basis: "TYPICAL",
+              raw: "Viscosity index: 118 [ASTM D2270]",
+              conflict: true,
+              finding: "The TR page says 122.",
+            },
+          },
+          {
+            kind: "SITE_VALUE_WITHHELD",
+            field: "spec:appearance",
+            text: "No test method on the site.",
+            sourceIds: [],
+            heldValue: {
+              definition: "appearance",
+              basis: "SPECIFICATION",
+              raw: "Appearance: clear",
+              conflict: false,
+              finding: null,
+            },
+          },
+        ],
+        sources: [
+          {
+            id: "S1",
+            title: "Producer TDS",
+            url: "https://example.com/tds.pdf",
+            level: "C",
+            documentDate: "2024",
+          },
+        ],
+      },
+      sourceRef: "docs/catalog/proposals/bv-content-proposals.json",
+      sourceSha256: "a".repeat(64),
+      status: "REVIEW_PENDING",
+      version: 3,
+      authors: [],
+      decidedAt: null,
+      decidedBy: null,
+      createdAt: T,
+      updatedAt: T,
+    },
+    events: [],
+    canRevise: true,
+    canDecide: false,
+    decisionBlocked: "no_permission",
+  });
 }
 
 async function render(query: Record<string, string>): Promise<string> {
@@ -286,6 +390,7 @@ describe("product page tabs", () => {
       "cross-references": "technical",
       images: "media",
       documents: "media",
+      research: "technical",
       review: "publication",
       publication: "publication",
       history: "publication",
@@ -433,6 +538,68 @@ describe("DP-193 direct publication and the research proposal", () => {
     const content = panel(await render({ site: "bv" }), "content");
     expect(content).toContain("Research proposal for Dream Petroleum BV");
     expect(content).not.toContain("Copy into summary and description");
+  });
+});
+
+// DP-180: the research notes (review items and sources) on the Technical tab, read only.
+describe("DP-180 research notes", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  it("shows every review item of the site's proposal in its group, with the sources", async () => {
+    const tech = panel(await render({ site: "bv", tab: "technical" }), "technical");
+    expect(tech).toContain('id="research"');
+    expect(tech).toContain(`data-review-total="7"`);
+    // Each item exactly once (held values: the phone list carries the marker, the table not).
+    expect(tech.match(/data-review-item=/g)).toHaveLength(7);
+    for (const [group, n] of [
+      ["research-questions", 2],
+      ["research-documents", 1],
+      ["research-attention", 1],
+      ["research-claims", 1],
+      ["research-held", 2],
+    ] as const) {
+      expect(tech).toMatch(new RegExp(`id="${group}"[\\s\\S]*?>${n}</span>`));
+    }
+    for (const t of [
+      "Questions for the company",
+      "Missing documents",
+      "Technical conflicts",
+      "Claim risks",
+      "Held for verification — not product data",
+      "Research sources",
+    ])
+      expect(tech).toContain(t);
+    expect(tech).toContain('data-research-source="S1"');
+    expect(tech).toContain(`href="/company-review/${PROPOSAL}?site=bv&amp;tab=verification"`);
+  });
+
+  it("marks held values as unverified and never shows them as specifications", async () => {
+    const tech = panel(await render({ site: "bv", tab: "technical" }), "technical");
+    expect(tech).toContain("data-held-warning");
+    expect(tech).toContain("2 technical values held for verification: not verified");
+    expect(tech).toContain("Unverified (DP-002)");
+    expect(tech).toContain("Viscosity index: 118 [ASTM D2270]");
+    // The specification editor above never lists them.
+    const specs = tech.slice(0, tech.indexOf('id="research"'));
+    expect(specs).not.toContain("Viscosity index: 118");
+  });
+
+  it("offers no edit or decision in the notes", async () => {
+    const notes = panel(await render({ site: "bv", tab: "technical" }), "technical").split(
+      'id="research"',
+    )[1]!;
+    expect(notes).not.toMatch(/<button|<textarea|<input/);
+  });
+
+  it("says when the site has no proposal", async () => {
+    const wf = reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+    reads.set(`${C}/products/${PRODUCT}/workflow`, {
+      ...wf,
+      sites: wf.sites.map((s) => ({ ...s, proposal: null })),
+    });
+    const tech = panel(await render({ site: "bv", tab: "technical" }), "technical");
+    expect(tech).toContain("There is no research proposal for this product on");
+    expect(tech).not.toContain("data-review-item");
   });
 });
 

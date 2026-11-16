@@ -375,7 +375,11 @@ function ItemList({
   return (
     <ul className="space-y-3">
       {items.map((item, i) => (
-        <li key={i} className="rounded-lg border border-line px-3 py-2.5">
+        <li
+          key={i}
+          data-review-item={item.kind}
+          className="rounded-lg border border-line px-3 py-2.5"
+        >
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill tone={KIND_META[item.kind].tone}>{KIND_META[item.kind].label}</StatusPill>
             {fieldLabel(item.field) ? (
@@ -469,7 +473,7 @@ export function ReviewItems({ proposal }: { proposal: Proposal }) {
 }
 
 /** DP-002 held values and rows withheld at import: never product specifications. */
-export function HeldValues({ proposal }: { proposal: Proposal }) {
+export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?: string }) {
   // Conflicting values first: they need an answer most. Otherwise the research order.
   const held = itemsOf(proposal.reviewData.items, HELD_KINDS)
     .map((item, i) => ({ item, i, c: item.heldValue?.conflict ? 1 : 0 }))
@@ -481,7 +485,7 @@ export function HeldValues({ proposal }: { proposal: Proposal }) {
     item.kind === "DP002_HELD" ? "Unverified (DP-002)" : "Not imported";
   return (
     <Group
-      id="held"
+      id={id}
       title="Held for verification — not product data"
       count={held.length}
       extra={conflicts > 0 ? `${plural(conflicts, "conflict")}, listed first` : undefined}
@@ -492,7 +496,11 @@ export function HeldValues({ proposal }: { proposal: Proposal }) {
         {/* Phones: one card per value. */}
         <ul className="space-y-3 md:hidden">
           {held.map((item, i) => (
-            <li key={i} className="rounded-lg border border-line px-3 py-2.5 text-sm">
+            <li
+              key={i}
+              data-review-item={item.kind}
+              className="rounded-lg border border-line px-3 py-2.5 text-sm"
+            >
               <div className="flex flex-wrap items-center gap-2">
                 <StatusPill tone={KIND_META[item.kind].tone}>{statusText(item)}</StatusPill>
                 {item.heldValue?.conflict ? <StatusPill tone="danger">Conflict</StatusPill> : null}
@@ -640,12 +648,12 @@ export function CurrentTechnicalData({ specs }: { specs: ProductSpecsResponse | 
 
 // --- Sources -----------------------------------------------------------------------------------
 
-export function SourcesPanel({ proposal }: { proposal: Proposal }) {
+export function SourcesPanel({ proposal, id = "sources" }: { proposal: Proposal; id?: string }) {
   const { sources, items, family } = proposal.reviewData;
   const cited = (id: string) => items.filter((i) => i.sourceIds.includes(id)).length;
   return (
     <Panel
-      id="sources"
+      id={id}
       title="Research sources"
       description="The documents the research relied on. The level says how much weight a source carries; only level A is the manufacturer's own document."
       action={<SourceTag kind="review" />}
@@ -663,7 +671,12 @@ export function SourcesPanel({ proposal }: { proposal: Proposal }) {
           {sources.map((s) => {
             const n = cited(s.id);
             return (
-              <li key={s.id} id={`source-${s.id}`} className="scroll-mt-32 py-3 first:pt-0">
+              <li
+                key={s.id}
+                id={`${id === "sources" ? "" : `${id}-`}source-${s.id}`}
+                data-research-source={s.id}
+                className="scroll-mt-32 py-3 first:pt-0"
+              >
                 <span className="font-mono text-xs text-ink-3">{s.id}</span>{" "}
                 {s.url ? (
                   <a
@@ -821,5 +834,76 @@ export function ProposalHistory({
         </ol>
       )}
     </Panel>
+  );
+}
+
+// --- DP-180: the research notes on the product page ---------------------------------------------
+
+/**
+ * DP-180: every review item and source of the site's research proposal, read only, on the
+ * product's Technical tab. The same groups as the company review, ids prefixed so they never
+ * collide with the product page's own sections:
+ *   questions for the company (CONFIRM), missing documents, technical conflicts (class conflicts,
+ *   inconsistencies, placeholders), claim risks, held technical values (DP-002 and values the
+ *   import left out: never product specifications, never published) and the research sources.
+ * Editing the text and deciding stay in Company Review (linked).
+ */
+export function ResearchNotes({
+  proposal,
+  reviewHref,
+}: {
+  proposal: Proposal;
+  reviewHref: string;
+}) {
+  const { items, sources } = proposal.reviewData;
+  const groups = [
+    { s: section("questions"), title: "Questions for the company" },
+    { s: section("documents"), title: "Missing documents" },
+    { s: section("attention"), title: "Technical conflicts" },
+    { s: section("claims"), title: "Claim risks" },
+  ]
+    .map((g) => ({ ...g, list: itemsOf(items, g.s.kinds) }))
+    .filter((g) => g.list.length > 0);
+  const held = itemsOf(items, HELD_KINDS).length;
+  return (
+    <div className="space-y-4" data-research-notes={proposal.id} data-review-total={items.length}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-ink-2">
+          {plural(items.length, "review item")} and {plural(sources.length, "source")} from the
+          research for this product. Read only; nothing here is published or used as product data.
+        </p>
+        <a
+          href={reviewHref}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-petrol-strong underline underline-offset-2"
+        >
+          Open in Company Review
+          <Icon name="chevron" size={14} />
+        </a>
+      </div>
+      {held > 0 ? (
+        <p
+          data-held-warning=""
+          className="flex items-start gap-2 rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/30"
+        >
+          <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
+          {plural(held, "technical value")} held for verification: not verified, not in the
+          specifications above and never published.
+        </p>
+      ) : null}
+      {groups.map(({ s, title, list }) => (
+        <Group
+          key={s.id}
+          id={`research-${s.id}`}
+          title={title}
+          count={list.length}
+          description={s.description}
+          tag="review"
+        >
+          <ItemList items={list} sources={sources} />
+        </Group>
+      ))}
+      <HeldValues proposal={proposal} id="research-held" />
+      <SourcesPanel proposal={proposal} id="research-sources" />
+    </div>
   );
 }

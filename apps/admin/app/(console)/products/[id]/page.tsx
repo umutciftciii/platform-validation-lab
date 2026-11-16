@@ -9,6 +9,7 @@ import {
   ProductImageListResponseSchema,
   ProductSpecsResponseSchema,
   ProductWorkflowResponseSchema,
+  ProposalResponseSchema,
 } from "@dream/contracts";
 import { CrossReferenceManager } from "../../../../components/catalog/cross-reference-manager";
 import { DocumentManager } from "../../../../components/catalog/document-manager";
@@ -22,6 +23,8 @@ import {
   TabLink,
 } from "../../../../components/catalog/product-tabs";
 import { SpecEditor } from "../../../../components/catalog/spec-editor";
+import { ResearchNotes } from "../../../../components/catalog/proposal-review";
+import { reviewHref } from "../../../../lib/review-tabs";
 import {
   PublicationPanel,
   ReviewHistory,
@@ -125,6 +128,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
     ? (workflow.data.sites.find((s) => s.siteId === site.id)?.proposal ?? null)
     : null;
   const tab = parseProductTab(query["tab"]);
+  // DP-180: the research notes of this site's proposal (review items and sources), read only.
+  const research = siteProposal
+    ? await serverRead(`${CATALOG}/proposals/${siteProposal.id}`, ProposalResponseSchema)
+    : null;
 
   return (
     <NoticeProvider>
@@ -292,6 +299,35 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 />
               ) : (
                 <ErrorState title="The cross-references could not be loaded">
+                  Try again in a moment.
+                </ErrorState>
+              )}
+            </Panel>
+
+            <Panel
+              id="research"
+              className="scroll-mt-32"
+              title="Research notes"
+              description="What the research found for this product on this site: questions, missing documents, conflicts, claim risks, values held for verification and sources. Never published."
+              action={
+                research?.ok ? (
+                  <span className="text-xs text-ink-3">
+                    {research.data.proposal.reviewData.items.length} items
+                  </span>
+                ) : undefined
+              }
+            >
+              {!siteProposal ? (
+                <p className="text-sm text-ink-3">
+                  There is no research proposal for this product on {SITE_SHORT[site.key]}.
+                </p>
+              ) : research?.ok ? (
+                <ResearchNotes
+                  proposal={research.data.proposal}
+                  reviewHref={reviewHref(siteProposal.id, sp, "verification")}
+                />
+              ) : (
+                <ErrorState title="The research notes could not be loaded">
                   Try again in a moment.
                 </ErrorState>
               )}

@@ -83,3 +83,27 @@ describe("catalogue contracts", () => {
     expect(ProductListQuerySchema.safeParse({}).success).toBe(false);
   });
 });
+
+// DP-180: the optional provenance of a listing's summary and description.
+describe("listing text source (DP-180)", () => {
+  const base = { version: 2, visibility: "HIDDEN" as const, summary: "S", description: "D" };
+  const source = {
+    proposalId: "0190a8c4-7c1e-7000-8000-000000000001",
+    proposalVersion: 1,
+    textSha256: "a".repeat(64),
+  };
+  it("is optional and, when given, strict", () => {
+    expect(ListingUpsertRequestSchema.parse(base).source).toBeUndefined();
+    expect(ListingUpsertRequestSchema.parse({ ...base, source: null }).source).toBeNull();
+    expect(ListingUpsertRequestSchema.parse({ ...base, source }).source).toEqual(source);
+    for (const bad of [
+      { ...source, textSha256: "A".repeat(64) },
+      { ...source, textSha256: "a".repeat(63) },
+      { ...source, proposalVersion: 0 },
+      { ...source, proposalId: "x" },
+      { ...source, extra: true },
+    ]) {
+      expect(ListingUpsertRequestSchema.safeParse({ ...base, source: bad }).success).toBe(false);
+    }
+  });
+});
