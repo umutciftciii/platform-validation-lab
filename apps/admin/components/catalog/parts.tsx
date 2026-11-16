@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { CatalogSite, ListingVisibility, ProductStatus } from "@dream/contracts";
+import type { CatalogSite, ProductStatus } from "@dream/contracts";
 import { Icon, type IconKey } from "../icons";
+import { SITE_STATUS_LABEL, type SiteStatus } from "../../lib/publication-status";
 import { cx, StatusPill, type PillTone } from "../ui";
 
 /** Text inputs and selects of the console's forms (same look as the sign-in form). */
@@ -126,26 +127,23 @@ export function ProductStatusPill({ status }: { status: ProductStatus }) {
   return <StatusPill tone={s.tone}>{s.label}</StatusPill>;
 }
 
-/** A site publication at a glance (product list, site cards). */
-export function PublicationPill({
-  publication,
-}: {
-  publication: { status: "PUBLISHED" | "UNPUBLISHED" } | null;
-}) {
-  if (!publication) return <StatusPill tone="neutral">Not published</StatusPill>;
-  return publication.status === "PUBLISHED" ? (
-    <StatusPill tone="success">Live</StatusPill>
-  ) : (
-    <StatusPill tone="neutral">Unpublished</StatusPill>
-  );
-}
+const SITE_STATUS_TONE: Readonly<Record<SiteStatus, PillTone>> = {
+  DRAFT: "neutral",
+  PUBLISHED: "success",
+  UNPUBLISHED: "petrol",
+};
 
-export function VisibilityPill({ visibility }: { visibility: ListingVisibility | null }) {
-  if (!visibility) return <StatusPill tone="neutral">Not listed</StatusPill>;
-  return visibility === "VISIBLE" ? (
-    <StatusPill tone="success">Visible</StatusPill>
-  ) : (
-    <StatusPill tone="petrol">Hidden</StatusPill>
+/**
+ * DP-197: the product on one site at a glance (product list, listing panel, site cards): Draft,
+ * Published or Unpublished. The listing's technical visibility is not shown (lib/publication-status).
+ */
+export function SiteStatusPill({ status }: { status: SiteStatus }) {
+  // Keyed by the status: a change replaces the pill, so a page translated by the browser
+  // (DP-196) never keeps the old label in its own copy of the text.
+  return (
+    <StatusPill key={status} tone={SITE_STATUS_TONE[status]}>
+      {SITE_STATUS_LABEL[status]}
+    </StatusPill>
   );
 }
 

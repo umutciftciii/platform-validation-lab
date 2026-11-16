@@ -425,8 +425,10 @@ describe("product page tabs", () => {
     expect(pub).toContain("Publishing is blocked:");
     expect(pub).toContain("Upload an image and make it the cover.");
     expect(pub).toContain(`href="/products/${PRODUCT}?site=bv&amp;tab=media"`);
-    expect(pub).toContain("Set the site listing to Visible and save it.");
-    expect(pub).toContain(`href="/products/${PRODUCT}?site=bv"`);
+    // DP-197: a listing that is not shown yet is no Content-tab fix any more: Publish shows it
+    // (here: approved path, product:edit on BV, so the console switches it on first).
+    expect(pub).not.toContain("Set the site listing to Visible");
+    expect(pub).toContain("Not shown on this site yet: publishing shows it.");
     expect(pub).toContain("Fill in this required specification and save.");
     expect(pub).toContain(`href="/products/${PRODUCT}?site=bv&amp;tab=technical"`);
     // A listing fix on another site opens that site's Content tab.
@@ -500,7 +502,11 @@ describe("DP-193 direct publication and the research proposal", () => {
   it("publishes directly with one button, shows warnings openly and needs no dialog", async () => {
     direct();
     const pub = panel(await render({ site: "bv", tab: "publication" }), "publication");
-    expect(pub).toContain("Show and publish");
+    // DP-197: one Publish button; the hidden listing is a plain note, never a technical term.
+    expect(pub).not.toContain("Show and publish");
+    expect(pub).toContain(">Publish<");
+    expect(pub).toContain("Not shown on this site yet: publishing shows it.");
+    expect(pub).not.toMatch(/\b(HIDDEN|VISIBLE)\b/);
     expect(pub).toContain(">Preview<");
     expect(pub).toContain("Check before publishing:");
     expect(pub).toContain("pharmaceutical or pharmacopoeia grade");
@@ -603,6 +609,91 @@ describe("DP-180 research notes", () => {
   });
 });
 
+// DP-197: no HIDDEN / VISIBLE in the console; Draft / Published / Unpublished per site.
+describe("DP-197 publication status without visibility terms", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  function bvSite(over: Partial<ProductWorkflowResponse["sites"][number]>) {
+    const wf = reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+    reads.set(`${C}/products/${PRODUCT}/workflow`, {
+      ...wf,
+      sites: [{ ...wf.sites[0]!, ...over }, wf.sites[1]!],
+    });
+  }
+  const pubRow = (status: "PUBLISHED" | "UNPUBLISHED") => ({
+    id: "0190a8c4-7c1e-7000-8000-0000000000b1",
+    status,
+    productVersion: 7,
+    listingVersion: 2,
+    publishedAt: T,
+    publishedBy: { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" },
+    unpublishedAt: status === "UNPUBLISHED" ? T : null,
+    unpublishedBy:
+      status === "UNPUBLISHED"
+        ? { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" }
+        : null,
+    approvalMode: "DIRECT" as const,
+    version: 2,
+  });
+  const ready = { ok: true, blocking: [], warnings: [] };
+
+  it("Content has no visibility control; saving says it never publishes", async () => {
+    const html = await render({ site: "bv" });
+    const content = panel(html, "content");
+    expect(content).not.toContain("Visibility on this site");
+    expect(content).not.toContain('role="radio"');
+    expect(content).not.toMatch(/>(Visible|Hidden)</);
+    expect(content).not.toMatch(/\b(HIDDEN|VISIBLE)\b/);
+    expect(content).toContain("Saving never publishes, unpublishes or changes the live site.");
+    expect(content).toContain("Save listing");
+    // The listing panel shows the site status: never published here = Draft.
+    expect(content).toContain(">Draft<");
+    expect(panel(html, "publication")).toContain(">Draft<");
+  });
+
+  it("Published: live, Unpublish offered, nothing to republish", async () => {
+    bvSite({
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("PUBLISHED"),
+      readiness: ready,
+    });
+    const html = await render({ site: "bv", tab: "publication" });
+    const pub = panel(html, "publication");
+    expect(pub).toContain(">Published<");
+    expect(pub).toContain(">Unpublish<");
+    expect(pub).toContain(">Republish<");
+    expect(pub).toContain("Live and up to date.");
+    expect(html).toContain("Live on 1 of 2 sites");
+  });
+
+  it("Unpublished: off the site, Publish again, no Unpublish", async () => {
+    bvSite({
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("UNPUBLISHED"),
+      readiness: ready,
+    });
+    const html = await render({ site: "bv", tab: "publication" });
+    const pub = panel(html, "publication");
+    expect(pub).toContain(">Unpublished<");
+    expect(pub).not.toContain(">Unpublish<");
+    expect(pub).toContain(">Publish<");
+    expect(html).toContain("Not live");
+  });
+
+  it("a published product whose listing is switched off reads Unpublished, not Live", async () => {
+    bvSite({
+      listing: { version: 2, visibility: "HIDDEN" },
+      publication: pubRow("PUBLISHED"),
+    });
+    const html = await render({ site: "bv", tab: "publication" });
+    const pub = panel(html, "publication");
+    expect(pub).toContain(">Unpublished<");
+    expect(pub).toContain("Not shown on this site at the moment.");
+    expect(pub).not.toContain(">Unpublish<");
+    expect(html).toContain("Not live");
+  });
+});
+
 describe("product tab helpers", () => {
   it("parses ?tab= and builds URLs without the default tab", () => {
     expect(parseProductTab("media")).toBe("media");
@@ -625,7 +716,14 @@ describe("product tab helpers", () => {
   });
 
   it("knows where every publication and validation issue is fixed", () => {
+    // DP-197: a listing that is not shown is no Content fix: Publish shows it, or needs edit
+    // rights on the site's listing (said in the issue itself).
+    const NO_FIX = new Set(["listing_shown_on_publish", "listing_hidden"]);
     for (const code of [...PUBLICATION_ISSUE_CODES, ...ISSUE_CODES]) {
+      if (NO_FIX.has(code)) {
+        expect(fixForIssue(code), code).toBeNull();
+        continue;
+      }
       const fix = fixForIssue(code);
       expect(fix, code).not.toBeNull();
       expect(SECTION_TAB[fix!.section], code).toBe(fix!.tab);
