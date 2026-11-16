@@ -4,6 +4,11 @@
  * Review, approval and publication of one product (PM-3). Every button maps to one API
  * transition and names the version the user saw; the API (and the database) decide. The panels
  * only show the actions the caller's permissions allow and say why the others are missing.
+ *
+ * DP-193 (ADR-023): publication is built around three actions per site — Preview, Publish and
+ * Unpublish — with no confirmation dialog. A user with approval and publishing rights publishes
+ * the current version directly (the API's `publishMode`); the second-person review stays
+ * available as an optional step.
  */
 import {
   REVIEW_COMMENT_MAX,
@@ -20,6 +25,7 @@ import { fixForIssue, productTabLabel } from "../../lib/product-tabs";
 import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, PublicationPill, SITE_SHORT, TEXTAREA } from "./parts";
+import { PreviewLinkButton } from "./preview-link-button";
 import { useNotice } from "./notices";
 import { TabLink, useUnsavedChanges } from "./product-tabs";
 
@@ -332,7 +338,8 @@ export function ReviewHistory({
   return (
     <ol className="relative space-y-4 before:absolute before:inset-y-1 before:left-[13px] before:w-px before:bg-line">
       {events.map((e) => {
-        const a = ACTION[e.action];
+        const direct = e.action === "PUBLISHED" && e.comment?.startsWith("Direct publication");
+        const a = direct ? { ...ACTION.PUBLISHED, label: "Published directly" } : ACTION[e.action];
         const site = e.siteId ? siteKeys[e.siteId] : undefined;
         return (
           <li key={e.id} className="relative flex gap-3">
@@ -411,9 +418,27 @@ function IssueList({
   );
 }
 
-function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflowResponse }) {
+/** DP-193: warnings the publisher must see without opening anything. */
+const ATTENTION = new Set([
+  "sensitive_claim",
+  "summary_missing",
+  "description_missing",
+  "not_reviewed",
+  "listing_shown_on_publish",
+  "company_review_pending",
+  "specs_missing",
+]);
+
+function SiteCard({
+  site,
+  data,
+  productSlug,
+}: {
+  site: SitePublication;
+  data: ProductWorkflowResponse;
+  productSlug: string;
+}) {
   const { pending, error, run } = useWorkflowCall();
-  const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState("");
   const reasonId = useId();
   const pub = site.publication;
@@ -421,13 +446,24 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
   const r = site.readiness;
   const base = `/products/${data.productId}/publications/${site.siteId}`;
   const name = SITE_SHORT[site.siteKey];
+  const direct = site.publishMode === "DIRECT";
+  const showsListing = direct && site.canShowListing && site.listing?.visibility === "HIDDEN";
+  const attention = r.warnings.filter((w) => ATTENTION.has(w.code));
+  const notes = r.warnings.filter((w) => !ATTENTION.has(w.code));
+  // DP-187: a typed reason survives a tab change.
+  useUnsavedChanges(reason.trim().length > 0);
 
   async function publish() {
     if (!site.listing) return;
     await run(
       "publish",
       `${base}/publish`,
-      { version: data.version, listingVersion: site.listing.version },
+      {
+        version: data.version,
+        listingVersion: site.listing.version,
+        approvalMode: site.publishMode,
+        makeVisible: showsListing,
+      },
       live ? `Republished on ${name}.` : `Published on ${name}.`,
     );
   }
@@ -439,14 +475,12 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
       { version: pub.version, comment: reason.trim() || null },
       `Unpublished on ${name}.`,
     );
-    if (ok) {
-      setConfirming(false);
-      setReason("");
-    }
+    if (ok) setReason("");
   }
 
+  const upToDate = live && !site.outdated.master && !site.outdated.listing;
   return (
-    <article className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2/40 p-4">
+    <article className="flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface-2/40 p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 font-medium text-ink">
           <Icon name="sites" size={16} className="text-ink-3" />
@@ -460,6 +494,7 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
           {live ? (
             <>
               Live: master version {pub.productVersion}, listing version {pub.listingVersion}
+              {pub.approvalMode === "DIRECT" ? " · published directly" : " · approved version"}
               <br />
               Published {when(pub.publishedAt)} by {pub.publishedBy.name}
             </>
@@ -479,10 +514,12 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
       {live && (site.outdated.master || site.outdated.listing) ? (
         <p className="flex items-start gap-1.5 rounded-lg bg-amber-soft px-2.5 py-1.5 text-xs text-amber-ink ring-1 ring-inset ring-amber/30">
           <Icon name="refresh" size={13} className="mt-px shrink-0" />
-          {site.outdated.master
-            ? `The master changed since publication (live version ${pub?.productVersion}, now ${data.version}).`
-            : "The site listing changed since publication."}{" "}
-          The site shows the published snapshot until it is republished.
+          <span>
+            {site.outdated.master
+              ? `The master changed since publication (live version ${pub?.productVersion}, now ${data.version}).`
+              : "The site listing changed since publication."}{" "}
+            The site shows the published snapshot until it is republished.
+          </span>
         </p>
       ) : null}
 
@@ -496,37 +533,44 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
       ) : (
         <p className="flex items-center gap-1.5 text-xs font-medium text-success">
           <Icon name="check" size={13} />
-          Ready to {live ? "republish" : "publish"}.
+          {upToDate ? "Live and up to date." : `Ready to ${live ? "republish" : "publish"}.`}
         </p>
       )}
-      {r.warnings.length ? (
+      {attention.length ? (
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-amber-ink">Check before publishing:</p>
+          <IssueList issues={attention} tone="amber" site={site.siteKey.toLowerCase()} />
+        </div>
+      ) : null}
+      {notes.length ? (
         <details className="text-xs">
           <summary className="cursor-pointer font-medium text-amber-ink">
-            {r.warnings.length} warning{r.warnings.length === 1 ? "" : "s"} (shown, not blocking)
+            {notes.length} more note{notes.length === 1 ? "" : "s"} (not blocking)
           </summary>
           <div className="mt-1.5">
-            <IssueList issues={r.warnings} tone="amber" site={site.siteKey.toLowerCase()} />
+            <IssueList issues={notes} tone="amber" site={site.siteKey.toLowerCase()} />
           </div>
         </details>
       ) : null}
 
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
 
-      {site.canPublish ? (
-        confirming ? (
-          <div className="space-y-2 rounded-lg border border-line bg-surface p-3">
-            <label htmlFor={reasonId} className="block text-sm font-medium text-ink">
-              Take the product off {name}?
-              <span className="ml-1 font-normal text-ink-3">Reason (optional)</span>
-            </label>
-            <input
-              id={reasonId}
-              value={reason}
-              maxLength={REVIEW_COMMENT_MAX}
-              onChange={(e) => setReason(e.currentTarget.value)}
-              className="block h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-petrol focus:outline-none focus:ring-4 focus:ring-petrol/15"
-            />
-            <div className="flex flex-wrap gap-2">
+      <div className="mt-auto flex flex-wrap items-start gap-2 pt-1">
+        {site.canPreview ? (
+          <PreviewLinkButton siteId={site.siteId} productSlug={productSlug} label="Preview" />
+        ) : null}
+        {site.canPublish ? (
+          <>
+            <button
+              type="button"
+              disabled={pending !== null || !r.ok || upToDate}
+              onClick={publish}
+              className={buttonStyles.primary}
+            >
+              {pending === "publish" ? <Spinner /> : <Icon name="publish" size={17} />}
+              {live ? "Republish" : showsListing ? "Show and publish" : "Publish"}
+            </button>
+            {live ? (
               <button
                 type="button"
                 disabled={pending !== null}
@@ -539,44 +583,36 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
                 {pending === "unpublish" ? <Spinner /> : <Icon name="archive" size={16} />}
                 Unpublish
               </button>
-              <button
-                type="button"
-                onClick={() => setConfirming(false)}
-                className={buttonStyles.ghost}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-auto flex flex-wrap gap-2 pt-1">
-            <button
-              type="button"
-              disabled={
-                pending !== null ||
-                !r.ok ||
-                (live && !site.outdated.master && !site.outdated.listing)
-              }
-              onClick={publish}
-              className={buttonStyles.primary}
-            >
-              {pending === "publish" ? <Spinner /> : <Icon name="publish" size={17} />}
-              {live ? "Republish" : "Publish"}
-            </button>
-            {live ? (
-              <button
-                type="button"
-                onClick={() => setConfirming(true)}
-                className={buttonStyles.secondary}
-              >
-                <Icon name="archive" size={16} />
-                Unpublish…
-              </button>
             ) : null}
-          </div>
-        )
+          </>
+        ) : null}
+      </div>
+      {site.canPublish && live ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-ink-3">
+            Reason for unpublishing (optional)
+          </summary>
+          <input
+            id={reasonId}
+            aria-label={`Reason for unpublishing on ${name}`}
+            value={reason}
+            maxLength={REVIEW_COMMENT_MAX}
+            onChange={(e) => setReason(e.currentTarget.value)}
+            className="mt-1.5 block h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-petrol focus:outline-none focus:ring-4 focus:ring-petrol/15"
+          />
+        </details>
+      ) : null}
+      {site.canPublish ? (
+        <p className="flex items-start gap-1.5 text-xs text-ink-3">
+          <Icon name="shield" size={13} className="mt-px shrink-0" />
+          {direct
+            ? "You publish this version directly; no second review is needed. Unpublishing takes it off the site at once."
+            : data.status === "APPROVED"
+              ? "Publishes the approved version."
+              : "Publishing needs an approved master (second-person review)."}
+        </p>
       ) : (
-        <p className="mt-auto flex items-center gap-1.5 pt-1 text-xs text-ink-3">
+        <p className="flex items-center gap-1.5 text-xs text-ink-3">
           <Icon name="shield" size={13} />
           Publishing on this site needs the publisher role of the site.
         </p>
@@ -585,14 +621,20 @@ function SiteCard({ site, data }: { site: SitePublication; data: ProductWorkflow
   );
 }
 
-export function PublicationPanel({ data }: { data: ProductWorkflowResponse }) {
+export function PublicationPanel({
+  data,
+  productSlug,
+}: {
+  data: ProductWorkflowResponse;
+  productSlug: string;
+}) {
   if (data.sites.length === 0) {
     return <p className="text-sm text-ink-3">You cannot read any site of this product.</p>;
   }
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {data.sites.map((s) => (
-        <SiteCard key={s.siteId} site={s} data={data} />
+        <SiteCard key={s.siteId} site={s} data={data} productSlug={productSlug} />
       ))}
     </div>
   );

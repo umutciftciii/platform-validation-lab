@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import {
   checkPublication,
+  findSensitiveClaims,
+  PublishRequestSchema,
   PublicProductSchema,
   PublicProductSummarySchema,
   PublishedSnapshotSchema,
@@ -230,5 +232,167 @@ describe("public view of a snapshot", () => {
     expect(
       PublishedSnapshotSchema.safeParse({ ...snapshot, storageKey: "products/x/original" }).success,
     ).toBe(false);
+  });
+});
+
+// DP-193 (ADR-023): direct publication and the new warnings.
+describe("DP-193 publish request", () => {
+  it("defaults to APPROVED without makeVisible, so older clients keep their behaviour", () => {
+    expect(PublishRequestSchema.parse({ version: 3, listingVersion: 2 })).toEqual({
+      version: 3,
+      listingVersion: 2,
+      approvalMode: "APPROVED",
+      makeVisible: false,
+    });
+  });
+
+  it("accepts DIRECT with makeVisible and refuses unknown modes and fields", () => {
+    expect(
+      PublishRequestSchema.parse({
+        version: 3,
+        listingVersion: 2,
+        approvalMode: "DIRECT",
+        makeVisible: true,
+      }),
+    ).toMatchObject({ approvalMode: "DIRECT", makeVisible: true });
+    expect(
+      PublishRequestSchema.safeParse({ version: 3, listingVersion: 2, approvalMode: "SELF" })
+        .success,
+    ).toBe(false);
+    expect(
+      PublishRequestSchema.safeParse({ version: 3, listingVersion: 2, approvedBy: "x" }).success,
+    ).toBe(false);
+  });
+});
+
+describe("DP-193 checkPublication in DIRECT mode", () => {
+  const draft: ReadinessInput = { ...base, product: { ...base.product, status: "DRAFT" } };
+  const warn = (r: ReturnType<typeof checkPublication>) => r.warnings.map((i) => i.code);
+
+  it("turns a missing technical review into a warning, for DRAFT and IN_REVIEW", () => {
+    for (const status of ["DRAFT", "IN_REVIEW"] as const) {
+      const r = checkPublication({
+        ...base,
+        product: { ...base.product, status },
+        mode: "DIRECT",
+      });
+      expect(r.ok).toBe(true);
+      expect(codes(r)).toEqual([]);
+      expect(warn(r)).toEqual(["not_reviewed"]);
+    }
+  });
+
+  it("an APPROVED master has nothing to warn about in either mode", () => {
+    expect(checkPublication({ ...base, mode: "DIRECT" })).toEqual({
+      ok: true,
+      blocking: [],
+      warnings: [],
+    });
+  });
+
+  it("the APPROVED mode still blocks a draft (unchanged PM-3 rule)", () => {
+    expect(codes(checkPublication(draft))).toEqual(["not_approved"]);
+    expect(codes(checkPublication({ ...draft, mode: "APPROVED" }))).toEqual(["not_approved"]);
+  });
+
+  it("shows a hidden listing only when the publisher may; otherwise it still blocks", () => {
+    const hidden = { ...draft, listing: { visibility: "HIDDEN" as const, text: null } };
+    const may = checkPublication({ ...hidden, mode: "DIRECT", canShowListing: true });
+    expect(may.ok).toBe(true);
+    expect(warn(may)).toEqual(["not_reviewed", "listing_shown_on_publish"]);
+    expect(codes(checkPublication({ ...hidden, mode: "DIRECT", canShowListing: false }))).toEqual([
+      "listing_hidden",
+    ]);
+    // APPROVED mode ignores canShowListing.
+    expect(
+      codes(
+        checkPublication({
+          ...hidden,
+          product: { ...base.product },
+          mode: "APPROVED",
+          canShowListing: true,
+        }),
+      ),
+    ).toEqual(["listing_hidden"]);
+  });
+
+  it("keeps archived, missing listing, missing cover and invalid data blocking", () => {
+    const d = { mode: "DIRECT" as const, canShowListing: true };
+    expect(
+      codes(checkPublication({ ...base, ...d, product: { ...base.product, status: "ARCHIVED" } })),
+    ).toEqual(["archived"]);
+    expect(codes(checkPublication({ ...draft, ...d, listing: null }))).toEqual(["listing_missing"]);
+    expect(codes(checkPublication({ ...draft, ...d, images: [] }))).toEqual(["cover_missing"]);
+    const invalid = {
+      ok: false,
+      blocking: [
+        {
+          severity: "BLOCKING" as const,
+          code: "invalid_unit" as const,
+          target: "spec:kv100",
+          message: "KV100: unit",
+        },
+      ],
+      warnings: [],
+    };
+    expect(codes(checkPublication({ ...draft, ...d, validation: invalid }))).toEqual([
+      "invalid_unit",
+    ]);
+  });
+
+  it("no technical data and no documents only warn", () => {
+    const validation = validateProductData({ definitions: [], values: [], images: [] });
+    const r = checkPublication({ ...draft, mode: "DIRECT", validation });
+    expect(r.ok).toBe(true);
+    expect(warn(r)).toContain("specs_missing");
+  });
+});
+
+describe("DP-193 company review and sensitive claims (warnings only)", () => {
+  it("warns while the site's proposal is not company-approved; never blocks", () => {
+    for (const status of ["REVIEW_PENDING", "CHANGES_REQUESTED"] as const) {
+      const r = checkPublication({ ...base, proposal: { status } });
+      expect(r.ok).toBe(true);
+      expect(r.warnings.map((i) => i.code)).toEqual(["company_review_pending"]);
+    }
+    expect(checkPublication({ ...base, proposal: { status: "APPROVED" } }).warnings).toEqual([]);
+    expect(checkPublication({ ...base, proposal: null }).warnings).toEqual([]);
+  });
+
+  it("finds sensitive wording in the public title, summary or description", () => {
+    const r = checkPublication({
+      ...base,
+      listing: {
+        visibility: "VISIBLE",
+        text: {
+          title: "Base oil for SAF blending",
+          summary: "Offered under the pharmaceutical grade designation.",
+          description: "Suitable for incidental food contact (NSF H1).",
+        },
+      },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.warnings.map((i) => [i.code, i.target])).toEqual([
+      ["sensitive_claim", "text:saf"],
+      ["sensitive_claim", "text:pharmaceutical"],
+      ["sensitive_claim", "text:food"],
+    ]);
+  });
+
+  it("matches acronyms only in capitals as whole words", () => {
+    expect(findSensitiveClaims("A safe, useful product for ctl lines and safety.")).toEqual([]);
+    expect(findSensitiveClaims("CTL base oil").map((c) => c.key)).toEqual(["ctl_gtl"]);
+    expect(findSensitiveClaims("Cosmetic Grade Petroleum Jelly").map((c) => c.key)).toEqual([
+      "cosmetic",
+    ]);
+    expect(findSensitiveClaims(null, undefined, "")).toEqual([]);
+  });
+
+  it("reads the master text when the listing has none", () => {
+    const r = checkPublication({
+      ...base,
+      product: { ...base.product, description: "A biodegradable fluid." },
+    });
+    expect(r.warnings.map((i) => i.target)).toEqual(["text:environmental"]);
   });
 });

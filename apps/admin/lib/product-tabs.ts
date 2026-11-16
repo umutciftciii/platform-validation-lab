@@ -78,7 +78,34 @@ export function fixForIssue(code: string): IssueFix | null {
       return {
         tab: "publication",
         section: "review",
-        hint: "Submit the product master for review; another reviewer approves it.",
+        hint: "Submit the product master for review; another reviewer approves it. An administrator with approval and publishing rights can publish directly.",
+      };
+    case "not_reviewed":
+      return {
+        tab: "publication",
+        section: "review",
+        hint: "Optional: ask a second person to review it first.",
+      };
+    case "listing_shown_on_publish":
+      return {
+        tab: "content",
+        section: "listing",
+        hint: "Nothing to do: publishing shows it. A hidden listing later takes it off the site again.",
+        perSite: true,
+      };
+    case "company_review_pending":
+      return {
+        tab: "content",
+        section: "listing",
+        hint: "Optional: the company can review the proposal under Company Review.",
+        perSite: true,
+      };
+    case "sensitive_claim":
+      return {
+        tab: "content",
+        section: "listing",
+        hint: "Keep this wording only with a certificate or source document; otherwise remove it from the site texts.",
+        perSite: true,
       };
     case "archived":
       return {
@@ -112,13 +139,13 @@ export function fixForIssue(code: string): IssueFix | null {
       return {
         tab: "content",
         section: "master",
-        hint: "Add a summary to the product master or to this site's listing.",
+        hint: "Add a summary to this site's listing (or copy the research proposal) or to the product master.",
       };
     case "description_missing":
       return {
         tab: "content",
         section: "master",
-        hint: "Add a description to the product master or to this site's listing.",
+        hint: "Add a description to this site's listing (or copy the research proposal) or to the product master.",
       };
     case "required_missing":
       return {

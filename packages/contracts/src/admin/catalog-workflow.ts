@@ -18,6 +18,14 @@
  * of that site, an APPROVED master, a visible listing and no BLOCKING issue. Publishing stores
  * an immutable snapshot of the approved content with the master and listing versions, so the
  * live site never shows unapproved edits, and the published version stays traceable.
+ *
+ * DP-193 (ADR-023): a second publication mode. `APPROVED` (the default, unchanged) publishes an
+ * APPROVED master. `DIRECT` publishes the CURRENT version of a DRAFT or IN_REVIEW master without a
+ * technical review; it needs `product:approve` platform-wide AND `product:publish` of the site
+ * (checked by the API and again by the database), never changes the master's status and is
+ * recorded as such (publication row, history comment, audit action). A hidden listing may be shown
+ * in the same transaction (`makeVisible`, needs `product:edit` of the site). Everything else stays:
+ * archived, missing listing, stale versions, missing cover and invalid technical data block.
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
@@ -72,13 +80,22 @@ export const RequestChangesRequestSchema = z.strictObject({
 });
 export type RequestChangesRequest = z.input<typeof RequestChangesRequestSchema>;
 
+/** DP-193: how a publication was authorised (see the header). */
+export const PUBLICATION_MODES = ["APPROVED", "DIRECT"] as const;
+export const PublicationModeSchema = z.enum(PUBLICATION_MODES);
+export type PublicationMode = z.infer<typeof PublicationModeSchema>;
+
 /**
  * Publish (or republish) on one site: the master version and the listing version the publisher
- * reviewed. Either changed since -> 409 stale.
+ * reviewed. Either changed since -> 409 stale. DP-193: `approvalMode` defaults to APPROVED, so
+ * older clients keep their behaviour; `makeVisible` (DIRECT only) shows a hidden listing in the
+ * same transaction.
  */
 export const PublishRequestSchema = z.strictObject({
   version: VersionSchema,
   listingVersion: VersionSchema,
+  approvalMode: PublicationModeSchema.default("APPROVED"),
+  makeVisible: z.boolean().default(false),
 });
 export type PublishRequest = z.input<typeof PublishRequestSchema>;
 
@@ -129,6 +146,13 @@ export const PUBLICATION_ISSUE_CODES = [
   "cover_missing",
   "summary_missing",
   "description_missing",
+  // DP-193 (all WARNING): direct publication without a technical review, a hidden listing the
+  // direct publication shows, a research proposal the company has not approved (optional), and
+  // wording that needs a certificate or source document.
+  "not_reviewed",
+  "listing_shown_on_publish",
+  "company_review_pending",
+  "sensitive_claim",
 ] as const;
 
 export const PublicationIssueSchema = z.strictObject({
@@ -160,6 +184,77 @@ export interface ReadinessInput {
   /** The shared validation engine's result for the master (validateProductData). */
   validation: ProductValidation;
   images: readonly { id: string; isCover: boolean; altText: string | null }[];
+  /** DP-193: the mode the publisher will use; APPROVED when omitted (the PM-3 rules). */
+  mode?: PublicationMode;
+  /** DP-193: DIRECT only — the publisher may show a hidden listing in the same step. */
+  canShowListing?: boolean;
+  /** DP-193: the site's research proposal (DP-171), when there is one. */
+  proposal?: { status: "REVIEW_PENDING" | "CHANGES_REQUESTED" | "APPROVED" } | null;
+}
+
+/**
+ * DP-193: wording that would need a certificate or a source document (ADR-022 CLAIM_RISK: SAF,
+ * pharmaceutical, cosmetic, food contact, CTL, ...). Found in the public title, summary or
+ * description, it is a WARNING the publisher sees before publishing; it never edits the text.
+ * Acronyms match case-sensitively as whole words, phrases case-insensitively.
+ */
+export const SENSITIVE_CLAIMS: readonly {
+  key: string;
+  label: string;
+  /** Phrases, any case. */
+  phrases: RegExp | null;
+  /** Acronyms as whole words in capitals ("saf" in ordinary words never matches). */
+  acronyms: RegExp | null;
+}[] = [
+  {
+    key: "saf",
+    label: "SAF / aviation fuel",
+    phrases: /sustainable aviation|aviation fuel|jet fuel/i,
+    acronyms: /\bSAF\b/,
+  },
+  {
+    key: "pharmaceutical",
+    label: "pharmaceutical or pharmacopoeia grade",
+    phrases: /pharmaceutical|pharma[- ]grade|pharmacopoei|\bPh\.? ?Eur\b/i,
+    acronyms: /\bUSP\b/,
+  },
+  { key: "cosmetic", label: "cosmetic grade", phrases: /cosmetic/i, acronyms: null },
+  {
+    key: "food",
+    label: "food grade or food contact",
+    phrases: /food[- ]grade|food contact|food[- ]safe|incidental food/i,
+    acronyms: /\b(?:NSF|H1|FDA)\b/,
+  },
+  { key: "medical", label: "medical use", phrases: /\bmedical\b|\bmedicinal\b/i, acronyms: null },
+  {
+    key: "ctl_gtl",
+    label: "CTL / GTL origin",
+    phrases: /coal[- ]to[- ]liquids?|gas[- ]to[- ]liquids?/i,
+    acronyms: /\b(?:CTL|GTL)\b/,
+  },
+  {
+    key: "certification",
+    label: "certification or OEM approval",
+    phrases: /\bcertified\b|\bcertificate\b|OEM approv|\bapproved by\b/i,
+    acronyms: null,
+  },
+  {
+    key: "environmental",
+    label: "environmental claim",
+    phrases: /biodegradable|renewable|bio[- ]based|carbon[- ]neutral|eco[- ]friendly/i,
+    acronyms: null,
+  },
+];
+
+/** DP-193: the sensitive claim categories found in public texts. */
+export function findSensitiveClaims(
+  ...texts: readonly (string | null | undefined)[]
+): { key: string; label: string }[] {
+  const all = texts.filter((t): t is string => !!t).join("\n");
+  if (!all) return [];
+  return SENSITIVE_CLAIMS.filter(
+    (c) => (c.phrases?.test(all) ?? false) || (c.acronyms?.test(all) ?? false),
+  ).map(({ key, label }) => ({ key, label }));
 }
 
 const pub = (
@@ -178,36 +273,68 @@ const fromValidation = (i: ValidationIssue): PublicationIssue => ({ ...i });
  * data"), a missing summary (DP-161: the catalogue source has none, so it is content to add, not
  * a gate) and a missing description. Used by the API to refuse, and by the console to
  * show the same list before the publisher clicks.
+ *
+ * DP-193, mode DIRECT: a DRAFT or IN_REVIEW master is a WARNING (`not_reviewed`) instead of
+ * `not_approved`; a hidden listing is a WARNING (`listing_shown_on_publish`) when the publisher
+ * may show it, else still BLOCKING. In both modes a research proposal the company has not
+ * approved (`company_review_pending`) and sensitive wording in the public text
+ * (`sensitive_claim`) are WARNINGS. Archived, listing missing, cover missing and the engine's
+ * BLOCKING issues block in both modes.
  */
 export function checkPublication(input: ReadinessInput): PublicationReadiness {
   const blocking: PublicationIssue[] = [];
   const warnings: PublicationIssue[] = [];
   const { product, listing } = input;
+  const direct = input.mode === "DIRECT";
   if (product.status === "ARCHIVED") {
     blocking.push(pub("BLOCKING", "archived", "product", "Archived products cannot be published."));
   } else if (product.status !== "APPROVED") {
-    blocking.push(
-      pub(
-        "BLOCKING",
-        "not_approved",
-        "product",
-        "The product master must be approved in its current version.",
-      ),
-    );
+    if (direct) {
+      warnings.push(
+        pub(
+          "WARNING",
+          "not_reviewed",
+          "product",
+          "Published directly: no second person reviewed this version (optional).",
+        ),
+      );
+    } else {
+      blocking.push(
+        pub(
+          "BLOCKING",
+          "not_approved",
+          "product",
+          "The product master must be approved in its current version.",
+        ),
+      );
+    }
   }
   if (!listing) {
     blocking.push(
       pub("BLOCKING", "listing_missing", "listing", "The site does not list this product."),
     );
   } else if (listing.visibility !== "VISIBLE") {
-    blocking.push(
-      pub("BLOCKING", "listing_hidden", "listing", "The listing is hidden on this site."),
-    );
+    if (direct && input.canShowListing) {
+      warnings.push(
+        pub(
+          "WARNING",
+          "listing_shown_on_publish",
+          "listing",
+          "The listing is hidden; publishing makes it visible on this site.",
+        ),
+      );
+    } else {
+      blocking.push(
+        pub("BLOCKING", "listing_hidden", "listing", "The listing is hidden on this site."),
+      );
+    }
   }
   if (!input.images.some((i) => i.isCover)) {
     blocking.push(pub("BLOCKING", "cover_missing", "images", "A cover image is required."));
   }
-  if (!(listing?.text?.summary ?? product.summary)) {
+  const summary = listing?.text?.summary ?? product.summary;
+  const description = listing?.text?.description ?? product.description;
+  if (!summary) {
     warnings.push(
       pub(
         "WARNING",
@@ -219,9 +346,29 @@ export function checkPublication(input: ReadinessInput): PublicationReadiness {
   }
   blocking.push(...input.validation.blocking.map(fromValidation));
   warnings.push(...input.validation.warnings.map(fromValidation));
-  if (!(listing?.text?.description ?? product.description)) {
+  if (!description) {
     warnings.push(
       pub("WARNING", "description_missing", "description", "The product has no description."),
+    );
+  }
+  for (const claim of findSensitiveClaims(listing?.text?.title, summary, description)) {
+    warnings.push(
+      pub(
+        "WARNING",
+        "sensitive_claim",
+        `text:${claim.key}`,
+        `The public text mentions ${claim.label}: publish it only with a certificate or source document.`,
+      ),
+    );
+  }
+  if (input.proposal && input.proposal.status !== "APPROVED") {
+    warnings.push(
+      pub(
+        "WARNING",
+        "company_review_pending",
+        "proposal",
+        "The company has not reviewed this site's research proposal (optional).",
+      ),
     );
   }
   return { ok: blocking.length === 0, blocking, warnings };
@@ -250,9 +397,27 @@ export const PublicationSchema = z.strictObject({
   publishedBy: ActorSchema,
   unpublishedAt: IsoDate.nullable(),
   unpublishedBy: ActorSchema.nullable(),
+  /** DP-193: how the live (or last live) snapshot was authorised. */
+  approvalMode: PublicationModeSchema,
   version: z.number().int(),
 });
 export type Publication = z.infer<typeof PublicationSchema>;
+
+/**
+ * DP-193: the site's research proposal (DP-171) as the product page uses it: its customer text
+ * for "Copy the proposal into the form" and its claim-risk notes. Never the held technical
+ * values (DP-002), which stay in the company review.
+ */
+export const SiteProposalSchema = z.strictObject({
+  id: UuidSchema,
+  status: z.enum(["REVIEW_PENDING", "CHANGES_REQUESTED", "APPROVED"]),
+  version: z.number().int(),
+  summary: z.string().nullable(),
+  description: z.string().nullable(),
+  /** Texts of the proposal's CLAIM_RISK review items (wording that needs a certificate). */
+  claimRisks: z.array(z.string()).max(50),
+});
+export type SiteProposal = z.infer<typeof SiteProposalSchema>;
 
 export const SitePublicationSchema = z.strictObject({
   siteId: UuidSchema,
@@ -266,6 +431,21 @@ export const SitePublicationSchema = z.strictObject({
   publication: PublicationSchema.nullable(),
   /** The live snapshot is older than the current master or listing. */
   outdated: z.strictObject({ master: z.boolean(), listing: z.boolean() }),
+  /**
+   * DP-193: the mode the console publishes with and `readiness` is checked for: DIRECT when the
+   * caller may publish directly (product:approve platform-wide and product:publish here) and the
+   * master is not APPROVED; APPROVED otherwise.
+   */
+  publishMode: PublicationModeSchema,
+  /** DP-193: DIRECT may show a hidden listing (product:edit of this site). */
+  canShowListing: z.boolean(),
+  /**
+   * DP-193: the caller may open this product in the BV catalogue preview (DP-173: BV only,
+   * product_proposal:review of the site).
+   */
+  canPreview: z.boolean(),
+  /** DP-193: the site's research proposal for this product, if any. */
+  proposal: SiteProposalSchema.nullable(),
   readiness: PublicationReadinessSchema,
 });
 export type SitePublication = z.infer<typeof SitePublicationSchema>;
