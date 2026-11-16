@@ -3451,3 +3451,217 @@ describe("13. DP-180 proposal text into listings", () => {
     ]);
   });
 });
+
+// ------------------------------------------------------------------------------------------
+// 14. DP-197: the console without a visibility control (no API change). The admin's Content
+//     save sends the saved visibility back; Publish shows the listing (DIRECT: makeVisible;
+//     APPROVED: the listing API first); Unpublish takes the product off the public catalogue.
+// ------------------------------------------------------------------------------------------
+
+describe("14. DP-197 publication without a visibility control", () => {
+  let admin: Staff; // platform_super_admin + product_publisher @ BV (DIRECT)
+  const listingRow = (id: string) =>
+    owner.productSiteListing.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+      include: { texts: true },
+    });
+  const publicationRow = (id: string) =>
+    owner.productPublication.findUnique({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+  /** The body the console's Content tab sends: the edited texts, the saved visibility. */
+  const contentSave = async (id: string, title: string) => {
+    const l = await listingRow(id);
+    return bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l.version,
+      categoryId: l.categoryId,
+      visibility: l.visibility,
+      sortOrder: l.sortOrder,
+      title,
+      summary: `BV summary ${title}`,
+      description: "",
+    });
+  };
+  const publicSlugs = async () =>
+    PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items.map(
+      (i) => i.slug,
+    );
+
+  beforeAll(async () => {
+    admin = await staff(
+      "dp197-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+  });
+
+  it("a Content save changes neither the visibility nor the publication", async () => {
+    const id = await completeProduct("dp197-content", "DP197-A");
+    // A new listing as the console creates it now: off the site.
+    const l = await listingRow(id);
+    expect(
+      (
+        await bvEditor.post(`/products/${id}/listings/${BV}`, {
+          version: l.version,
+          categoryId: l.categoryId,
+          visibility: "HIDDEN",
+          sortOrder: 0,
+          title: "DP197-A for BV",
+        })
+      ).status,
+    ).toBe(200);
+    const res = await contentSave(id, "Edited title");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(await listingRow(id)).toMatchObject({ visibility: "HIDDEN", version: l.version + 2 });
+    expect(await publicationRow(id)).toBeNull();
+    expect((await pub("bv", "/products/dp197-a")).status).toBe(404);
+  });
+
+  it("DIRECT: Publish shows the listing; Unpublish takes it off the public catalogue", async () => {
+    const id = await completeProduct("dp197-direct", "DP197-B");
+    const l0 = await listingRow(id);
+    await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l0.version,
+      categoryId: l0.categoryId,
+      visibility: "HIDDEN",
+      title: "DP197-B for BV",
+    });
+    const site = (await admin.workflow(id)).sites.find((s) => s.siteKey === "BV")!;
+    expect(site).toMatchObject({ publishMode: "DIRECT", canShowListing: true });
+    expect(site.readiness.ok).toBe(true);
+    const published = await admin.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+      makeVisible: true,
+    });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    expect((await listingRow(id)).visibility).toBe("VISIBLE");
+    expect(await publicSlugs()).toContain("dp197-b");
+    expect((await pub("bv", "/products/dp197-b")).status).toBe(200);
+
+    // A Content save while live keeps it live with the published snapshot.
+    expect((await contentSave(id, "Edited while live")).status).toBe(200);
+    expect((await listingRow(id)).visibility).toBe("VISIBLE");
+    expect((await publicationRow(id))?.status).toBe("PUBLISHED");
+    expect((await pub("bv", "/products/dp197-b")).body).toMatchObject({
+      product: { name: "DP197-B for BV" },
+    });
+
+    const row = (await publicationRow(id))!;
+    const off = await admin.post(`/products/${id}/publications/${BV}/unpublish`, {
+      version: row.version,
+      comment: null,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    // The API leaves the listing switched on; the public catalogue needs a PUBLISHED row.
+    expect((await listingRow(id)).visibility).toBe("VISIBLE");
+    expect((await publicationRow(id))?.status).toBe("UNPUBLISHED");
+    expect(await publicSlugs()).not.toContain("dp197-b");
+    expect((await pub("bv", "/products/dp197-b")).status).toBe(404);
+    const img = await owner.productImage.findFirstOrThrow({ where: { productId: id } });
+    expect((await pubBytes("bv", `/images/${img.id}/display`)).status).toBe(404);
+
+    // Publishing again brings it back, without makeVisible (already shown).
+    const again = await admin.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+    });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect((await pub("bv", "/products/dp197-b")).body).toMatchObject({
+      product: { name: "Edited while live" },
+    });
+  });
+
+  it("APPROVED: the console shows the listing first, then publishes the approved version", async () => {
+    const id = await completeProduct("dp197-approved", "DP197-C");
+    const l0 = await listingRow(id);
+    await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l0.version,
+      categoryId: l0.categoryId,
+      visibility: "HIDDEN",
+      title: "DP197-C for BV",
+    });
+    expect((await pm.post(`/products/${id}/submit`, { version: await version(id) })).status).toBe(
+      200,
+    );
+    expect(
+      (await reviewer.post(`/products/${id}/approve`, { version: await version(id) })).status,
+    ).toBe(200);
+    const before = (await bvPublisher.workflow(id)).sites[0]!;
+    expect(before.publishMode).toBe("APPROVED");
+    expect(before.readiness.blocking.map((i) => i.code)).toEqual(["listing_hidden"]);
+
+    // Step 1 (product:edit): the saved listing again, only switched on. The approval stays.
+    const l1 = await listingRow(id);
+    const shown = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l1.version,
+      categoryId: l1.categoryId,
+      visibility: "VISIBLE",
+      sortOrder: l1.sortOrder,
+      title: l1.texts[0]?.title ?? null,
+      summary: l1.texts[0]?.summary ?? null,
+      description: l1.texts[0]?.description ?? null,
+    });
+    expect(shown.status, JSON.stringify(shown.body)).toBe(200);
+    expect((await owner.product.findUniqueOrThrow({ where: { id } })).status).toBe("APPROVED");
+    // Not live before the publication.
+    expect((await pub("bv", "/products/dp197-c")).status).toBe(404);
+
+    // Step 2 (product:publish): the APPROVED publication as before.
+    const res = await bvPublisher.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: shown.body.listing.version,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(ProductWorkflowResponseSchema.parse(res.body).sites[0]!.publication).toMatchObject({
+      status: "PUBLISHED",
+      approvalMode: "APPROVED",
+    });
+    expect((await pub("bv", "/products/dp197-c")).status).toBe(200);
+    expect(await lastAudit("catalog.product_published")).toMatchObject({
+      actorUserId: bvPublisher.userId,
+      siteId: BV,
+    });
+  });
+
+  it("APPROVED: a failed publication is undone by switching the listing off again", async () => {
+    const id = await completeProduct("dp197-rollback", "DP197-D");
+    const l0 = await listingRow(id);
+    await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l0.version,
+      categoryId: l0.categoryId,
+      visibility: "HIDDEN",
+      title: "DP197-D for BV",
+    });
+    // Not approved: the publication is refused after the listing was switched on.
+    const l1 = await listingRow(id);
+    const shown = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: l1.version,
+      categoryId: l1.categoryId,
+      visibility: "VISIBLE",
+      title: "DP197-D for BV",
+    });
+    expect(shown.status).toBe(200);
+    expectError(
+      await bvPublisher.post(`/products/${id}/publications/${BV}/publish`, {
+        version: await version(id),
+        listingVersion: shown.body.listing.version,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "product", rule: "not_approved" },
+    );
+    const back = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: shown.body.listing.version,
+      categoryId: l1.categoryId,
+      visibility: "HIDDEN",
+      title: "DP197-D for BV",
+    });
+    expect(back.status).toBe(200);
+    expect((await listingRow(id)).visibility).toBe("HIDDEN");
+    expect(await publicationRow(id)).toBeNull();
+    expect((await pub("bv", "/products/dp197-d")).status).toBe(404);
+  });
+});
