@@ -269,6 +269,12 @@ async function rejectsDb(p: Promise<unknown>, pattern: RegExp): Promise<void> {
   expect(JSON.stringify(error, Object.getOwnPropertyNames(error)) + String(error)).toMatch(pattern);
 }
 
+/** contracts proposalContentKey, hashed like the API (DP-171/DP-191). */
+const textSha = (summary: string | null, description: string | null) =>
+  createHash("sha256")
+    .update(`${summary ?? ""}\u0000${description ?? ""}`, "utf8")
+    .digest("hex");
+
 const lastAudit = (action: string) =>
   owner.auditEvent.findFirst({ where: { action }, orderBy: { occurredAt: "desc" } });
 
@@ -2074,6 +2080,10 @@ describe("10. DP-171 content proposals", () => {
       sourceSha256: "c".repeat(64),
     });
     expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    const pendingText = {
+      summary: cur.proposal.summary,
+      description: "A base oil for lubricant manufacturers.",
+    };
     await rejectsDb(
       owner.productContentProposalEvent.create({
         data: {
@@ -2082,7 +2092,9 @@ describe("10. DP-171 content proposals", () => {
           action: "CHANGES_REQUESTED",
           proposalVersion: cur.proposal.version + 2,
           actorUserId: companyBv.userId,
-          contentSha256: "e".repeat(64),
+          contentSha256: textSha(pendingText.summary, pendingText.description),
+          textRecorded: true,
+          ...pendingText,
         },
       }),
       /changes_need_comment|check constraint/,
@@ -2135,6 +2147,295 @@ describe("10. DP-171 content proposals", () => {
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ProposalResponseSchema.parse(ok.body).proposal.status).toBe("APPROVED");
     expect(await fingerprint()).toBe(before);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 10b. DP-191: editing the proposed text; every version keeps its text
+// ------------------------------------------------------------------------------------------
+
+describe("10b. DP-191 proposal text editing and history", () => {
+  let companyBv: Staff;
+  let productId: string;
+  let proposalId: string;
+  let before: string;
+
+  // Review data close to the largest BV proposal (ICCSYN-6-G3P, ~14.8 KB): with it, the full
+  // revision body of an 8,000-character description is over the 16 KiB request limit.
+  const bigReviewData = {
+    schemaVersion: 1,
+    language: "en",
+    family: "Group III+ base oil",
+    items: Array.from({ length: 22 }, (_, i) => ({
+      kind: "DP002_HELD",
+      field: `spec:held_${i}`,
+      text: `Held value ${i}: ${"two limits on one page, the source shows both. ".repeat(6)}`,
+      sourceIds: ["S1"],
+      heldValue: {
+        definition: `held_${i}`,
+        basis: "SPECIFICATION",
+        raw: `Property ${i}, max: ${"value as printed on the source page ".repeat(4)}`,
+        conflict: i % 2 === 0,
+        finding: null,
+      },
+    })),
+    sources: [{ id: "S1", title: "Source page", url: null, level: "D", documentDate: null }],
+  };
+  const original = {
+    summary: "Group III+ base oil for synthetic blends.",
+    description: "A base oil for lubricant blenders.",
+  };
+
+  async function read(who: Staff = bvEditor) {
+    const res = await who.get(`/proposals/${proposalId}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return ProposalResponseSchema.parse(res.body);
+  }
+
+  async function stored() {
+    return owner.productContentProposal.findUniqueOrThrow({
+      where: { id: proposalId },
+      select: { reviewData: true, sourceRef: true, sourceSha256: true },
+    });
+  }
+
+  beforeAll(async () => {
+    companyBv = await staff(
+      "company-bv-191",
+      [{ role: "company_content_reviewer", site: BV }],
+      root.userId,
+    );
+    productId = await completeProduct("dp191", "DP191-A");
+    const res = await bvEditor.post(`/sites/${BV}/proposals`, {
+      productId,
+      locale: "en",
+      ...original,
+      reviewData: bigReviewData,
+      sourceRef: "docs/catalog/proposals/test.json",
+      sourceSha256: "d".repeat(64),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    proposalId = ProposalResponseSchema.parse(res.body).proposal.id;
+    before = JSON.stringify(await stored());
+  });
+
+  it("records the text of the CREATED event", async () => {
+    const { events } = await read();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ action: "CREATED", textRecorded: true, ...original });
+    expect(events[0]?.contentSha256).toBe(textSha(original.summary, original.description));
+  });
+
+  it("revises only the text it sends; review data and source stay as they are", async () => {
+    const res = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: 1,
+      description: "A base oil for lubricant blenders and grease makers.",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const r = ProposalResponseSchema.parse(res.body);
+    expect(r.proposal).toMatchObject({
+      version: 2,
+      status: "REVIEW_PENDING",
+      summary: original.summary,
+      description: "A base oil for lubricant blenders and grease makers.",
+    });
+    expect(JSON.stringify(await stored())).toBe(before);
+    expect(r.events.map((e) => [e.action, e.proposalVersion, e.description])).toEqual([
+      ["CREATED", 1, original.description],
+      ["REVISED", 2, "A base oil for lubricant blenders and grease makers."],
+    ]);
+    const audit = await lastAudit("catalog.proposal_revised");
+    expect(audit?.metadata).toMatchObject({ version: 2, fields: ["description"] });
+  });
+
+  it("saves an 8,000-character description although the full body would be over 16 KiB", async () => {
+    const long = `${"Base oil text. ".repeat(533)}End.`.slice(0, 8000).trim();
+    expect(long.length).toBeGreaterThan(7990);
+    const fullBody = {
+      version: 2,
+      summary: original.summary,
+      description: long,
+      reviewData: bigReviewData,
+      sourceRef: "docs/catalog/proposals/test.json",
+      sourceSha256: "d".repeat(64),
+    };
+    expect(Buffer.byteLength(JSON.stringify(fullBody))).toBeGreaterThan(16 * 1024);
+    expectError(
+      await bvEditor.post(`/proposals/${proposalId}/revise`, fullBody),
+      413,
+      "PAYLOAD_TOO_LARGE",
+    );
+    const res = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: 2,
+      description: long,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const r = ProposalResponseSchema.parse(res.body);
+    expect(r.proposal.description).toBe(long);
+    expect(r.events.at(-1)).toMatchObject({ proposalVersion: 3, description: long });
+    expect(JSON.stringify(await stored())).toBe(before);
+  });
+
+  it("keeps null apart from a left-out field", async () => {
+    // null review data, source or hash is invalid, never "keep".
+    for (const field of ["reviewData", "sourceRef", "sourceSha256"]) {
+      expectError(
+        await bvEditor.post(`/proposals/${proposalId}/revise`, { version: 3, [field]: null }),
+        400,
+        "VALIDATION_FAILED",
+      );
+    }
+    // null clears a text; the other text is kept.
+    const res = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: 3,
+      summary: null,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const r = ProposalResponseSchema.parse(res.body);
+    expect(r.proposal.summary).toBeNull();
+    expect(r.proposal.description?.length).toBeGreaterThan(7990);
+    const filled = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: 4,
+      summary: original.summary,
+      description: original.description,
+    });
+    expect(filled.status, JSON.stringify(filled.body)).toBe(200);
+  });
+
+  it("refuses a stale version and keeps the newer text", async () => {
+    const cur = (await read()).proposal;
+    expectError(
+      await bvEditor.post(`/proposals/${proposalId}/revise`, {
+        version: cur.version - 1,
+        description: "An older edit.",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    expect((await read()).proposal).toMatchObject({
+      version: cur.version,
+      description: cur.description,
+    });
+  });
+
+  it("only product:edit of the site may revise; the author still cannot approve", async () => {
+    const cur = (await read()).proposal;
+    const body = { version: cur.version, description: "Not allowed." };
+    expectError(await companyBv.post(`/proposals/${proposalId}/revise`, body), 403, "FORBIDDEN");
+    expectError(await bvReader.post(`/proposals/${proposalId}/revise`, body), 403, "FORBIDDEN");
+    expectError(await nobody.post(`/proposals/${proposalId}/revise`, body), 404, "NOT_FOUND");
+    // The super admin edits with its own account and becomes an author of the revision.
+    const own = await root.post(`/proposals/${proposalId}/revise`, {
+      version: cur.version,
+      summary: "Group III+ base oil for synthetic lubricant blends.",
+    });
+    expect(own.status, JSON.stringify(own.body)).toBe(200);
+    const mine = ProposalResponseSchema.parse(own.body);
+    expect(mine.proposal.authors.map((a) => a.id)).toContain(root.userId);
+    expectError(
+      await root.post(`/proposals/${proposalId}/approve`, { version: mine.proposal.version }),
+      403,
+      "FORBIDDEN",
+      { path: "(root)", rule: "own_change" },
+    );
+    expect((await read(root)).canDecide).toBe(false);
+    const ok = await companyBv.post(`/proposals/${proposalId}/approve`, {
+      version: mine.proposal.version,
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const approved = ProposalResponseSchema.parse(ok.body);
+    expect(approved.events.at(-1)).toMatchObject({
+      action: "APPROVED",
+      textRecorded: true,
+      summary: "Group III+ base oil for synthetic lubricant blends.",
+      description: original.description,
+    });
+  });
+
+  it("keeps every earlier text in the history", async () => {
+    const { events } = await read();
+    expect(events.every((e) => e.textRecorded)).toBe(true);
+    expect(events.map((e) => e.proposalVersion)).toEqual(events.map((_, i) => i + 1));
+    for (const e of events) expect(e.contentSha256).toBe(textSha(e.summary, e.description));
+    expect(new Set(events.map((e) => e.contentSha256)).size).toBeGreaterThanOrEqual(5);
+  });
+
+  it("the database refuses an event without its text, with another text or another version's text", async () => {
+    const cur = (await read()).proposal;
+    const base = {
+      proposalId,
+      siteId: BV,
+      action: "REVISED" as const,
+      proposalVersion: cur.version + 1,
+      actorUserId: bvEditor.userId,
+    };
+    await rejectsDb(
+      owner.productContentProposalEvent.create({
+        data: { ...base, contentSha256: textSha(cur.summary, cur.description) },
+      }),
+      /records the text of its version/,
+    );
+    await rejectsDb(
+      owner.productContentProposalEvent.create({
+        data: {
+          ...base,
+          contentSha256: textSha(cur.summary, cur.description),
+          textRecorded: true,
+          summary: cur.summary,
+          description: "Another text.",
+        },
+      }),
+      /text_matches_hash|check constraint/,
+    );
+    await rejectsDb(
+      owner.productContentProposalEvent.create({
+        data: {
+          ...base,
+          contentSha256: textSha(null, null),
+          textRecorded: false,
+          summary: "Unrecorded text.",
+        },
+      }),
+      /unrecorded_text_empty|check constraint/,
+    );
+    // A request for changes on a pending revision must record exactly the pending text.
+    const rev = await bvEditor.post(`/proposals/${proposalId}/revise`, {
+      version: cur.version,
+      description: "Pending text.",
+    });
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    const pending = ProposalResponseSchema.parse(rev.body).proposal;
+    await rejectsDb(
+      owner.productContentProposalEvent.create({
+        data: {
+          proposalId,
+          siteId: BV,
+          action: "CHANGES_REQUESTED",
+          proposalVersion: pending.version + 1,
+          actorUserId: companyBv.userId,
+          comment: "Please shorten it.",
+          contentSha256: textSha(original.summary, original.description),
+          textRecorded: true,
+          ...original,
+        },
+      }),
+      /records the text it decides on/,
+    );
+    await rejectsDb(
+      asApp.productContentProposalEvent.updateMany({
+        where: { proposalId },
+        data: { description: "Rewritten history." },
+      }),
+      /permission denied/,
+    );
+    await rejectsDb(
+      owner.productContentProposalEvent.updateMany({
+        where: { proposalId },
+        data: { description: "Rewritten history." },
+      }),
+      /append-only/,
+    );
   });
 });
 
