@@ -1,17 +1,11 @@
 "use client";
 
-import {
-  DESCRIPTION_MAX,
-  type Category,
-  type Listing,
-  type ListingUpsertRequest,
-  type ListingVisibility,
-  type SiteProposal,
-} from "@dream/contracts";
+import { DESCRIPTION_MAX, type Category, type Listing, type SiteProposal } from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
 import { flattenTree } from "../../lib/catalog-view";
+import { listingSaveBody } from "../../lib/listing-request";
 import { formHasChanges } from "../../lib/product-tabs";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
@@ -20,8 +14,12 @@ import { useNotice } from "./notices";
 import { useUnsavedChanges } from "./product-tabs";
 
 /**
- * The product's listing on one site (product:edit of that site): visibility, the site's category
+ * The product's listing on one site (product:edit of that site): the site's category, sort order
  * and the site's own English texts. Creating a listing without a category uses the site default.
+ *
+ * DP-197: the form has no visibility control. A save sends the listing's saved visibility back
+ * unchanged (a new listing starts off the site), so saving never shows, publishes or unpublishes
+ * anything; the Publication tab's Publish switches the listing on when needed.
  *
  * DP-193: "Copy research proposal" fills the summary and description fields with the site's
  * research proposal (DP-171) — the fields only: nothing is written until Save, the copied text
@@ -36,7 +34,6 @@ export function ListingForm({
   listing,
   categories,
   canEdit,
-  productArchived,
   proposal = null,
 }: {
   productId: string;
@@ -45,7 +42,6 @@ export function ListingForm({
   listing: Listing | null;
   categories: readonly Category[];
   canEdit: boolean;
-  productArchived: boolean;
   /** DP-193: the site's research proposal, if any. */
   proposal?: SiteProposal | null;
 }) {
@@ -55,15 +51,13 @@ export function ListingForm({
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
   const [saved, setSaved] = useState(false);
-  const [visibility, setVisibility] = useState<ListingVisibility>(listing?.visibility ?? "HIDDEN");
   const tree = flattenTree(categories);
   const defaultCategory = categories.find((c) => c.isDefault);
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
   const id = (name: string) => `listing-${siteId}-${name}`;
   // DP-187: unsaved edits mark the Content tab and are confirmed before a site switch.
   const [fieldsChanged, setFieldsChanged] = useState(false);
-  const visibilityChanged = visibility !== (listing?.visibility ?? "HIDDEN");
-  useUnsavedChanges(canEdit && (fieldsChanged || visibilityChanged));
+  useUnsavedChanges(canEdit && fieldsChanged);
   const track = (e: FormEvent<HTMLFormElement>) =>
     setFieldsChanged(formHasChanges(e.currentTarget));
 
@@ -88,7 +82,6 @@ export function ListingForm({
   }
   function discard() {
     formRef.current?.reset();
-    setVisibility(listing?.visibility ?? "HIDDEN");
     setFieldsChanged(false);
     setCopied(false);
     setError(null);
@@ -100,15 +93,14 @@ export function ListingForm({
     if (!canEdit) return;
     const form = new FormData(e.currentTarget);
     const categoryId = String(form.get("categoryId") ?? "");
-    const body: ListingUpsertRequest = {
-      version: listing?.version ?? null,
-      categoryId: categoryId || null,
-      visibility,
-      sortOrder: Number.parseInt(String(form.get("sortOrder") ?? "0"), 10) || 0,
+    // DP-197: the saved visibility goes back unchanged (lib/listing-request).
+    const body = listingSaveBody(listing, {
+      categoryId,
+      sortOrder: String(form.get("sortOrder") ?? "0"),
       title: String(form.get("title") ?? ""),
       summary: String(form.get("summary") ?? ""),
       description: String(form.get("description") ?? ""),
-    };
+    });
     setPending(true);
     setError(null);
     setIssues([]);
@@ -210,44 +202,6 @@ export function ListingForm({
       ) : null}
       <fieldset disabled={!canEdit} className="space-y-4">
         <legend className="sr-only">Listing on {siteName}</legend>
-        <div>
-          <span className="mb-1.5 block text-sm font-medium text-ink">Visibility on this site</span>
-          <div role="radiogroup" aria-label="Visibility" className="grid grid-cols-2 gap-2">
-            {(["VISIBLE", "HIDDEN"] as const).map((v) => {
-              const active = visibility === v;
-              const blocked = v === "VISIBLE" && productArchived;
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  disabled={!canEdit || blocked}
-                  onClick={() => setVisibility(v)}
-                  className={cx(
-                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60",
-                    active
-                      ? "border-petrol bg-petrol-soft text-ink ring-2 ring-petrol/20"
-                      : "border-line-strong bg-surface text-ink-2 hover:border-ink-3",
-                  )}
-                >
-                  <Icon name={v === "VISIBLE" ? "eye" : "eyeOff"} size={17} />
-                  <span>
-                    <span className="block font-medium">
-                      {v === "VISIBLE" ? "Visible" : "Hidden"}
-                    </span>
-                    <span className="block text-xs text-ink-3">
-                      {v === "VISIBLE" ? "Shown once published" : "Admin only"}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {productArchived ? (
-            <p className="mt-1 text-xs text-ink-3">Archived products cannot be visible.</p>
-          ) : null}
-        </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
           <Field
             label="Category on this site"
@@ -335,7 +289,7 @@ export function ListingForm({
       {saved ? <FormMessage kind="success">Listing saved.</FormMessage> : null}
       {canEdit ? (
         <div className="flex flex-wrap justify-end gap-2">
-          {fieldsChanged || visibilityChanged ? (
+          {fieldsChanged ? (
             <button
               type="button"
               disabled={pending}

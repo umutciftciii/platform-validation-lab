@@ -5,16 +5,16 @@ import {
   CategoryListResponseSchema,
   ProductListResponseSchema,
   type CatalogSite,
+  type ProductListItem,
 } from "@dream/contracts";
 import {
   FIELD,
   PageHeader,
   pickSite,
   ProductStatusPill,
-  PublicationPill,
+  SiteStatusPill,
   SiteSwitcher,
   siteParam,
-  VisibilityPill,
 } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
 import { buttonStyles, cx, EmptyState, ErrorState, Panel } from "../../../components/ui";
@@ -26,6 +26,7 @@ import {
   PAGE_SIZE,
   readFilters,
 } from "../../../lib/catalog-view";
+import { siteStatus } from "../../../lib/publication-status";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
@@ -164,14 +165,6 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
             </select>
           </label>
           <label>
-            <span className="sr-only">Visibility</span>
-            <select name="visibility" defaultValue={filters.visibility} className={FIELD}>
-              <option value="">Any visibility</option>
-              <option value="VISIBLE">Visible</option>
-              <option value="HIDDEN">Hidden</option>
-            </select>
-          </label>
-          <label>
             <span className="sr-only">Sort</span>
             <select name="sort" defaultValue={filters.sort} className={FIELD}>
               <option value="name">Sort by name</option>
@@ -253,13 +246,10 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                       Category on this site
                     </th>
                     <th scope="col" className="px-3 py-2.5 font-semibold">
-                      Site listing
+                      On this site
                     </th>
                     <th scope="col" className="px-3 py-2.5 font-semibold">
                       Master
-                    </th>
-                    <th scope="col" className="px-3 py-2.5 font-semibold">
-                      Live
                     </th>
                     <th scope="col" className="py-2.5 pl-3 pr-6 font-semibold">
                       Last changed
@@ -289,13 +279,10 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                         {p.listing ? p.listing.categoryName : <span className="text-ink-3">—</span>}
                       </td>
                       <td className="px-3 py-3.5">
-                        <VisibilityPill visibility={p.listing?.visibility ?? null} />
+                        <SiteStatusPill status={statusOf(p)} />
                       </td>
                       <td className="px-3 py-3.5">
                         <ProductStatusPill status={p.status} />
-                      </td>
-                      <td className="px-3 py-3.5">
-                        <PublicationPill publication={p.publication} />
                       </td>
                       <td className="tabular whitespace-nowrap py-3.5 pl-3 pr-6 text-ink-2">
                         <span className="flex items-center justify-between gap-2">
@@ -324,9 +311,8 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                       <span className="block font-medium text-ink">{p.name}</span>
                       <span className="tabular block font-mono text-xs text-ink-3">{p.code}</span>
                       <span className="mt-2 flex flex-wrap gap-1.5">
-                        <VisibilityPill visibility={p.listing?.visibility ?? null} />
+                        <SiteStatusPill status={statusOf(p)} />
                         <ProductStatusPill status={p.status} />
-                        <PublicationPill publication={p.publication} />
                       </span>
                       {p.listing ? (
                         <span className="mt-1.5 block text-xs text-ink-3">
@@ -345,6 +331,15 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       </Panel>
     </div>
   );
+}
+
+/** DP-197: Draft, Published or Unpublished on the selected site. */
+function statusOf(p: ProductListItem) {
+  return siteStatus({
+    publication: p.publication,
+    listing: p.listing?.visibility ?? null,
+    productStatus: p.status,
+  });
 }
 
 function countLabel(total: number, filtered: boolean): string {
