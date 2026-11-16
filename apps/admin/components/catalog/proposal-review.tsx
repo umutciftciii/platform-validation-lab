@@ -355,7 +355,7 @@ function SourceLinks({ sources }: { sources: readonly ReviewSource[] }) {
       Sources:{" "}
       {sources.map((s, i) => (
         <span key={s.id}>
-          {i > 0 ? "; " : null}
+          {i > 0 ? <span>{"; "}</span> : null}
           <ReviewTabLink tab="sources" section={`source-${s.id}`} className="underline">
             {s.id}
           </ReviewTabLink>

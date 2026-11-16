@@ -353,7 +353,9 @@ function PasswordStep({
         className={cx(buttonStyles.primary, "h-11 w-full")}
       >
         {busy ? <Spinner /> : null}
-        {busy ? "Checking…" : reenrol ? "Confirm and continue" : "Save password and continue"}
+        <span>
+          {busy ? "Checking…" : reenrol ? "Confirm and continue" : "Save password and continue"}
+        </span>
       </button>
     </form>
   );
@@ -542,7 +544,7 @@ function AuthenticatorStep({
               className={cx(buttonStyles.primary, "h-11 w-full")}
             >
               {busy ? <Spinner /> : null}
-              {busy ? "Verifying…" : "Verify and activate"}
+              <span>{busy ? "Verifying…" : "Verify and activate"}</span>
             </button>
           </form>
         </li>

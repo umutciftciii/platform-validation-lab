@@ -98,7 +98,7 @@ function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCance
       <div className="flex flex-wrap gap-2">
         <button type="submit" className={buttonStyles.primary} disabled={busy || !code.trim()}>
           {busy ? <Spinner size={14} /> : null}
-          Confirm
+          <span>Confirm</span>
         </button>
         <button type="button" className={buttonStyles.ghost} onClick={onCancel}>
           Cancel
@@ -196,7 +196,7 @@ export function ModuleSwitch({
               disabled={busy || reason.trim().length < 3}
             >
               {busy ? <Spinner size={14} /> : null}
-              {enabled ? "Switch off" : "Switch on"}
+              <span>{enabled ? "Switch off" : "Switch on"}</span>
             </button>
             <button
               type="button"
@@ -254,7 +254,7 @@ export function ChainStatus({ initial }: { initial: OwnerChainStatus }) {
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       <button type="button" className={buttonStyles.secondary} onClick={verify} disabled={busy}>
         {busy ? <Spinner size={14} /> : null}
-        Verify now
+        <span>Verify now</span>
       </button>
       {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}
     </div>
@@ -340,7 +340,7 @@ export function ProtectedAuditLog() {
             disabled={busy}
           >
             {busy ? <Spinner size={14} /> : null}
-            Load protected events
+            <span>Load protected events</span>
           </button>
         ) : null}
         {next ? (
@@ -351,7 +351,7 @@ export function ProtectedAuditLog() {
             disabled={busy}
           >
             {busy ? <Spinner size={14} /> : null}
-            Older events
+            <span>Older events</span>
           </button>
         ) : null}
       </div>
@@ -449,7 +449,7 @@ export function ConfirmDesignation() {
         {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
         <button type="submit" className={cx(buttonStyles.primary)} disabled={busy || !password}>
           {busy ? <Spinner size={14} /> : null}
-          Confirm designation
+          <span>Confirm designation</span>
         </button>
       </form>
       {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}

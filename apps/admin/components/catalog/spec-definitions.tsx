@@ -438,7 +438,7 @@ export function SpecDefinitionManager({
                 </button>
                 <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
                   {busy === "create" ? <Spinner /> : <Icon name="plus" size={17} />}
-                  Create specification
+                  <span>Create specification</span>
                 </button>
               </div>
             </form>
