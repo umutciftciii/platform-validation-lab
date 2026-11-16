@@ -39,6 +39,8 @@ import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client.js";
 import { issueCatalogPreviewToken } from "../../src/catalog/preview-token.js";
+import { adminApi } from "../../src/catalog/import/client.js";
+import { runApplyText, textSha256 } from "../../src/catalog/proposals/apply-text.js";
 import { parseHmacKey } from "../../src/iam/auth/secrets.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 
@@ -103,7 +105,7 @@ class Staff {
   constructor(
     readonly name: string,
     readonly userId: string,
-    private readonly token: string,
+    readonly token: string,
   ) {}
 
   private headers(): Record<string, string> {
@@ -3172,5 +3174,280 @@ describe("12. DP-193 direct publication", () => {
       _count: true,
     });
     expect(modes.map((m) => m.approvalMode)).toEqual(["APPROVED"]);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 13. DP-180: research text into listing texts (source check, audit, the apply-text tool)
+// ------------------------------------------------------------------------------------------
+
+describe("13. DP-180 proposal text into listings", () => {
+  const reviewData = {
+    schemaVersion: 1,
+    family: "Group II base oil",
+    items: [
+      { kind: "CONFIRM", field: "packaging", text: "Pack sizes?", sourceIds: [], heldValue: null },
+    ],
+    sources: [],
+  };
+  const ids: Record<string, string> = {};
+  const proposals: Record<string, { id: string; version: number }> = {};
+
+  async function withProposal(
+    key: string,
+    code: string,
+    summary: string | null,
+    description: string | null,
+  ) {
+    const id = await completeProduct(`dp180-${key}`, code);
+    ids[key] = id;
+    const res = await bvEditor.post(`/sites/${BV}/proposals`, {
+      productId: id,
+      locale: "en",
+      summary,
+      description,
+      reviewData,
+      sourceRef: "docs/catalog/proposals/dp180.json",
+      sourceSha256: "d".repeat(64),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    proposals[key] = { id: res.body.proposal.id, version: res.body.proposal.version };
+  }
+  const listingOf = (id: string) =>
+    owner.productSiteListing.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+      include: { texts: true },
+    });
+  async function save(key: string, extra: Record<string, unknown>) {
+    const l = await listingOf(ids[key]!);
+    return bvEditor.post(`/products/${ids[key]}/listings/${BV}`, {
+      version: l.version,
+      categoryId: l.categoryId,
+      visibility: l.visibility,
+      sortOrder: l.sortOrder,
+      title: l.texts[0]?.title ?? null,
+      ...extra,
+    });
+  }
+
+  beforeAll(async () => {
+    await withProposal(
+      "a",
+      "DP180-A",
+      "Group II base oil, 150N.",
+      "A paraffinic base oil for blending.",
+    );
+    await withProposal("b", "DP180-B", "Base oil B.", "Description B.");
+    await withProposal("c", "DP180-C", "Base oil C.", "Description C.");
+    await withProposal("n", "DP180-N", null, null);
+  });
+
+  it("refuses a source of another product, another version, another hash or another text", async () => {
+    const a = proposals["a"]!;
+    const sha = textSha256("Group II base oil, 150N.", "A paraffinic base oil for blending.");
+    const text = {
+      summary: "Group II base oil, 150N.",
+      description: "A paraffinic base oil for blending.",
+    };
+    expectError(
+      await save("a", {
+        ...text,
+        source: { proposalId: proposals["b"]!.id, proposalVersion: 1, textSha256: sha },
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "source.proposalId", rule: "unknown" },
+    );
+    expectError(
+      await save("a", {
+        ...text,
+        source: { proposalId: a.id, proposalVersion: a.version + 1, textSha256: sha },
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "source.proposalVersion", rule: "stale" },
+    );
+    expectError(
+      await save("a", {
+        ...text,
+        source: { proposalId: a.id, proposalVersion: a.version, textSha256: "0".repeat(64) },
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "source.textSha256", rule: "mismatch" },
+    );
+    expectError(
+      await save("a", {
+        summary: "Edited by hand.",
+        description: text.description,
+        source: { proposalId: a.id, proposalVersion: a.version, textSha256: sha },
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "summary", rule: "differs_from_source" },
+    );
+    const n = proposals["n"]!;
+    expectError(
+      await save("n", {
+        source: {
+          proposalId: n.id,
+          proposalVersion: n.version,
+          textSha256: textSha256(null, null),
+        },
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "source", rule: "no_text" },
+    );
+    // Nothing was written by the refusals.
+    expect((await listingOf(ids["a"]!)).texts[0]?.summary ?? null).toBeNull();
+  });
+
+  it("accepts the proposal's exact text and keeps the source in the audit event", async () => {
+    const a = proposals["a"]!;
+    const sha = textSha256("Group II base oil, 150N.", "A paraffinic base oil for blending.");
+    const res = await save("a", {
+      summary: "Group II base oil, 150N.",
+      description: "A paraffinic base oil for blending.",
+      source: { proposalId: a.id, proposalVersion: a.version, textSha256: sha },
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const audit = await lastAudit("catalog.listing_updated");
+    expect(audit).toMatchObject({ actorUserId: bvEditor.userId, siteId: BV });
+    expect(audit?.metadata).toMatchObject({
+      productId: ids["a"],
+      source: { proposalId: a.id, proposalVersion: a.version, textSha256: sha },
+    });
+    // A save without a source behaves as before and records none.
+    const plain = await save("a", {
+      summary: "Group II base oil, 150N.",
+      description: "Edited later.",
+    });
+    expect(plain.status).toBe(200);
+    expect((await lastAudit("catalog.listing_updated"))?.metadata).not.toHaveProperty("source");
+  });
+
+  it("apply-text: dry run, --confirm, only summary and description, idempotent second run", async () => {
+    const only = new Set(["DP180-A", "DP180-B", "DP180-C", "DP180-N"]);
+    // DP180-C already has its own summary: never overwritten.
+    expect((await save("c", { summary: "Our own summary." })).status).toBe(200);
+    const api = adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: bvEditor.token,
+      origin: ADMIN_ORIGIN,
+    });
+    const before = {
+      b: await listingOf(ids["b"]!),
+      specs: await owner.productSpecValue.findMany({
+        where: { productId: { in: Object.values(ids) } },
+        orderBy: { id: "asc" },
+      }),
+      products: await owner.product.findMany({
+        where: { id: { in: Object.values(ids) } },
+        orderBy: { id: "asc" },
+      }),
+    };
+    const dry = await runApplyText(api, {
+      siteKey: "BV",
+      locale: "en",
+      only,
+      apply: false,
+      confirm: undefined,
+    });
+    expect(dry.error).toBeNull();
+    expect(Object.fromEntries(dry.plan.map((r) => [r.code, r.action]))).toEqual({
+      "DP180-A": "KEEP_EXISTING", // edited by hand above
+      "DP180-B": "APPLY",
+      "DP180-C": "KEEP_EXISTING",
+      "DP180-N": "NO_TEXT",
+    });
+    expect(
+      (await runApplyText(api, { siteKey: "BV", locale: "en", only, apply: true, confirm: 2 }))
+        .error,
+    ).toMatch(/does not match/);
+    const applied = await runApplyText(api, {
+      siteKey: "BV",
+      locale: "en",
+      only,
+      apply: true,
+      confirm: 1,
+    });
+    expect(applied.error).toBeNull();
+    expect(applied.applied.map((a) => a.code)).toEqual(["DP180-B"]);
+    const b = await listingOf(ids["b"]!);
+    expect(b).toMatchObject({
+      visibility: before.b.visibility,
+      categoryId: before.b.categoryId,
+      sortOrder: before.b.sortOrder,
+      version: before.b.version + 1,
+    });
+    expect(b.texts[0]).toMatchObject({
+      title: before.b.texts[0]?.title,
+      summary: "Base oil B.",
+      description: "Description B.",
+    });
+    expect((await lastAudit("catalog.listing_updated"))?.metadata).toMatchObject({
+      source: {
+        proposalId: proposals["b"]!.id,
+        textSha256: textSha256("Base oil B.", "Description B."),
+      },
+    });
+    // Others untouched; proposals stay REVIEW_PENDING; master and specification values unchanged.
+    expect((await listingOf(ids["c"]!)).texts[0]?.summary).toBe("Our own summary.");
+    expect((await listingOf(ids["n"]!)).texts[0]?.summary ?? null).toBeNull();
+    const statuses = await owner.productContentProposal.findMany({
+      where: { id: { in: Object.values(proposals).map((p) => p.id) } },
+      select: { status: true },
+    });
+    expect(new Set(statuses.map((s) => s.status))).toEqual(new Set(["REVIEW_PENDING"]));
+    expect(
+      await owner.productSpecValue.findMany({
+        where: { productId: { in: Object.values(ids) } },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(before.specs);
+    expect(
+      await owner.product.findMany({
+        where: { id: { in: Object.values(ids) } },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(before.products);
+    expect(
+      await owner.productPublication.count({ where: { productId: { in: Object.values(ids) } } }),
+    ).toBe(0);
+    // Second run: nothing to do.
+    const again = await runApplyText(api, {
+      siteKey: "BV",
+      locale: "en",
+      only,
+      apply: false,
+      confirm: undefined,
+    });
+    expect(Object.fromEntries(again.plan.map((r) => [r.code, r.action]))).toMatchObject({
+      "DP180-B": "SAME",
+    });
+    expect(again.counts.APPLY).toBe(0);
+  });
+
+  it("skips a product published on the site (archived: unit test)", async () => {
+    const live = P["direct"]!; // DP-193 section: published on BV
+    const code = (await owner.product.findUniqueOrThrow({ where: { id: live } })).code;
+    const api = adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: bvEditor.token,
+      origin: ADMIN_ORIGIN,
+    });
+    const r = await runApplyText(api, {
+      siteKey: "BV",
+      locale: "en",
+      only: new Set([code]),
+      apply: false,
+      confirm: undefined,
+    });
+    expect(r.plan).toEqual([
+      expect.objectContaining({ code, action: "SKIP", reason: "published" }),
+    ]);
   });
 });

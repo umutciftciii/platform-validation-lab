@@ -11,9 +11,11 @@
  *  - Every change and its audit event are written in one transaction. Refusals are audited by
  *    StaffAccess.require.
  */
+import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   CATALOG_CONTENT_LOCALE,
+  proposalContentKey,
   CategoryCreateRequestSchema,
   CategoryDefaultRequestSchema,
   CategoryUpdateRequestSchema,
@@ -473,6 +475,50 @@ export class CatalogService {
           throw new ApiError("CONFLICT_STATE", [{ path: "listing", rule: "unique" }]);
         }
         if (!existing && input.version !== null) throw staleVersion();
+        // DP-180: a text said to come from the research proposal must be exactly that proposal's
+        // current text, of this product, site and locale; the reference goes to the audit event.
+        if (input.source) {
+          const src = input.source;
+          const proposal = await tx.productContentProposal.findFirst({
+            where: { id: src.proposalId, productId, siteId, locale: CATALOG_CONTENT_LOCALE },
+            select: { version: true, proposedSummary: true, proposedDescription: true },
+          });
+          if (!proposal) {
+            throw new ApiError("VALIDATION_FAILED", [
+              { path: "source.proposalId", rule: "unknown" },
+            ]);
+          }
+          if (proposal.version !== src.proposalVersion) {
+            throw new ApiError("CONFLICT_STATE", [
+              { path: "source.proposalVersion", rule: "stale" },
+            ]);
+          }
+          const sha = createHash("sha256")
+            .update(
+              proposalContentKey(proposal.proposedSummary, proposal.proposedDescription),
+              "utf8",
+            )
+            .digest("hex");
+          if (sha !== src.textSha256) {
+            throw new ApiError("VALIDATION_FAILED", [
+              { path: "source.textSha256", rule: "mismatch" },
+            ]);
+          }
+          const differs: { path: string; rule: string }[] = [];
+          if (proposal.proposedSummary !== null && input.summary !== proposal.proposedSummary) {
+            differs.push({ path: "summary", rule: "differs_from_source" });
+          }
+          if (
+            proposal.proposedDescription !== null &&
+            input.description !== proposal.proposedDescription
+          ) {
+            differs.push({ path: "description", rule: "differs_from_source" });
+          }
+          if (proposal.proposedSummary === null && proposal.proposedDescription === null) {
+            differs.push({ path: "source", rule: "no_text" });
+          }
+          if (differs.length) throw new ApiError("VALIDATION_FAILED", differs);
+        }
 
         let categoryId = input.categoryId ?? null;
         if (!categoryId && existing) categoryId = existing.categoryId;
@@ -549,6 +595,7 @@ export class CatalogService {
             changed: changedFields(beforeFlat, { ...fields, ...text }),
             visibility: after.visibility,
             version: after.version,
+            ...(input.source ? { source: input.source } : {}),
           },
         });
         return after;
