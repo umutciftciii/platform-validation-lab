@@ -1,26 +1,72 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
+  CategoryListResponseSchema,
+  PAGE_SIZE_MAX,
+  ProductListResponseSchema,
   ProposalContextResponseSchema,
   ProposalListResponseSchema,
   ProposalStatusSchema,
+  type ProductListItem,
   type ProposalStatus,
 } from "@dream/contracts";
-import { PageHeader } from "../../../components/catalog/parts";
+import { FIELD, PageHeader } from "../../../components/catalog/parts";
 import { PreviewLinkButton } from "../../../components/catalog/preview-link-button";
 import { ProposalStatusPill } from "../../../components/catalog/proposal-review";
-import { EmptyState, ErrorState, Panel, StatusPill, cx } from "../../../components/ui";
-import { attentionCount, COMPANY_REVIEW_PATH, STATUS_META } from "../../../lib/proposals-view";
+import { Icon } from "../../../components/icons";
+import {
+  buttonStyles,
+  EmptyState,
+  ErrorState,
+  Panel,
+  StatusPill,
+  cx,
+} from "../../../components/ui";
+import { flattenTree } from "../../../lib/catalog-view";
+import { STATUS_META } from "../../../lib/proposals-view";
+import {
+  filterProposals,
+  plural,
+  readReviewFilters,
+  reviewAttention,
+  reviewHref,
+  reviewListHref,
+} from "../../../lib/review-tabs";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
 const CATALOG = "/api/v1/admin/catalog";
+/** Upper bound of product pages read for the category column and filter (100 per page). */
+const MAX_PRODUCT_PAGES = 20;
 
 export const metadata: Metadata = { title: "Company review" };
 
+/** Every product of the site's catalogue view (optionally of one category), or null on failure. */
+async function readProducts(
+  siteId: string,
+  categoryId?: string,
+): Promise<ProductListItem[] | null> {
+  const out: ProductListItem[] = [];
+  for (let page = 1; page <= MAX_PRODUCT_PAGES; page++) {
+    const q = new URLSearchParams({
+      siteId,
+      sort: "name",
+      order: "asc",
+      page: String(page),
+      pageSize: String(PAGE_SIZE_MAX),
+    });
+    if (categoryId) q.set("categoryId", categoryId);
+    const res = await serverRead(`${CATALOG}/products?${q.toString()}`, ProductListResponseSchema);
+    if (!res.ok) return null;
+    out.push(...res.data.items);
+    if (out.length >= res.data.total || res.data.items.length === 0) break;
+  }
+  return out;
+}
+
 /**
- * DP-172 (ADR-022): the company's list of proposed product content, per site and status. Opening
- * a product shows its current site data, the research proposal and the review items side by side.
+ * DP-172 (ADR-022), DP-189: the company's list of proposed product content, per site. Search by
+ * product name or SKU, filter by category and review status; one click opens a product's review.
  */
 export default async function CompanyReviewPage({ searchParams }: PageProps<"/company-review">) {
   await requireStaffSession();
@@ -39,17 +85,29 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
   }
   const wanted = typeof query["site"] === "string" ? query["site"].toUpperCase() : undefined;
   const site = sites.find((s) => s.key === wanted) ?? sites[0]!;
-  const statusParam = typeof query["status"] === "string" ? query["status"] : undefined;
-  const status = ProposalStatusSchema.safeParse(statusParam).success
-    ? (statusParam as ProposalStatus)
-    : undefined;
-  const list = await serverRead(
-    `${CATALOG}/proposals?siteId=${site.id}${status ? `&status=${status}` : ""}`,
-    ProposalListResponseSchema,
+  const siteKey = site.key.toLowerCase();
+  const filters = readReviewFilters(query, ProposalStatusSchema.options);
+  const status = filters.status ? (filters.status as ProposalStatus) : undefined;
+
+  const [list, categories, products, inCategory] = await Promise.all([
+    serverRead(
+      `${CATALOG}/proposals?siteId=${site.id}${status ? `&status=${status}` : ""}`,
+      ProposalListResponseSchema,
+    ),
+    serverRead(`${CATALOG}/sites/${site.id}/categories`, CategoryListResponseSchema),
+    readProducts(site.id),
+    filters.category ? readProducts(site.id, filters.category) : Promise.resolve(null),
+  ]);
+  const tree = categories.ok ? flattenTree(categories.data.items) : [];
+  const categoryOf = new Map(
+    (products ?? []).map((p) => [p.id, p.listing?.categoryName ?? null] as const),
   );
-  const siteQuery = `site=${site.key.toLowerCase()}`;
-  const filterHref = (s?: ProposalStatus) =>
-    `${COMPANY_REVIEW_PATH}?${siteQuery}${s ? `&status=${s}` : ""}`;
+  // A chosen category that could not be read filters nothing out rather than everything.
+  const categorySet = filters.category && inCategory ? new Set(inCategory.map((p) => p.id)) : null;
+  const shown = list.ok ? filterProposals(list.data.proposals, filters.q, categorySet) : [];
+  const narrowed = Boolean(filters.q || categorySet);
+  const statusHref = (s?: ProposalStatus) =>
+    reviewListHref(siteKey, { q: filters.q, category: filters.category, status: s ?? "" });
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -61,13 +119,32 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
         }
         description={
           <>
-            Proposed English texts for the {site.name} catalogue, prepared from research. For each
-            product, check the current site data, the proposal and the review items, then approve or
-            request changes. An approval neither publishes the product nor approves its technical
-            data.
+            Proposed English texts for the {site.name} catalogue, prepared from research. Open a
+            product to compare the current site data with the proposal, check the open points, then
+            approve or request changes. An approval neither publishes the product nor approves its
+            technical data.
           </>
         }
       />
+      {sites.length > 1 ? (
+        <nav aria-label="Site" className="flex flex-wrap gap-2">
+          {sites.map((s) => (
+            <Link
+              key={s.id}
+              href={reviewListHref(s.key.toLowerCase(), {})}
+              aria-current={s.id === site.id ? "page" : undefined}
+              className={cx(
+                "rounded-lg px-3 py-1.5 text-sm font-medium ring-1 ring-inset",
+                s.id === site.id
+                  ? "bg-petrol-soft text-petrol-strong ring-petrol/30"
+                  : "text-ink-2 ring-line-strong hover:bg-surface-2",
+              )}
+            >
+              {s.name}
+            </Link>
+          ))}
+        </nav>
+      ) : null}
       {!list.ok ? (
         <ErrorState title="The proposals could not be loaded">
           Reload the page. If it keeps failing, your role may not include this site.
@@ -76,54 +153,150 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
         <Panel
           title="Products"
           description={`${list.data.counts.REVIEW_PENDING} pending · ${list.data.counts.CHANGES_REQUESTED} with changes requested · ${list.data.counts.APPROVED} approved`}
+          bodyClassName="px-0! pb-2! pt-3!"
         >
-          <nav aria-label="Filter by status" className="mb-4 flex flex-wrap gap-2">
-            {[undefined, ...ProposalStatusSchema.options].map((s) => (
-              <Link
-                key={s ?? "all"}
-                href={filterHref(s)}
-                aria-current={s === status ? "page" : undefined}
-                className={cx(
-                  "rounded-full px-3 py-1 text-sm ring-1 ring-inset",
-                  s === status
-                    ? "bg-petrol-soft text-petrol-strong ring-petrol/30"
-                    : "text-ink-2 ring-line-strong hover:bg-surface-2",
-                )}
+          <form
+            method="get"
+            action="/company-review"
+            role="search"
+            aria-label="Filter proposals"
+            className="grid grid-cols-1 gap-3 border-b border-line px-5 pb-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto] sm:px-6"
+          >
+            <input type="hidden" name="site" value={siteKey} />
+            {status ? <input type="hidden" name="status" value={status} /> : null}
+            <label className="relative block">
+              <span className="sr-only">Search by product name or SKU</span>
+              <Icon
+                name="search"
+                size={17}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
+              />
+              <input
+                type="search"
+                name="q"
+                defaultValue={filters.q}
+                maxLength={100}
+                placeholder="Search product name or SKU"
+                className={cx(FIELD, "pl-9")}
+              />
+            </label>
+            <label>
+              <span className="sr-only">Category</span>
+              <select
+                name="category"
+                defaultValue={filters.category}
+                className={FIELD}
+                disabled={tree.length === 0}
               >
-                {s ? STATUS_META[s].label : "All"}
-              </Link>
-            ))}
-          </nav>
-          {list.data.proposals.length === 0 ? (
-            <p className="text-sm text-ink-3">No proposals in this view.</p>
+                <option value="">All categories</option>
+                {tree.map(({ category, depth }) => (
+                  <option key={category.id} value={category.id}>
+                    {`${"  ".repeat(depth)}${category.name}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex gap-2">
+              <button type="submit" className={cx(buttonStyles.secondary, "flex-1 sm:flex-none")}>
+                <Icon name="search" size={16} />
+                Search
+              </button>
+              {narrowed ? (
+                <Link
+                  href={reviewListHref(siteKey, { status: status ?? "" })}
+                  className={cx(buttonStyles.ghost, "flex-1 sm:flex-none")}
+                >
+                  Clear
+                </Link>
+              ) : null}
+            </div>
+            <nav
+              aria-label="Filter by review status"
+              className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] sm:col-span-3 sm:flex-wrap [&::-webkit-scrollbar]:hidden"
+            >
+              {[undefined, ...ProposalStatusSchema.options].map((s) => {
+                const n = s
+                  ? list.data.counts[s]
+                  : ProposalStatusSchema.options.reduce((a, k) => a + list.data.counts[k], 0);
+                return (
+                  <Link
+                    key={s ?? "all"}
+                    href={statusHref(s)}
+                    aria-current={s === status ? "page" : undefined}
+                    className={cx(
+                      "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-sm ring-1 ring-inset",
+                      s === status
+                        ? "bg-petrol-soft text-petrol-strong ring-petrol/30"
+                        : "text-ink-2 ring-line-strong hover:bg-surface-2",
+                    )}
+                  >
+                    {s ? STATUS_META[s].label : "All"}
+                    <span className="tabular text-xs opacity-75">{n}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </form>
+          {categories.ok && products === null ? (
+            <p className="border-b border-line px-5 py-2 text-xs text-ink-3 sm:px-6">
+              Categories of the products could not be loaded; the category filter may be incomplete.
+            </p>
+          ) : null}
+          {narrowed ? (
+            <p className="px-5 pt-3 text-sm text-ink-3 sm:px-6" role="status">
+              {`Showing ${plural(shown.length, "product")} of ${list.data.proposals.length}`}
+            </p>
+          ) : null}
+          {shown.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-ink-3 sm:px-6">
+              {narrowed
+                ? "No product matches this search. Change the search or clear the filters."
+                : "No proposals in this view."}
+            </p>
           ) : (
             <ul className="divide-y divide-line" data-proposal-list="">
-              {list.data.proposals.map((p) => {
-                const attention = attentionCount(p.itemCounts);
-                const held =
-                  (p.itemCounts.DP002_HELD ?? 0) + (p.itemCounts.SITE_VALUE_WITHHELD ?? 0);
+              {shown.map((p) => {
+                const a = reviewAttention(p.itemCounts);
+                const category = categoryOf.get(p.productId);
                 return (
                   <li key={p.id}>
                     <Link
-                      href={`${COMPANY_REVIEW_PATH}/${p.id}?${siteQuery}`}
-                      className="flex flex-col gap-2 py-3 transition-colors hover:bg-surface-2 sm:flex-row sm:items-center sm:justify-between sm:px-2"
+                      href={reviewHref(p.id, siteKey, "content")}
+                      className="group flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none sm:px-6"
                     >
-                      <span className="min-w-0">
-                        <span className="block font-medium text-ink">{p.productName}</span>
-                        <span className="font-mono text-xs text-ink-3">{p.productCode}</span>
+                      <span className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <span className="min-w-0">
+                          <span className="block font-medium text-ink group-hover:text-petrol-strong">
+                            {p.productName}
+                          </span>
+                          <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-3">
+                            <span className="font-mono">{p.productCode}</span>
+                            {category ? (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span>{category}</span>
+                              </>
+                            ) : null}
+                          </span>
+                        </span>
+                        <span className="flex flex-wrap items-center gap-2 md:justify-end">
+                          <ProposalStatusPill status={p.status} />
+                          {!p.hasText ? (
+                            <StatusPill tone="neutral">No text proposed</StatusPill>
+                          ) : null}
+                          {a.conflicts > 0 ? (
+                            <StatusPill tone="danger">{plural(a.conflicts, "conflict")}</StatusPill>
+                          ) : null}
+                          {a.held > 0 ? (
+                            <StatusPill tone="amber">{plural(a.held, "held value")}</StatusPill>
+                          ) : null}
+                        </span>
                       </span>
-                      <span className="flex flex-wrap items-center gap-2">
-                        {!p.hasText ? (
-                          <StatusPill tone="neutral">No text proposed</StatusPill>
-                        ) : null}
-                        {attention > 0 ? (
-                          <StatusPill tone="danger">{`${attention} conflict${attention === 1 ? "" : "s"}`}</StatusPill>
-                        ) : null}
-                        {held > 0 ? (
-                          <StatusPill tone="amber">{`${held} held value${held === 1 ? "" : "s"}`}</StatusPill>
-                        ) : null}
-                        <ProposalStatusPill status={p.status} />
-                      </span>
+                      <Icon
+                        name="chevron"
+                        size={18}
+                        className="shrink-0 text-ink-3 group-hover:text-petrol-strong"
+                      />
                     </Link>
                   </li>
                 );

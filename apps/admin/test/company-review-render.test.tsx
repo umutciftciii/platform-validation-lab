@@ -1,8 +1,10 @@
-// DP-172 (ADR-022): the company review renders on the server with real response shapes. The
-// admin API and the session are fixtures. Checks: current site data, research proposal and review
-// items are separate, labelled sections; DP-002 held values never appear in the product's
-// specification table; a placeholder shows no proposed text; the decision form needs a reason to
-// request changes; a review-only user is limited to the company review.
+// DP-172 (ADR-022), DP-189: the company review renders on the server with real response shapes.
+// The admin API and the session are fixtures. Checks: the list searches by name/SKU and filters by
+// category and status; the product page has four tabs, each piece of data in exactly one of them;
+// current site data, research proposal and review items keep their provenance tags; DP-002 held
+// values never appear in the product's specification table; a placeholder shows no proposed text;
+// the decision form needs a reason to request changes, and a user who cannot decide is told why;
+// a review-only user is limited to the company review.
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { changeRequestProblem } from "../components/catalog/proposal-decision";
@@ -37,6 +39,7 @@ const P2 = "0190f2a1-0000-7000-8000-000000000302"; // placeholder without text
 const PR1 = "0190f2a1-0000-7000-8000-000000000401";
 const PR2 = "0190f2a1-0000-7000-8000-000000000402";
 const CAT = "0190f2a1-0000-7000-8000-000000000501";
+const CAT2 = "0190f2a1-0000-7000-8000-000000000502";
 const DEF = "0190f2a1-0000-7000-8000-000000000601";
 const USER = { id: "0190f2a1-0000-7000-8000-000000000201", name: "Research editor (fixture)" };
 const AT = "2026-11-15T12:00:00.000Z";
@@ -76,6 +79,20 @@ const reviewData = {
       originRef: "0123456789abcde0",
     },
     {
+      kind: "SITE_VALUE_WITHHELD",
+      field: "spec:flash_point",
+      text: "Not imported: no test method.",
+      sourceIds: [],
+      heldValue: {
+        definition: "flash_point",
+        basis: "TYPICAL",
+        raw: "Flash point: 220 °C",
+        conflict: false,
+        finding: null,
+      },
+      originRef: "0123456789abcde3",
+    },
+    {
       kind: "DP002_HELD",
       field: "spec:pour_point",
       text: "DP-002: held value.",
@@ -88,6 +105,14 @@ const reviewData = {
         finding: "Two rows in one document; the GOST 20287 method letter is not stated.",
       },
       originRef: "0123456789abcde1",
+    },
+    {
+      kind: "CLAIM_RISK",
+      field: "description",
+      text: "'Pharmaceutical grade' needs a certificate.",
+      sourceIds: ["A-S01"],
+      heldValue: null,
+      originRef: "0123456789abcde4",
     },
     {
       kind: "MISSING_DOCUMENT",
@@ -275,6 +300,38 @@ beforeEach(() => {
       validation: { ok: true, blocking: [], warnings: [] },
     });
   }
+  const productsPage = (ids: readonly (readonly [string, string, string])[]) => ({
+    items: ids.map(([id, code, cat]) => ({
+      id,
+      code,
+      slug: code.toLowerCase(),
+      name: `Product ${code}`,
+      status: "DRAFT",
+      version: 3,
+      updatedAt: AT,
+      listing: {
+        id: "0190f2a1-0000-7000-8000-000000000801",
+        visibility: "HIDDEN",
+        categoryId: cat,
+        categoryName: cat === CAT ? "Base Oil" : "Fuels",
+        updatedAt: AT,
+      },
+      publication: null,
+    })),
+    page: 1,
+    pageSize: 100,
+    total: ids.length,
+  });
+  const productQuery = (category?: string) =>
+    `${C}/products?siteId=${BV}&sort=name&order=asc&page=1&pageSize=100${category ? `&categoryId=${category}` : ""}`;
+  reads.set(
+    productQuery(),
+    productsPage([
+      [PR1, "G2-HVI-6", CAT],
+      [PR2, "SAF", CAT2],
+    ]),
+  );
+  reads.set(productQuery(CAT), productsPage([[PR1, "G2-HVI-6", CAT]]));
   reads.set(`${C}/sites/${BV}/categories`, {
     items: [
       {
@@ -287,7 +344,21 @@ beforeEach(() => {
         sortOrder: 0,
         isDefault: false,
         version: 1,
-        listingCount: 2,
+        listingCount: 1,
+        childCount: 0,
+        updatedAt: AT,
+      },
+      {
+        id: CAT2,
+        siteId: BV,
+        parentId: null,
+        name: "Fuels",
+        slug: "fuels",
+        description: null,
+        sortOrder: 1,
+        isDefault: false,
+        version: 1,
+        listingCount: 1,
         childCount: 0,
         updatedAt: AT,
       },
@@ -298,9 +369,28 @@ beforeEach(() => {
 const render = async (node: Promise<React.ReactNode>) => renderToStaticMarkup(await node);
 const TURKISH = /[çğıöşÇĞİÖŞ]/;
 
+const listPage = (query: Record<string, string> = {}) =>
+  render(ListPage({ searchParams: Promise.resolve(query) } as never));
+const detailPage = (id: string, query: Record<string, string> = {}) =>
+  render(
+    DetailPage({ params: Promise.resolve({ id }), searchParams: Promise.resolve(query) } as never),
+  );
+
+/** The markup of one tab panel of the product page. */
+function tabPanel(html: string, tab: string): string {
+  const start = html.indexOf(`id="review-tab-${tab}"`);
+  expect(start).toBeGreaterThan(-1);
+  const open = html.lastIndexOf("<div", start);
+  const next = html.indexOf('role="tabpanel"', html.indexOf(">", start));
+  return html.slice(open, next === -1 ? undefined : html.lastIndexOf("<div", next));
+}
+
+const TABS = ["content", "verification", "sources", "history"] as const;
+const count = (html: string, needle: string) => html.split(needle).length - 1;
+
 describe("company review list", () => {
-  it("lists the proposals with their status, conflicts and held values", async () => {
-    const html = await render(ListPage({ searchParams: Promise.resolve({}) } as never));
+  it("lists the proposals with their status, category, conflicts and held values", async () => {
+    const html = await listPage();
     expect(html).toContain("Company review");
     expect(html).toContain("G2-HVI-6");
     expect(html).toContain("Review pending");
@@ -308,94 +398,200 @@ describe("company review list", () => {
     expect(html).toContain("1 conflict");
     expect(html).toContain("15 held values");
     expect(html).toContain("No text proposed");
+    expect(html).toContain("Base Oil");
+    expect(html).toContain("Fuels");
     expect(html).toContain("neither publishes the product nor approves its technical");
+    expect(html).toContain(`href="/company-review/${P1}?site=bv"`);
+    expect(html).toContain('role="search"');
+    expect(html).toContain("All categories");
     expect(TURKISH.test(html)).toBe(false);
+  });
+
+  it.each([
+    ["saf", "SAF"],
+    ["hvi 6", "G2-HVI-6"],
+    ["g2-hvi", "G2-HVI-6"],
+    ["sustainable aviation", "SAF"],
+  ])("searches by product name or SKU (%s)", async (q, code) => {
+    const html = await listPage({ q });
+    const list = html.slice(html.indexOf("data-proposal-list"));
+    expect(list).toContain(code);
+    expect(list.match(/<li>/g)?.length).toBe(1);
+    expect(html).toContain("Showing 1 product of 2");
+  });
+
+  it("filters by category, including the products listed under it", async () => {
+    const html = await listPage({ category: CAT });
+    const list = html.slice(html.indexOf("data-proposal-list"));
+    expect(list).toContain("G2-HVI-6");
+    expect(list).not.toContain("Sustainable Aviation Fuel");
+  });
+
+  it("keeps search and category in the status filter links", async () => {
+    const html = await listPage({ q: "base", category: CAT });
+    expect(html).toContain(
+      `href="/company-review?site=bv&amp;q=base&amp;category=${CAT}&amp;status=APPROVED"`,
+    );
+  });
+
+  it("says so when nothing matches, and still renders when products cannot be read", async () => {
+    reads.delete(`${C}/products?siteId=${BV}&sort=name&order=asc&page=1&pageSize=100`);
+    const html = await listPage({ q: "nothing-like-this" });
+    expect(html).toContain("No product matches this search.");
+    expect(html).toContain("the category filter may be");
   });
 });
 
 describe("company review product page", () => {
-  it("keeps current site data, the proposal and review items in separate labelled sections", async () => {
-    const html = await render(
-      DetailPage({
-        params: Promise.resolve({ id: P1 }),
-        searchParams: Promise.resolve({}),
-      } as never),
-    );
-    const order = [
-      "Current site data",
-      "Research proposal",
-      "Review items",
-      "Held for verification",
-    ];
-    const at = order.map((t) => html.indexOf(t));
-    expect(at.every((i) => i >= 0)).toBe(true);
-    expect([...at].sort((a, b) => a - b)).toEqual(at);
-    expect(html).toContain('data-provenance="site"');
-    expect(html).toContain('data-provenance="proposal"');
-    expect(html).toContain('data-provenance="review"');
-    expect(html).toContain("From current site");
-    expect(html).toContain("Research proposal — not published");
-    expect(html).toContain("Base Oil");
-    expect(html).toContain("5.5 to 7 mm²/s");
-    expect(html).toContain("Classification conflict");
+  it("shows name, SKU and status at the top and four tabs", async () => {
+    const html = await detailPage(P1);
+    expect(html).toContain("Group II Base Oil HVI 6");
+    expect(html).toMatch(/data-sku=""[^>]*>G2-HVI-6</);
+    expect(html.indexOf("Review pending")).toBeLessThan(html.indexOf('role="tablist"'));
+    for (const label of ["Content Review", "Missing &amp; Verification", "Sources", "History"]) {
+      expect(html).toContain(`>${label}`);
+    }
+    expect(count(html, 'role="tab"')).toBe(4);
+    expect(count(html, 'role="tabpanel"')).toBe(4);
     expect(TURKISH.test(html)).toBe(false);
   });
 
-  it("never shows a DP-002 held value in the product's specification table", async () => {
-    const html = await render(
-      DetailPage({
-        params: Promise.resolve({ id: P1 }),
-        searchParams: Promise.resolve({}),
-      } as never),
-    );
-    const current = html.slice(
-      html.indexOf("Current site data"),
-      html.indexOf("Research proposal"),
-    );
-    expect(current).not.toContain("Minus 15");
-    const held = html.slice(html.indexOf("data-held-values"));
-    expect(held).toContain("Pour Point, max: Minus 15 °C [GOST 20287]");
-    expect(held).toContain("Unverified (DP-002)");
-    expect(html).toContain("They are not verified specifications and are not part of the product.");
+  it("opens the tab named in the URL and hides the others", async () => {
+    for (const tab of TABS) {
+      const html = await detailPage(P1, { tab });
+      for (const other of TABS) {
+        const p = tabPanel(html, other);
+        expect(p.slice(0, p.indexOf(">")).includes("hidden")).toBe(other !== tab);
+      }
+    }
+    const fallback = await detailPage(P1, { tab: "nonsense" });
+    expect(tabPanel(fallback, "content").slice(0, 200)).not.toContain("hidden");
   });
 
-  it("shows the decision form with Approve and Request changes", async () => {
-    const html = await render(
-      DetailPage({
-        params: Promise.resolve({ id: P1 }),
-        searchParams: Promise.resolve({}),
-      } as never),
-    );
-    expect(html).toContain(">Approve<");
-    expect(html).toContain("Request changes");
-    expect(html).toContain("required to request changes");
+  it("Content Review compares the current text with the proposal and holds the decision", async () => {
+    const content = tabPanel(await detailPage(P1), "content");
+    expect(content).toContain("Current site data");
+    expect(content).toContain('data-provenance="site"');
+    expect(content).toContain('data-provenance="proposal"');
+    expect(content).toContain("From current site");
+    expect(content).toContain("Research proposal — not published");
+    expect(content).toContain("Base Oil");
+    expect(content).toContain('data-compare="site"');
+    expect(content).toContain("Group II base oil in the HVI 6 grade, for lubricant blending.");
+    expect(content).toContain("Claim risks");
+    expect(content).toContain(">Approve<");
+    expect(content).toContain("Request changes");
+    expect(content).toContain("required to request changes");
+    expect(content).toContain("Open catalogue preview");
+    // Open points are counts that link to the verification tab, not the items themselves.
+    expect(content).toContain("Open points in the research");
+    expect(content).toContain("/company-review/" + P1 + "?tab=verification#held");
+    expect(content).not.toContain("Pour Point, max");
+  });
+
+  it("Missing & Verification holds conflicts, questions, held values and documents", async () => {
+    const v = tabPanel(await detailPage(P1), "verification");
+    expect(v).toContain("Conflicts and placeholders");
+    expect(v).toContain("Classification conflict");
+    expect(v).toContain("Questions to confirm");
+    expect(v).toContain("Held for verification — not product data");
+    expect(v).toContain("They are not verified specifications and are not part of the product.");
+    expect(v).toContain("Unverified (DP-002)");
+    expect(v).toContain("SDS (REACH/CLP)");
+    expect(v).toContain("No original TDS, SDS or COA is on file.");
+    expect(v).toContain("Technical data on the current site");
+    expect(v).toContain("5.5 to 7 mm²/s");
+    expect(v).toContain('aria-label="Verification groups"');
+    // Long lists are collapsible groups, open by default.
+    expect(count(v, "<details")).toBe(5);
+    expect(count(v, "<details")).toBe(count(v, ' open=""'));
+    // Conflicting held values come first.
+    expect(v.indexOf("Pour Point, max: Minus 15")).toBeLessThan(v.indexOf("Flash point: 220"));
+  });
+
+  it("never shows a DP-002 held value in the product's specification table", async () => {
+    const html = await detailPage(P1);
+    const specs = html.slice(html.indexOf("data-current-specs"));
+    expect(specs.slice(0, specs.indexOf("</table>"))).not.toContain("Minus 15");
+    const held = html.slice(html.indexOf("data-held-values"));
+    expect(held).toContain("Pour Point, max: Minus 15 °C [GOST 20287]");
+  });
+
+  it("shows each piece of data in one tab only", async () => {
+    const html = await detailPage(P1);
+    const panels = Object.fromEntries(TABS.map((t) => [t, tabPanel(html, t)]));
+    const only = (needle: string, tab: (typeof TABS)[number]) => {
+      for (const t of TABS)
+        expect(panels[t]!.includes(needle), `${needle} in ${t}`).toBe(t === tab);
+    };
+    only("Group II base oil in the HVI 6 grade", "content");
+    only("Pour Point, max: Minus 15", "verification");
+    only("5.5 to 7 mm²/s", "verification");
+    only("API 1509 Annex E", "sources");
+    only("Proposal created", "history");
+    only(">Approve<", "content");
+  });
+
+  it("Sources lists the research sources with their level and citations", async () => {
+    const s = tabPanel(await detailPage(P1), "sources");
+    expect(s).toContain("Research sources");
+    expect(s).toContain('id="source-A-S01"');
+    expect(s).toContain("B · standard or regulation");
+    expect(s).toContain("cited by 2 review items");
+    expect(s).toContain("Research family");
+    expect(s).toContain('rel="noopener noreferrer nofollow"');
+  });
+
+  it("History shows authors, decisions, comments and status changes", async () => {
+    reads.set(`${C}/proposals/${P1}`, {
+      ...proposal(P1, PR1, {
+        status: "CHANGES_REQUESTED",
+        version: 2,
+        decidedAt: AT,
+        decidedBy: { id: "0190f2a1-0000-7000-8000-000000000202", name: "Company reviewer" },
+      }),
+      events: [
+        ...proposal(P1, PR1).events,
+        {
+          id: "0190f2a1-0000-7000-8000-000000000702",
+          action: "CHANGES_REQUESTED",
+          proposalVersion: 1,
+          actor: { id: "0190f2a1-0000-7000-8000-000000000202", name: "Company reviewer" },
+          comment: "Please drop the blending claim.",
+          contentSha256: SHA,
+          createdAt: AT,
+        },
+      ],
+    });
+    const h = tabPanel(await detailPage(P1), "history");
+    expect(h).toContain("Research editor (fixture)");
+    expect(h).toContain("Company reviewer");
+    expect(h).toContain("Please drop the blending claim.");
+    expect(h.indexOf("Changes requested")).toBeLessThan(h.indexOf("Proposal created"));
   });
 
   it("shows no proposed text for a placeholder and explains why", async () => {
-    const html = await render(
-      DetailPage({
-        params: Promise.resolve({ id: P2 }),
-        searchParams: Promise.resolve({}),
-      } as never),
-    );
+    const html = await detailPage(P2);
     expect(html).toContain("No text is proposed for this product");
     expect(html).toContain("The current site shows no technical data for this product.");
   });
 
-  it("explains why a user cannot decide", async () => {
+  it.each([
+    ["own_change", "separation of duties"],
+    ["no_permission", "cannot decide on it"],
+    ["not_in_review", "not waiting for review"],
+  ])("explains why a user cannot decide (%s)", async (reason, text) => {
     reads.set(`${C}/proposals/${P1}`, {
       ...proposal(P1, PR1),
       canDecide: false,
-      decisionBlocked: "own_change",
+      decisionBlocked: reason,
     });
-    const html = await render(
-      DetailPage({
-        params: Promise.resolve({ id: P1 }),
-        searchParams: Promise.resolve({}),
-      } as never),
-    );
+    const html = await detailPage(P1);
     expect(html).not.toContain(">Approve<");
-    expect(html).toContain("separation of duties");
+    expect(html).not.toContain(">Request changes<");
+    expect(html).toContain(`data-decision-blocked="${reason}"`);
+    expect(html).toContain("data-decision-notice");
+    expect(html).toContain(text);
   });
 });
 
