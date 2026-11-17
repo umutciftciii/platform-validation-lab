@@ -209,7 +209,9 @@ export const BV_HOME_SEED: BvHomeContent = {
     title: "From Synthesis Gas to ICCSYN Base Oils",
     document: {
       label: "CTL Technology Overview (PDF)",
-      href: "https://dreampetroleumbv.com/assets/specs/iccsyn-ctl-technology-overview.pdf",
+      // DP-205: the overview is a LEAD_REQUIRED document of ICCSYN 10 (request form, watermark).
+      // A fresh database links its product page; DEV links the document's request form.
+      href: "/products/iccsyn-10-ctl-technology#documents",
     },
     stages: [
       {
