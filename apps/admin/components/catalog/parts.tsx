@@ -4,7 +4,9 @@ import type { CatalogSite, ProductStatus } from "@dream/contracts";
 import { Icon, type IconKey } from "../icons";
 import {
   SITE_STATUS_LABEL,
+  type HeaderStatus,
   type ListRowStatus,
+  type SiteDisplayStatus,
   type SiteStatus,
 } from "../../lib/publication-status";
 import { cx, StatusPill, type PillTone } from "../ui";
@@ -145,10 +147,23 @@ const SITE_STATUS_TONE: Readonly<Record<SiteStatus, PillTone>> = {
 /**
  * DP-197: the product on one site at a glance (product list, listing panel, site cards): Draft,
  * Published or Unpublished. The listing's technical visibility is not shown (lib/publication-status).
+ * DP-203: Not listed is no step of the publication, so it is drawn apart from Draft — a dashed,
+ * dot-less outline with muted text — never as an alarm.
  */
-export function SiteStatusPill({ status }: { status: SiteStatus }) {
+export function SiteStatusPill({ status }: { status: SiteDisplayStatus }) {
   // Keyed by the status: a change replaces the pill, so a page translated by the browser
   // (DP-196) never keeps the old label in its own copy of the text.
+  if (status === "NOT_LISTED") {
+    return (
+      <span
+        key={status}
+        data-site-status="not-listed"
+        className="inline-flex items-center whitespace-nowrap rounded-full border border-dashed border-line-strong px-2.5 py-0.5 text-xs font-medium text-ink-3"
+      >
+        {SITE_STATUS_LABEL[status]}
+      </span>
+    );
+  }
   return (
     <StatusPill key={status} tone={SITE_STATUS_TONE[status]}>
       {SITE_STATUS_LABEL[status]}
@@ -182,6 +197,43 @@ export function ProductListStatus({
       </span>
       {status.master ? (
         <span key="master" className="inline-flex items-center gap-1.5" data-status="master">
+          <span className="text-xs font-medium text-ink-3">Master</span>
+          <ProductStatusPill status={status.master} />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * DP-203: the product header's status line. The publication status on each readable site comes
+ * first (the primary fact, named after the site); the master's review status follows, apart and
+ * labelled "Master", only when it adds something (lib/publication-status headerStatus). One
+ * string per label (DP-196/199).
+ */
+export function ProductHeaderStatus({ status }: { status: HeaderStatus }) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5" data-header-status="">
+      {status.sites.map((s) => (
+        <span
+          key={s.siteKey}
+          className="inline-flex items-center gap-1.5"
+          data-status="site"
+          data-site={s.siteKey}
+        >
+          <span className="text-xs font-medium text-ink-3">{LIST_SITE[s.siteKey]}</span>
+          <SiteStatusPill status={s.status} />
+        </span>
+      ))}
+      {status.master ? (
+        <span
+          key="master"
+          className={cx(
+            "inline-flex items-center gap-1.5",
+            status.sites.length > 0 && "sm:border-l sm:border-line sm:pl-3",
+          )}
+          data-status="master"
+        >
           <span className="text-xs font-medium text-ink-3">Master</span>
           <ProductStatusPill status={status.master} />
         </span>
