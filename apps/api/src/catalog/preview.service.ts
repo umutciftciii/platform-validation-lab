@@ -2,13 +2,16 @@
  * DP-173 (ADR-022 D5): the company catalogue preview.
  *
  * Admin side: `link(ctx, siteId)` issues a short-lived signed link for the BV site's preview
- * routes. It needs `product_proposal:review` on the site and records an audit event.
+ * routes. It needs `product_proposal:review` or (DP-204) `product:publish` on the site — the
+ * company reviewer and the publisher who previews before publishing — and records an audit event
+ * naming the permission used.
  *
  * Public side (the site's proxy key only, GET only): every request
  *   1. derives the site from the key (PublicSiteService), never from the path;
  *   2. verifies the link's signature, site and expiry;
  *   3. asks the database whether the issuing session is still live and its user still holds
- *      `product_proposal:review` on the site (catalog_preview_session_allowed);
+ *      `product_proposal:review` or `product:publish` on the site (catalog_preview_session_allowed,
+ *      DP-204);
  * and only then reads. A failed check answers 404 like an unknown link.
  *
  * What the preview shows: the products the site lists (any visibility, not archived), each with
@@ -51,6 +54,8 @@ import { heldRawForDisplay } from "./preview-display.js";
 import { uuidOr404, valueData } from "./specs.service.js";
 
 const REVIEW = "product_proposal:review";
+/** DP-204: a publisher may preview what it is about to publish (same link, same checks). */
+const PUBLISH = "product:publish";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface PreviewItem {
@@ -82,7 +87,10 @@ export class CatalogPreviewService {
   async link(ctx: RequestContext, rawSiteId: string): Promise<CatalogPreviewLinkResponse> {
     const a = await this.access.begin(ctx);
     const siteId = uuidOr404(rawSiteId);
-    await a.require(REVIEW, { scope: "site", siteId }, { type: "catalog_preview", id: null });
+    const target = { scope: "site", siteId } as const;
+    // DP-204: either permission opens the preview; a reviewer keeps REVIEW in the audit record.
+    const permission = a.allows(REVIEW, target) ? REVIEW : PUBLISH;
+    await a.require(permission, target, { type: "catalog_preview", id: null });
     const site = a.sites.find((s) => s.id === siteId);
     if (!site || site.key !== "BV" || !a.sessionId) {
       throw new ApiError("CONFLICT_STATE", [{ path: "site", rule: "no_preview" }]);
@@ -99,7 +107,7 @@ export class CatalogPreviewService {
       resourceType: "catalog_preview",
       resourceId: null,
       siteId,
-      permission: REVIEW,
+      permission,
       metadata: { expiresAt: expiresAt.toISOString() },
     });
     return {

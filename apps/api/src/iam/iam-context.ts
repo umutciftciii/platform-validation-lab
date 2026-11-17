@@ -128,8 +128,9 @@ export async function operatorAdminState(
 
 /**
  * DP-173: whether the staff session that issued a catalogue preview link is still a live admin
- * session of an ACTIVE user who holds `product_proposal:review` on the site (migration
- * 20261203090000_dp_173_catalog_preview_access). Answers one boolean; never the session token.
+ * session of an ACTIVE user who holds `product_proposal:review` or (DP-204) `product:publish` on
+ * the site (migrations 20261203090000_dp_173_catalog_preview_access and
+ * 20261206090000_dp_204_catalog_preview_publisher). Answers one boolean; never the session token.
  */
 export async function catalogPreviewSessionAllowed(
   db: Db,
