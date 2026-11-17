@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
 import { fixForIssue, productTabLabel } from "../../lib/product-tabs";
-import { planPublication } from "../../lib/publication-status";
+import { planPublication, submitOffer } from "../../lib/publication-status";
 import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, SITE_SHORT, SiteStatusPill, TEXTAREA } from "./parts";
@@ -136,13 +136,29 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
     if (ok) setComment("");
   }
 
-  const showComment = p.canSubmit || p.canReview;
+  // DP-203: no "Submit for review" for a user who publishes directly on every readable site
+  // (the review changes nothing for them); secondary when direct on some sites only.
+  const offer = submitOffer(data);
+  const canSubmit = offer !== "hidden";
+  const directOnly = p.canSubmit && !canSubmit;
+  const showComment = canSubmit || p.canReview;
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Stepper status={data.status} />
+        {directOnly ? null : <Stepper status={data.status} />}
         <span className="text-xs text-ink-3">Master version {data.version}</span>
       </div>
+
+      {directOnly ? (
+        <p
+          key="direct-only"
+          className="flex items-start gap-2 text-sm text-ink-2"
+          data-review-direct=""
+        >
+          <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-petrol-strong" />
+          <span>You publish directly on every site you can open, so no review is needed.</span>
+        </p>
+      ) : null}
 
       <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-line bg-line text-sm sm:grid-cols-2">
         <div className="bg-surface p-3.5">
@@ -227,9 +243,9 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
       {showComment ? (
         <div>
           <label htmlFor={commentId} className="mb-1.5 block text-sm font-medium text-ink">
-            {p.canSubmit ? "Note for the reviewer" : "Review comment"}
+            {canSubmit ? "Note for the reviewer" : "Review comment"}
             <span className="ml-1 font-normal text-ink-3">
-              {p.canSubmit ? "(optional)" : "(required to request changes)"}
+              {canSubmit ? "(optional)" : "(required to request changes)"}
             </span>
           </label>
           <textarea
@@ -243,7 +259,7 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
             rows={3}
             className={cx(TEXTAREA, "min-h-20")}
             placeholder={
-              p.canSubmit ? "What changed, what to check…" : "Reason, or what has to change…"
+              canSubmit ? "What changed, what to check…" : "Reason, or what has to change…"
             }
           />
         </div>
@@ -251,14 +267,14 @@ export function ReviewPanel({ data }: { data: ProductWorkflowResponse }) {
 
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
 
-      {p.canSubmit || p.canWithdraw || p.canReview ? (
+      {canSubmit || p.canWithdraw || p.canReview ? (
         <div className="flex flex-wrap gap-2">
-          {p.canSubmit ? (
+          {canSubmit ? (
             <button
               type="button"
               disabled={busy || blocking > 0}
               onClick={() => act("submit", "submit", "Submitted for review.", true)}
-              className={buttonStyles.primary}
+              className={offer === "primary" ? buttonStyles.primary : buttonStyles.secondary}
             >
               {pending === "submit" ? <Spinner /> : <Icon name="publish" size={17} />}
               <span>Submit for review</span>
@@ -434,10 +450,13 @@ function SiteCard({
   site,
   data,
   productSlug,
+  canList,
 }: {
   site: SitePublication;
   data: ProductWorkflowResponse;
   productSlug: string;
+  /** DP-203: product:edit on the site — the user can list the product there (Content tab). */
+  canList: boolean;
 }) {
   const { pending, error, run } = useWorkflowCall();
   const [reason, setReason] = useState("");
@@ -447,6 +466,8 @@ function SiteCard({
   const live = plan.status === "PUBLISHED";
   const base = `/products/${data.productId}/publications/${site.siteId}`;
   const name = SITE_SHORT[site.siteKey];
+  const siteKey = site.siteKey.toLowerCase();
+  const notListed = plan.notListed;
   const direct = site.publishMode === "DIRECT";
   const attention = plan.warnings.filter((w) => ATTENTION.has(w.code));
   const notes = plan.warnings.filter((w) => !ATTENTION.has(w.code));
@@ -519,6 +540,37 @@ function SiteCard({
             </span>
           )}
         </p>
+      ) : notListed ? (
+        /* DP-203: information, not an alarm — the site does not list the product. */
+        <div
+          key="not-listed"
+          className="flex items-start gap-1.5 rounded-lg bg-surface px-2.5 py-1.5 text-xs text-ink-2 ring-1 ring-inset ring-line"
+          data-not-listed=""
+        >
+          <Icon name="list" size={13} className="mt-px shrink-0 text-ink-3" />
+          <span className="min-w-0">
+            <span key="nl-1" className="block">
+              {`${name} does not list this product.`}
+            </span>
+            {canList ? (
+              <span key="nl-2" className="block text-ink-3">
+                {`To publish it here, list it on ${name} first. `}
+                <TabLink
+                  tab="content"
+                  section="listing"
+                  site={siteKey}
+                  className="font-medium text-petrol-strong underline underline-offset-2"
+                >
+                  Go to Content
+                </TabLink>
+              </span>
+            ) : (
+              <span key="nl-3" className="block text-ink-3">
+                Listing it here needs edit rights on this site.
+              </span>
+            )}
+          </span>
+        </div>
       ) : (
         <p key="never" className="text-xs text-ink-3">
           Never published on this site.
@@ -537,12 +589,21 @@ function SiteCard({
         </p>
       ) : null}
 
-      {plan.blocking.length ? (
-        <div className="space-y-1">
+      {notListed ? (
+        // DP-203: the other blockers stay visible, as what publishing here would also need —
+        // amber, not red: nobody has to act while the site does not list the product.
+        plan.blocking.length ? (
+          <div key="also-needed" className="space-y-1" data-also-needed="">
+            <p className="text-xs font-semibold text-amber-ink">Publishing here would also need:</p>
+            <IssueList issues={plan.blocking} tone="amber" site={siteKey} />
+          </div>
+        ) : null
+      ) : plan.blocking.length ? (
+        <div key="blocked" className="space-y-1">
           <p className="text-xs font-semibold text-danger">
             {live ? "Republishing is blocked:" : "Publishing is blocked:"}
           </p>
-          <IssueList issues={plan.blocking} tone="danger" site={site.siteKey.toLowerCase()} />
+          <IssueList issues={plan.blocking} tone="danger" site={siteKey} />
         </div>
       ) : (
         <p className="flex items-center gap-1.5 text-xs font-medium text-success">
@@ -552,13 +613,13 @@ function SiteCard({
           </span>
         </p>
       )}
-      {attention.length ? (
+      {!notListed && attention.length ? (
         <div className="space-y-1">
           <p className="text-xs font-semibold text-amber-ink">Check before publishing:</p>
           <IssueList issues={attention} tone="amber" site={site.siteKey.toLowerCase()} />
         </div>
       ) : null}
-      {notes.length ? (
+      {!notListed && notes.length ? (
         <details className="text-xs">
           <summary className="cursor-pointer font-medium text-amber-ink">
             {notes.length} more note{notes.length === 1 ? "" : "s"} (not blocking)
@@ -575,7 +636,7 @@ function SiteCard({
         {site.canPreview ? (
           <PreviewLinkButton siteId={site.siteId} productSlug={productSlug} label="Preview" />
         ) : null}
-        {site.canPublish ? (
+        {site.canPublish && !notListed ? (
           <>
             <button
               type="button"
@@ -618,7 +679,7 @@ function SiteCard({
           />
         </details>
       ) : null}
-      {site.canPublish ? (
+      {notListed ? null : site.canPublish ? (
         <p className="flex items-start gap-1.5 text-xs text-ink-3">
           <Icon name="shield" size={13} className="mt-px shrink-0" />
           <span>
@@ -642,9 +703,12 @@ function SiteCard({
 export function PublicationPanel({
   data,
   productSlug,
+  canEditSite,
 }: {
   data: ProductWorkflowResponse;
   productSlug: string;
+  /** DP-203: product:edit per site id (catalogue context), for the "list it first" hint. */
+  canEditSite: Readonly<Record<string, boolean>>;
 }) {
   if (data.sites.length === 0) {
     return <p className="text-sm text-ink-3">You cannot read any site of this product.</p>;
@@ -652,7 +716,13 @@ export function PublicationPanel({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {data.sites.map((s) => (
-        <SiteCard key={s.siteId} site={s} data={data} productSlug={productSlug} />
+        <SiteCard
+          key={s.siteId}
+          site={s}
+          data={data}
+          productSlug={productSlug}
+          canList={canEditSite[s.siteId] === true}
+        />
       ))}
     </div>
   );
