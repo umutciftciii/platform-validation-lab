@@ -270,7 +270,8 @@ export class WorkflowService {
           },
           publishMode,
           canShowListing,
-          canPreview: s.key === "BV" && a.allows(PREVIEW, site),
+          // DP-204: the reviewer or the site's publisher (BV only: only web-bv has the preview).
+          canPreview: s.key === "BV" && (a.allows(PREVIEW, site) || canPublish),
           proposal,
           readiness: checkPublication({
             product,
