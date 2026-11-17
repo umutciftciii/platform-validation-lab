@@ -16,9 +16,11 @@
  *
  * Used by the import only; it never overwrites a page that exists (ADR-020 D7).
  */
-import type { CmsSeo } from "@dream/contracts";
+import type { CmsArticleContent, CmsSeo } from "@dream/contracts";
 
 const CONTACT = "/contact";
+const TAGLINE =
+  "Connecting global energy and chemical markets with excellence — from the heart of Rotterdam.";
 const CGI_NOTE =
   "Illustrative CGI image. It does not show Dream Petroleum facilities, vessels or vehicles.";
 const PARTNER_CTA = {
@@ -385,6 +387,298 @@ export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
           link: { label: "Enquire About Storage Capacity", href: CONTACT },
         },
         { id: "storage-cta", ...PARTNER_CTA },
+      ],
+    },
+  },
+  // DP-206: the company pages and the blog post of the live site, read on 2026-11-18. Word for word;
+  // the leftover "Welcome to Dream Chemicals" kicker is not used, the page name is the eyebrow.
+  "bv.strategic-partnership": {
+    slug: "strategic-partnership",
+    title: "Strategic Partnership",
+    seo: seo("Strategic Partnership | Dream Petroleum BV"),
+    content: {
+      sections: [
+        {
+          id: "partnership-hero",
+          type: "hero",
+          eyebrow: "Synergy & Growth",
+          title: "Strategic Partnership",
+          intro: TAGLINE,
+          cta: null,
+        },
+        {
+          id: "partnership-intro",
+          type: "text",
+          title: "Driving Innovation Through Global Alliances",
+          body: "We believe in the power of strategic alliances to unlock new markets, enhance supply chain resilience, and deliver superior value. Dream Petroleum actively seeks partners who share our vision for a sustainable and efficient industrial future.\n\nOur collaborative approach combines local market expertise with global technical capabilities to create unparalleled competitive advantages for all stakeholders.",
+        },
+        {
+          id: "partnership-focus",
+          type: "cards",
+          title: null,
+          intro: null,
+          items: [
+            {
+              title: "Global Collaboration",
+              description:
+                "Connecting with industry leaders across continents to expand our collective reach and market access.",
+              link: null,
+            },
+            {
+              title: "Sustainable Growth",
+              description:
+                "Focused on long-term value creation and environmental responsibility for all involved parties.",
+              link: null,
+            },
+          ],
+        },
+        {
+          id: "partnership-foundations",
+          type: "cards",
+          title: "Foundations of Successful Partnerships",
+          intro: null,
+          items: [
+            {
+              title: "Integrity",
+              description:
+                "Maintaining the highest ethical standards and transparency in every partnership agreement and commercial transaction.",
+              link: null,
+            },
+            {
+              title: "Value Creation",
+              description:
+                "Focused on delivering tangible economic and operational benefits for all involved parties across the supply chain.",
+              link: null,
+            },
+            {
+              title: "Innovation",
+              description:
+                "Leveraging collective expertise to drive technological progress, process efficiency, and market-leading solutions.",
+              link: null,
+            },
+            {
+              title: "Global Reach",
+              description:
+                "Ensuring long-term environmental viability and access to diverse international markets across 50+ countries.",
+              link: null,
+            },
+          ],
+        },
+        {
+          id: "partnership-methodology",
+          type: "specList",
+          title: "Partnership Methodology",
+          intro:
+            "Our engagement model is designed to be flexible yet structured, ensuring that every alliance is optimised for mutual growth and operational excellence.",
+          items: [
+            {
+              term: "Joint Ventures & Strategic Alliances",
+              detail:
+                "Collaborative capital investment and resource sharing for large-scale projects.",
+            },
+            {
+              term: "Technology Licensing & Transfer",
+              detail:
+                "Access to proprietary chemical processes and industrial intellectual property.",
+            },
+            {
+              term: "Supply Chain Integration",
+              detail: "Seamless logistics and distribution networking for global commodity flow.",
+            },
+            {
+              term: "Market Entry Support",
+              detail:
+                "Leveraging our local footprint to facilitate swift and compliant market penetration.",
+            },
+          ],
+          link: { label: "Become a Partner", href: CONTACT },
+        },
+        { id: "partnership-cta", ...PARTNER_CTA },
+      ],
+    },
+  },
+  "bv.sustainability": {
+    slug: "sustainability",
+    title: "Sustainability",
+    seo: seo("Sustainability | Dream Petroleum BV"),
+    content: {
+      sections: [
+        {
+          id: "sustainability-hero",
+          type: "hero",
+          eyebrow: "Commitment to the Future",
+          title: "Sustainability",
+          intro: TAGLINE,
+          cta: null,
+        },
+        {
+          id: "sustainability-intro",
+          type: "text",
+          title: "Driving Sustainable Innovation in Petrochemicals",
+          body: "We believe that the future of the petrochemical industry lies at the intersection of operational excellence and environmental responsibility. Dream Petroleum is dedicated to minimising our environmental footprint while maximising social and economic value.\n\nOur ESG framework guides every decision — from supply chain optimisation to community investment — ensuring a resilient and sustainable future for all stakeholders.",
+        },
+        {
+          id: "sustainability-focus",
+          type: "cards",
+          title: null,
+          intro: null,
+          items: [
+            {
+              title: "Eco-Efficiency",
+              description:
+                "Reducing emissions and waste through advanced chemical processing and green logistics technologies.",
+              link: null,
+            },
+            {
+              title: "Social Responsibility",
+              description:
+                "Upholding the highest standards of safety, ethical conduct, and community engagement across all operations.",
+              link: null,
+            },
+          ],
+        },
+        {
+          id: "sustainability-pillars",
+          type: "cards",
+          title: "Our ESG Core Pillars",
+          intro: null,
+          items: [
+            {
+              title: "Environmental",
+              description:
+                "Transitioning to circular economy models and carbon reduction strategies across all operations and supply chains.",
+              link: null,
+            },
+            {
+              title: "Safety First",
+              description:
+                "Maintaining zero-harm workplaces through rigorous health and safety protocols for our global team.",
+              link: null,
+            },
+            {
+              title: "Community",
+              description:
+                "Investing in local development and fostering inclusive growth in the regions where we operate.",
+              link: null,
+            },
+            {
+              title: "Governance",
+              description:
+                "Ensuring absolute transparency, board accountability, and ethical business standards across all entities.",
+              link: null,
+            },
+          ],
+        },
+        {
+          id: "sustainability-logistics",
+          type: "specList",
+          title: "Green Logistics & Supply Chain",
+          intro:
+            "We are reimagining the petrochemical supply chain by integrating data-driven efficiency and low-carbon logistics solutions.",
+          items: [
+            {
+              term: "Dynamic Route Optimisation to reduce fuel consumption and emissions",
+              detail: null,
+            },
+            { term: "Intermodal Transport Solutions for lower carbon intensity", detail: null },
+            { term: "Smart Storage Systems with zero-leakage technology", detail: null },
+            { term: "Vapour recovery units across all terminal operations", detail: null },
+            {
+              term: "Carbon Neutral Goal",
+              detail: "Committed to Net Zero emissions across Scope 1 and 2 by 2050",
+            },
+          ],
+          link: { label: "Join Our Mission", href: CONTACT },
+        },
+        { id: "sustainability-cta", ...PARTNER_CTA },
+      ],
+    },
+  },
+  "bv.our-team": {
+    slug: "our-team",
+    title: "Our Leadership Team",
+    seo: seo("Our Leadership Team | Dream Petroleum BV"),
+    content: {
+      sections: [
+        {
+          id: "team-hero",
+          type: "hero",
+          eyebrow: "Core Leadership & Teams",
+          title: "Our Leadership Team",
+          intro: TAGLINE,
+          cta: null,
+        },
+        {
+          id: "team-intro",
+          type: "split",
+          eyebrow: null,
+          title: "Meet Our Dedicated Professionals",
+          body: "Our leadership team brings decades of combined expertise across energy trading, logistics, terminal operations, and international market development. Each department is staffed with specialists committed to delivering exceptional results for our partners.",
+          image: "/media/company/team-1.jpg",
+          imageAlt:
+            "A trading floor with screens of market charts and a world map, and a team working at desks.",
+          imageNote: "Illustrative image.",
+        },
+        {
+          id: "team-leadership",
+          type: "specList",
+          title: "Leadership Team",
+          intro: null,
+          items: [
+            { term: "Executive Director", detail: "Chief Executive Officer · Trading Team" },
+            { term: "Operations Director", detail: "Head of Operations · Operations Team" },
+            { term: "Logistics Manager", detail: "Head of Logistics · Logistics Team" },
+            { term: "Technical Director", detail: "Head of Technical · Technical Team" },
+          ],
+          link: { label: "Get In Touch With Our Team", href: CONTACT },
+        },
+        { id: "team-cta", ...PARTNER_CTA },
+      ],
+    },
+  },
+};
+
+export interface CmsArticleSeed {
+  slug: string;
+  title: string;
+  seo: CmsSeo;
+  content: CmsArticleContent;
+}
+
+/**
+ * DP-206: the live blog's only post, imported as a news article (DP-020). The live article has no
+ * body beyond its summary; its category, date and reading time are not fields of an article here
+ * (DP-152), so they are kept as the article's details. The date the site shows is the first
+ * publication here; the live post is from July 2026 (cover uploaded 2026-07-20).
+ */
+export const CMS_ARTICLE_SEEDS: Readonly<Record<string, CmsArticleSeed>> = {
+  "bv.news-oil-prices-us-iran": {
+    slug: "why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets",
+    title: "Why Are Oil Prices Falling? The Impact Of The US-Iran Agreement On Energy Markets",
+    seo: {
+      title: "Why Are Oil Prices Falling? | Dream Petroleum BV",
+      description: null,
+      noindex: false,
+    },
+    content: {
+      excerpt:
+        "An in-depth analysis of how the recent geopolitical developments between the US and Iran are reshaping global energy price dynamics and what it means for petrochemical traders.",
+      coverImage: "/media/news/why-are-oil-prices-falling.jpg",
+      coverAlt:
+        "A crude oil tanker sailing through a strait between mountains, with a glowing map outline of the coastline over the water.",
+      sections: [
+        {
+          id: "article-details",
+          type: "specList",
+          title: "Article details",
+          intro: null,
+          items: [
+            { term: "Category", detail: "Market Analysis" },
+            { term: "Originally published", detail: "July 2026" },
+            { term: "Reading time", detail: "5 min read" },
+          ],
+          link: null,
+        },
       ],
     },
   },

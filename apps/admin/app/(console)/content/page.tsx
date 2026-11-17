@@ -65,7 +65,8 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
   // News articles (DP-020) have their own list under /content/news.
   const pages = list.ok ? list.data.items.filter((p) => !cmsIsArticle(p)) : [];
   const imported = new Set(pages.filter((p) => p.kind !== "TEMPLATE").map((p) => p.templateKey));
-  const paths = new Set(pages.map((p) => p.path));
+  // Every path, articles included: an imported article (DP-206) leaves the registry list too.
+  const paths = new Set((list.ok ? list.data.items : []).map((p) => p.path));
   const routes = CMS_SITE_REGISTRY.filter(
     (e) =>
       e.site === site.key && !imported.has(e.key) && !(e.kind === "TEMPLATE" && paths.has(e.path)),

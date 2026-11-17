@@ -1216,15 +1216,22 @@ describe("12. content pages from code (DP-135)", () => {
     );
   });
 
-  it("refuses pages whose content still needs confirmation and BV pages on the Corporate site", async () => {
-    for (const key of ["bv.strategic-partnership", "bv.sustainability", "bv.our-team"]) {
-      expectError(
-        await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: true }),
-        400,
-        "VALIDATION_FAILED",
-        { path: "key", rule: "unknown_template" },
-      );
-    }
+  it("refuses unknown keys and BV pages on the Corporate site", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "bv.no-such-page", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, {
+        key: "bv.news-oil-prices-us-iran",
+        dryRun: true,
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
     expectError(
       await comEditor.post(`/sites/${COM}/import`, { key: "bv.about-us", dryRun: true }),
       400,
@@ -1584,5 +1591,79 @@ describe("13. news articles (DP-020)", () => {
     });
     // History of a page outside the caller's sites: not found.
     expectError(await comEditor.get(`/pages/${a.id}/history`), 404, "NOT_FOUND");
+  });
+});
+
+describe("14. company pages and the blog post of the live site (DP-206)", () => {
+  const ARTICLE =
+    "/news/why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets";
+  const KEYS = [
+    ["bv.strategic-partnership", "/strategic-partnership", "standard"],
+    ["bv.sustainability", "/sustainability", "standard"],
+    ["bv.our-team", "/our-team", "standard"],
+    ["bv.news-oil-prices-us-iran", ARTICLE, "article"],
+  ] as const;
+
+  it("imports the four as drafts once, publishes them and a second run creates nothing", async () => {
+    const ids: string[] = [];
+    for (const [key, path, templateKey] of KEYS) {
+      const dry = await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: true });
+      expect(dry.status, `${key} ${JSON.stringify(dry.body)}`).toBe(200);
+      const res = await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: false });
+      expect(res.status, `${key} ${JSON.stringify(res.body)}`).toBe(200);
+      const id = CmsImportResponseSchema.parse(res.body).pageId!;
+      const imported = CmsPageResponseSchema.parse((await page(id)).body).page;
+      expect(imported).toMatchObject({ kind: "TEMPLATE", templateKey, path, publication: null });
+      ids.push(id);
+    }
+    // A draft never reaches the site.
+    expectError(await pub("/page?path=/our-team"), 404, "NOT_FOUND");
+
+    const team = CmsPageResponseSchema.parse((await page(ids[2]!)).body).page;
+    expect(team.title).toBe("Our Leadership Team");
+    expect((team.content["sections"] as { type: string }[]).map((x) => x.type)).toEqual([
+      "hero",
+      "split",
+      "specList",
+      "cta",
+    ]);
+    const article = CmsPageResponseSchema.parse((await page(ids[3]!)).body).page;
+    expect(article).toMatchObject({
+      title: "Why Are Oil Prices Falling? The Impact Of The US-Iran Agreement On Energy Markets",
+      seo: { title: "Why Are Oil Prices Falling? | Dream Petroleum BV", description: null },
+      content: {
+        coverImage: "/media/news/why-are-oil-prices-falling.jpg",
+        excerpt: expect.stringMatching(/^An in-depth analysis of how the recent geopolitical/),
+      },
+    });
+
+    for (const id of ids) {
+      const draft = CmsPageResponseSchema.parse((await page(id)).body).page;
+      const res = await bvPublisher.post(`/pages/${id}/publish`, { version: draft.version });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    for (const [, path] of KEYS) {
+      const live = CmsPublicBundleSchema.parse((await pub(`/page?path=${path}`)).body);
+      expect(live.page).toMatchObject({ path, revisionNumber: 1 });
+    }
+    const news = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(news.articles[0]).toMatchObject({
+      path: ARTICLE,
+      coverImage: "/media/news/why-are-oil-prices-falling.jpg",
+    });
+
+    // Repeatable: every key answers already_imported, nothing new is created.
+    const count = await owner.cmsPage.count();
+    for (const [key] of KEYS) {
+      for (const dryRun of [true, false]) {
+        expectError(
+          await bvEditor.post(`/sites/${BV}/import`, { key, dryRun }),
+          409,
+          "CONFLICT_STATE",
+          { path: "key", rule: "already_imported" },
+        );
+      }
+    }
+    expect(await owner.cmsPage.count()).toBe(count);
   });
 });
