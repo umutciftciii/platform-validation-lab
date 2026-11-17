@@ -157,6 +157,7 @@ export function FormMessage({
 }) {
   return kind === "error" ? (
     <p
+      key="error"
       role="alert"
       className="flex items-start gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger ring-1 ring-inset ring-danger/25"
     >
@@ -165,6 +166,7 @@ export function FormMessage({
     </p>
   ) : (
     <p
+      key="success"
       role="status"
       className="rounded-lg bg-success-soft px-3 py-2 text-sm text-success ring-1 ring-inset ring-success/25"
     >

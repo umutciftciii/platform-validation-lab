@@ -804,6 +804,7 @@ function SiteRow({
         {site.canPublish ? (
           site.enabled ? (
             <button
+              key="hide"
               type="button"
               disabled={busy}
               className={cx(buttonStyles.secondary, "h-9 px-3 text-sm")}
@@ -815,6 +816,7 @@ function SiteRow({
             </button>
           ) : confirming ? null : (
             <button
+              key="show"
               type="button"
               disabled={busy || blocked}
               aria-expanded={confirming}

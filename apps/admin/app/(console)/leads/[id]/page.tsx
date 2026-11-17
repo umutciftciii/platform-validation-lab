@@ -308,11 +308,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </p>
                 </div>
                 {m.message !== null ? (
-                  <p className="whitespace-pre-line text-sm leading-relaxed text-ink-2">
+                  <p
+                    key="message"
+                    className="whitespace-pre-line text-sm leading-relaxed text-ink-2"
+                  >
                     {m.message}
                   </p>
                 ) : (
-                  <p className="text-sm text-ink-3">
+                  <p key="cleared" className="text-sm text-ink-3">
                     Cleared when the lead was anonymised
                     {m.redactedAt ? ` (${DATE.format(new Date(m.redactedAt))})` : ""}.
                   </p>
@@ -411,11 +414,13 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                       <li key={d.deliveredAt} className="tabular-nums">
                         {DATE.format(new Date(d.deliveredAt))} · {size(d.byteSize)} · stamped copy{" "}
                         {d.sha256 ? (
-                          <span className="font-mono text-xs" title={d.sha256}>
+                          <span key="hash" className="font-mono text-xs" title={d.sha256}>
                             {d.sha256.slice(0, 12)}…
                           </span>
                         ) : (
-                          <span className="text-xs">(hash cleared)</span>
+                          <span key="cleared" className="text-xs">
+                            (hash cleared)
+                          </span>
                         )}
                       </li>
                     ))}

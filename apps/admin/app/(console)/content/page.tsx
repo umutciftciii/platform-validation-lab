@@ -208,7 +208,7 @@ function RouteRow({ entry, site }: { entry: CmsRegistryEntry; site: CmsSite }) {
       <p className="text-sm text-ink-2">
         {entry.note}
         {entry.managedBy === "catalog" ? (
-          <>
+          <span>
             {" "}
             <Link
               href={`/products?site=${site.key.toLowerCase()}`}
@@ -216,7 +216,7 @@ function RouteRow({ entry, site }: { entry: CmsRegistryEntry; site: CmsSite }) {
             >
               Open Products
             </Link>
-          </>
+          </span>
         ) : null}
       </p>
       {entry.managedBy === "cms_pending" && entry.importable && site.canEdit ? (
