@@ -7,6 +7,7 @@ import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
 import { flattenTree } from "../../lib/catalog-view";
 import { listingSaveBody } from "../../lib/listing-request";
 import { formHasChanges } from "../../lib/product-tabs";
+import { siteTextHint } from "../../lib/site-text";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { Field, FIELD, FormMessage, TEXTAREA } from "./parts";
@@ -26,6 +27,11 @@ import { useUnsavedChanges } from "./product-tabs";
  * stays editable and "Discard changes" restores the saved values. Technical values held for
  * verification (DP-002) are never copied. The form says when the saved text differs from the
  * proposal and lists the proposal's claim-risk notes.
+ *
+ * DP-202: the site's own title, summary and description come first — they are what the site's
+ * product page shows. Each field says whether the page uses it or, when it is empty, the shared
+ * product content (the master), exactly as the API falls back. Category and sort order follow
+ * as listing settings. The form saves the listing only; the master has its own form.
  */
 export function ListingForm({
   productId,
@@ -35,6 +41,7 @@ export function ListingForm({
   categories,
   canEdit,
   proposal = null,
+  shared,
 }: {
   productId: string;
   siteId: string;
@@ -44,6 +51,8 @@ export function ListingForm({
   canEdit: boolean;
   /** DP-193: the site's research proposal, if any. */
   proposal?: SiteProposal | null;
+  /** DP-202: the saved shared (master) texts a site falls back to; shown in the hints only. */
+  shared?: { name: string; summary: string | null; description: string | null };
 }) {
   const router = useRouter();
   const notify = useNotice();
@@ -63,7 +72,7 @@ export function ListingForm({
 
   // DP-193: copy the research proposal into the fields (never saved by itself).
   const formRef = useRef<HTMLFormElement>(null);
-  const summaryRef = useRef<HTMLInputElement>(null);
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const [copied, setCopied] = useState(false);
   const proposalHasText = !!(proposal && (proposal.summary || proposal.description));
@@ -118,7 +127,7 @@ export function ListingForm({
     }
     setFieldsChanged(false);
     setCopied(false);
-    if (notify) notify(listing ? "Listing saved." : `Listed on ${siteName}.`);
+    if (notify) notify(listing ? `${siteName} text saved.` : `Listed on ${siteName}.`);
     else setSaved(true);
     router.refresh();
   }
@@ -132,6 +141,59 @@ export function ListingForm({
       noValidate
       className="space-y-4"
     >
+      <fieldset disabled={!canEdit} className="space-y-4">
+        <legend className="sr-only">Product text on {siteName}</legend>
+        <Field
+          label="Title on this site"
+          htmlFor={id("title")}
+          hint={siteTextHint("title", siteName, listing?.text?.title, shared?.name)}
+        >
+          <input
+            id={id("title")}
+            name="title"
+            maxLength={200}
+            defaultValue={listing?.text?.title ?? ""}
+            aria-invalid={invalid("title")}
+            className={FIELD}
+          />
+        </Field>
+        <Field
+          label="Summary on this site"
+          htmlFor={id("summary")}
+          hint={siteTextHint("summary", siteName, savedSummary, shared?.summary)}
+        >
+          <textarea
+            ref={summaryRef}
+            id={id("summary")}
+            name="summary"
+            rows={3}
+            maxLength={500}
+            defaultValue={listing?.text?.summary ?? ""}
+            aria-invalid={invalid("summary")}
+            onKeyDown={(e) => {
+              // One line: Enter does not add a line break (the summary is a single sentence).
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) e.preventDefault();
+            }}
+            className={cx(FIELD, "field-sizing-content h-auto min-h-16 py-2 leading-relaxed")}
+          />
+        </Field>
+        <Field
+          label="Description on this site"
+          htmlFor={id("description")}
+          hint={siteTextHint("description", siteName, savedDescription, shared?.description)}
+        >
+          <textarea
+            ref={descriptionRef}
+            id={id("description")}
+            name="description"
+            rows={8}
+            maxLength={DESCRIPTION_MAX}
+            defaultValue={listing?.text?.description ?? ""}
+            aria-invalid={invalid("description")}
+            className={cx(TEXTAREA, "field-sizing-content min-h-48 max-h-[36rem]")}
+          />
+        </Field>
+      </fieldset>
       {proposalHasText ? (
         <div className="space-y-2 rounded-lg border border-line bg-surface-2/60 p-3 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -163,7 +225,8 @@ export function ListingForm({
           {copied ? (
             <p className="flex items-start gap-1.5 text-petrol-strong" role="status">
               <Icon name="check" size={13} className="mt-px shrink-0" />
-              Copied into the fields below. Edit it, then save the listing; nothing is saved yet.
+              Copied into the summary and description above. Edit it, then save; nothing is saved
+              yet.
             </p>
           ) : null}
           <p className="text-ink-3">
@@ -200,93 +263,53 @@ export function ListingForm({
           ) : null}
         </div>
       ) : null}
-      <fieldset disabled={!canEdit} className="space-y-4">
-        <legend className="sr-only">Listing on {siteName}</legend>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
-          <Field
-            label="Category on this site"
-            htmlFor={id("category")}
-            hint={
-              listing
-                ? undefined
-                : defaultCategory
-                  ? `Left empty, the site default “${defaultCategory.name}” is used.`
-                  : "This site has no default category yet."
-            }
+      <fieldset
+        disabled={!canEdit}
+        className="grid grid-cols-1 gap-4 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_8rem]"
+      >
+        <legend className="sr-only">Listing settings on {siteName}</legend>
+        <Field
+          label="Category on this site"
+          htmlFor={id("category")}
+          hint={
+            listing
+              ? undefined
+              : defaultCategory
+                ? `Left empty, the site default “${defaultCategory.name}” is used.`
+                : "This site has no default category yet."
+          }
+        >
+          <select
+            id={id("category")}
+            name="categoryId"
+            defaultValue={listing?.categoryId ?? ""}
+            aria-invalid={invalid("categoryId")}
+            className={FIELD}
           >
-            <select
-              id={id("category")}
-              name="categoryId"
-              defaultValue={listing?.categoryId ?? ""}
-              aria-invalid={invalid("categoryId")}
-              className={FIELD}
-            >
-              {listing ? null : <option value="">Site default</option>}
-              {tree.map(({ category, depth }) => (
-                <option key={category.id} value={category.id}>
-                  {" ".repeat(depth)}
-                  {category.name}
-                  {category.isDefault ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sort order" htmlFor={id("sort")}>
-            <input
-              id={id("sort")}
-              name="sortOrder"
-              type="number"
-              inputMode="numeric"
-              step={1}
-              defaultValue={listing?.sortOrder ?? 0}
-              className={cx(FIELD, "tabular")}
-            />
-          </Field>
-        </div>
-        <Field
-          label="Title on this site"
-          htmlFor={id("title")}
-          hint="Optional. Without it the site shows the master name."
-        >
-          <input
-            id={id("title")}
-            name="title"
-            maxLength={200}
-            defaultValue={listing?.text?.title ?? ""}
-            aria-invalid={invalid("title")}
-            className={FIELD}
-          />
+            {listing ? null : <option value="">Site default</option>}
+            {tree.map(({ category, depth }) => (
+              <option key={category.id} value={category.id}>
+                {" ".repeat(depth)}
+                {category.name}
+                {category.isDefault ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Summary on this site" htmlFor={id("summary")}>
+        <Field label="Sort order" htmlFor={id("sort")}>
           <input
-            ref={summaryRef}
-            id={id("summary")}
-            name="summary"
-            maxLength={500}
-            defaultValue={listing?.text?.summary ?? ""}
-            aria-invalid={invalid("summary")}
-            className={FIELD}
-          />
-        </Field>
-        <Field
-          label="Description on this site"
-          htmlFor={id("description")}
-          hint="English only for now. Translations come later."
-        >
-          <textarea
-            ref={descriptionRef}
-            id={id("description")}
-            name="description"
-            rows={5}
-            maxLength={DESCRIPTION_MAX}
-            defaultValue={listing?.text?.description ?? ""}
-            aria-invalid={invalid("description")}
-            className={TEXTAREA}
+            id={id("sort")}
+            name="sortOrder"
+            type="number"
+            inputMode="numeric"
+            step={1}
+            defaultValue={listing?.sortOrder ?? 0}
+            className={cx(FIELD, "tabular")}
           />
         </Field>
       </fieldset>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
-      {saved ? <FormMessage kind="success">Listing saved.</FormMessage> : null}
+      {saved ? <FormMessage kind="success">{`${siteName} text saved.`}</FormMessage> : null}
       {canEdit ? (
         <div className="flex flex-wrap justify-end gap-2">
           {fieldsChanged ? (
@@ -301,7 +324,9 @@ export function ListingForm({
           ) : null}
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={listing ? "edit" : "plus"} size={17} />}
-            <span>{pending ? "Saving…" : listing ? "Save listing" : `List on ${siteName}`}</span>
+            <span>
+              {pending ? "Saving…" : listing ? `Save ${siteName} text` : `List on ${siteName}`}
+            </span>
           </button>
         </div>
       ) : (

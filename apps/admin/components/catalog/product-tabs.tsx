@@ -84,6 +84,8 @@ export function ProductTabs({
   }
   const [unsaved, setUnsavedMap] = useState<Readonly<Record<string, ProductTabId | null>>>({});
   const pendingSection = useRef<string | null>(null);
+  // DP-202: counts selections, so a section link inside the active tab still scrolls (and opens).
+  const [navigation, setNavigation] = useState(0);
   const topRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const base = useId();
@@ -103,6 +105,7 @@ export function ProductTabs({
     (tab: ProductTabId, section?: string) => {
       pendingSection.current = section ?? null;
       setActive(tab);
+      setNavigation((n) => n + 1);
       window.history.replaceState(null, "", productHref(productId, siteParam, tab));
     },
     [productId, siteParam],
@@ -114,14 +117,17 @@ export function ProductTabs({
     const section = pendingSection.current;
     pendingSection.current = null;
     if (section) {
-      document.getElementById(section)?.scrollIntoView({ block: "start" });
+      const target = document.getElementById(section);
+      // DP-202: a collapsed section (the shared product content) opens when a link targets it.
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      target?.scrollIntoView({ block: "start" });
     } else if (topRef.current && topRef.current.getBoundingClientRect().top < 0) {
       topRef.current.scrollIntoView({ block: "start" });
     }
     listRef.current
       ?.querySelector<HTMLElement>('[aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active]);
+  }, [active, navigation]);
 
   // Old one-page links: /products/…#documents opens Media & Documents at the documents.
   // Read after the first paint (the server cannot see the hash), and on in-page hash changes.

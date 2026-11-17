@@ -123,17 +123,20 @@ export function fixForIssue(code: string): IssueFix | null {
       };
     case "alt_text_missing":
       return { tab: "media", section: "images", hint: "Add alt text to every image." };
+    // DP-202: the site's own text is the primary place; the shared content is the fallback.
     case "summary_missing":
       return {
         tab: "content",
-        section: "master",
-        hint: "Add a summary to this site's listing (or copy the research proposal) or to the product master.",
+        section: "listing",
+        hint: "Add a summary to this site's product text (or copy the research proposal).",
+        perSite: true,
       };
     case "description_missing":
       return {
         tab: "content",
-        section: "master",
-        hint: "Add a description to this site's listing (or copy the research proposal) or to the product master.",
+        section: "listing",
+        hint: "Add a description to this site's product text (or copy the research proposal).",
+        perSite: true,
       };
     case "required_missing":
       return {
