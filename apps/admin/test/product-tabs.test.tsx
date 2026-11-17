@@ -175,7 +175,8 @@ function fixtures(opts: { canEditMaster: boolean }) {
         publication: null,
         outdated: { master: false, listing: false },
         publishMode: "APPROVED",
-        canShowListing: false,
+        // DP-198: the API lets an APPROVED publication show the listing (product:edit on BV).
+        canShowListing: true,
         canPreview: false,
         proposal: {
           id: "0190a8c4-7c1e-7000-8000-0000000000f1",
@@ -196,19 +197,20 @@ function fixtures(opts: { canEditMaster: boolean }) {
             },
             {
               severity: "BLOCKING",
-              code: "listing_hidden",
-              target: "listing",
-              message: "The listing is hidden on this site.",
-            },
-            {
-              severity: "BLOCKING",
               code: "cover_missing",
               target: "images",
               message: "A cover image is required.",
             },
             required,
           ],
-          warnings: [],
+          warnings: [
+            {
+              severity: "WARNING",
+              code: "listing_shown_on_publish",
+              target: "listing",
+              message: "The listing is hidden; publishing makes it visible on this site.",
+            },
+          ],
         },
       },
       {
@@ -426,7 +428,7 @@ describe("product page tabs", () => {
     expect(pub).toContain("Upload an image and make it the cover.");
     expect(pub).toContain(`href="/products/${PRODUCT}?site=bv&amp;tab=media"`);
     // DP-197: a listing that is not shown yet is no Content-tab fix any more: Publish shows it
-    // (here: approved path, product:edit on BV, so the console switches it on first).
+    // (DP-198: approved path, product:edit on BV, so the API shows it in the same request).
     expect(pub).not.toContain("Set the site listing to Visible");
     expect(pub).toContain("Not shown on this site yet: publishing shows it.");
     expect(pub).toContain("Fill in this required specification and save.");

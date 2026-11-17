@@ -246,6 +246,12 @@ describe("DP-193 publish request", () => {
     });
   });
 
+  it("DP-198: accepts makeVisible in the APPROVED mode too", () => {
+    expect(
+      PublishRequestSchema.parse({ version: 3, listingVersion: 2, makeVisible: true }),
+    ).toEqual({ version: 3, listingVersion: 2, approvalMode: "APPROVED", makeVisible: true });
+  });
+
   it("accepts DIRECT with makeVisible and refuses unknown modes and fields", () => {
     expect(
       PublishRequestSchema.parse({
@@ -303,17 +309,22 @@ describe("DP-193 checkPublication in DIRECT mode", () => {
     expect(codes(checkPublication({ ...hidden, mode: "DIRECT", canShowListing: false }))).toEqual([
       "listing_hidden",
     ]);
-    // APPROVED mode ignores canShowListing.
+    // DP-198: the APPROVED mode may show it too; without the right it still blocks.
+    const approved = checkPublication({
+      ...hidden,
+      product: { ...base.product },
+      mode: "APPROVED",
+      canShowListing: true,
+    });
+    expect(approved.ok).toBe(true);
+    expect(warn(approved)).toEqual(["listing_shown_on_publish"]);
     expect(
-      codes(
-        checkPublication({
-          ...hidden,
-          product: { ...base.product },
-          mode: "APPROVED",
-          canShowListing: true,
-        }),
-      ),
+      codes(checkPublication({ ...hidden, product: { ...base.product }, mode: "APPROVED" })),
     ).toEqual(["listing_hidden"]);
+    // A draft stays blocked in the APPROVED mode, shown listing or not.
+    expect(codes(checkPublication({ ...hidden, mode: "APPROVED", canShowListing: true }))).toEqual([
+      "not_approved",
+    ]);
   });
 
   it("keeps archived, missing listing, missing cover and invalid data blocking", () => {

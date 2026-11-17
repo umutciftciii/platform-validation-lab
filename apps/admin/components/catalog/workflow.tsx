@@ -12,7 +12,6 @@
  */
 import {
   REVIEW_COMMENT_MAX,
-  type Listing,
   type ProductWorkflowResponse,
   type PublicationIssue,
   type ReviewAction,
@@ -23,7 +22,6 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
 import { fixForIssue, productTabLabel } from "../../lib/product-tabs";
-import { listingVisibilityBody } from "../../lib/listing-request";
 import { planPublication } from "../../lib/publication-status";
 import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
@@ -62,7 +60,7 @@ function useWorkflowCall() {
     router.refresh();
     return true;
   }
-  return { pending, error, run, setError, refresh: () => router.refresh() };
+  return { pending, error, run, setError };
 }
 
 // --- review ------------------------------------------------------------------------------------
@@ -436,91 +434,41 @@ function SiteCard({
   site,
   data,
   productSlug,
-  listing,
-  canEditListing,
 }: {
   site: SitePublication;
   data: ProductWorkflowResponse;
   productSlug: string;
-  /** DP-197: the site's saved listing (for the APPROVED path's switch-on step). */
-  listing: Listing | null;
-  /** DP-197: product:edit on this site. */
-  canEditListing: boolean;
 }) {
-  const { pending, error, run, setError, refresh } = useWorkflowCall();
-  const [stepPending, setStepPending] = useState(false);
+  const { pending, error, run } = useWorkflowCall();
   const [reason, setReason] = useState("");
   const reasonId = useId();
   const pub = site.publication;
-  const plan = planPublication(site, { canEditListing, productStatus: data.status });
+  const plan = planPublication(site, { productStatus: data.status });
   const live = plan.status === "PUBLISHED";
   const base = `/products/${data.productId}/publications/${site.siteId}`;
   const name = SITE_SHORT[site.siteKey];
   const direct = site.publishMode === "DIRECT";
   const attention = plan.warnings.filter((w) => ATTENTION.has(w.code));
   const notes = plan.warnings.filter((w) => !ATTENTION.has(w.code));
-  const busy = pending !== null || stepPending;
+  const busy = pending !== null;
   // DP-187: a typed reason survives a tab change.
   useUnsavedChanges(reason.trim().length > 0);
 
   async function publish() {
     if (!site.listing) return;
-    const done = live ? `Republished on ${name}.` : `Published on ${name}.`;
-    if (plan.showListing !== "listing-first") {
-      await run(
-        "publish",
-        `${base}/publish`,
-        {
-          version: data.version,
-          listingVersion: site.listing.version,
-          approvalMode: site.publishMode,
-          makeVisible: plan.showListing === "direct",
-        },
-        done,
-      );
-      return;
-    }
-    // DP-197, APPROVED path: the API publishes a shown listing only, and refuses to show it in
-    // the same step. Show it with the listing API (product:edit, audited), publish, and switch
-    // it off again when publishing fails, so a failure leaves the site as it was.
-    if (!listing || listing.version !== site.listing.version) {
-      setError("The site listing changed meanwhile. Reload the page and check it again.");
-      return;
-    }
-    setStepPending(true);
-    setError(null);
-    const shown = await callCatalog<{ listing: Listing }>(
-      "POST",
-      `/products/${data.productId}/listings/${site.siteId}`,
-      listingVisibilityBody(listing, "VISIBLE", listing.version),
-    );
-    setStepPending(false);
-    if (!shown.ok) {
-      setError(shown.message);
-      return;
-    }
-    const ok = await run(
+    // DP-198 (R-29): one request in both modes. The API shows a hidden listing (makeVisible)
+    // and publishes in one transaction, so a refusal leaves the listing and the site unchanged.
+    await run(
       "publish",
       `${base}/publish`,
       {
         version: data.version,
-        listingVersion: shown.data.listing.version,
+        listingVersion: site.listing.version,
         approvalMode: site.publishMode,
+        makeVisible: plan.showListing,
       },
-      done,
+      live ? `Republished on ${name}.` : `Published on ${name}.`,
     );
-    if (ok) return;
-    const back = await callCatalog<{ listing: Listing }>(
-      "POST",
-      `/products/${data.productId}/listings/${site.siteId}`,
-      listingVisibilityBody(listing, "HIDDEN", shown.data.listing.version),
-    );
-    refresh();
-    if (!back.ok) {
-      setError(
-        `Publishing failed, and the listing could not be taken back off ${name}: ${back.message} Reload the page and check the site.`,
-      );
-    }
   }
   async function unpublish() {
     if (!pub) return;
@@ -635,11 +583,7 @@ function SiteCard({
               onClick={publish}
               className={buttonStyles.primary}
             >
-              {pending === "publish" || stepPending ? (
-                <Spinner />
-              ) : (
-                <Icon name="publish" size={17} />
-              )}
+              {pending === "publish" ? <Spinner /> : <Icon name="publish" size={17} />}
               <span key={plan.publishLabel}>{plan.publishLabel}</span>
             </button>
             {plan.canUnpublish ? (
@@ -698,15 +642,9 @@ function SiteCard({
 export function PublicationPanel({
   data,
   productSlug,
-  listings = {},
-  editableSiteIds = [],
 }: {
   data: ProductWorkflowResponse;
   productSlug: string;
-  /** DP-197: each site's saved listing, by site id. */
-  listings?: Readonly<Record<string, Listing | null>>;
-  /** DP-197: the sites where the caller has product:edit. */
-  editableSiteIds?: readonly string[];
 }) {
   if (data.sites.length === 0) {
     return <p className="text-sm text-ink-3">You cannot read any site of this product.</p>;
@@ -714,14 +652,7 @@ export function PublicationPanel({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {data.sites.map((s) => (
-        <SiteCard
-          key={s.siteId}
-          site={s}
-          data={data}
-          productSlug={productSlug}
-          listing={listings[s.siteId] ?? null}
-          canEditListing={editableSiteIds.includes(s.siteId)}
-        />
+        <SiteCard key={s.siteId} site={s} data={data} productSlug={productSlug} />
       ))}
     </div>
   );

@@ -134,35 +134,11 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
   const currentSite = workflow.ok
     ? (workflow.data.sites.find((s) => s.siteId === site.id) ?? null)
     : null;
-  // DP-197: the Publication tab switches a listing on before publishing an approved master
-  // (APPROVED path), so it needs each site's saved listing and the caller's product:edit there.
-  const publicationListings = workflow.ok
-    ? Object.fromEntries(
-        await Promise.all(
-          workflow.data.sites.map(async (s) => {
-            if (s.siteId === site.id) return [s.siteId, listing] as const;
-            if (!s.listing) return [s.siteId, null] as const;
-            const other = await serverRead(
-              `${CATALOG}/products/${id}?siteId=${s.siteId}`,
-              ProductDetailResponseSchema,
-            );
-            return [s.siteId, other.ok ? other.data.listing : null] as const;
-          }),
-        ),
-      )
-    : {};
-  const editableSiteIds = sites.filter((s) => s.canEdit).map((s) => s.id);
-
   // Publication: one red marker when no site can be published or republished as it stands.
-  // DP-197: the same plan as the site cards (an approved master's listing the caller may switch
-  // on is not a blocker).
+  // DP-197: the same plan as the site cards (a listing Publish may switch on is not a blocker).
   const blockedSites = workflow.ok
     ? workflow.data.sites.filter(
-        (s) =>
-          planPublication(s, {
-            canEditListing: editableSiteIds.includes(s.siteId),
-            productStatus: workflow.data.status,
-          }).blocking.length > 0,
+        (s) => planPublication(s, { productStatus: workflow.data.status }).blocking.length > 0,
       ).length
     : 0;
   // DP-193: the site's research proposal, for "Copy into the form" on the listing.
@@ -437,12 +413,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   title="Publication"
                   description="Preview, publish and unpublish per site. A live site shows the published snapshot, never the current draft; every blocker says where it is fixed."
                 >
-                  <PublicationPanel
-                    data={workflow.data}
-                    productSlug={product.slug}
-                    listings={publicationListings}
-                    editableSiteIds={editableSiteIds}
-                  />
+                  <PublicationPanel data={workflow.data} productSlug={product.slug} />
                 </Panel>
                 <Panel
                   id="review"
