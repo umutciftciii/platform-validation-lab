@@ -59,7 +59,7 @@ import {
 } from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
 import { CMS_SEEDS } from "./seed/bv.js";
-import { CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
+import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 
 const READ = "content:read";
 const EDIT = "content:edit";
@@ -403,7 +403,10 @@ export class CmsService {
     }
   }
 
-  /** What an import key creates: a designed page or fragment, or a content (TEMPLATE) page. */
+  /**
+   * What an import key creates: a designed page or fragment, a content (TEMPLATE) page or a news
+   * article.
+   */
   private static importPlan(key: string, siteKey: CmsSite["key"]) {
     const template = cmsDesignTemplate(key);
     const seed = CMS_SEEDS[key];
@@ -426,6 +429,18 @@ export class CmsService {
         title: page.title,
         seo: page.seo,
         content: page.content,
+      };
+    }
+    // DP-206: a news article of the live site (DP-020 article template at /news/<slug>).
+    const article = CMS_ARTICLE_SEEDS[key];
+    if (article && key.startsWith(`${siteKey.toLowerCase()}.`)) {
+      return {
+        kind: "TEMPLATE" as const,
+        templateKey: CMS_ARTICLE_TEMPLATE,
+        path: cmsArticlePath(article.slug),
+        title: article.title,
+        seo: article.seo,
+        content: article.content,
       };
     }
     throw new ApiError("VALIDATION_FAILED", [{ path: "key", rule: "unknown_template" }]);
