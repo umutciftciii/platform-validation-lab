@@ -494,7 +494,7 @@ describe("DP-193 direct publication and the research proposal", () => {
                 severity: "WARNING",
                 code: "not_reviewed",
                 target: "product",
-                message: "Published directly: no second person reviewed this version (optional).",
+                message: "No second person has reviewed this version (optional).",
               },
               {
                 severity: "WARNING",
@@ -775,7 +775,7 @@ describe("DP-203 product status, review action and Not listed", () => {
         severity: "WARNING" as const,
         code: "not_reviewed",
         target: "product",
-        message: "Published directly: no second person reviewed this version (optional).",
+        message: "No second person has reviewed this version (optional).",
       },
     ],
   };
@@ -976,6 +976,204 @@ describe("DP-203 product status, review action and Not listed", () => {
     const html = await render({ site: "bv" });
     expect(html).not.toContain("publishing blocked on");
     expect(html).not.toMatch(/role="tab"[^>]*>Publication<span[^>]*text-danger/);
+  });
+});
+
+// DP-204: Preview for the publisher (BV only, with the reason when missing); pre-publication
+// checks only where something can be published; no past-tense or flow names on the cards.
+describe("DP-204 preview access, publication warnings and status texts", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  type Site = ProductWorkflowResponse["sites"][number];
+  function setSites(bv: Partial<Site>, corp: Partial<Site> = {}) {
+    const w = reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+    reads.set(`${C}/products/${PRODUCT}/workflow`, {
+      ...w,
+      sites: [
+        { ...w.sites[0]!, ...bv },
+        { ...w.sites[1]!, ...corp },
+      ],
+    });
+  }
+  const warn = (code: string, message: string) => ({
+    severity: "WARNING" as const,
+    code,
+    target: code === "sensitive_claim" ? "text:pharmaceutical" : "product",
+    message,
+  });
+  const notReviewed = warn(
+    "not_reviewed",
+    "No second person has reviewed this version (optional).",
+  );
+  const shown = warn(
+    "listing_shown_on_publish",
+    "The listing is hidden; publishing makes it visible on this site.",
+  );
+  const pending = warn(
+    "company_review_pending",
+    "The company has not reviewed the proposal (optional).",
+  );
+  const claim = warn(
+    "sensitive_claim",
+    "The public text mentions pharmaceutical or pharmacopoeia grade: publish it only with a certificate or source document.",
+  );
+  const summaryMissing = warn("summary_missing", "The product has no summary.");
+  const allWarnings = {
+    ok: true,
+    blocking: [],
+    warnings: [notReviewed, shown, pending, claim, summaryMissing],
+  };
+  const pubRow = (status: "PUBLISHED" | "UNPUBLISHED", approvalMode: "DIRECT" | "APPROVED") => ({
+    id: "0190a8c4-7c1e-7000-8000-0000000000b1",
+    status,
+    productVersion: 7,
+    listingVersion: 2,
+    publishedAt: T,
+    publishedBy: { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" },
+    unpublishedAt: status === "UNPUBLISHED" ? T : null,
+    unpublishedBy:
+      status === "UNPUBLISHED"
+        ? { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" }
+        : null,
+    approvalMode,
+    version: 2,
+  });
+  function card(pub: string, name: string): string {
+    const found = pub
+      .split("<article")
+      .slice(1)
+      .find((c) => new RegExp(`</svg>${name}</h3>`).test(c));
+    expect(found, name).toBeDefined();
+    return found!.split("</article>")[0]!;
+  }
+  const bvCard = async () =>
+    card(
+      panel(await render({ site: "bv", tab: "publication" }), "publication"),
+      "Dream Petroleum BV",
+    );
+
+  it("a publisher without the review role gets Preview on BV", async () => {
+    // The API's canPreview (DP-204: product:publish or product_proposal:review on BV).
+    setSites({ canPublish: true, canPreview: true });
+    const bv = await bvCard();
+    expect(bv).toContain(">Preview<");
+    expect(bv).not.toContain("data-no-preview");
+  });
+
+  it("says why Preview is missing: rights on BV, BV only on Corporate", async () => {
+    setSites(
+      { canPublish: false, canPreview: false },
+      {
+        listing: { version: 1, visibility: "HIDDEN" },
+        readiness: { ok: true, blocking: [], warnings: [] },
+        canPreview: false,
+      },
+    );
+    const pub = panel(await render({ site: "bv", tab: "publication" }), "publication");
+    expect(card(pub, "Dream Petroleum BV")).not.toContain(">Preview<");
+    expect(card(pub, "Dream Petroleum BV")).toContain(
+      "Preview needs publishing or content review rights on this site.",
+    );
+    expect(card(pub, "Corporate")).toContain("Preview is available for the BV site only.");
+    expect(card(pub, "Corporate")).not.toContain(">Preview<");
+  });
+
+  it("an unlisted site offers no Preview and no preview note", async () => {
+    const corp = card(
+      panel(await render({ site: "bv", tab: "publication" }), "publication"),
+      "Corporate",
+    );
+    expect(corp).toContain("data-not-listed");
+    expect(corp).not.toContain(">Preview<");
+    expect(corp).not.toContain("data-no-preview");
+  });
+
+  it("Draft: every check before publishing, in the present tense", async () => {
+    setSites({
+      publishMode: "DIRECT",
+      listing: { version: 2, visibility: "HIDDEN" },
+      readiness: allWarnings,
+    });
+    const bv = await bvCard();
+    expect(bv).toContain("Check before publishing:");
+    expect(bv).toContain("No second person has reviewed this version (optional).");
+    expect(bv).toContain("Not shown on this site yet: publishing shows it.");
+    expect(bv).not.toMatch(/Published directly/);
+    expect(bv).toContain("Never published on this site.");
+  });
+
+  it("Published and up to date: no pre-publication checks; data and claim warnings stay", async () => {
+    setSites({
+      publishMode: "DIRECT",
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("PUBLISHED", "DIRECT"),
+      readiness: allWarnings,
+    });
+    const bv = await bvCard();
+    expect(bv).toContain("Live and up to date.");
+    expect(bv).not.toContain("Check before publishing");
+    expect(bv).not.toContain("No second person has reviewed");
+    expect(bv).not.toContain("publishing shows it");
+    expect(bv).not.toContain("company has not reviewed");
+    expect(bv).toContain("Notes on the live version:");
+    expect(bv).toContain("pharmaceutical or pharmacopoeia grade");
+    expect(bv).toContain("The product has no summary.");
+    // Date and person only: no version numbers, no flow names.
+    expect(bv).toContain("Published 16 Nov 2026");
+    expect(bv).not.toMatch(/master version|listing version|published directly|approved version/);
+  });
+
+  it("Published with changes: the checks come back, as before republishing", async () => {
+    setSites({
+      publishMode: "DIRECT",
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("PUBLISHED", "APPROVED"),
+      outdated: { master: true, listing: false },
+      readiness: allWarnings,
+    });
+    const bv = await bvCard();
+    expect(bv).toContain("Check before republishing:");
+    expect(bv).toContain("No second person has reviewed this version (optional).");
+    expect(bv).toContain("Changes since publication are not live yet");
+    expect(bv).not.toMatch(/master version|now 7|approved version/);
+  });
+
+  it("Unpublished: checks before publishing again, last publication by date", async () => {
+    setSites({
+      publishMode: "DIRECT",
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("UNPUBLISHED", "DIRECT"),
+      readiness: allWarnings,
+    });
+    const bv = await bvCard();
+    expect(bv).toContain(">Unpublished<");
+    expect(bv).toContain("Check before publishing:");
+    expect(bv).toContain("Last published 16 Nov 2026");
+    expect(bv).not.toMatch(/Last live|master version/);
+  });
+
+  it("keeps real blockers red on a live site", async () => {
+    setSites({
+      listing: { version: 2, visibility: "VISIBLE" },
+      publication: pubRow("PUBLISHED", "DIRECT"),
+      outdated: { master: true, listing: false },
+      readiness: {
+        ok: false,
+        blocking: [
+          {
+            severity: "BLOCKING",
+            code: "cover_missing",
+            target: "images",
+            message: "A cover image is required.",
+          },
+        ],
+        warnings: [claim],
+      },
+    });
+    const bv = await bvCard();
+    expect(bv).toContain("Republishing is blocked:");
+    expect(bv).toContain("A cover image is required.");
+    expect(bv).toContain("pharmaceutical or pharmacopoeia grade");
   });
 });
 

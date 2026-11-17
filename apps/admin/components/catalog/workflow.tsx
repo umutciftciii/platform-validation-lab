@@ -435,6 +435,17 @@ function IssueList({
   );
 }
 
+/**
+ * DP-204: warnings that only matter for the next (re)publication — how it is authorised, the
+ * listing it switches on, the optional company review. On a live, up-to-date site there is
+ * nothing to publish, so they are not shown; data gaps and claim warnings always stay.
+ */
+const BEFORE_PUBLISHING_ONLY = new Set([
+  "not_reviewed",
+  "listing_shown_on_publish",
+  "company_review_pending",
+]);
+
 /** DP-193: warnings the publisher must see without opening anything. */
 const ATTENTION = new Set([
   "sensitive_claim",
@@ -469,8 +480,17 @@ function SiteCard({
   const siteKey = site.siteKey.toLowerCase();
   const notListed = plan.notListed;
   const direct = site.publishMode === "DIRECT";
-  const attention = plan.warnings.filter((w) => ATTENTION.has(w.code));
-  const notes = plan.warnings.filter((w) => !ATTENTION.has(w.code));
+  // DP-204: a live, up-to-date site has nothing to publish: no pre-publication checks there.
+  const warnings = plan.upToDate
+    ? plan.warnings.filter((w) => !BEFORE_PUBLISHING_ONLY.has(w.code))
+    : plan.warnings;
+  const attention = warnings.filter((w) => ATTENTION.has(w.code));
+  const notes = warnings.filter((w) => !ATTENTION.has(w.code));
+  const attentionTitle = plan.upToDate
+    ? "Notes on the live version:"
+    : live
+      ? "Check before republishing:"
+      : "Check before publishing:";
   const busy = pending !== null;
   // DP-187: a typed reason survives a tab change.
   useUnsavedChanges(reason.trim().length > 0);
@@ -518,9 +538,7 @@ function SiteCard({
         <p className="text-xs text-ink-3">
           {live ? (
             <>
-              <span key="live-1" className="block">
-                {`Live: master version ${pub.productVersion}, listing version ${pub.listingVersion}${pub.approvalMode === "DIRECT" ? " · published directly" : " · approved version"}`}
-              </span>
+              {/* DP-204: date and person; no version numbers or publication-mode names. */}
               <span key="live-2" className="block">
                 {`Published ${when(pub.publishedAt)} by ${pub.publishedBy.name}`}
               </span>
@@ -530,13 +548,13 @@ function SiteCard({
               <span key="off-1" className="block">
                 {`Unpublished${pub.unpublishedAt ? ` ${when(pub.unpublishedAt)}` : ""}${pub.unpublishedBy ? ` by ${pub.unpublishedBy.name}` : ""}`}
               </span>
-              <span key="off-2" className="block">
-                {`Last live: master version ${pub.productVersion}`}
+              <span key="off-3" className="block">
+                {`Last published ${when(pub.publishedAt)}`}
               </span>
             </>
           ) : (
             <span key="hidden-1" className="block">
-              {`Not shown on this site at the moment. Last published: master version ${pub.productVersion}, ${when(pub.publishedAt)}.`}
+              {`Not shown on this site at the moment. Last published ${when(pub.publishedAt)}.`}
             </span>
           )}
         </p>
@@ -580,11 +598,9 @@ function SiteCard({
       {live && (site.outdated.master || site.outdated.listing) ? (
         <p className="flex items-start gap-1.5 rounded-lg bg-amber-soft px-2.5 py-1.5 text-xs text-amber-ink ring-1 ring-inset ring-amber/30">
           <Icon name="refresh" size={13} className="mt-px shrink-0" />
-          <span>
-            {site.outdated.master
-              ? `The master changed since publication (live version ${pub?.productVersion}, now ${data.version}).`
-              : "The site listing changed since publication."}{" "}
-            The site shows the published snapshot until it is republished.
+          <span key="outdated">
+            Changes since publication are not live yet: the site shows the published version until
+            it is republished.
           </span>
         </p>
       ) : null}
@@ -614,8 +630,10 @@ function SiteCard({
         </p>
       )}
       {!notListed && attention.length ? (
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-amber-ink">Check before publishing:</p>
+        <div className="space-y-1" data-attention="">
+          <p key={attentionTitle} className="text-xs font-semibold text-amber-ink">
+            {attentionTitle}
+          </p>
           <IssueList issues={attention} tone="amber" site={site.siteKey.toLowerCase()} />
         </div>
       ) : null}
@@ -633,7 +651,7 @@ function SiteCard({
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
 
       <div className="mt-auto flex flex-wrap items-start gap-2 pt-1">
-        {site.canPreview ? (
+        {site.canPreview && !notListed ? (
           <PreviewLinkButton siteId={site.siteId} productSlug={productSlug} label="Preview" />
         ) : null}
         {site.canPublish && !notListed ? (
@@ -678,6 +696,21 @@ function SiteCard({
             className="mt-1.5 block h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-petrol focus:outline-none focus:ring-4 focus:ring-petrol/15"
           />
         </details>
+      ) : null}
+      {/* DP-204: say why there is no Preview button (BV only; publisher or company reviewer). */}
+      {!notListed && !site.canPreview ? (
+        <p
+          key="no-preview"
+          className="flex items-start gap-1.5 text-xs text-ink-3"
+          data-no-preview=""
+        >
+          <Icon name="eye" size={13} className="mt-px shrink-0" />
+          <span>
+            {site.siteKey === "BV"
+              ? "Preview needs publishing or content review rights on this site."
+              : "Preview is available for the BV site only."}
+          </span>
+        </p>
       ) : null}
       {notListed ? null : site.canPublish ? (
         <p className="flex items-start gap-1.5 text-xs text-ink-3">

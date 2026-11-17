@@ -2635,6 +2635,56 @@ describe("11. DP-173 catalogue preview", () => {
     expect((await previewJson("bv", `/${token}/products/not-a-product`)).status).toBe(404);
   });
 
+  // DP-204: the publisher of the site previews before publishing; same link, same checks.
+  it("issues a link to the site's publisher too (audited as product:publish), never to others", async () => {
+    const publisher = await staff(
+      "preview-publisher",
+      [{ role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    // Still refused: no publishing or review right on BV, or another site's publisher.
+    expectError(await bvReader.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await bvEditor.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await nobody.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    expectError(await comPublisher.post(`/sites/${BV}/preview-link`), 403, "FORBIDDEN");
+    // Corporate has no preview pages: its publisher gets the same refusal as its reviewer.
+    expectError(await comPublisher.post(`/sites/${COM}/preview-link`), 409, "CONFLICT_STATE", {
+      path: "site",
+      rule: "no_preview",
+    });
+
+    const res = await publisher.post(`/sites/${BV}/preview-link`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const t = /\/catalog\/([^/]+)\//.exec(
+      CatalogPreviewLinkResponseSchema.parse(res.body).url,
+    )![1]!;
+    const audit = await lastAudit("catalog.preview_link_issued");
+    expect(audit?.actorUserId).toBe(publisher.userId);
+    expect((audit?.metadata as { permission?: string }).permission).toBe("product:publish");
+    expect(audit?.siteId).toBe(BV);
+
+    // The link opens the unpublished product on BV only, read-only.
+    expect((await preview("bv", `/${t}/products`)).status).toBe(200);
+    const detail = await previewJson("bv", `/${t}/products/dp173-a`);
+    expect(detail.status, JSON.stringify(detail.body)).toBe(200);
+    expect((await preview("com", `/${t}/products`)).status).toBe(404);
+    expect((await preview("admin", `/${t}/products`)).status).toBe(404);
+    // Another user's ids in the same link break the signature: 404.
+    const forged = t.replace(publisher.userId, bvReader.userId);
+    expect((await preview("bv", `/${forged}/products`)).status).toBe(404);
+
+    // Removing the publisher role ends the preview at once (the database re-checks every request).
+    const role = await owner.role.findUniqueOrThrow({ where: { key: "product_publisher" } });
+    const assignment = await owner.roleAssignment.findFirstOrThrow({
+      where: { userId: publisher.userId, roleId: role.id, siteId: BV, revokedAt: null },
+    });
+    await owner.roleAssignment.update({
+      where: { id: assignment.id },
+      data: { revokedAt: new Date(), revokedById: root.userId },
+    });
+    expect((await preview("bv", `/${t}/products`)).status).toBe(404);
+  });
+
   it("ends at once when the role is revoked or the session ends", async () => {
     const ok = await company.post(`/sites/${BV}/preview-link`);
     const t2 = /\/catalog\/([^/]+)\//.exec(
@@ -2724,7 +2774,8 @@ describe("12. DP-193 direct publication", () => {
     );
     const theirs = (await bvPublisher.workflow(d)).sites[0]!;
     expect(theirs).toMatchObject({ publishMode: "APPROVED", canShowListing: false });
-    expect(theirs.canPreview).toBe(false);
+    // DP-204: the site's publisher previews what it is about to publish.
+    expect(theirs.canPreview).toBe(true);
     expect(theirs.readiness.blocking.map((i) => i.code)).toEqual([
       "not_approved",
       "listing_hidden",

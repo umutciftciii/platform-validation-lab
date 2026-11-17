@@ -4,7 +4,8 @@
  *
  *  - A preview link is short-lived and signed; it names the BV site and the staff session that
  *    issued it (never the session token). On every preview request the API checks that this
- *    session is still live and that its user still holds `product_proposal:review` on BV.
+ *    session is still live and that its user still holds `product_proposal:review` or (DP-204)
+ *    `product:publish` on BV.
  *  - The preview is read-only: products of the site's listings (published or not, never
  *    archived) with their CURRENT data, the research proposal kept apart, and the held/withheld
  *    values in a block of their own, never as specifications. No documents, no cross-references,
