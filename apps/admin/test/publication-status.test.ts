@@ -1,9 +1,11 @@
 // DP-197: Draft / Published / Unpublished, the Publish button's plan and the listing request
-// bodies. The Content save never changes visibility; Publish shows the listing when needed
-// (DIRECT: in the API's transaction; APPROVED: switch on, publish, switch back off on failure).
+// bodies. The Content save never changes visibility; Publish shows the listing when needed.
+// DP-198 (R-29): in both modes with one request (makeVisible), inside the API's transaction.
 import type { Listing, PublicationIssue, SitePublication } from "@dream/contracts";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { listingSaveBody, listingVisibilityBody } from "../lib/listing-request";
+import { messageForIssues } from "../lib/catalog-client";
+import { listingSaveBody } from "../lib/listing-request";
 import { planPublication, siteStatus } from "../lib/publication-status";
 
 const T = "2026-11-17T10:00:00.000Z";
@@ -83,13 +85,13 @@ describe("siteStatus", () => {
 });
 
 describe("planPublication", () => {
-  const opts = { canEditListing: true, productStatus: "DRAFT" as const };
+  const opts = { productStatus: "DRAFT" as const };
 
   it("DIRECT: publishes a draft and lets the API show the listing in the same step", () => {
     const plan = planPublication(site(), opts);
     expect(plan).toMatchObject({
       status: "DRAFT",
-      showListing: "direct",
+      showListing: true,
       canPublish: true,
       publishLabel: "Publish",
       canUnpublish: false,
@@ -107,18 +109,14 @@ describe("planPublication", () => {
       }),
       opts,
     );
-    expect(plan.showListing).toBe("none");
+    expect(plan.showListing).toBe(false);
     expect(plan.canPublish).toBe(true);
   });
 
-  it("APPROVED: switches the listing on first when the publisher may edit it", () => {
-    const approved = site({
-      publishMode: "APPROVED",
-      canShowListing: false,
-      readiness: { ok: false, blocking: [issue("BLOCKING", "listing_hidden")], warnings: [] },
-    });
-    const plan = planPublication(approved, { canEditListing: true, productStatus: "APPROVED" });
-    expect(plan.showListing).toBe("listing-first");
+  it("APPROVED: shows the listing in the publishing request when the API allows it", () => {
+    const approved = site({ publishMode: "APPROVED" });
+    const plan = planPublication(approved, { productStatus: "APPROVED" });
+    expect(plan.showListing).toBe(true);
     expect(plan.blocking).toEqual([]);
     expect(plan.warnings.map((w) => [w.code, w.message])).toEqual([
       ["listing_shown_on_publish", "Not shown on this site yet: publishing shows it."],
@@ -132,8 +130,8 @@ describe("planPublication", () => {
       canShowListing: false,
       readiness: { ok: false, blocking: [issue("BLOCKING", "listing_hidden")], warnings: [] },
     });
-    const plan = planPublication(approved, { canEditListing: false, productStatus: "APPROVED" });
-    expect(plan.showListing).toBe("none");
+    const plan = planPublication(approved, { productStatus: "APPROVED" });
+    expect(plan.showListing).toBe(false);
     expect(plan.canPublish).toBe(false);
     expect(plan.blocking[0]!.message).toBe(
       "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.",
@@ -144,11 +142,10 @@ describe("planPublication", () => {
     const plan = planPublication(
       site({
         publishMode: "APPROVED",
-        canShowListing: false,
         readiness: {
           ok: false,
-          blocking: [issue("BLOCKING", "not_approved"), issue("BLOCKING", "listing_hidden")],
-          warnings: [],
+          blocking: [issue("BLOCKING", "not_approved")],
+          warnings: [issue("WARNING", "listing_shown_on_publish")],
         },
       }),
       opts,
@@ -209,7 +206,7 @@ describe("planPublication", () => {
     const plan = planPublication(site({ publication: publication("PUBLISHED") }), opts);
     expect(plan).toMatchObject({
       status: "UNPUBLISHED",
-      showListing: "direct",
+      showListing: true,
       upToDate: false,
       canPublish: true,
       publishLabel: "Publish",
@@ -275,20 +272,37 @@ describe("listing request bodies", () => {
       sortOrder: 0,
     });
   });
+});
 
-  it("the switch-on step changes only the visibility", () => {
-    expect(listingVisibilityBody({ ...listing, visibility: "HIDDEN" }, "VISIBLE", 9)).toEqual({
-      version: 9,
-      categoryId: listing.categoryId,
-      visibility: "VISIBLE",
-      sortOrder: 5,
-      title: "Title",
-      summary: "Summary",
-      description: null,
-    });
-    expect(listingVisibilityBody(listing, "HIDDEN", 10)).toMatchObject({
-      version: 10,
-      visibility: "HIDDEN",
-    });
+// DP-198 (R-29): Publish is one API request in both modes; the console never saves the listing
+// around it, and every refusal reads as what happened.
+describe("DP-198 one publishing request", () => {
+  const source = readFileSync(
+    new URL("../components/catalog/workflow.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("the Publication tab calls no listing endpoint", () => {
+    expect(source).not.toMatch(/\/listings\//);
+    expect(source).not.toMatch(/listingVisibilityBody|listing-first/);
+    expect(source).toMatch(/makeVisible: plan\.showListing/);
+  });
+
+  it("explains a repeated, a concurrent and a refused publication", () => {
+    expect(
+      messageForIssues("CONFLICT_STATE", [{ path: "publication", rule: "already_published" }]),
+    ).toBe("This version is already live on the site. Reload the page.");
+    expect(messageForIssues("CONFLICT_STATE", [{ path: "publication", rule: "unique" }])).toBe(
+      "The product was published on this site meanwhile. Reload the page.",
+    );
+    expect(messageForIssues("CONFLICT_STATE", [{ path: "status", rule: "not_approved" }])).toBe(
+      "The product master must be approved in its current version.",
+    );
+    expect(messageForIssues("CONFLICT_STATE", [{ path: "listingVersion", rule: "stale" }])).toBe(
+      "The site listing changed meanwhile. Reload the page and check it again.",
+    );
+    expect(messageForIssues("CONFLICT_STATE", [{ path: "listing", rule: "listing_hidden" }])).toBe(
+      "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.",
+    );
   });
 });

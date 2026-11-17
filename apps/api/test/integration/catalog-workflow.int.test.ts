@@ -2758,6 +2758,8 @@ describe("12. DP-193 direct publication", () => {
       "CONFLICT_STATE",
       { path: "product", rule: "not_approved" },
     );
+    // DP-198: makeVisible is accepted in the APPROVED mode, but a draft is still refused and the
+    // listing is not shown.
     expectError(
       await publish(admin, d, {
         version: await version(d),
@@ -2765,10 +2767,11 @@ describe("12. DP-193 direct publication", () => {
         approvalMode: "APPROVED",
         makeVisible: true,
       }),
-      400,
-      "VALIDATION_FAILED",
-      { path: "makeVisible", rule: "direct_only" },
+      409,
+      "CONFLICT_STATE",
+      { path: "product", rule: "not_approved" },
     );
+    expect(await listingRow(d)).toMatchObject({ visibility: "HIDDEN", version: lv });
   });
 
   it("blocks a hidden listing unless asked to show it, and stale versions", async () => {
@@ -3453,9 +3456,9 @@ describe("13. DP-180 proposal text into listings", () => {
 });
 
 // ------------------------------------------------------------------------------------------
-// 14. DP-197: the console without a visibility control (no API change). The admin's Content
-//     save sends the saved visibility back; Publish shows the listing (DIRECT: makeVisible;
-//     APPROVED: the listing API first); Unpublish takes the product off the public catalogue.
+// 14. DP-197: the console without a visibility control. The admin's Content save sends the
+//     saved visibility back; Publish shows the listing (makeVisible; DP-198: in both modes, see
+//     section 15); Unpublish takes the product off the public catalogue.
 // ------------------------------------------------------------------------------------------
 
 describe("14. DP-197 publication without a visibility control", () => {
@@ -3573,95 +3576,369 @@ describe("14. DP-197 publication without a visibility control", () => {
       product: { name: "Edited while live" },
     });
   });
+});
 
-  it("APPROVED: the console shows the listing first, then publishes the approved version", async () => {
-    const id = await completeProduct("dp197-approved", "DP197-C");
-    const l0 = await listingRow(id);
-    await bvEditor.post(`/products/${id}/listings/${BV}`, {
-      version: l0.version,
-      categoryId: l0.categoryId,
-      visibility: "HIDDEN",
-      title: "DP197-C for BV",
+// ------------------------------------------------------------------------------------------
+// 15. DP-198 (R-29): an APPROVED publication shows the hidden listing and publishes in ONE
+//     transaction (makeVisible in both modes), with one audit trail; a repeated or concurrent
+//     request publishes once; a refusal at any point leaves nothing behind.
+// ------------------------------------------------------------------------------------------
+
+describe("15. DP-198 atomic APPROVED publication", () => {
+  let pubEditor: Staff; // product_publisher + product_editor @ BV: publish and show the listing
+  const listingRow = (id: string) =>
+    owner.productSiteListing.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
     });
+  const publicationRow = (id: string) =>
+    owner.productPublication.findUnique({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+  const publish = (who: Staff, id: string, body: Record<string, unknown>) =>
+    who.post(`/products/${id}/publications/${BV}/publish`, body);
+  /** Everything a publication writes about one product, to prove that nothing was written. */
+  const trail = async (id: string) => {
+    const listing = await listingRow(id);
+    return {
+      listing: { visibility: listing.visibility, version: listing.version },
+      master: await owner.product.findUniqueOrThrow({
+        where: { id },
+        select: { status: true, version: true, approvedVersion: true },
+      }),
+      publication: await publicationRow(id),
+      published: await owner.productReviewEvent.count({
+        where: { productId: id, siteId: BV, action: "PUBLISHED" },
+      }),
+      listingAudits: await owner.auditEvent.count({
+        where: { action: "catalog.listing_updated", resourceId: listing.id, outcome: "SUCCESS" },
+      }),
+      publishAudits: await owner.auditEvent.count({
+        where: { action: "catalog.product_published", resourceId: id, siteId: BV },
+      }),
+    };
+  };
+  /** An APPROVED master whose BV listing is hidden (a new listing as the console creates it). */
+  async function approvedHidden(key: string, code: string): Promise<string> {
+    const id = await completeProduct(key, code);
+    const hidden = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: await listingVersion(id, BV),
+      categoryId: bvCategory,
+      visibility: "HIDDEN",
+      title: `${code} for BV`,
+    });
+    expect(hidden.status, JSON.stringify(hidden.body)).toBe(200);
     expect((await pm.post(`/products/${id}/submit`, { version: await version(id) })).status).toBe(
       200,
     );
     expect(
       (await reviewer.post(`/products/${id}/approve`, { version: await version(id) })).status,
     ).toBe(200);
-    const before = (await bvPublisher.workflow(id)).sites[0]!;
-    expect(before.publishMode).toBe("APPROVED");
-    expect(before.readiness.blocking.map((i) => i.code)).toEqual(["listing_hidden"]);
+    return id;
+  }
+  const bodyOf = async (id: string, extra: Record<string, unknown> = {}) => ({
+    version: await version(id),
+    listingVersion: await listingVersion(id, BV),
+    makeVisible: true,
+    ...extra,
+  });
 
-    // Step 1 (product:edit): the saved listing again, only switched on. The approval stays.
-    const l1 = await listingRow(id);
-    const shown = await bvEditor.post(`/products/${id}/listings/${BV}`, {
-      version: l1.version,
-      categoryId: l1.categoryId,
-      visibility: "VISIBLE",
-      sortOrder: l1.sortOrder,
-      title: l1.texts[0]?.title ?? null,
-      summary: l1.texts[0]?.summary ?? null,
-      description: l1.texts[0]?.description ?? null,
-    });
-    expect(shown.status, JSON.stringify(shown.body)).toBe(200);
-    expect((await owner.product.findUniqueOrThrow({ where: { id } })).status).toBe("APPROVED");
-    // Not live before the publication.
-    expect((await pub("bv", "/products/dp197-c")).status).toBe(404);
+  beforeAll(async () => {
+    pubEditor = await staff(
+      "dp198-publisher-editor",
+      [
+        { role: "product_publisher", site: BV },
+        { role: "product_editor", site: BV },
+      ],
+      root.userId,
+    );
+  });
 
-    // Step 2 (product:publish): the APPROVED publication as before.
-    const res = await bvPublisher.post(`/products/${id}/publications/${BV}/publish`, {
-      version: await version(id),
-      listingVersion: shown.body.listing.version,
-    });
+  it("tells the console that Publish shows the listing, only with edit rights on it", async () => {
+    const id = await approvedHidden("dp198-ctx", "DP198-A");
+    const mine = (await pubEditor.workflow(id)).sites.find((s) => s.siteKey === "BV")!;
+    expect(mine).toMatchObject({ publishMode: "APPROVED", canShowListing: true });
+    expect(mine.readiness).toMatchObject({ ok: true, blocking: [] });
+    expect(mine.readiness.warnings.map((w) => w.code)).toContain("listing_shown_on_publish");
+    // A publisher without product:edit: the hidden listing still blocks (no new right).
+    const theirs = (await bvPublisher.workflow(id)).sites[0]!;
+    expect(theirs).toMatchObject({ publishMode: "APPROVED", canShowListing: false });
+    expect(theirs.readiness.blocking.map((i) => i.code)).toEqual(["listing_hidden"]);
+    // An editor who cannot publish is not offered it either.
+    const editor = (await bvEditor.workflow(id)).sites.find((s) => s.siteKey === "BV")!;
+    expect(editor).toMatchObject({ canPublish: false, canShowListing: false });
+  });
+
+  it("publishes the approved version and shows the listing in one request, one audit trail", async () => {
+    const id = await approvedHidden("dp198-ok", "DP198-B");
+    const before = await trail(id);
+    expect((await pub("bv", "/products/dp198-b")).status).toBe(404);
+    const body = await bodyOf(id);
+    const res = await publish(pubEditor, id, body);
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(ProductWorkflowResponseSchema.parse(res.body).sites[0]!.publication).toMatchObject({
+    const site = ProductWorkflowResponseSchema.parse(res.body).sites.find(
+      (s) => s.siteKey === "BV",
+    )!;
+    expect(site.publication).toMatchObject({
       status: "PUBLISHED",
       approvalMode: "APPROVED",
+      productVersion: body.version,
+      listingVersion: body.listingVersion + 1,
     });
-    expect((await pub("bv", "/products/dp197-c")).status).toBe(200);
+    expect(site.outdated).toEqual({ master: false, listing: false });
+
+    const after = await trail(id);
+    expect(after.listing).toEqual({ visibility: "VISIBLE", version: body.listingVersion + 1 });
+    // The approval and the master are untouched (the lock keeps the version).
+    expect(after.master).toEqual(before.master);
+    expect(after.master).toMatchObject({ status: "APPROVED", approvedVersion: body.version });
+    expect(after.published).toBe(before.published + 1);
+    expect(after.listingAudits).toBe(before.listingAudits + 1);
+    expect(after.publishAudits).toBe(before.publishAudits + 1);
+
+    const listing = await listingRow(id);
+    const shown = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "catalog.listing_updated", resourceId: listing.id },
+      orderBy: { occurredAt: "desc" },
+    });
+    const published = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "catalog.product_published", resourceId: id },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(shown).toMatchObject({ actorUserId: pubEditor.userId, siteId: BV, outcome: "SUCCESS" });
+    expect(shown.metadata).toMatchObject({
+      productId: id,
+      changed: ["visibility"],
+      visibility: "VISIBLE",
+      version: body.listingVersion + 1,
+      cause: "approved_publication",
+      permission: "product:edit",
+    });
+    expect(published).toMatchObject({ actorUserId: pubEditor.userId, siteId: BV });
+    expect(published.metadata).toMatchObject({
+      productVersion: body.version,
+      listingVersion: body.listingVersion + 1,
+      listingShown: true,
+      republished: false,
+      permission: "product:publish",
+    });
+    // Both events belong to the same request.
+    expect(shown.requestId).toBe(published.requestId);
+
+    expect((await pub("bv", "/products/dp198-b")).status).toBe(200);
+    expect(
+      PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items.map(
+        (i) => i.slug,
+      ),
+    ).toContain("dp198-b");
+  });
+
+  it("refuses callers without both rights, audited, and changes nothing", async () => {
+    const id = await approvedHidden("dp198-rbac", "DP198-C");
+    const before = await trail(id);
+    const body = await bodyOf(id);
+    // Publisher without product:edit: the listing change is refused (403, audited).
+    expectError(await publish(bvPublisher, id, body), 403, "FORBIDDEN");
+    const denied = await owner.auditEvent.findFirst({
+      where: { action: "catalog.access_denied", actorUserId: bvPublisher.userId },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(denied).toMatchObject({
+      outcome: "DENIED",
+      resourceType: "product_listing",
+      resourceId: id,
+    });
+    // Editor without product:publish, the other site's publisher, a reader, a super admin
+    // (never publishes) and a user without a role.
+    for (const s of [bvEditor, comPublisher, bvReader, root, nobody]) {
+      expectError(await publish(s, id, body), 403, "FORBIDDEN");
+    }
+    expect(await trail(id)).toEqual(before);
+    expect((await pub("bv", "/products/dp198-c")).status).toBe(404);
+  });
+
+  it("refuses stale versions and an unapproved master without showing the listing", async () => {
+    const id = await approvedHidden("dp198-stale", "DP198-D");
+    const before = await trail(id);
+    const body = await bodyOf(id);
+    expectError(
+      await publish(pubEditor, id, { ...body, version: body.version - 1 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    expectError(
+      await publish(pubEditor, id, { ...body, listingVersion: body.listingVersion - 1 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "listingVersion", rule: "stale" },
+    );
+    expect(await trail(id)).toEqual(before);
+
+    // An edit after the approval returns the master to DRAFT: refused, listing stays hidden.
+    const edit = await pm.post(`/products/${id}`, {
+      version: body.version,
+      code: "DP198-D",
+      slug: "dp198-d",
+      name: "Product DP198-D",
+      summary: "Changed after approval",
+      description: "Description of DP198-D",
+    });
+    expect(edit.status, JSON.stringify(edit.body)).toBe(200);
+    expectError(await publish(pubEditor, id, await bodyOf(id)), 409, "CONFLICT_STATE", {
+      path: "product",
+      rule: "not_approved",
+    });
+    expect((await trail(id)).listing).toEqual(before.listing);
+    expect(await publicationRow(id)).toBeNull();
+  });
+
+  it("rolls back the shown listing when the publication is refused at the last write", async () => {
+    const id = await approvedHidden("dp198-rollback", "DP198-E");
+    const before = await trail(id);
+    // The database refuses the publication row itself (as its guard would), after the API has
+    // already shown the listing and written its audit event in the same transaction.
+    await owner.$executeRawUnsafe(`
+      CREATE FUNCTION dp198_refuse_publication() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN
+        RAISE EXCEPTION 'catalog: only the approved version of a product can be published'
+          USING ERRCODE = 'check_violation';
+      END
+      $fn$`);
+    await owner.$executeRawUnsafe(`
+      CREATE TRIGGER dp198_refuse_publication BEFORE INSERT OR UPDATE ON "ProductPublication"
+      FOR EACH ROW WHEN (NEW."productId" = '${id}'::uuid)
+      EXECUTE FUNCTION dp198_refuse_publication()`);
+    try {
+      expectError(await publish(pubEditor, id, await bodyOf(id)), 409, "CONFLICT_STATE", {
+        path: "status",
+        rule: "not_approved",
+      });
+    } finally {
+      await owner.$executeRawUnsafe(
+        `DROP TRIGGER dp198_refuse_publication ON "ProductPublication"`,
+      );
+      await owner.$executeRawUnsafe(`DROP FUNCTION dp198_refuse_publication()`);
+    }
+    // Nothing of the request is left: listing, master, publication, history, audit.
+    expect(await trail(id)).toEqual(before);
+    expect((await pub("bv", "/products/dp198-e")).status).toBe(404);
+    // And the same request succeeds once the refusal is gone.
+    expect((await publish(pubEditor, id, await bodyOf(id))).status).toBe(200);
+  });
+
+  it("concurrent identical requests: exactly one publication, one event, one audit", async () => {
+    const id = await approvedHidden("dp198-race", "DP198-F");
+    const before = await trail(id);
+    const body = await bodyOf(id);
+    const results = await Promise.all([
+      publish(pubEditor, id, body),
+      publish(pubEditor, id, body),
+      publish(pubEditor, id, body),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409, 409]);
+    for (const r of results.filter((x) => x.status === 409)) {
+      expectError(r, 409, "CONFLICT_STATE", { path: "listingVersion", rule: "stale" });
+    }
+    const after = await trail(id);
+    expect(after.listing).toEqual({ visibility: "VISIBLE", version: body.listingVersion + 1 });
+    expect(after.published).toBe(before.published + 1);
+    expect(after.listingAudits).toBe(before.listingAudits + 1);
+    expect(after.publishAudits).toBe(before.publishAudits + 1);
+    expect(after.publication).toMatchObject({ status: "PUBLISHED", version: 1 });
+  });
+
+  it("a repeated request publishes once: what is live is not published twice", async () => {
+    const id = await approvedHidden("dp198-repeat", "DP198-G");
+    const res = await publish(pubEditor, id, await bodyOf(id));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const live = await trail(id);
+    // The same request again (now without makeVisible, as the listing is shown), sequentially
+    // and concurrently.
+    const again = await bodyOf(id, { makeVisible: false });
+    expectError(await publish(pubEditor, id, again), 409, "CONFLICT_STATE", {
+      path: "publication",
+      rule: "already_published",
+    });
+    const raced = await Promise.all([
+      publish(pubEditor, id, again),
+      publish(bvPublisher, id, again),
+    ]);
+    for (const r of raced) {
+      expectError(r, 409, "CONFLICT_STATE", { path: "publication", rule: "already_published" });
+    }
+    expect(await trail(id)).toEqual(live);
+  });
+
+  it("Unpublish takes it off the public catalogue; Publish brings it back without a second listing change", async () => {
+    const id = await approvedHidden("dp198-unpub", "DP198-H");
+    expect((await publish(pubEditor, id, await bodyOf(id))).status).toBe(200);
+    expect((await pub("bv", "/products/dp198-h")).status).toBe(200);
+    const row = (await publicationRow(id))!;
+    const off = await bvPublisher.post(`/products/${id}/publications/${BV}/unpublish`, {
+      version: row.version,
+      comment: null,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await publicationRow(id))?.status).toBe("UNPUBLISHED");
+    expect((await listingRow(id)).visibility).toBe("VISIBLE");
+    expect((await pub("bv", "/products/dp198-h")).status).toBe(404);
+    expect(
+      PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items.map(
+        (i) => i.slug,
+      ),
+    ).not.toContain("dp198-h");
+
+    // A publisher without product:edit may publish again: the listing is shown already.
+    const listingBefore = await listingRow(id);
+    const back = await publish(bvPublisher, id, await bodyOf(id, { makeVisible: false }));
+    expect(back.status, JSON.stringify(back.body)).toBe(200);
+    expect((await listingRow(id)).version).toBe(listingBefore.version);
+    expect((await pub("bv", "/products/dp198-h")).status).toBe(200);
     expect(await lastAudit("catalog.product_published")).toMatchObject({
       actorUserId: bvPublisher.userId,
-      siteId: BV,
+      resourceId: id,
+    });
+    expect((await lastAudit("catalog.product_published"))!.metadata).toMatchObject({
+      republished: true,
+      listingShown: false,
     });
   });
 
-  it("APPROVED: a failed publication is undone by switching the listing off again", async () => {
-    const id = await completeProduct("dp197-rollback", "DP197-D");
-    const l0 = await listingRow(id);
+  it("DIRECT is unchanged: the draft stays DRAFT, the listing is shown, a repeat publishes once", async () => {
+    const admin = await staff(
+      "dp198-direct-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    const id = await completeProduct("dp198-direct", "DP198-I");
+    const l = await listingRow(id);
     await bvEditor.post(`/products/${id}/listings/${BV}`, {
-      version: l0.version,
-      categoryId: l0.categoryId,
+      version: l.version,
+      categoryId: bvCategory,
       visibility: "HIDDEN",
-      title: "DP197-D for BV",
+      title: "DP198-I for BV",
     });
-    // Not approved: the publication is refused after the listing was switched on.
-    const l1 = await listingRow(id);
-    const shown = await bvEditor.post(`/products/${id}/listings/${BV}`, {
-      version: l1.version,
-      categoryId: l1.categoryId,
-      visibility: "VISIBLE",
-      title: "DP197-D for BV",
+    const body = await bodyOf(id, { approvalMode: "DIRECT" });
+    const res = await publish(admin, id, body);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const after = await trail(id);
+    expect(after.master.status).toBe("DRAFT");
+    expect(after.master.version).toBe(body.version);
+    expect(after.listing).toEqual({ visibility: "VISIBLE", version: body.listingVersion + 1 });
+    expect(after.publication).toMatchObject({ status: "PUBLISHED", approvalMode: "DIRECT" });
+    const shown = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "catalog.listing_updated", resourceId: l.id },
+      orderBy: { occurredAt: "desc" },
     });
-    expect(shown.status).toBe(200);
+    expect(shown.metadata).toMatchObject({ cause: "direct_publication" });
+    expect(await lastAudit("catalog.product_published_direct")).toMatchObject({ resourceId: id });
     expectError(
-      await bvPublisher.post(`/products/${id}/publications/${BV}/publish`, {
-        version: await version(id),
-        listingVersion: shown.body.listing.version,
-      }),
+      await publish(admin, id, await bodyOf(id, { approvalMode: "DIRECT", makeVisible: false })),
       409,
       "CONFLICT_STATE",
-      { path: "product", rule: "not_approved" },
+      { path: "publication", rule: "already_published" },
     );
-    const back = await bvEditor.post(`/products/${id}/listings/${BV}`, {
-      version: shown.body.listing.version,
-      categoryId: l1.categoryId,
-      visibility: "HIDDEN",
-      title: "DP197-D for BV",
-    });
-    expect(back.status).toBe(200);
-    expect((await listingRow(id)).visibility).toBe("HIDDEN");
-    expect(await publicationRow(id)).toBeNull();
-    expect((await pub("bv", "/products/dp197-d")).status).toBe(404);
+    expect(await trail(id)).toEqual(after);
+    expect((await pub("bv", "/products/dp198-i")).status).toBe(200);
   });
 });
