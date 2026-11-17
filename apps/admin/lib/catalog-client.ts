@@ -39,7 +39,12 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "product:not_approved": "The product master must be approved in its current version.",
   "product:archived": "Archived products cannot be published.",
   "listing:listing_missing": "List the product on this site first.",
-  "listing:listing_hidden": "Make the listing visible on this site first.",
+  "listing:listing_hidden":
+    "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.",
+  // DP-198: the database's refusal of an unapproved version, and repeated or concurrent publishing.
+  "status:not_approved": "The product master must be approved in its current version.",
+  "publication:already_published": "This version is already live on the site. Reload the page.",
+  "publication:unique": "The product was published on this site meanwhile. Reload the page.",
   "images:cover_missing": "Add a cover image first.",
   "summary:summary_missing": "Add a summary (master or listing) first.",
   "(root):image_published": "This image is shown on a live site. Unpublish the product first.",

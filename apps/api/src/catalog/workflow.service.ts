@@ -14,6 +14,10 @@
  *  - DP-193 (ADR-023) direct publish (`approvalMode: DIRECT`): additionally `product:approve`
  *    platform-wide (the database checks both again); showing a hidden listing in the same step
  *    (`makeVisible`) needs `product:edit` of the site. The master status is never changed.
+ *  - DP-198 (R-29): `makeVisible` in the APPROVED mode too (`product:edit` of the site as well):
+ *    the listing is shown, the publication written and both audited in ONE transaction, after
+ *    the master row is locked, so either all of it is stored or nothing. Publishing again what is
+ *    already live (same mode and versions) is refused, so a repeated request publishes once.
  *
  * Every transition names the version it was based on; each writes its history event and audit
  * event in the same transaction.
@@ -237,7 +241,8 @@ export class WorkflowService {
         // APPROVED; an APPROVED master keeps the PM-3 path.
         const publishMode: PublicationMode =
           canPublish && approvesPlatform && product.status !== "APPROVED" ? "DIRECT" : "APPROVED";
-        const canShowListing = publishMode === "DIRECT" && a.allows(EDIT, site);
+        // DP-198: either mode may show a hidden listing in the publishing transaction.
+        const canShowListing = canPublish && a.allows(EDIT, site);
         const proposal = proposals.get(s.id) ?? null;
         return {
           siteId: s.id,
@@ -584,24 +589,23 @@ export class WorkflowService {
       body,
     );
     const direct = approvalMode === "DIRECT";
-    if (makeVisible && !direct) {
-      throw new ApiError("VALIDATION_FAILED", [{ path: "makeVisible", rule: "direct_only" }]);
-    }
     if (direct) {
       // DP-193: publishing without a review needs the approver's right too (audited when
       // refused); the database checks both rights again.
       await a.require(APPROVE, PLATFORM, { type: "product_publication", id });
-      if (makeVisible) {
-        await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id });
-      }
+    }
+    if (makeVisible) {
+      // DP-193 / DP-198: showing the listing is a listing change (audited when refused).
+      await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id });
     }
     const db = a.db({ siteIds: [siteId], includePlatform: true });
     try {
       await db.$transaction(async (tx) => {
-        // DP-193: a direct publication locks the master first, so a concurrent edit waits and
-        // the snapshot is exactly the version checked here (the APPROVED path relies on the
-        // approval reset instead, as before).
-        if (direct && !(await lockMaster(tx, id))) throw new ApiError("NOT_FOUND");
+        // DP-193 / DP-198: every publication locks the master first (a no-op UPDATE that keeps
+        // the version and the approval), so a concurrent edit, review decision or second
+        // publication of this product waits and then sees this one's result: the snapshot is
+        // exactly the version checked here, and a repeated request finds the live publication.
+        if (!(await lockMaster(tx, id))) throw new ApiError("NOT_FOUND");
         const product = await tx.product.findUnique({ where: { id } });
         if (!product) throw new ApiError("NOT_FOUND");
         let listing = await tx.productSiteListing.findUnique({
@@ -641,7 +645,31 @@ export class WorkflowService {
             readiness.blocking.slice(0, 50).map((i) => ({ path: i.target, rule: i.code })),
           );
         }
-        // DP-193: show the hidden listing in the same transaction (its own version and audit).
+        const existing = await tx.productPublication.findUnique({
+          where: { productId_siteId: { productId: id, siteId } },
+          select: {
+            id: true,
+            version: true,
+            status: true,
+            productVersion: true,
+            listingVersion: true,
+            approvalMode: true,
+          },
+        });
+        // DP-198: what is live already is not published twice (a repeated or concurrent request).
+        if (
+          existing?.status === "PUBLISHED" &&
+          existing.approvalMode === approvalMode &&
+          existing.productVersion === version &&
+          existing.listingVersion === listing.version &&
+          listing.visibility === "VISIBLE"
+        ) {
+          throw new ApiError("CONFLICT_STATE", [
+            { path: "publication", rule: "already_published" },
+          ]);
+        }
+        // DP-193 / DP-198: show the hidden listing in the same transaction (its own version and
+        // audit); a later refusal rolls it back with the publication.
         const listingShown = makeVisible && listing.visibility !== "VISIBLE";
         if (listingShown) {
           const res = await tx.productSiteListing.updateMany({
@@ -663,7 +691,7 @@ export class WorkflowService {
               changed: ["visibility"],
               visibility: "VISIBLE",
               version: listing.version,
-              cause: "direct_publication",
+              cause: direct ? "direct_publication" : "approved_publication",
             },
           });
         }
@@ -707,10 +735,6 @@ export class WorkflowService {
               height: display?.height ?? 0,
             };
           }),
-        });
-        const existing = await tx.productPublication.findUnique({
-          where: { productId_siteId: { productId: id, siteId } },
-          select: { id: true, version: true },
         });
         const fields = {
           status: "PUBLISHED" as const,
@@ -769,7 +793,7 @@ export class WorkflowService {
                   .length,
                 companyReview: proposal?.status ?? null,
               }
-            : common,
+            : { ...common, listingVersion: publishedListingVersion, listingShown },
         });
       });
     } catch (e) {

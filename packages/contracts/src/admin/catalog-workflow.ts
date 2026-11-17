@@ -26,6 +26,11 @@
  * recorded as such (publication row, history comment, audit action). A hidden listing may be shown
  * in the same transaction (`makeVisible`, needs `product:edit` of the site). Everything else stays:
  * archived, missing listing, stale versions, missing cover and invalid technical data block.
+ *
+ * DP-198 (R-29): `makeVisible` works in both modes. An APPROVED publication may show the hidden
+ * listing in the same transaction as the publication (`product:edit` of the site as well), so the
+ * console no longer switches the listing on with a separate request first. Publishing again what
+ * is already live (same mode, same master and listing versions) is refused (`already_published`).
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
@@ -88,8 +93,8 @@ export type PublicationMode = z.infer<typeof PublicationModeSchema>;
 /**
  * Publish (or republish) on one site: the master version and the listing version the publisher
  * reviewed. Either changed since -> 409 stale. DP-193: `approvalMode` defaults to APPROVED, so
- * older clients keep their behaviour; `makeVisible` (DIRECT only) shows a hidden listing in the
- * same transaction.
+ * older clients keep their behaviour; `makeVisible` shows a hidden listing in the same
+ * transaction (DP-198: in both modes; needs `product:edit` of the site).
  */
 export const PublishRequestSchema = z.strictObject({
   version: VersionSchema,
@@ -186,7 +191,10 @@ export interface ReadinessInput {
   images: readonly { id: string; isCover: boolean; altText: string | null }[];
   /** DP-193: the mode the publisher will use; APPROVED when omitted (the PM-3 rules). */
   mode?: PublicationMode;
-  /** DP-193: DIRECT only — the publisher may show a hidden listing in the same step. */
+  /**
+   * DP-193 / DP-198: the publisher may show a hidden listing in the same step (both modes;
+   * product:edit of the site).
+   */
   canShowListing?: boolean;
   /** DP-193: the site's research proposal (DP-171), when there is one. */
   proposal?: { status: "REVIEW_PENDING" | "CHANGES_REQUESTED" | "APPROVED" } | null;
@@ -275,8 +283,8 @@ const fromValidation = (i: ValidationIssue): PublicationIssue => ({ ...i });
  * show the same list before the publisher clicks.
  *
  * DP-193, mode DIRECT: a DRAFT or IN_REVIEW master is a WARNING (`not_reviewed`) instead of
- * `not_approved`; a hidden listing is a WARNING (`listing_shown_on_publish`) when the publisher
- * may show it, else still BLOCKING. In both modes a research proposal the company has not
+ * `not_approved`. DP-198, both modes: a hidden listing is a WARNING (`listing_shown_on_publish`)
+ * when the publisher may show it, else still BLOCKING. In both modes a research proposal the company has not
  * approved (`company_review_pending`) and sensitive wording in the public text
  * (`sensitive_claim`) are WARNINGS. Archived, listing missing, cover missing and the engine's
  * BLOCKING issues block in both modes.
@@ -314,7 +322,7 @@ export function checkPublication(input: ReadinessInput): PublicationReadiness {
       pub("BLOCKING", "listing_missing", "listing", "The site does not list this product."),
     );
   } else if (listing.visibility !== "VISIBLE") {
-    if (direct && input.canShowListing) {
+    if (input.canShowListing) {
       warnings.push(
         pub(
           "WARNING",
@@ -437,7 +445,10 @@ export const SitePublicationSchema = z.strictObject({
    * master is not APPROVED; APPROVED otherwise.
    */
   publishMode: PublicationModeSchema,
-  /** DP-193: DIRECT may show a hidden listing (product:edit of this site). */
+  /**
+   * DP-193 / DP-198: Publish may show a hidden listing in the same transaction, in either mode
+   * (product:publish and product:edit of this site).
+   */
   canShowListing: z.boolean(),
   /**
    * DP-193: the caller may open this product in the BV catalogue preview (DP-173: BV only,

@@ -1,7 +1,7 @@
 /**
  * DP-197: the request bodies the console sends to POST /products/:id/listings/:siteId. Pure
- * functions, unit-tested: the Content tab's save never changes the listing's visibility, and the
- * Publication tab's switch-on step changes nothing but the visibility.
+ * functions, unit-tested: the Content tab's save never changes the listing's visibility. DP-198:
+ * the Publication tab no longer saves the listing; Publish shows it in the API's transaction.
  */
 import type { Listing, ListingUpsertRequest } from "@dream/contracts";
 
@@ -30,25 +30,5 @@ export function listingSaveBody(
     title: values.title,
     summary: values.summary,
     description: values.description,
-  };
-}
-
-/**
- * Publication tab, approved path: the saved listing again with only its visibility changed
- * (switched on before publishing, or back off when publishing failed).
- */
-export function listingVisibilityBody(
-  listing: Listing,
-  visibility: Listing["visibility"],
-  version: number,
-): ListingUpsertRequest {
-  return {
-    version,
-    categoryId: listing.categoryId,
-    visibility,
-    sortOrder: listing.sortOrder,
-    title: listing.text?.title ?? null,
-    summary: listing.text?.summary ?? null,
-    description: listing.text?.description ?? null,
   };
 }

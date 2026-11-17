@@ -1,8 +1,9 @@
 /**
  * DP-197: what the console shows about a product on one site, in three words — Draft, Published,
  * Unpublished — and what the Publication tab's Publish button does. The listing's technical
- * visibility (HIDDEN / VISIBLE) is never shown: publishing switches the listing on when needed,
- * unpublishing takes the product off the site. Pure functions over the API's answers; the API
+ * visibility (HIDDEN / VISIBLE) is never shown: publishing switches the listing on when needed
+ * (DP-198: in the publishing transaction itself, in both modes), unpublishing takes the product
+ * off the site. Pure functions over the API's answers; the API
  * (checkPublication, the publish and unpublish transitions, the database guards) still decides.
  */
 import type {
@@ -38,19 +39,14 @@ export function siteStatus(input: {
   return live ? "PUBLISHED" : "UNPUBLISHED";
 }
 
-/**
- * How Publish treats a listing that is not switched on yet:
- *  - `none`: nothing to switch on (or it cannot be: then `listing_hidden` stays blocking);
- *  - `direct`: the API switches it on in the same transaction (DP-193 `makeVisible`);
- *  - `listing-first`: an approved master (APPROVED path, where the API refuses `makeVisible`):
- *    the console first saves the listing switched on with the caller's product:edit, then
- *    publishes, and switches it off again if publishing fails.
- */
-export type ShowListing = "none" | "direct" | "listing-first";
-
 export interface PublicationPlan {
   status: SiteStatus;
-  showListing: ShowListing;
+  /**
+   * DP-198 (R-29): Publish shows the hidden listing in the same API transaction (`makeVisible`,
+   * both modes; the API's `canShowListing`: product:publish and product:edit of the site). False
+   * when it is shown already, or cannot be shown (then `listing_hidden` stays blocking).
+   */
+  showListing: boolean;
   blocking: PublicationIssue[];
   warnings: PublicationIssue[];
   /** Published and nothing changed since: Publish has nothing to do. */
@@ -75,7 +71,7 @@ function plain(issue: PublicationIssue): PublicationIssue {
 
 export function planPublication(
   site: SitePublication,
-  opts: { canEditListing: boolean; productStatus: ProductStatus },
+  opts: { productStatus: ProductStatus },
 ): PublicationPlan {
   const pub = site.publication;
   const status = siteStatus({
@@ -83,34 +79,9 @@ export function planPublication(
     listing: site.listing?.visibility ?? null,
     productStatus: opts.productStatus,
   });
-  const hidden = site.listing?.visibility === "HIDDEN";
-  const showListing: ShowListing = !hidden
-    ? "none"
-    : site.publishMode === "DIRECT"
-      ? site.canShowListing
-        ? "direct"
-        : "none"
-      : opts.canEditListing && site.canPublish
-        ? "listing-first"
-        : "none";
-
-  let blocking = site.readiness.blocking.map(plain);
-  let warnings = site.readiness.warnings.map(plain);
-  if (showListing === "listing-first") {
-    const hiddenIssue = blocking.find((i) => i.code === "listing_hidden");
-    blocking = blocking.filter((i) => i.code !== "listing_hidden");
-    if (hiddenIssue) {
-      warnings = [
-        {
-          ...hiddenIssue,
-          severity: "WARNING",
-          code: "listing_shown_on_publish",
-          message: SHOWN_ON_PUBLISH,
-        },
-        ...warnings,
-      ];
-    }
-  }
+  const showListing = site.listing?.visibility === "HIDDEN" && site.canShowListing;
+  const blocking = site.readiness.blocking.map(plain);
+  const warnings = site.readiness.warnings.map(plain);
   const upToDate = status === "PUBLISHED" && !site.outdated.master && !site.outdated.listing;
   return {
     status,
