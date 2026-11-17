@@ -39,6 +39,30 @@ export function siteStatus(input: {
   return live ? "PUBLISHED" : "UNPUBLISHED";
 }
 
+/**
+ * DP-200: what one row of the product list says about the selected site. The site status always
+ * shows; the master status only when it tells the user something the site status does not. A new
+ * master in Draft that was never published on the site would read "Draft" twice for one meaning
+ * ("not live yet, still being prepared"), so that one pair shows the site status alone. Every
+ * other pair stays: In review and Archived say where the master is, Approved says it is ready, and
+ * Draft next to Published or Unpublished is a real difference. No new words, no visibility.
+ */
+export interface ListRowStatus {
+  site: SiteStatus;
+  /** Null when it would only repeat the site status. */
+  master: ProductStatus | null;
+}
+
+export function listRowStatus(input: {
+  publication: { status: "PUBLISHED" | "UNPUBLISHED" } | null;
+  listing: ListingVisibility | null;
+  productStatus: ProductStatus;
+}): ListRowStatus {
+  const site = siteStatus(input);
+  const repeats = site === "DRAFT" && input.productStatus === "DRAFT";
+  return { site, master: repeats ? null : input.productStatus };
+}
+
 export interface PublicationPlan {
   status: SiteStatus;
   /**
