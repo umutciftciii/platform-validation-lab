@@ -303,7 +303,7 @@ export function checkPublication(input: ReadinessInput): PublicationReadiness {
           "WARNING",
           "not_reviewed",
           "product",
-          "Published directly: no second person reviewed this version (optional).",
+          "No second person has reviewed this version (optional).",
         ),
       );
     } else {
@@ -451,8 +451,9 @@ export const SitePublicationSchema = z.strictObject({
    */
   canShowListing: z.boolean(),
   /**
-   * DP-193: the caller may open this product in the BV catalogue preview (DP-173: BV only,
-   * product_proposal:review of the site).
+   * DP-193: the caller may open this product in the BV catalogue preview (DP-173: BV only — the
+   * preview pages exist on the BV site only; DP-204: product_proposal:review or product:publish
+   * of the site).
    */
   canPreview: z.boolean(),
   /** DP-193: the site's research proposal for this product, if any. */
