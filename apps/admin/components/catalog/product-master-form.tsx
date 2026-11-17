@@ -93,7 +93,7 @@ export function ProductMasterForm({
     if (product) {
       // The provider's notice outlives this form's remount after the refresh (new version).
       setChanged(false);
-      if (notify) notify("Product master saved.");
+      if (notify) notify("Shared product content saved.");
       else setSaved(true);
       router.refresh();
     } else {
@@ -108,7 +108,7 @@ export function ProductMasterForm({
           label="Product name"
           htmlFor="name"
           className="sm:col-span-2"
-          hint="The master name, shared by every site."
+          hint="Shared by every site; a site shows it when its own title is empty."
         >
           <input
             id="name"
@@ -156,10 +156,10 @@ export function ProductMasterForm({
           />
         </Field>
         <Field
-          label="Summary"
+          label="Shared summary"
           htmlFor="summary"
           className="sm:col-span-2"
-          hint="One line, optional."
+          hint="Optional. Used only on sites whose own summary is empty."
         >
           <input
             id="summary"
@@ -172,10 +172,10 @@ export function ProductMasterForm({
           />
         </Field>
         <Field
-          label="Description"
+          label="Shared description"
           htmlFor="description"
           className="sm:col-span-2"
-          hint={`Plain text, English, up to ${DESCRIPTION_MAX.toLocaleString("en")} characters.`}
+          hint={`Optional. Used only on sites whose own description is empty. Plain text, English, up to ${DESCRIPTION_MAX.toLocaleString("en")} characters.`}
         >
           <textarea
             id="description"
@@ -190,7 +190,7 @@ export function ProductMasterForm({
         </Field>
       </div>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
-      {saved ? <FormMessage kind="success">Product master saved.</FormMessage> : null}
+      {saved ? <FormMessage kind="success">Shared product content saved.</FormMessage> : null}
       {readOnly ? (
         <p className="flex items-center gap-2 text-sm text-ink-3">
           <Icon name="shield" size={16} />
@@ -202,7 +202,7 @@ export function ProductMasterForm({
         <div className="flex justify-end">
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={product ? "edit" : "plus"} size={17} />}
-            <span>{pending ? "Saving…" : product ? "Save master" : "Create product"}</span>
+            <span>{pending ? "Saving…" : product ? "Save shared content" : "Create product"}</span>
           </button>
         </div>
       )}

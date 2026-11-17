@@ -43,6 +43,7 @@ import {
   ProductMasterForm,
   ProductStateButton,
 } from "../../../../components/catalog/product-master-form";
+import { Icon } from "../../../../components/icons";
 import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
 import { parseProductTab } from "../../../../lib/product-tabs";
 import { planPublication, siteStatus } from "../../../../lib/publication-status";
@@ -196,81 +197,112 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             },
           }}
         >
-          {/* 1. Content: platform-wide master texts, then this site's listing and texts. */}
+          {/* 1. Content (DP-202): the selected site's own texts first — what its product page
+              shows — then the shared master content, collapsed and clearly secondary. */}
           <ProductTabPanel tab="content">
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+            <div id="listing" className="scroll-mt-32 space-y-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <ProductSiteSwitcher sites={sites} current={site.id} />
+                <p className="text-sm text-ink-3">Choose the site whose product text you edit.</p>
+              </div>
               <Panel
-                id="master"
-                className="scroll-mt-32 xl:col-span-3"
-                title="Product master"
-                description="Name, code, summary and description: platform-wide, the same on every site."
+                id="listing-panel"
+                title={`Product text on ${SITE_SHORT[site.key]}`}
+                description={
+                  listing
+                    ? `What the ${SITE_SHORT[site.key]} product page shows. Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
+                    : "This site does not list the product yet."
+                }
+                action={
+                  !listing ? (
+                    <StatusPill tone="neutral">Not listed</StatusPill>
+                  ) : currentSite ? (
+                    <SiteStatusPill status={statusOf(currentSite)} />
+                  ) : undefined
+                }
               >
+                {categories.ok && categories.data.items.length === 0 && !listing ? (
+                  <EmptyState
+                    icon="folder"
+                    title="No categories on this site"
+                    {...(site.canEdit
+                      ? {
+                          action: {
+                            href: `/products/categories?site=${sp}`,
+                            label: "Create categories",
+                          },
+                        }
+                      : {})}
+                  >
+                    A product is listed in one of the site&apos;s categories. Create the first
+                    category to list products here.
+                  </EmptyState>
+                ) : (
+                  <ListingForm
+                    key={`${site.id}-${listing?.version ?? 0}`}
+                    productId={product.id}
+                    siteId={site.id}
+                    siteName={SITE_SHORT[site.key]}
+                    listing={listing}
+                    categories={categories.ok ? categories.data.items : []}
+                    canEdit={site.canEdit}
+                    proposal={siteProposal}
+                    shared={{
+                      name: product.name,
+                      summary: product.summary,
+                      description: product.description,
+                    }}
+                  />
+                )}
+              </Panel>
+              <p className="px-1 text-xs text-ink-3">
+                Saving never publishes, unpublishes or changes the live site. Preview and publish on
+                the{" "}
+                <TabLink
+                  tab="publication"
+                  section="publication"
+                  className="font-medium text-petrol-strong underline underline-offset-2"
+                >
+                  Publication
+                </TabLink>{" "}
+                tab.
+              </p>
+            </div>
+
+            <details
+              id="master"
+              className="group scroll-mt-32 rounded-2xl border border-line bg-surface shadow-panel"
+            >
+              <summary className="flex cursor-pointer list-none items-start justify-between gap-3 rounded-2xl px-5 py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-petrol/40 sm:px-6 [&::-webkit-details-marker]:hidden">
+                <span className="min-w-0">
+                  <span className="type-display block text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink">
+                    Shared product content
+                  </span>
+                  <span className="mt-0.5 block text-sm text-ink-3">
+                    Name, code, URL slug and a shared summary and description, the same for every
+                    site. Not published as such: a site shows its own text above.
+                  </span>
+                </span>
+                <Icon
+                  name="chevron"
+                  size={18}
+                  className="mt-1 shrink-0 rotate-90 text-ink-3 transition-transform group-open:-rotate-90"
+                />
+              </summary>
+              <div className="space-y-4 border-t border-line px-5 pb-5 pt-4 sm:px-6">
+                <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2 ring-1 ring-inset ring-line">
+                  <Icon name="eye" size={16} className="mt-0.5 shrink-0 text-ink-3" />
+                  <span>
+                    The shared summary and description appear on a site only where that site&apos;s
+                    own field is empty, and only after the site is published again. Editing them
+                    never changes a site&apos;s own text.
+                  </span>
+                </p>
                 <KeepUnsaved resetKey={`${product.id}-${product.version}`}>
                   <ProductMasterForm product={product} canEdit={canEditMaster} siteParam={sp} />
                 </KeepUnsaved>
-              </Panel>
-
-              <div id="listing" className="scroll-mt-32 space-y-4 xl:col-span-2">
-                <ProductSiteSwitcher sites={sites} current={site.id} />
-                <Panel
-                  id="listing-panel"
-                  title={`Listing on ${SITE_SHORT[site.key]}`}
-                  description={
-                    listing
-                      ? `Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
-                      : "This site does not list the product yet."
-                  }
-                  action={
-                    !listing ? (
-                      <StatusPill tone="neutral">Not listed</StatusPill>
-                    ) : currentSite ? (
-                      <SiteStatusPill status={statusOf(currentSite)} />
-                    ) : undefined
-                  }
-                >
-                  {categories.ok && categories.data.items.length === 0 && !listing ? (
-                    <EmptyState
-                      icon="folder"
-                      title="No categories on this site"
-                      {...(site.canEdit
-                        ? {
-                            action: {
-                              href: `/products/categories?site=${sp}`,
-                              label: "Create categories",
-                            },
-                          }
-                        : {})}
-                    >
-                      A product is listed in one of the site&apos;s categories. Create the first
-                      category to list products here.
-                    </EmptyState>
-                  ) : (
-                    <ListingForm
-                      key={`${site.id}-${listing?.version ?? 0}`}
-                      productId={product.id}
-                      siteId={site.id}
-                      siteName={SITE_SHORT[site.key]}
-                      listing={listing}
-                      categories={categories.ok ? categories.data.items : []}
-                      canEdit={site.canEdit}
-                      proposal={siteProposal}
-                    />
-                  )}
-                </Panel>
-                <p className="px-1 text-xs text-ink-3">
-                  Saving never publishes, unpublishes or changes the live site. Preview and publish
-                  on the{" "}
-                  <TabLink
-                    tab="publication"
-                    section="publication"
-                    className="font-medium text-petrol-strong underline underline-offset-2"
-                  >
-                    Publication
-                  </TabLink>{" "}
-                  tab.
-                </p>
               </div>
-            </div>
+            </details>
           </ProductTabPanel>
 
           {/* 2. Technical: specifications with their validation, and cross-references. */}
