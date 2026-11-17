@@ -406,8 +406,8 @@ describe("product page tabs", () => {
     const content = panel(html, "content");
     for (const f of ['id="name"', 'id="code"', 'id="slug"', 'id="summary"', 'id="description"'])
       expect(content).toContain(f);
-    expect(content).toContain("Save master");
-    expect(content).toContain("Save listing");
+    expect(content).toContain("Save shared content");
+    expect(content).toContain("Save Dream Petroleum BV text");
     expect(panel(html, "technical")).toContain("Kinematic viscosity");
     // The history appears once, only in Publication.
     expect(html.split("Review and publication history")).toHaveLength(2);
@@ -443,7 +443,7 @@ describe("product page tabs", () => {
     fixtures({ canEditMaster: false });
     const html = await render({ site: "bv" });
     expect(html).not.toContain(">Archive<");
-    expect(html).not.toContain("Save master");
+    expect(html).not.toContain("Save shared content");
     expect(html).toContain("Product masters are edited by the platform product team");
     expect(panel(html, "publication")).not.toContain("Submit for review");
   });
@@ -647,7 +647,7 @@ describe("DP-197 publication status without visibility terms", () => {
     expect(content).not.toMatch(/>(Visible|Hidden)</);
     expect(content).not.toMatch(/\b(HIDDEN|VISIBLE)\b/);
     expect(content).toContain("Saving never publishes, unpublishes or changes the live site.");
-    expect(content).toContain("Save listing");
+    expect(content).toContain("Save Dream Petroleum BV text");
     // The listing panel shows the site status: never published here = Draft.
     expect(content).toContain(">Draft<");
     expect(panel(html, "publication")).toContain(">Draft<");
@@ -693,6 +693,105 @@ describe("DP-197 publication status without visibility terms", () => {
     expect(pub).toContain("Not shown on this site at the moment.");
     expect(pub).not.toContain(">Unpublish<");
     expect(html).toContain("Not live");
+  });
+});
+
+// DP-202: the site's own texts are the primary Content fields; the shared master content is a
+// separate, collapsed form that the hints name as the fallback.
+describe("DP-202 site text first, shared content second", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  function siteText(text: {
+    title: string | null;
+    summary: string | null;
+    description: string | null;
+  }) {
+    const key = `${C}/products/${PRODUCT}?siteId=${BV}`;
+    const d = reads.get(key) as { product: unknown; listing: Record<string, unknown> };
+    reads.set(key, { ...d, listing: { ...d.listing, text } });
+  }
+  /** The <form> elements of one HTML fragment. */
+  const forms = (html: string) =>
+    html
+      .split("<form")
+      .slice(1)
+      .map((f) => f.split("</form>")[0]!);
+
+  it("puts the site text above the collapsed shared content, in two separate forms", async () => {
+    const content = panel(await render({ site: "bv" }), "content");
+    const site = content.indexOf('id="listing-panel"');
+    const shared = content.indexOf('id="master"');
+    expect(site).toBeGreaterThan(-1);
+    expect(shared).toBeGreaterThan(site);
+    // The shared content is a <details>, closed by default.
+    expect(content).toMatch(/<details id="master"[^>]*>/);
+    expect(content).not.toMatch(/<details id="master"[^>]*\sopen(=|\s|>)/);
+    expect(content).toContain("Shared product content");
+    expect(content).toContain("Not published as such: a site shows its own text above.");
+    // Two forms: the site text never posts master fields, the master never posts site fields.
+    const all = forms(content);
+    expect(all).toHaveLength(2);
+    const listingForm = all[0]!;
+    const masterForm = all[1]!;
+    for (const f of ['name="title"', 'name="summary"', 'name="description"', 'name="categoryId"'])
+      expect(listingForm).toContain(f);
+    for (const f of ['name="name"', 'name="code"', 'name="slug"'])
+      expect(listingForm).not.toContain(f);
+    for (const f of [
+      'name="name"',
+      'name="code"',
+      'name="slug"',
+      'name="summary"',
+      'name="description"',
+    ])
+      expect(masterForm).toContain(f);
+    expect(masterForm).not.toContain('name="title"');
+    expect(masterForm).not.toContain('name="categoryId"');
+    // Title, summary and description come before the listing settings.
+    expect(listingForm.indexOf('name="description"')).toBeLessThan(
+      listingForm.indexOf('name="categoryId"'),
+    );
+    expect(listingForm).toContain("Save Dream Petroleum BV text");
+    expect(masterForm).toContain("Save shared content");
+  });
+
+  it("shows the saved site texts in the primary fields and says the page uses them", async () => {
+    siteText({
+      title: null,
+      summary: "Site summary for BV.",
+      description: "Site description for BV.",
+    });
+    const content = panel(await render({ site: "bv" }), "content");
+    expect(content).toMatch(/name="summary"[^>]*>Site summary for BV\.<\/textarea>/);
+    expect(content).toMatch(/name="description"[^>]*>Site description for BV\.<\/textarea>/);
+    expect(content).toContain("Shown on the Dream Petroleum BV product card and product page.");
+    expect(content).toContain(
+      "Shown on the Dream Petroleum BV product page. English only for now.",
+    );
+    // The master description stays in its own field.
+    expect(content).toMatch(/id="description"[^>]*>Fully synthetic engine oil\.<\/textarea>/);
+  });
+
+  it("names the shared text as the fallback of an empty site field, or says nothing shows", async () => {
+    // Fixture: no site text; master summary empty, master description filled.
+    const content = panel(await render({ site: "bv" }), "content");
+    expect(content).toContain(
+      "Empty: Dream Petroleum BV shows the shared description from “Shared product content” below.",
+    );
+    expect(content).toContain(
+      "Empty: the Dream Petroleum BV product card and page show no summary.",
+    );
+    expect(content).toContain(
+      "Empty: Dream Petroleum BV shows the shared name from “Shared product content” below.",
+    );
+  });
+
+  it("sends a missing summary or description to this site's text, not to the master", () => {
+    for (const code of ["summary_missing", "description_missing"]) {
+      const fix = fixForIssue(code);
+      expect(fix).toMatchObject({ tab: "content", section: "listing", perSite: true });
+      expect(fix!.hint).not.toContain("master");
+    }
   });
 });
 
