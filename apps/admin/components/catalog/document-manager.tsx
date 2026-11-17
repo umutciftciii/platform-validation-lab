@@ -225,11 +225,13 @@ function FilePicker({
       >
         <Icon name="document" size={22} className="text-ink-3" />
         {file ? (
-          <p className="max-w-full truncate text-sm font-medium text-ink">
+          <p key="file" className="max-w-full truncate text-sm font-medium text-ink">
             {file.name} <span className="font-normal text-ink-3">· {formatBytes(file.size)}</span>
           </p>
         ) : (
-          <p className="text-sm text-ink-2">Drag a PDF here, or</p>
+          <p key="empty" className="text-sm text-ink-2">
+            Drag a PDF here, or
+          </p>
         )}
         <button
           type="button"

@@ -101,7 +101,7 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
       {site.key === "BV" && list.ok ? (
         <p className="text-sm text-ink-2">
           {heading ? (
-            <>
+            <span key="heading">
               Heading and introduction of the news list:{" "}
               <Link
                 href={`/content/${heading.id}?site=${sp}`}
@@ -110,9 +110,9 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
                 edit the News page
               </Link>{" "}
               ({publicationState(heading).label.toLowerCase()}).
-            </>
+            </span>
           ) : (
-            <>
+            <span key="missing">
               The heading of the news list is not in the CMS yet: import “News” under{" "}
               <Link
                 href={`/content?site=${sp}`}
@@ -121,7 +121,7 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
                 Pages
               </Link>
               , then publish it. Until then the site shows the list as unavailable.
-            </>
+            </span>
           )}
         </p>
       ) : null}
