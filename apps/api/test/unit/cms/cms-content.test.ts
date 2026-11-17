@@ -24,7 +24,7 @@ import {
   verifyPreviewToken,
 } from "../../../src/cms/cms-content.js";
 import { BV_FOOTER_SEED, BV_HOME_SEED, BV_NAV_SEED, CMS_SEEDS } from "../../../src/cms/seed/bv.js";
-import { CMS_PAGE_SEEDS } from "../../../src/cms/seed/bv-pages.js";
+import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "../../../src/cms/seed/bv-pages.js";
 
 describe("BV import seeds", () => {
   it("has exactly one seed per designed template, and each validates unchanged", () => {
@@ -99,7 +99,10 @@ describe("BV content page seeds (DP-135)", () => {
   const seeds = Object.entries(CMS_PAGE_SEEDS);
 
   it("has one seed per importable content page of the registry, at the registry path", () => {
-    const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
+    // News articles (DP-206) have their own seeds below.
+    const importable = CMS_SITE_REGISTRY.filter(
+      (e) => e.kind === "TEMPLATE" && e.importable && !e.path?.startsWith("/news/"),
+    );
     expect(seeds.map(([k]) => k).sort()).toEqual(importable.map((e) => e.key).sort());
     for (const [key, seed] of seeds) {
       expect(CmsSlugSchema.parse(seed.slug), key).toBe(seed.slug);
@@ -132,8 +135,47 @@ describe("BV content page seeds (DP-135)", () => {
     );
     for (const [key, seed] of seeds) {
       for (const s of seed.content.sections.filter((x) => x.type === "split")) {
-        expect(s["imageNote"], key).toMatch(/^Illustrative CGI image\./);
+        // CGI renders on the service pages; the live site's own team image (DP-206).
+        expect(s["imageNote"], key).toMatch(/^Illustrative (CGI )?image\./);
       }
+    }
+  });
+});
+
+describe("BV company pages and blog post of the live site (DP-206)", () => {
+  it("imports the three company pages from the live site", () => {
+    for (const key of ["bv.strategic-partnership", "bv.sustainability", "bv.our-team"]) {
+      const sections = CMS_PAGE_SEEDS[key]!.content.sections;
+      expect(sections[0]?.type, key).toBe("hero");
+      expect(sections.at(-1)?.type, key).toBe("cta");
+    }
+    // The live counters show 0: left out, never shown as figures.
+    expect(JSON.stringify(CMS_PAGE_SEEDS["bv.our-team"])).not.toMatch(/Trading Team Experts/);
+  });
+
+  it("has one article seed per news entry of the registry, valid as article content", () => {
+    const entries = CMS_SITE_REGISTRY.filter((e) => e.path?.startsWith("/news/"));
+    expect(Object.keys(CMS_ARTICLE_SEEDS).sort()).toEqual(entries.map((e) => e.key).sort());
+    for (const [key, seed] of Object.entries(CMS_ARTICLE_SEEDS)) {
+      expect(CmsArticleSlugSchema.parse(seed.slug), key).toBe(seed.slug);
+      expect(cmsArticlePath(seed.slug)).toBe(entries.find((e) => e.key === key)?.path);
+      const parsed = CmsArticleContentSchema.safeParse(seed.content);
+      expect(parsed.success, `${key}: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`).toBe(
+        true,
+      );
+      expect(parsed.data).toEqual(seed.content);
+      expect(cmsAsset(seed.content.coverImage!)?.kind, key).toBe("image");
+      // Publishable: a summary and at least one body section (DP-020).
+      expect(seed.content.excerpt.length).toBeGreaterThan(0);
+      expect(seed.content.sections.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("points the footer's company links at the pages here, not at the live site", () => {
+    const footer = JSON.stringify(BV_FOOTER_SEED);
+    expect(footer).not.toContain("dreampetroleumbv.com/en/");
+    for (const href of ["/strategic-partnership", "/sustainability", "/our-team", "/news"]) {
+      expect(footer).toContain(`"href":"${href}"`);
     }
   });
 });

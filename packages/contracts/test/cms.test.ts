@@ -243,7 +243,8 @@ describe("CMS S2 field types", () => {
     const srcs = CMS_STATIC_ASSETS.map((a) => a.src);
     expect(new Set(srcs).size).toBe(srcs.length);
     for (const a of CMS_STATIC_ASSETS) {
-      expect(a.src).toMatch(/^\/media\/[a-z0-9/_-]+\.(webp|gif)$/);
+      // DP-206: the live site's own photos stay JPEG, byte for byte.
+      expect(a.src).toMatch(/^\/media\/[a-z0-9/_-]+\.(webp|gif|jpg)$/);
       expect(a.width).toBeGreaterThan(0);
       expect(a.height).toBeGreaterThan(0);
     }
@@ -323,7 +324,8 @@ describe("CMS content page sections (DP-135)", () => {
   it("offers an import only for content the site has a seed for", () => {
     for (const e of CMS_SITE_REGISTRY) {
       if (e.importable) expect(e.managedBy, e.key).toBe("cms_pending");
-      if (e.kind === "TEMPLATE") expect(e.path, e.key).toMatch(/^\/[a-z0-9-]+$/);
+      // A content page, or a news article at /news/<slug> (DP-206).
+      if (e.kind === "TEMPLATE") expect(e.path, e.key).toMatch(/^\/(news\/)?[a-z0-9-]+$/);
     }
     const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
     expect(importable.map((e) => e.path).sort()).toEqual([
@@ -331,7 +333,11 @@ describe("CMS content page sections (DP-135)", () => {
       "/contact",
       "/energy-trading",
       "/logistics",
+      "/news/why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets",
+      "/our-team",
       "/storage-distribution",
+      "/strategic-partnership",
+      "/sustainability",
     ]);
   });
 });

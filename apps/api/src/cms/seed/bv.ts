@@ -463,19 +463,19 @@ export const BV_FOOTER_SEED: BvFooterContent = {
         },
         {
           label: "Strategic Partnership",
-          href: "https://dreampetroleumbv.com/en/strategic-partnership",
+          href: "/strategic-partnership",
         },
         {
           label: "Sustainability",
-          href: "https://dreampetroleumbv.com/en/sustainability",
+          href: "/sustainability",
         },
         {
           label: "Leadership Team",
-          href: "https://dreampetroleumbv.com/en/our-team",
+          href: "/our-team",
         },
         {
           label: "News & Insights",
-          href: "https://dreampetroleumbv.com/en/blog",
+          href: "/news",
         },
         {
           label: "Contact Us",
