@@ -188,3 +188,48 @@ export const MediaManifestSchema = z
 export type MediaManifest = z.infer<typeof MediaManifestSchema>;
 export type MediaImageEntry = z.infer<typeof MediaImageEntrySchema>;
 export type MediaPdfEntry = z.infer<typeof MediaPdfEntrySchema>;
+
+/**
+ * DP-205: the BV document links (`manifest.json` of the DP-205 download, outside the repository).
+ * The published PDFs of the current dreampetroleumbv.com are the source: every entry names the
+ * product, the live URL and the SHA-256 and size of the live file. The documents stage links the
+ * platform document holding exactly that file to the BV site (the existing publisher pin, DP-086)
+ * and uploads a file only when an entry carries `upload` (a PDF the platform does not hold yet).
+ * Content, type and access policy are never changed: documents stay OTHER and LEAD_REQUIRED.
+ */
+export const DocumentLinkEntrySchema = z.strictObject({
+  code: ProductCodeSchema,
+  sourceUrl: z
+    .string()
+    .max(500)
+    .regex(/^https:\/\/[^\s/]+\/[^\s]*$/),
+  sha256: Sha256Schema,
+  bytes: z.number().int().positive(),
+  /** Only for a PDF not yet in the platform: the downloaded file and the new document's text. */
+  upload: z
+    .strictObject({
+      file: RelativeFileSchema,
+      title: z.string().trim().min(1).max(200),
+      description: z.string().trim().min(1).max(2000).nullable(),
+    })
+    .nullable(),
+});
+export const DocumentLinkManifestSchema = z
+  .strictObject({
+    dp: z.literal("DP-205"),
+    site: z.literal("BV"),
+    documentType: z.literal("OTHER"),
+    accessPolicy: z.literal("LEAD_REQUIRED"),
+    documents: z.array(DocumentLinkEntrySchema).min(1).max(200),
+  })
+  .superRefine((m, ctx) => {
+    const seen = new Set<string>();
+    m.documents.forEach((d, i) => {
+      if (seen.has(d.sha256)) {
+        ctx.addIssue({ code: "custom", path: ["documents", i], message: "second entry of a file" });
+      }
+      seen.add(d.sha256);
+    });
+  });
+export type DocumentLinkManifest = z.infer<typeof DocumentLinkManifestSchema>;
+export type DocumentLinkEntry = z.infer<typeof DocumentLinkEntrySchema>;

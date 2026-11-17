@@ -48,7 +48,7 @@ export const POLICY_TEXT: Readonly<
   LEAD_REQUIRED: {
     label: "Lead required",
     tone: "amber",
-    help: "Listed on the site, but not downloadable until the request form and download grants exist (DP-042, DP-043).",
+    help: "Listed on the site; downloaded after the short request form, with a watermark naming the requester (DP-042, DP-043).",
   },
   INTERNAL: {
     label: "Internal",
