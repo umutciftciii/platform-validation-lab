@@ -6,7 +6,7 @@
 import type { ProductListItem, ProductStatus } from "@dream/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listRowStatus, type SiteStatus } from "../lib/publication-status";
+import { listRowStatus, type SiteDisplayStatus } from "../lib/publication-status";
 
 const reads = new Map<string, unknown>();
 
@@ -37,15 +37,17 @@ describe("listRowStatus", () => {
     productStatus: ProductStatus,
   ) => listRowStatus({ publication, listing, productStatus });
 
-  it("drops the master status only when it repeats the site's Draft", () => {
-    expect(row(null, null, "DRAFT")).toEqual({ site: "DRAFT", master: null });
+  it("drops the master status only when it repeats the site's Draft or Not listed", () => {
+    // DP-203: no listing and no publication on the site = Not listed, not Draft.
+    expect(row(null, null, "DRAFT")).toEqual({ site: "NOT_LISTED", master: null });
     expect(row(null, "HIDDEN", "DRAFT")).toEqual({ site: "DRAFT", master: null });
   });
 
   it("keeps the master status whenever it says something else", () => {
     expect(row(null, "HIDDEN", "IN_REVIEW")).toEqual({ site: "DRAFT", master: "IN_REVIEW" });
     expect(row(null, "HIDDEN", "APPROVED")).toEqual({ site: "DRAFT", master: "APPROVED" });
-    expect(row(null, null, "ARCHIVED")).toEqual({ site: "DRAFT", master: "ARCHIVED" });
+    expect(row(null, null, "ARCHIVED")).toEqual({ site: "NOT_LISTED", master: "ARCHIVED" });
+    expect(row(null, null, "APPROVED")).toEqual({ site: "NOT_LISTED", master: "APPROVED" });
     // Draft master next to a published or unpublished site is a real difference.
     expect(row(live, "VISIBLE", "DRAFT")).toEqual({ site: "PUBLISHED", master: "DRAFT" });
     expect(row(off, "VISIBLE", "DRAFT")).toEqual({ site: "UNPUBLISHED", master: "DRAFT" });
@@ -54,7 +56,7 @@ describe("listRowStatus", () => {
   });
 
   it("keeps Published and Unpublished apart", () => {
-    const site = (p: typeof live | typeof off | null, l: "HIDDEN" | "VISIBLE"): SiteStatus =>
+    const site = (p: typeof live | typeof off | null, l: "HIDDEN" | "VISIBLE"): SiteDisplayStatus =>
       row(p, l, "APPROVED").site;
     expect(site(live, "VISIBLE")).toBe("PUBLISHED");
     expect(site(live, "HIDDEN")).toBe("UNPUBLISHED");
@@ -114,6 +116,7 @@ function fixtures() {
       item("Live approved", "APPROVED", live, "VISIBLE"),
       item("Taken off", "APPROVED", off, "VISIBLE"),
       item("Archived", "ARCHIVED", live, "VISIBLE"),
+      item("Unlisted draft", "DRAFT", null, null),
     ]),
   );
   n = 3;
@@ -135,7 +138,7 @@ async function render(params: Record<string, string> = {}) {
 
 /** The status cells of each product, from the table (wide) and the stacked list (phones). */
 const STATUS =
-  /data-status="(\w+)"><span[^>]*>([^<]*)<\/span><span[^>]*><span[^>]*><\/span>([^<]*)<\/span>/g;
+  /data-status="(\w+)"><span[^>]*>([^<]*)<\/span><span[^>]*>(?:<span[^>]*><\/span>)?([^<]*)<\/span>/g;
 
 function section(html: string, from: string, to: string): string {
   const a = html.indexOf(from);
@@ -173,6 +176,8 @@ describe("products list (DP-200)", () => {
       { name: "Live approved", status: ["site:BVPublished", "master:MasterApproved"] },
       { name: "Taken off", status: ["site:BVUnpublished", "master:MasterApproved"] },
       { name: "Archived", status: ["site:BVUnpublished", "master:MasterArchived"] },
+      // DP-203: not listed on the site reads "Not listed", never "Draft".
+      { name: "Unlisted draft", status: ["site:BVNot listed"] },
     ];
     expect(table).toEqual(expected);
     // Phones show exactly what the table shows.
@@ -191,7 +196,7 @@ describe("products list (DP-200)", () => {
   it("names the selected site, so a product reads per site", async () => {
     const { table } = rows(await render({ site: "corporate" }));
     expect(table).toEqual([
-      { name: "Live approved", status: ["site:CorporateDraft", "master:MasterApproved"] },
+      { name: "Live approved", status: ["site:CorporateNot listed", "master:MasterApproved"] },
     ]);
   });
 

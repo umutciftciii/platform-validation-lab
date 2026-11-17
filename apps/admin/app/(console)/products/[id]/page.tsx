@@ -34,7 +34,7 @@ import { ListingForm } from "../../../../components/catalog/listing-form";
 import {
   PageHeader,
   pickSite,
-  ProductStatusPill,
+  ProductHeaderStatus,
   SITE_SHORT,
   siteParam,
   SiteStatusPill,
@@ -44,9 +44,13 @@ import {
   ProductStateButton,
 } from "../../../../components/catalog/product-master-form";
 import { Icon } from "../../../../components/icons";
-import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
+import { EmptyState, ErrorState, Panel } from "../../../../components/ui";
 import { parseProductTab } from "../../../../lib/product-tabs";
-import { planPublication, siteStatus } from "../../../../lib/publication-status";
+import {
+  blockedSiteCount,
+  headerStatus,
+  siteDisplayStatus,
+} from "../../../../lib/publication-status";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
@@ -119,28 +123,24 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
       label: `${d.type} · ${d.title} · revision ${d.activeRevision!.revisionNumber}`,
     }));
   const siteKeys = Object.fromEntries(sites.map((s) => [s.id, s.key]));
-  // DP-197: Draft / Published / Unpublished per site (live = published and shown).
+  // DP-197: Draft / Published / Unpublished per site (live = published and shown);
+  // DP-203: Not listed when the site has no listing.
   const statusOf = (s: {
     publication: { status: "PUBLISHED" | "UNPUBLISHED" } | null;
     listing: { visibility: "VISIBLE" | "HIDDEN" } | null;
   }) =>
-    siteStatus({
+    siteDisplayStatus({
       publication: s.publication,
       listing: s.listing?.visibility ?? null,
       productStatus: product.status,
     });
-  const liveCount = workflow.ok
-    ? workflow.data.sites.filter((s) => statusOf(s) === "PUBLISHED").length
-    : 0;
   const currentSite = workflow.ok
     ? (workflow.data.sites.find((s) => s.siteId === site.id) ?? null)
     : null;
-  // Publication: one red marker when no site can be published or republished as it stands.
-  // DP-197: the same plan as the site cards (a listing Publish may switch on is not a blocker).
+  // Publication: one red marker when a listed site cannot be published or republished as it
+  // stands. DP-197: the same plan as the site cards; DP-203: an unlisted site is no blocker.
   const blockedSites = workflow.ok
-    ? workflow.data.sites.filter(
-        (s) => planPublication(s, { productStatus: workflow.data.status }).blocking.length > 0,
-      ).length
+    ? blockedSiteCount(workflow.data.sites, workflow.data.status)
     : 0;
   // DP-193: the site's research proposal, for "Copy into the form" on the listing.
   const siteProposal = workflow.ok
@@ -165,14 +165,12 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
               <span className="tabular rounded-md bg-surface-2 px-2 py-0.5 font-mono text-ink-2 ring-1 ring-line">
                 {product.code}
               </span>
-              <ProductStatusPill status={product.status} />
+              {/* DP-203: the site publication status first; the master status apart, labelled. */}
               {workflow.ok ? (
-                <StatusPill key={`live-${liveCount}`} tone={liveCount > 0 ? "success" : "neutral"}>
-                  {liveCount > 0
-                    ? `Live on ${liveCount} of ${workflow.data.sites.length} site${workflow.data.sites.length === 1 ? "" : "s"}`
-                    : "Not live"}
-                </StatusPill>
-              ) : null}
+                <ProductHeaderStatus status={headerStatus(workflow.data.sites, product.status)} />
+              ) : (
+                <ProductHeaderStatus status={{ sites: [], master: product.status }} />
+              )}
               <span className="text-ink-3">
                 Version {product.version} · changed {DATE_TIME.format(new Date(product.updatedAt))}
               </span>
@@ -215,7 +213,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 }
                 action={
                   !listing ? (
-                    <StatusPill tone="neutral">Not listed</StatusPill>
+                    <SiteStatusPill status="NOT_LISTED" />
                   ) : currentSite ? (
                     <SiteStatusPill status={statusOf(currentSite)} />
                   ) : undefined
@@ -445,14 +443,20 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   title="Publication"
                   description="Preview, publish and unpublish per site. A live site shows the published snapshot, never the current draft; every blocker says where it is fixed."
                 >
-                  <PublicationPanel data={workflow.data} productSlug={product.slug} />
+                  <PublicationPanel
+                    data={workflow.data}
+                    productSlug={product.slug}
+                    canEditSite={Object.fromEntries(sites.map((s) => [s.id, s.canEdit]))}
+                  />
                 </Panel>
                 <Panel
                   id="review"
                   className="scroll-mt-32 xl:col-span-2"
                   title="Second-person review"
                   description="Optional when you can publish directly. Publishers without approval rights publish an approved master only."
-                  action={<ProductStatusPill status={workflow.data.status} />}
+                  action={
+                    <ProductHeaderStatus status={{ sites: [], master: workflow.data.status }} />
+                  }
                 >
                   <KeepUnsaved resetKey={`review-${workflow.data.version}`}>
                     <ReviewPanel data={workflow.data} />
