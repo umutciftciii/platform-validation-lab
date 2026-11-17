@@ -19,6 +19,7 @@ import {
   SECTION_TAB,
   tabForHash,
 } from "../lib/product-tabs";
+import { buttonStyles } from "../components/ui";
 
 const reads = new Map<string, unknown>();
 
@@ -354,6 +355,24 @@ async function render(query: Record<string, string>): Promise<string> {
   return renderToStaticMarkup(page);
 }
 
+/** DP-203: the header status line as "Label:Status" pairs (site statuses, then the master). */
+function headerStatus(html: string): string[] {
+  const start = html.indexOf("data-header-status");
+  expect(start).toBeGreaterThan(-1);
+  const line = html.slice(start, html.indexOf("Version ", start));
+  const pair =
+    /data-status="\w+"[^>]*><span[^>]*>([^<]*)<\/span><span[^>]*>(?:<span[^>]*><\/span>)?([^<]*)<\/span>/g;
+  return [...line.matchAll(pair)].map((m) => `${m[1]}:${m[2]}`);
+}
+
+/** DP-203: one site card of the Publication panel, by the site's display name. */
+function card(pub: string, name: string): string {
+  const cards = pub.split("<article").slice(1);
+  const found = cards.find((c) => new RegExp(`</svg>${name}</h3>`).test(c));
+  expect(found, name).toBeDefined();
+  return found!.split("</article>")[0]!;
+}
+
 /** The HTML of one tab panel (panels are siblings, in tab order). */
 function panel(html: string, tab: string): string {
   const start = html.indexOf(`id="product-tab-${tab}"`);
@@ -372,8 +391,9 @@ describe("product page tabs", () => {
     const html = await render({ site: "bv" });
     expect(html).toContain("ICCSYN 6 Synthetic");
     expect(html).toContain("ICC-SYN-6");
-    expect(html).toContain("Draft");
-    expect(html).toContain("Not live");
+    // DP-203: the site statuses lead the header; a Draft master that only repeats them is left out.
+    expect(headerStatus(html)).toEqual(["BV:Draft", "Corporate:Not listed"]);
+    expect(html).not.toContain("Not live");
     expect(html).toContain(">Archive<");
     const tabs = [...html.matchAll(/role="tab"[^>]*aria-selected="(true|false)"/g)];
     expect(tabs).toHaveLength(4);
@@ -433,10 +453,12 @@ describe("product page tabs", () => {
     expect(pub).toContain("Not shown on this site yet: publishing shows it.");
     expect(pub).toContain("Fill in this required specification and save.");
     expect(pub).toContain(`href="/products/${PRODUCT}?site=bv&amp;tab=technical"`);
-    // A listing fix on another site opens that site's Content tab.
-    expect(pub).toContain(`href="/products/${PRODUCT}?site=corporate#listing"`);
-    // The tab bar flags the blocked publication.
-    expect(html).toContain("publishing blocked on 2 sites");
+    // DP-203: the unlisted Corporate site is information, not a blocker: no red line, no Publish,
+    // and no listing link for a user without edit rights there.
+    expect(card(pub, "Corporate")).not.toContain("Publishing is blocked:");
+    expect(card(pub, "Corporate")).toContain("Listing it here needs edit rights on this site.");
+    // The tab bar flags the blocked publication — on the listed site only.
+    expect(html).toContain("publishing blocked on 1 site");
   });
 
   it("keeps the permission limits: no archive, read-only master without product_master:edit", async () => {
@@ -665,7 +687,8 @@ describe("DP-197 publication status without visibility terms", () => {
     expect(pub).toContain(">Unpublish<");
     expect(pub).toContain(">Republish<");
     expect(pub).toContain("Live and up to date.");
-    expect(html).toContain("Live on 1 of 2 sites");
+    // DP-203: Draft master next to a published site — two separate, labelled facts.
+    expect(headerStatus(html)).toEqual(["BV:Published", "Corporate:Not listed", "Master:Draft"]);
   });
 
   it("Unpublished: off the site, Publish again, no Unpublish", async () => {
@@ -679,7 +702,7 @@ describe("DP-197 publication status without visibility terms", () => {
     expect(pub).toContain(">Unpublished<");
     expect(pub).not.toContain(">Unpublish<");
     expect(pub).toContain(">Publish<");
-    expect(html).toContain("Not live");
+    expect(headerStatus(html)).toEqual(["BV:Unpublished", "Corporate:Not listed", "Master:Draft"]);
   });
 
   it("a published product whose listing is switched off reads Unpublished, not Live", async () => {
@@ -692,7 +715,267 @@ describe("DP-197 publication status without visibility terms", () => {
     expect(pub).toContain(">Unpublished<");
     expect(pub).toContain("Not shown on this site at the moment.");
     expect(pub).not.toContain(">Unpublish<");
-    expect(html).toContain("Not live");
+    expect(headerStatus(html)[0]).toBe("BV:Unpublished");
+  });
+});
+
+// DP-203: site publication status first, master status apart; Not listed is no alarm; no
+// review step for a user who publishes directly everywhere. The API decides as before.
+describe("DP-203 product status, review action and Not listed", () => {
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  type Site = ProductWorkflowResponse["sites"][number];
+  const wf = () => reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+  function setWorkflow(
+    over: Partial<ProductWorkflowResponse>,
+    bv: Partial<Site>,
+    corp: Partial<Site>,
+  ) {
+    const w = wf();
+    reads.set(`${C}/products/${PRODUCT}/workflow`, {
+      ...w,
+      ...over,
+      sites: [
+        { ...w.sites[0]!, ...bv },
+        { ...w.sites[1]!, ...corp },
+      ],
+    });
+  }
+  function corporateEditable() {
+    const ctx = reads.get(`${C}/context`) as { sites: { canEdit: boolean; canPublish: boolean }[] };
+    reads.set(`${C}/context`, {
+      ...ctx,
+      sites: [ctx.sites[0], { ...ctx.sites[1], canEdit: true, canPublish: true }],
+    });
+  }
+  const live = {
+    id: "0190a8c4-7c1e-7000-8000-0000000000b1",
+    status: "PUBLISHED" as const,
+    productVersion: 7,
+    listingVersion: 2,
+    publishedAt: T,
+    publishedBy: { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" },
+    unpublishedAt: null,
+    unpublishedBy: null,
+    approvalMode: "DIRECT" as const,
+    version: 2,
+  };
+  const off = {
+    ...live,
+    status: "UNPUBLISHED" as const,
+    unpublishedAt: T,
+    unpublishedBy: live.publishedBy,
+  };
+  const ready = { ok: true, blocking: [], warnings: [] };
+  const directReady = {
+    ok: true,
+    blocking: [],
+    warnings: [
+      {
+        severity: "WARNING" as const,
+        code: "not_reviewed",
+        target: "product",
+        message: "Published directly: no second person reviewed this version (optional).",
+      },
+    ],
+  };
+  const listingMissing = {
+    severity: "BLOCKING" as const,
+    code: "listing_missing",
+    target: "listing",
+    message: "The site does not list this product.",
+  };
+  const coverMissing = {
+    severity: "BLOCKING" as const,
+    code: "cover_missing",
+    target: "images",
+    message: "A cover image is required.",
+  };
+  const notListed = (extra: (typeof coverMissing)[] = []): Partial<Site> => ({
+    listing: null,
+    publication: null,
+    readiness: {
+      ok: false,
+      blocking: [listingMissing, ...extra],
+      warnings: directReady.warnings,
+    },
+  });
+  /** The Submit for review button's class, or null when it is not offered. */
+  function submitButton(pub: string): string | null {
+    const m = /<button[^>]*class="([^"]*)"[^>]*>(?:(?!<\/button>)[\s\S])*Submit for review/.exec(
+      pub,
+    );
+    return m ? m[1]! : null;
+  }
+  const ok = (html: string) => panel(html, "publication");
+
+  it("DIRECT on every site: no Submit for review, no review steps, publishing stays", async () => {
+    corporateEditable();
+    setWorkflow(
+      { validation: { ok: true, blocking: [], warnings: [] } },
+      { publishMode: "DIRECT", canPreview: true, readiness: directReady },
+      { publishMode: "DIRECT", canPublish: true, ...notListed() },
+    );
+    const pub = ok(await render({ site: "bv", tab: "publication" }));
+    expect(submitButton(pub)).toBeNull();
+    expect(pub).not.toContain('aria-label="Review progress"');
+    expect(pub).not.toContain("Note for the reviewer");
+    expect(pub).toContain(
+      "You publish directly on every site you can open, so no review is needed.",
+    );
+    expect(card(pub, "Dream Petroleum BV")).toContain(">Publish<");
+    expect(card(pub, "Dream Petroleum BV")).toContain("You publish this version directly");
+  });
+
+  it("DIRECT on some sites only: Submit for review stays, as a secondary action", async () => {
+    setWorkflow(
+      { validation: { ok: true, blocking: [], warnings: [] } },
+      { publishMode: "DIRECT", readiness: directReady },
+      {},
+    );
+    const cls = submitButton(ok(await render({ site: "bv", tab: "publication" })));
+    expect(cls).toBe(buttonStyles.secondary);
+  });
+
+  it("APPROVED path: Submit for review is the primary action, with the review steps", async () => {
+    const pub = ok(await render({ site: "bv", tab: "publication" }));
+    expect(submitButton(pub)).toBe(buttonStyles.primary);
+    expect(pub).toContain('aria-label="Review progress"');
+    expect(pub).toContain("Publishing needs an approved master (second-person review).");
+    expect(pub).not.toContain("so no review is needed");
+  });
+
+  it("a reviewer keeps Approve and Request changes even when publishing directly", async () => {
+    setWorkflow(
+      {
+        status: "IN_REVIEW",
+        validation: { ok: true, blocking: [], warnings: [] },
+        permissions: {
+          canSubmit: false,
+          canWithdraw: true,
+          canReview: true,
+          reviewBlockedReason: null,
+        },
+      },
+      { publishMode: "DIRECT", readiness: directReady },
+      { publishMode: "DIRECT", ...notListed() },
+    );
+    const pub = ok(await render({ site: "bv", tab: "publication" }));
+    expect(pub).toContain(">Approve<");
+    expect(pub).toContain(">Request changes<");
+    expect(pub).toContain(">Withdraw from review<");
+    expect(pub).toContain('aria-label="Review progress"');
+  });
+
+  it("a user without master edit rights gets no review action and no publish button", async () => {
+    fixtures({ canEditMaster: false });
+    setWorkflow({}, { canPublish: false, canShowListing: false }, {});
+    const pub = ok(await render({ site: "bv", tab: "publication" }));
+    expect(submitButton(pub)).toBeNull();
+    expect(pub).not.toContain(">Publish<");
+    expect(pub).toContain("Publishing on this site needs the publisher role of the site.");
+    expect(card(pub, "Corporate")).toContain("Listing it here needs edit rights on this site.");
+    expect(card(pub, "Corporate")).not.toContain("Go to Content");
+  });
+
+  it("Draft master + Published BV: both shown, apart; the master is labelled", async () => {
+    setWorkflow(
+      {},
+      {
+        publishMode: "DIRECT",
+        listing: { version: 2, visibility: "VISIBLE" },
+        publication: live,
+        readiness: directReady,
+      },
+      {},
+    );
+    const html = await render({ site: "bv" });
+    expect(headerStatus(html)).toEqual(["BV:Published", "Corporate:Not listed", "Master:Draft"]);
+    // Never folded into one status, never the old summary.
+    expect(html).not.toContain("Live on 1 of 2 sites");
+    expect(html).toContain('data-status="master"');
+  });
+
+  it("BV Published + Corporate Not listed: no red marker, no red blocker, Publish only on BV", async () => {
+    corporateEditable();
+    setWorkflow(
+      {},
+      {
+        publishMode: "DIRECT",
+        listing: { version: 2, visibility: "VISIBLE" },
+        publication: live,
+        readiness: directReady,
+      },
+      { publishMode: "DIRECT", canPublish: true, ...notListed() },
+    );
+    const html = await render({ site: "bv", tab: "publication" });
+    expect(html).not.toContain("publishing blocked on");
+    const corp = card(ok(html), "Corporate");
+    expect(corp).toContain('data-site-status="not-listed"');
+    expect(corp).toContain(">Not listed<");
+    expect(corp).not.toContain(">Draft<");
+    expect(corp).not.toContain("text-danger");
+    expect(corp).not.toContain("Publishing is blocked");
+    expect(corp).not.toContain(">Publish<");
+    // The wrong "Published directly" note of the readiness check is not shown for it.
+    expect(corp).not.toContain("Published directly");
+    // The listing flow stays: the card sends the editor to Corporate's Content tab.
+    expect(corp).toContain("To publish it here, list it on Corporate first.");
+    expect(corp).toContain(`href="/products/${PRODUCT}?site=corporate#listing"`);
+    expect(card(ok(html), "Dream Petroleum BV")).toContain(">Unpublish<");
+  });
+
+  it("BV Unpublished + Corporate Draft: Draft stays Draft when the site lists the product", async () => {
+    corporateEditable();
+    setWorkflow(
+      {},
+      { listing: { version: 2, visibility: "VISIBLE" }, publication: off, readiness: ready },
+      {
+        canPublish: true,
+        listing: { version: 1, visibility: "HIDDEN" },
+        publication: null,
+        readiness: { ok: true, blocking: [], warnings: [] },
+      },
+    );
+    const html = await render({ site: "bv", tab: "publication" });
+    expect(headerStatus(html)).toEqual(["BV:Unpublished", "Corporate:Draft", "Master:Draft"]);
+    const corp = card(ok(html), "Corporate");
+    expect(corp).toContain(">Draft<");
+    expect(corp).not.toContain("data-not-listed");
+    expect(corp).toContain(">Publish<");
+  });
+
+  it("keeps real blockers: red on a listed site, still listed (amber) on an unlisted one", async () => {
+    corporateEditable();
+    setWorkflow(
+      {},
+      {
+        listing: { version: 2, visibility: "VISIBLE" },
+        readiness: { ok: false, blocking: [coverMissing], warnings: [] },
+      },
+      { canPublish: true, ...notListed([coverMissing]) },
+    );
+    const html = await render({ site: "bv", tab: "publication" });
+    expect(html).toContain("publishing blocked on 1 site");
+    const bv = card(ok(html), "Dream Petroleum BV");
+    expect(bv).toContain("Publishing is blocked:");
+    expect(bv).toContain("A cover image is required.");
+    const corp = card(ok(html), "Corporate");
+    expect(corp).not.toContain("Publishing is blocked:");
+    expect(corp).toContain("Publishing here would also need:");
+    expect(corp).toContain("A cover image is required.");
+    expect(corp).not.toContain("The site does not list this product.");
+  });
+
+  it("an unlisted site never raises the tab marker on its own", async () => {
+    setWorkflow(
+      {},
+      { listing: { version: 2, visibility: "VISIBLE" }, readiness: ready },
+      notListed(),
+    );
+    const html = await render({ site: "bv" });
+    expect(html).not.toContain("publishing blocked on");
+    expect(html).not.toMatch(/role="tab"[^>]*>Publication<span[^>]*text-danger/);
   });
 });
 

@@ -6,7 +6,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { messageForIssues } from "../lib/catalog-client";
 import { listingSaveBody } from "../lib/listing-request";
-import { planPublication, siteStatus } from "../lib/publication-status";
+import {
+  blockedSiteCount,
+  headerStatus,
+  planPublication,
+  siteDisplayStatus,
+  siteStatus,
+  submitOffer,
+} from "../lib/publication-status";
 
 const T = "2026-11-17T10:00:00.000Z";
 const actor = { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" };
@@ -304,5 +311,69 @@ describe("DP-198 one publishing request", () => {
     expect(messageForIssues("CONFLICT_STATE", [{ path: "listing", rule: "listing_hidden" }])).toBe(
       "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.",
     );
+  });
+});
+
+// DP-203: Not listed apart from Draft; unlisted sites raise no red marker; Submit for review
+// only where a review can change what the user publishes.
+describe("DP-203 status helpers", () => {
+  const missing = issue("BLOCKING", "listing_missing");
+  const cover = issue("BLOCKING", "cover_missing");
+
+  it("tells Not listed from Draft", () => {
+    expect(siteDisplayStatus({ publication: null, listing: null })).toBe("NOT_LISTED");
+    expect(siteDisplayStatus({ publication: null, listing: "HIDDEN" })).toBe("DRAFT");
+    // Published before, listing gone since: off the site, not "Not listed".
+    expect(siteDisplayStatus({ publication: { status: "UNPUBLISHED" }, listing: null })).toBe(
+      "UNPUBLISHED",
+    );
+  });
+
+  it("drops listing_missing from an unlisted site's blockers and keeps the others", () => {
+    const plan = planPublication(
+      site({ listing: null, readiness: { ok: false, blocking: [missing, cover], warnings: [] } }),
+      { productStatus: "DRAFT" },
+    );
+    expect(plan.status).toBe("NOT_LISTED");
+    expect(plan.notListed).toBe(true);
+    expect(plan.blocking.map((i) => i.code)).toEqual(["cover_missing"]);
+    expect(plan.canPublish).toBe(false);
+  });
+
+  it("counts only listed sites as blocked", () => {
+    const unlisted = site({
+      listing: null,
+      readiness: { ok: false, blocking: [missing, cover], warnings: [] },
+    });
+    const listed = site({ readiness: { ok: false, blocking: [cover], warnings: [] } });
+    expect(blockedSiteCount([unlisted], "DRAFT")).toBe(0);
+    expect(blockedSiteCount([unlisted, listed], "DRAFT")).toBe(1);
+  });
+
+  it("puts the master next to the site statuses only when it adds something", () => {
+    const live = site({
+      listing: { version: 3, visibility: "VISIBLE" },
+      publication: publication("PUBLISHED"),
+    });
+    const unlisted = site({ siteKey: "CORPORATE", listing: null });
+    expect(headerStatus([live, unlisted], "DRAFT")).toEqual({
+      sites: [
+        { siteKey: "BV", status: "PUBLISHED" },
+        { siteKey: "CORPORATE", status: "NOT_LISTED" },
+      ],
+      master: "DRAFT",
+    });
+    expect(headerStatus([site(), unlisted], "DRAFT").master).toBeNull();
+    expect(headerStatus([site(), unlisted], "IN_REVIEW").master).toBe("IN_REVIEW");
+  });
+
+  it("offers Submit for review by publish mode, never without canSubmit", () => {
+    const d = { publishMode: "DIRECT" as const };
+    const a = { publishMode: "APPROVED" as const };
+    expect(submitOffer({ permissions: { canSubmit: true }, sites: [d, d] })).toBe("hidden");
+    expect(submitOffer({ permissions: { canSubmit: true }, sites: [d, a] })).toBe("secondary");
+    expect(submitOffer({ permissions: { canSubmit: true }, sites: [a, a] })).toBe("primary");
+    expect(submitOffer({ permissions: { canSubmit: true }, sites: [] })).toBe("primary");
+    expect(submitOffer({ permissions: { canSubmit: false }, sites: [a] })).toBe("hidden");
   });
 });
