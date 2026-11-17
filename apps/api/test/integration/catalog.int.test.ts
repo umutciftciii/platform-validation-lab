@@ -47,8 +47,13 @@ import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 import { adminApi } from "../../src/catalog/import/client.js";
 import { runImport } from "../../src/catalog/import/run.js";
 import { runMedia } from "../../src/catalog/import/media.js";
+import { runDocumentLinks } from "../../src/catalog/import/documents.js";
 import { makePdf } from "../fixtures/pdf.js";
-import { CatalogMappingSchema, MediaManifestSchema } from "@dream/contracts";
+import {
+  CatalogMappingSchema,
+  DocumentLinkManifestSchema,
+  MediaManifestSchema,
+} from "@dream/contracts";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CLI = path.join(API_DIR, "dist/iam/iam-cli.js");
@@ -2456,5 +2461,207 @@ describe("14. DP-158 media stage (images and compiled PDFs, no site link)", () =
       include: { revisions: true },
     });
     expect(doc.revisions.map((x) => x.sha256)).toEqual([sha(pdf3)]);
+  });
+});
+
+describe("15. DP-205 documents stage (live PDFs linked to BV, overview uploaded once)", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dp-205-docs-"));
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const api = (s: Staff) =>
+    adminApi({
+      baseUrl: base,
+      proxyKey: TEST_KEYS.admin,
+      sessionToken: s.token,
+      origin: ADMIN_ORIGIN,
+    });
+  const footprint = async () => ({
+    documents: await owner.productDocument.count(),
+    revisions: await owner.productDocumentRevision.count(),
+    siteLinks: await owner.productDocumentSite.count(),
+    publications: await owner.productPublication.count(),
+  });
+  let operator: Staff; // master edit + BV publisher: the DEV apply step's one session
+  let editorOnly: Staff; // master edit only: may upload, may not pin for BV
+  let overview: Buffer;
+  let manifest: ReturnType<typeof DocumentLinkManifestSchema.parse>;
+
+  beforeAll(async () => {
+    operator = await staff(
+      "dp205-operator",
+      [{ role: "platform_product_manager" }, { role: "product_publisher", site: BV }],
+      admin.userId,
+    );
+    editorOnly = await staff(
+      "dp205-editor",
+      [{ role: "platform_product_manager" }, { role: "product_editor", site: BV }],
+      admin.userId,
+    );
+    overview = makePdf({ pages: 3, text: "CTL technology overview, supplier deck" });
+    mkdirSync(path.join(root, "originals"), { recursive: true });
+    writeFileSync(path.join(root, "originals", "overview.pdf"), overview);
+    // the files the media stage (14) uploaded are the live site's files
+    const held = async (code: string) =>
+      (
+        await owner.productDocumentRevision.findFirstOrThrow({
+          where: { document: { product: { code } } },
+          orderBy: { revisionNumber: "asc" },
+        })
+      ).sha256;
+    const live = (code: string, s: string) => ({
+      code,
+      sourceUrl: `https://dreampetroleumbv.com/assets/specs/${code.toLowerCase()}.pdf`,
+      sha256: s,
+      bytes: 100,
+      upload: null,
+    });
+    manifest = DocumentLinkManifestSchema.parse({
+      dp: "DP-205",
+      site: "BV",
+      documentType: "OTHER",
+      accessPolicy: "LEAD_REQUIRED",
+      documents: [
+        live("IMP-1", await held("IMP-1")),
+        live("IMP-2", await held("IMP-2")),
+        {
+          code: "IMP-1",
+          sourceUrl: "https://dreampetroleumbv.com/assets/specs/overview.pdf",
+          sha256: sha(overview),
+          bytes: overview.length,
+          upload: {
+            file: "originals/overview.pdf",
+            title: "CTL Technology Overview",
+            description: "Published on dreampetroleumbv.com; unchanged.",
+          },
+        },
+        // a file the platform does not hold and may not upload: never touched
+        live("SN-500", "a".repeat(64)),
+      ],
+    });
+  });
+
+  it("a dry run writes nothing; a session without the BV publisher role links nothing", async () => {
+    const before = await footprint();
+    const r = await runDocumentLinks(api(operator), manifest, root, { apply: false });
+    expect(r.plan.items.map((i) => [i.code, i.action])).toEqual([
+      ["IMP-1", "LINK"],
+      ["IMP-2", "LINK"],
+      ["IMP-1", "UPLOAD_AND_LINK"],
+      ["SN-500", "CONFLICT"],
+    ]);
+    expect(r.plan.confirmCount).toBe(3);
+    expect(await footprint()).toEqual(before);
+    await expect(
+      runDocumentLinks(api(operator), manifest, root, { apply: true, confirm: 2 }),
+    ).rejects.toThrow(/does not match the plan/);
+    const denied = await runDocumentLinks(api(editorOnly), manifest, root, {
+      apply: true,
+      confirm: 3,
+    });
+    expect(denied.error).toMatch(/403/);
+    expect(denied.written).toEqual([]);
+    expect(await footprint()).toEqual(before);
+  });
+
+  it("apply pins the active revisions for BV and uploads the overview once, content unchanged", async () => {
+    const before = await footprint();
+    const docsBefore = await owner.productDocument.findMany({
+      where: { product: { code: { in: ["IMP-1", "IMP-2"] } } },
+      select: { id: true, type: true, title: true, description: true, accessPolicy: true },
+      orderBy: { id: "asc" },
+    });
+    const r = await runDocumentLinks(api(operator), manifest, root, { apply: true, confirm: 3 });
+    expect(r.error).toBeNull();
+    expect(r.written.map((w) => `${w.kind}:${w.code}`)).toEqual([
+      "link:IMP-1",
+      "link:IMP-2",
+      "document:IMP-1",
+      "revision:IMP-1",
+      "link:IMP-1",
+    ]);
+    const after = await footprint();
+    expect([
+      after.documents - before.documents,
+      after.revisions - before.revisions,
+      after.siteLinks - before.siteLinks,
+      after.publications - before.publications,
+    ]).toEqual([1, 1, 3, 0]);
+    // every BV row pins the active revision holding exactly the manifest's file
+    for (const e of manifest.documents.slice(0, 3)) {
+      const row = await owner.productDocumentSite.findFirstOrThrow({
+        where: { siteId: BV, revision: { sha256: e.sha256 } },
+        include: { revision: true, document: true },
+      });
+      expect([row.revision.isActive, row.document.type, row.document.accessPolicy]).toEqual([
+        true,
+        "OTHER",
+        "LEAD_REQUIRED",
+      ]);
+    }
+    // existing documents are unchanged; the overview kept its file name and bytes
+    expect(
+      await owner.productDocument.findMany({
+        where: { id: { in: docsBefore.map((d) => d.id) } },
+        select: { id: true, type: true, title: true, description: true, accessPolicy: true },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(docsBefore);
+    const ov = await owner.productDocumentRevision.findFirstOrThrow({
+      where: { sha256: sha(overview) },
+      include: { document: true },
+    });
+    expect([ov.originalFilename, ov.byteSize, ov.document.title]).toEqual([
+      "overview.pdf",
+      overview.length,
+      "CTL Technology Overview",
+    ]);
+    expect(r.plan.items[2]!.publicPath).toBe(`/products/imp-1/documents/${ov.documentId}`);
+    // audited as the operator's own publisher decisions, nothing else
+    expect(
+      await owner.auditEvent.count({
+        where: { actorUserId: operator.userId, action: "catalog.document_site_shown" },
+      }),
+    ).toBe(3);
+  });
+
+  it("re-running writes nothing; a file changed in the admin is left to the publisher", async () => {
+    const before = await footprint();
+    const again = await runDocumentLinks(api(operator), manifest, root, {
+      apply: true,
+      confirm: 0,
+    });
+    expect(again.written).toEqual([]);
+    expect(again.plan.items.map((i) => i.action)).toEqual([
+      "ALREADY_LINKED",
+      "ALREADY_LINKED",
+      "ALREADY_LINKED",
+      "CONFLICT",
+    ]);
+    expect(await footprint()).toEqual(before);
+    // the company replaces IMP-2's file in the admin: the import never moves BV's pin
+    const imp2 = await owner.productDocument.findFirstOrThrow({
+      where: {
+        product: { code: "IMP-2" },
+        revisions: { some: { sha256: manifest.documents[1]!.sha256 } },
+      },
+    });
+    await api(editorOnly).put(
+      `/documents/${imp2.id}/revisions`,
+      makePdf({ text: "IMP-2 corrected by the company" }),
+      { "content-type": "application/pdf" },
+    );
+    const pinBefore = await owner.productDocumentSite.findFirstOrThrow({
+      where: { documentId: imp2.id, siteId: BV },
+    });
+    const later = await runDocumentLinks(api(operator), manifest, root, {
+      apply: true,
+      confirm: 0,
+    });
+    expect(later.plan.items[1]).toMatchObject({ action: "CONFLICT" });
+    expect(later.plan.items[1]!.reason).toMatch(/another revision/);
+    expect(
+      await owner.productDocumentSite.findFirstOrThrow({
+        where: { documentId: imp2.id, siteId: BV },
+      }),
+    ).toEqual(pinBefore);
   });
 });

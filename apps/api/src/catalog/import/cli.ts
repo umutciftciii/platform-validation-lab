@@ -6,24 +6,33 @@
  *   node dist/catalog/import/cli.js --mapping <file> [--report <file>] [--only CODE,CODE]
  *        [--resume-partial] [--apply --confirm <n>]
  *   node dist/catalog/import/cli.js --media <manifest.json> [--media-root <dir>] [same options]
+ *   node dist/catalog/import/cli.js --documents <manifest.json> [--media-root <dir>] [same options]
  *
  * The media stage (DP-158) runs on its own: it reads the verified DP-158 manifest and uploads
  * images and PDFs through the existing admin API (media.ts). It never links a document to a site.
+ * The documents stage (DP-205, documents.ts) links the documents holding the live site's PDFs to
+ * BV with the site publisher's pin and uploads only PDFs the platform does not hold yet.
  *
  * Environment (never on the command line): DP_IMPORT_API_URL, DP_PROXY_KEY_ADMIN,
  * DP_IMPORT_SESSION_TOKEN (the operator's own admin session), DP_IMPORT_ORIGIN (default
- * DP_ADMIN_BASE_URL). Images and documents are never imported by this tool.
+ * DP_ADMIN_BASE_URL). The mapping stage never imports images or documents.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { CatalogMappingSchema, MediaManifestSchema } from "@dream/contracts";
+import {
+  CatalogMappingSchema,
+  DocumentLinkManifestSchema,
+  MediaManifestSchema,
+} from "@dream/contracts";
 import { adminApi } from "./client.js";
+import { runDocumentLinks, type DocumentLinkReport } from "./documents.js";
 import { runMedia, type MediaReport } from "./media.js";
 import { runImport, type ImportReport } from "./run.js";
 
 interface Args {
   mapping: string;
   media: string;
+  documents: string;
   mediaRoot: string | null;
   report: string | null;
   only: Set<string> | null;
@@ -36,6 +45,7 @@ export function parseArgs(argv: readonly string[]): Args {
   const a: Args = {
     mapping: "",
     media: "",
+    documents: "",
     mediaRoot: null,
     report: null,
     only: null,
@@ -56,6 +66,9 @@ export function parseArgs(argv: readonly string[]): Args {
         break;
       case "--media":
         a.media = next();
+        break;
+      case "--documents":
+        a.documents = next();
         break;
       case "--media-root":
         a.mediaRoot = next();
@@ -87,9 +100,16 @@ export function parseArgs(argv: readonly string[]): Args {
         throw new Error(`unknown argument ${arg}`);
     }
   }
-  if (!a.mapping && !a.media) throw new Error("--mapping <file> or --media <manifest> is required");
-  if (a.mapping && a.media) throw new Error("--mapping and --media are separate stages; run one");
-  if (a.mediaRoot && !a.media) throw new Error("--media-root is only used with --media");
+  const stages = [a.mapping, a.media, a.documents].filter(Boolean).length;
+  if (stages === 0) {
+    throw new Error("--mapping <file>, --media <manifest> or --documents <manifest> is required");
+  }
+  if (stages > 1) {
+    throw new Error("--mapping, --media and --documents are separate stages; run one");
+  }
+  if (a.mediaRoot && !a.media && !a.documents) {
+    throw new Error("--media-root is only used with --media or --documents");
+  }
   if (a.confirm !== undefined && !a.apply) throw new Error("--confirm is only used with --apply");
   return a;
 }
@@ -146,6 +166,31 @@ export function mediaSummary(r: MediaReport): string {
   return lines.join("\n");
 }
 
+export function documentsSummary(r: DocumentLinkReport): string {
+  const c = r.plan.counts;
+  const lines = [
+    `mode: ${r.mode} (documents stage, site BV)`,
+    `documents: ${r.plan.items.length} | link ${c.LINK} | upload and link ${c.UPLOAD_AND_LINK} | resume ${c.RESUME} | already linked ${c.ALREADY_LINKED} | partial ${c.PARTIAL} | conflict ${c.CONFLICT}`,
+    ...r.plan.items.map(
+      (i) =>
+        `${i.action.toLowerCase()} ${i.code} ${i.sha256.slice(0, 12)}` +
+        (i.reason ? `: ${i.reason}` : "") +
+        (i.publicPath ? ` -> ${i.publicPath}` : ""),
+    ),
+  ];
+  if (r.mode === "dry-run") {
+    lines.push(
+      r.plan.confirmCount > 0
+        ? `nothing written. To apply this plan: --apply --confirm ${r.plan.confirmCount}`
+        : "nothing written; nothing to apply",
+    );
+  } else {
+    lines.push(`written: ${r.written.length} record(s)`);
+    if (r.error) lines.push(`STOPPED: ${r.error}`);
+  }
+  return lines.join("\n");
+}
+
 function env(name: string, fallback?: string): string {
   const v = process.env[name]?.trim() || fallback;
   if (!v) throw new Error(`${name} is not set`);
@@ -173,6 +218,16 @@ async function main(argv: readonly string[]): Promise<number> {
     resumePartial: args.resumePartial,
     log: (l: string) => process.stderr.write(`${l}\n`),
   };
+  if (args.documents) {
+    const manifest = DocumentLinkManifestSchema.parse(
+      JSON.parse(readFileSync(args.documents, "utf8")),
+    );
+    const root = args.mediaRoot ?? path.dirname(args.documents);
+    const docs = await runDocumentLinks(api, manifest, root, common);
+    if (args.report) writeFileSync(args.report, `${JSON.stringify(docs, null, 2)}\n`);
+    process.stdout.write(`${documentsSummary(docs)}\n`);
+    return docs.error ? 3 : 0;
+  }
   if (args.media) {
     const manifest = MediaManifestSchema.parse(JSON.parse(readFileSync(args.media, "utf8")));
     const media = await runMedia(api, manifest, args.mediaRoot ?? path.dirname(args.media), common);

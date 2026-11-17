@@ -213,7 +213,8 @@ for (const [name, opts] of [["reduced motion 1440x900", { width: 1440, height: 9
   const order = await p.evaluate(() => [...document.querySelector("main").children].map((e) => e.id || e.className.split(" ")[0]));
   check("section sits right after Services", order[order.indexOf("services") + 1] === "ctl-technology", order);
   const pdf = await p.locator(".ctl-document").getAttribute("href");
-  check("PDF link is the site's own file", pdf === "https://dreampetroleumbv.com/assets/specs/iccsyn-ctl-technology-overview.pdf", pdf);
+  // DP-205: the overview is a LEAD_REQUIRED document; the link opens its request form (or, on a fresh database, the product's documents).
+  check("PDF link opens the platform's request form", /^\/products\/[a-z0-9-]+(\/documents\/[0-9a-f-]{36}|#documents)$/.test(pdf ?? ""), pdf);
   await p.context().close();
 }
 
