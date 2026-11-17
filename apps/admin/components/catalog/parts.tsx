@@ -2,7 +2,11 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import type { CatalogSite, ProductStatus } from "@dream/contracts";
 import { Icon, type IconKey } from "../icons";
-import { SITE_STATUS_LABEL, type SiteStatus } from "../../lib/publication-status";
+import {
+  SITE_STATUS_LABEL,
+  type ListRowStatus,
+  type SiteStatus,
+} from "../../lib/publication-status";
 import { cx, StatusPill, type PillTone } from "../ui";
 
 /** Text inputs and selects of the console's forms (same look as the sign-in form). */
@@ -124,7 +128,12 @@ const STATUS_PILL: Readonly<Record<ProductStatus, { tone: PillTone; label: strin
 
 export function ProductStatusPill({ status }: { status: ProductStatus }) {
   const s = STATUS_PILL[status];
-  return <StatusPill tone={s.tone}>{s.label}</StatusPill>;
+  // Keyed like SiteStatusPill (DP-196): a status change replaces the pill and its text.
+  return (
+    <StatusPill key={status} tone={s.tone}>
+      {s.label}
+    </StatusPill>
+  );
 }
 
 const SITE_STATUS_TONE: Readonly<Record<SiteStatus, PillTone>> = {
@@ -144,6 +153,40 @@ export function SiteStatusPill({ status }: { status: SiteStatus }) {
     <StatusPill key={status} tone={SITE_STATUS_TONE[status]}>
       {SITE_STATUS_LABEL[status]}
     </StatusPill>
+  );
+}
+
+/** DP-200: short site names for the product list, so a row fits 320 px. */
+const LIST_SITE: Readonly<Record<CatalogSite["key"], string>> = {
+  BV: "BV",
+  CORPORATE: "Corporate",
+};
+
+/**
+ * DP-200: the status of one product-list row, the same on wide screens and phones. The site's
+ * status always shows, named after the site; the master's only when it adds something
+ * (lib/publication-status listRowStatus), named "Master". One string per label (DP-196/199).
+ */
+export function ProductListStatus({
+  siteKey,
+  status,
+}: {
+  siteKey: CatalogSite["key"];
+  status: ListRowStatus;
+}) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span key="site" className="inline-flex items-center gap-1.5" data-status="site">
+        <span className="text-xs font-medium text-ink-3">{LIST_SITE[siteKey]}</span>
+        <SiteStatusPill status={status.site} />
+      </span>
+      {status.master ? (
+        <span key="master" className="inline-flex items-center gap-1.5" data-status="master">
+          <span className="text-xs font-medium text-ink-3">Master</span>
+          <ProductStatusPill status={status.master} />
+        </span>
+      ) : null}
+    </span>
   );
 }
 

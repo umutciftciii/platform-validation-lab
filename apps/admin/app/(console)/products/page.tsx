@@ -11,8 +11,7 @@ import {
   FIELD,
   PageHeader,
   pickSite,
-  ProductStatusPill,
-  SiteStatusPill,
+  ProductListStatus,
   SiteSwitcher,
   siteParam,
 } from "../../../components/catalog/parts";
@@ -26,7 +25,7 @@ import {
   PAGE_SIZE,
   readFilters,
 } from "../../../lib/catalog-view";
-import { siteStatus } from "../../../lib/publication-status";
+import { listRowStatus } from "../../../lib/publication-status";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
@@ -246,10 +245,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                       Category on this site
                     </th>
                     <th scope="col" className="px-3 py-2.5 font-semibold">
-                      On this site
-                    </th>
-                    <th scope="col" className="px-3 py-2.5 font-semibold">
-                      Master
+                      Status
                     </th>
                     <th scope="col" className="py-2.5 pl-3 pr-6 font-semibold">
                       Last changed
@@ -279,10 +275,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                         {p.listing ? p.listing.categoryName : <span className="text-ink-3">—</span>}
                       </td>
                       <td className="px-3 py-3.5">
-                        <SiteStatusPill status={statusOf(p)} />
-                      </td>
-                      <td className="px-3 py-3.5">
-                        <ProductStatusPill status={p.status} />
+                        <ProductListStatus siteKey={site.key} status={statusOf(p)} />
                       </td>
                       <td className="tabular whitespace-nowrap py-3.5 pl-3 pr-6 text-ink-2">
                         <span className="flex items-center justify-between gap-2">
@@ -310,9 +303,8 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
                     <span className="min-w-0">
                       <span className="block font-medium text-ink">{p.name}</span>
                       <span className="tabular block font-mono text-xs text-ink-3">{p.code}</span>
-                      <span className="mt-2 flex flex-wrap gap-1.5">
-                        <SiteStatusPill status={statusOf(p)} />
-                        <ProductStatusPill status={p.status} />
+                      <span className="mt-2 block">
+                        <ProductListStatus siteKey={site.key} status={statusOf(p)} />
                       </span>
                       {p.listing ? (
                         <span className="mt-1.5 block text-xs text-ink-3">
@@ -333,9 +325,12 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
   );
 }
 
-/** DP-197: Draft, Published or Unpublished on the selected site. */
+/**
+ * DP-197: Draft, Published or Unpublished on the selected site; DP-200: plus the master status
+ * when it does not merely repeat it.
+ */
 function statusOf(p: ProductListItem) {
-  return siteStatus({
+  return listRowStatus({
     publication: p.publication,
     listing: p.listing?.visibility ?? null,
     productStatus: p.status,
