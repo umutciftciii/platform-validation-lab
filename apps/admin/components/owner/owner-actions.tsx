@@ -239,9 +239,13 @@ export function ChainStatus({ initial }: { initial: OwnerChainStatus }) {
       <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <Fact label="State">
           {status.intact ? (
-            <StatusPill tone="success">Intact</StatusPill>
+            <StatusPill key="intact" tone="success">
+              Intact
+            </StatusPill>
           ) : (
-            <StatusPill tone="danger">Broken at #{status.firstBrokenSeq}</StatusPill>
+            <StatusPill key="broken" tone="danger">
+              Broken at #{status.firstBrokenSeq}
+            </StatusPill>
           )}
         </Fact>
         <Fact label="Protected events">{status.events}</Fact>
