@@ -31,6 +31,10 @@ import {
   PublicSiteSeoResponseSchema,
   PublicSitemapResponseSchema,
   SeoOverviewResponseSchema,
+  SeoRedirectHistoryResponseSchema,
+  SeoRedirectImportResponseSchema,
+  SeoRedirectListResponseSchema,
+  SeoRedirectResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -109,7 +113,8 @@ class Staff {
     if (method !== "GET") headers["origin"] = ADMIN_ORIGIN;
     if (method === "POST") headers["content-type"] = "application/json";
     return parse(
-      await fetch(`${base}/api/v1/admin/cms${p}`, {
+      // DP-211: an absolute API path (e.g. /api/v1/admin/seo/...) is used as is.
+      await fetch(`${base}${p.startsWith("/api/") ? p : `/api/v1/admin/cms${p}`}`, {
         method,
         headers,
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
@@ -2601,3 +2606,546 @@ describe("17. slug changes and automatic 301 (DP-210)", () => {
     await expectRedirect("/dp210-a", "/dp210-d");
   });
 });
+
+describe("18. redirect management (DP-211)", () => {
+  let manager: Staff; // site_admin @ BV: content:publish and audit:read
+  let comPublisher2: Staff; // content_publisher @ CORPORATE
+  const R = () => `/api/v1/admin/seo/sites/${BV}/redirects`;
+  async function seo(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.45" },
+      }),
+    );
+  }
+  const resolve = (p: string, query = "", key?: string) =>
+    seo(
+      `/resolve?path=${encodeURIComponent(p)}${query ? `&query=${encodeURIComponent(query)}` : ""}`,
+      key,
+    );
+  const sitemap = async () =>
+    PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries.map((e) => e.path);
+  async function livePage(slug: string, as: Staff = bvEditor): Promise<string> {
+    const created = await as.post(`/sites/${BV}/pages`, { title: `DP-211 ${slug}`, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = CmsPageResponseSchema.parse(created.body).page.id;
+    const p = CmsPageResponseSchema.parse((await bvPublisher.get(`/pages/${id}`)).body).page;
+    const pub = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(200);
+    return id;
+  }
+  async function move(id: string, slug: string) {
+    const p = CmsPageResponseSchema.parse((await bvEditor.get(`/pages/${id}`)).body).page;
+    const saved = await bvEditor.post(`/pages/${id}/draft`, {
+      version: p.version,
+      title: p.title,
+      slug,
+      seo: SEO,
+      content: { sections: [HERO] },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const q = CmsPageResponseSchema.parse((await bvPublisher.get(`/pages/${id}`)).body).page;
+    const pub = await bvPublisher.post(`/pages/${id}/publish`, { version: q.version });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(200);
+  }
+  const body = (source: string, target: string, over: Record<string, unknown> = {}) => ({
+    source,
+    target,
+    statusCode: 301,
+    active: true,
+    note: null,
+    ...over,
+  });
+  async function create(source: string, target: string, over = {}, as: Staff = manager) {
+    const res = await as.post(R(), body(source, target, over));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return SeoRedirectResponseSchema.parse(res.body);
+  }
+  const rowAt = (sourcePath: string, sourceQuery = "") =>
+    owner.siteRedirect.findUniqueOrThrow({
+      where: { siteId_sourcePath_sourceQuery: { siteId: BV, sourcePath, sourceQuery } },
+    });
+  /** No active redirect starts at a live address, chains or loops. */
+  async function expectConsistent() {
+    const active = await owner.siteRedirect.findMany({ where: { siteId: BV, active: true } });
+    const plain = new Set(active.filter((r) => r.sourceQuery === "").map((r) => r.sourcePath));
+    for (const r of active) {
+      expect(plain.has(r.target.split("?")[0]!), `chain at ${r.sourcePath}`).toBe(false);
+      const res = await resolve(r.sourcePath, r.sourceQuery);
+      expect(res.body?.redirect, `live content at ${r.sourcePath}`).toBeDefined();
+    }
+  }
+
+  beforeAll(async () => {
+    manager = await staff("bv-site-admin", [{ role: "site_admin", site: BV }], root.userId);
+    comPublisher2 = await staff(
+      "com-publisher-211",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+    await livePage("dp211-target");
+  });
+
+  it("authorization: read with content:read, change with content:publish, history with audit:read", async () => {
+    expectError(await nobody.get(R()), 403, "FORBIDDEN");
+    expectError(await comEditor.get(R()), 403, "FORBIDDEN");
+    const read = await bvReader.get(R());
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(SeoRedirectListResponseSchema.parse(read.body).permissions).toEqual({
+      manage: false,
+      history: false,
+    });
+    const managed = SeoRedirectListResponseSchema.parse((await manager.get(R())).body);
+    expect(managed.permissions).toEqual({ manage: true, history: true });
+    expect(
+      SeoRedirectListResponseSchema.parse((await bvPublisher.get(R())).body).permissions,
+    ).toEqual({
+      manage: true,
+      history: false,
+    });
+    // Editors (no publishing), readers and the super admin (no publishing) cannot change redirects.
+    for (const who of [bvEditor, bvReader, root, nobody]) {
+      expectError(await who.post(R(), body("/dp211-denied", "/dp211-target")), 403, "FORBIDDEN");
+    }
+    const denied = await owner.auditEvent.findFirst({
+      where: { actorUserId: bvEditor.userId, outcome: "DENIED", resourceType: "site_redirect" },
+    });
+    expect(denied).not.toBeNull();
+    expect(await owner.siteRedirect.count({ where: { sourcePath: "/dp211-denied" } })).toBe(0);
+    // Corporate applies no redirects: 404 for its own publisher; a malformed site id is 404/403.
+    expectError(
+      await comPublisher2.get(`/api/v1/admin/seo/sites/${COM}/redirects`),
+      404,
+      "NOT_FOUND",
+      { path: "site", rule: "no_redirects" },
+    );
+    expectError(
+      await manager.get(`/api/v1/admin/seo/sites/not-a-uuid/redirects`),
+      403,
+      "FORBIDDEN",
+    );
+  });
+
+  it("create, edit and delete a manual redirect; audited; live on the site at once", async () => {
+    const created = await create("/dp211-old", "/dp211-target", { note: " Old page " });
+    expect(created.warnings).toEqual([]);
+    expect(created.redirect).toMatchObject({
+      sourcePath: "/dp211-old",
+      sourceQuery: "",
+      target: "/dp211-target",
+      statusCode: 301,
+      active: true,
+      origin: "MANUAL",
+      note: "Old page",
+      version: 1,
+      protected: false,
+      content: null,
+      createdBy: expect.any(String),
+    });
+    const res = await resolve("/dp211-old");
+    expect(PublicSeoResolveResponseSchema.parse(res.body)).toEqual({
+      path: "/dp211-old",
+      redirect: { target: "/dp211-target", statusCode: 301 },
+    });
+    expect(await sitemap()).not.toContain("/dp211-old");
+    const audit = await lastAudit("seo.redirect_created");
+    expect(audit).toMatchObject({ actorUserId: manager.userId, siteId: BV, outcome: "SUCCESS" });
+    expect(audit?.metadata).toMatchObject({
+      permission: "content:publish",
+      sourcePath: "/dp211-old",
+      target: "/dp211-target",
+      origin: "MANUAL",
+      hasNote: true,
+    });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("Old page");
+
+    // Edit: 302 and inactive; a stale version is refused; the site follows at once.
+    const id = created.redirect.id;
+    const edited = await manager.post(`${R()}/${id}`, {
+      ...body("/dp211-old", "/dp211-target", { statusCode: 302 }),
+      version: 1,
+    });
+    expect(edited.status, JSON.stringify(edited.body)).toBe(200);
+    expect(SeoRedirectResponseSchema.parse(edited.body).redirect).toMatchObject({
+      statusCode: 302,
+      version: 2,
+      note: null,
+    });
+    expect((await resolve("/dp211-old")).body.redirect).toEqual({
+      target: "/dp211-target",
+      statusCode: 302,
+    });
+    expectError(
+      await manager.post(`${R()}/${id}`, { ...body("/dp211-old", "/x"), version: 1 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    const off = await bvPublisher.post(`${R()}/${id}`, {
+      ...body("/dp211-old", "/dp211-target", { active: false, statusCode: 302 }),
+      version: 2,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expectError(await resolve("/dp211-old"), 404, "NOT_FOUND");
+    expect((await lastAudit("seo.redirect_updated"))?.metadata).toMatchObject({
+      active: false,
+      previous: { active: true, statusCode: 302 },
+      changed: ["active"],
+    });
+
+    // Delete: version checked; history survives the row (audit:read only).
+    expectError(await manager.post(`${R()}/${id}/delete`, { version: 1 }), 409, "CONFLICT_STATE", {
+      path: "version",
+      rule: "stale",
+    });
+    expectError(await bvReader.post(`${R()}/${id}/delete`, { version: 3 }), 403, "FORBIDDEN");
+    const del = await manager.post(`${R()}/${id}/delete`, { version: 3 });
+    expect(del.status, JSON.stringify(del.body)).toBe(200);
+    expect(await owner.siteRedirect.count({ where: { id } })).toBe(0);
+    expect((await lastAudit("seo.redirect_deleted"))?.metadata).toMatchObject({
+      sourcePath: "/dp211-old",
+      origin: "MANUAL",
+      version: 3,
+    });
+    expectError(await bvPublisher.get(`${R()}/${id}/history`), 403, "FORBIDDEN");
+    const history = SeoRedirectHistoryResponseSchema.parse(
+      (await manager.get(`${R()}/${id}/history`)).body,
+    );
+    expect(history.events.map((e) => e.action)).toEqual([
+      "seo.redirect_deleted",
+      "seo.redirect_updated",
+      "seo.redirect_updated",
+      "seo.redirect_created",
+    ]);
+    expect(history.events[0]?.actor).toBeTruthy();
+    expect(history.events[0]?.details["permission"]).toBeUndefined();
+    expectError(await manager.get(`${R()}/${randomUUIDLike()}/history`), 404, "NOT_FOUND");
+  });
+
+  it("validation: same-site targets, reserved paths, live content, duplicates, chains and loops", async () => {
+    const bad = async (
+      source: string,
+      target: string,
+      status: number,
+      detail: { path: string; rule: string },
+    ) =>
+      expectError(
+        await manager.post(R(), body(source, target)),
+        status,
+        status === 400 ? "VALIDATION_FAILED" : "CONFLICT_STATE",
+        detail,
+      );
+    await bad("/dp211-v", "https://evil.example/", 400, { path: "target", rule: "external" });
+    await bad("/dp211-v", "//evil.example", 400, { path: "target", rule: "external" });
+    await bad("/dp211-v", "/api/x", 400, { path: "target", rule: "reserved" });
+    await bad("/products", "/x", 400, { path: "source", rule: "reserved" });
+    await bad("/en", "/x", 400, { path: "source", rule: "reserved" });
+    await bad("/Dp211", "/x", 400, { path: "source", rule: "format" });
+    await bad("/dp211-v#x", "/x", 400, { path: "source", rule: "fragment" });
+    await bad("/dp211-v", "/dp211-v", 400, { path: "target", rule: "self" });
+    // A live page's address is never a source.
+    await bad("/dp211-target", "/x", 409, { path: "source", rule: "live_content" });
+    // Duplicates: the same source (and query) once.
+    await create("/dp211-a", "/dp211-target");
+    await bad("/dp211-a", "/x", 409, { path: "source", rule: "duplicate" });
+    await bad("/dp211-a/", "/x", 409, { path: "source", rule: "duplicate" });
+    // Chains (and so loops): /dp211-b -> /dp211-a (a source), /dp211-target <- ... ; /dp211-c as a
+    // source that /dp211-x already targets.
+    await bad("/dp211-b", "/dp211-a", 409, { path: "target", rule: "chain" });
+    await create("/dp211-x", "/dp211-c");
+    await bad("/dp211-c", "/dp211-target", 409, { path: "source", rule: "chain" });
+    await bad("/dp211-target-2", "/dp211-x", 409, { path: "target", rule: "chain" });
+    // Warnings never block: a target without live content, a draft at the source.
+    const draft = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "Draft",
+      slug: "dp211-draft",
+    });
+    expect(draft.status).toBe(201);
+    const warned = await create("/dp211-draft", "/dp211-nowhere");
+    expect(warned.warnings.sort()).toEqual(["source:draft_content", "target:not_live"]);
+    expect((await create("/dp211-to-products", "/products?category=base-oil")).warnings).toEqual(
+      [],
+    );
+    await expectConsistent();
+  });
+
+  it("query-bound sources match their exact query and send the target as is", async () => {
+    await create("/dp211-q?ref=mail&b=2", "/dp211-target", { statusCode: 302 });
+    await create("/dp211-q", "/dp211-target?from=q");
+    expect(await rowAt("/dp211-q", "b=2&ref=mail")).toMatchObject({ statusCode: 302 });
+    expect((await resolve("/dp211-q", "ref=mail&b=2")).body.redirect).toEqual({
+      target: "/dp211-target",
+      statusCode: 302,
+      keepQuery: false,
+    });
+    // Parameter order does not matter.
+    expect((await resolve("/dp211-q", "b=2&ref=mail")).body.redirect).toMatchObject({
+      keepQuery: false,
+    });
+    // Another query falls back to the plain redirect (which keeps the request query, DP-210).
+    expect((await resolve("/dp211-q", "ref=other")).body.redirect).toEqual({
+      target: "/dp211-target?from=q",
+      statusCode: 301,
+    });
+    expect((await resolve("/dp211-q")).body.redirect).toMatchObject({ statusCode: 301 });
+    // The Corporate key never sees a BV redirect.
+    expectError(await resolve("/dp211-q", "", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+  });
+
+  it("slug-change redirects are listed with their content and protected", async () => {
+    const list = SeoRedirectListResponseSchema.parse(
+      (await manager.get(`${R()}?origin=SLUG_CHANGE`)).body,
+    );
+    expect(list.items.length).toBeGreaterThan(0);
+    const item = list.items.find((i) => i.sourcePath === "/dp210-a")!;
+    expect(item).toMatchObject({
+      origin: "SLUG_CHANGE",
+      protected: true,
+      content: { type: "CMS_PAGE", name: expect.stringContaining("DP-210"), livePath: item.target },
+    });
+    const keep = { source: item.sourcePath, target: item.target, statusCode: 301, active: true };
+    for (const change of [
+      { target: "/dp211-target" },
+      { active: false },
+      { statusCode: 302 },
+      { source: "/dp211-moved" },
+    ]) {
+      expectError(
+        await manager.post(`${R()}/${item.id}`, {
+          ...keep,
+          note: null,
+          ...change,
+          version: item.version,
+        }),
+        409,
+        "CONFLICT_STATE",
+        { path: "redirect", rule: "protected" },
+      );
+    }
+    expectError(
+      await manager.post(`${R()}/${item.id}/delete`, { version: item.version }),
+      409,
+      "CONFLICT_STATE",
+      {
+        path: "redirect",
+        rule: "protected",
+      },
+    );
+    const noted = await manager.post(`${R()}/${item.id}`, {
+      ...keep,
+      note: "Moved in 2026",
+      version: item.version,
+    });
+    expect(noted.status, JSON.stringify(noted.body)).toBe(200);
+    expect(SeoRedirectResponseSchema.parse(noted.body).redirect).toMatchObject({
+      note: "Moved in 2026",
+      origin: "SLUG_CHANGE",
+      target: item.target,
+    });
+    expect((await resolve("/dp210-a")).body.redirect).toEqual({
+      target: item.target,
+      statusCode: 301,
+    });
+    // Search, filters and sorting.
+    const found = SeoRedirectListResponseSchema.parse(
+      (await manager.get(`${R()}?q=MOVED%20IN&origin=SLUG_CHANGE`)).body,
+    );
+    expect(found.items.map((i) => i.id)).toEqual([item.id]);
+    const sorted = SeoRedirectListResponseSchema.parse(
+      (await manager.get(`${R()}?sort=source&dir=asc`)).body,
+    );
+    const dbOrder = await owner.siteRedirect.findMany({
+      where: { siteId: BV },
+      orderBy: [{ sourcePath: "asc" }, { sourceQuery: "asc" }, { id: "asc" }],
+      take: 50,
+      select: { id: true },
+    });
+    expect(sorted.items.map((i) => i.id)).toEqual(dbOrder.map((r) => r.id));
+    const s302 = SeoRedirectListResponseSchema.parse((await manager.get(`${R()}?status=302`)).body);
+    expect(s302.items.every((i) => i.statusCode === 302)).toBe(true);
+    expect(s302.counts.SLUG_CHANGE).toBe(list.counts.SLUG_CHANGE);
+    expectError(await manager.get(`${R()}?sort=evil`), 400, "VALIDATION_FAILED");
+    expectError(await manager.get(`${R()}?unknown=1`), 400, "VALIDATION_FAILED");
+  });
+
+  it("slug changes keep manual redirects one hop; published content takes a source back", async () => {
+    const pid = await livePage("dp211-p1");
+    await create("/dp211-m", "/dp211-p1");
+    await move(pid, "dp211-p2");
+    // DP-210 rule 2: the manual redirect follows the page (no chain), origin unchanged.
+    expect(await rowAt("/dp211-m")).toMatchObject({
+      target: "/dp211-p2",
+      origin: "MANUAL",
+      active: true,
+    });
+    expect(await rowAt("/dp211-p1")).toMatchObject({ target: "/dp211-p2", origin: "SLUG_CHANGE" });
+    // DP-210 rule 1: a page published at a manual redirect's source switches it off.
+    await create("/dp211-src", "/dp211-target");
+    await livePage("dp211-src");
+    expect(await rowAt("/dp211-src")).toMatchObject({ active: false, origin: "MANUAL" });
+    expect((await resolve("/dp211-src")).body.redirect).toBeUndefined();
+    // Switching it on again is refused while the page is live.
+    const r = await rowAt("/dp211-src");
+    expectError(
+      await manager.post(`${R()}/${r.id}`, {
+        ...body("/dp211-src", "/dp211-target"),
+        version: r.version,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "source", rule: "live_content" },
+    );
+    await expectConsistent();
+  });
+
+  it("concurrent changes: one wins, the other is refused; no duplicate, no chain", async () => {
+    const r = (await create("/dp211-race", "/dp211-target")).redirect;
+    const [a, b] = await Promise.all([
+      manager.post(`${R()}/${r.id}`, {
+        ...body("/dp211-race", "/dp211-target", { statusCode: 302 }),
+        version: 1,
+      }),
+      bvPublisher.post(`${R()}/${r.id}`, {
+        ...body("/dp211-race", "/dp211-target", { active: false }),
+        version: 1,
+      }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect((await rowAt("/dp211-race")).version).toBe(2);
+    const twins = await Promise.all([
+      manager.post(R(), body("/dp211-twin", "/dp211-target")),
+      bvPublisher.post(R(), body("/dp211-twin", "/dp211-target")),
+    ]);
+    expect(twins.map((t) => t.status).sort()).toEqual([201, 409]);
+    expect(
+      await owner.siteRedirect.count({ where: { siteId: BV, sourcePath: "/dp211-twin" } }),
+    ).toBe(1);
+    // A redirect and a publication at the same address: whichever is second sees the first.
+    const draft = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "Race",
+      slug: "dp211-race-page",
+    });
+    const raceId = CmsPageResponseSchema.parse(draft.body).page.id;
+    const p = CmsPageResponseSchema.parse((await bvPublisher.get(`/pages/${raceId}`)).body).page;
+    const [made, pub] = await Promise.all([
+      manager.post(R(), body("/dp211-race-page", "/dp211-target")),
+      bvPublisher.post(`/pages/${raceId}/publish`, { version: p.version }),
+    ]);
+    expect(pub.status, JSON.stringify(pub.body)).toBe(200);
+    expect([201, 409]).toContain(made.status);
+    const left = await owner.siteRedirect.findMany({
+      where: { siteId: BV, sourcePath: "/dp211-race-page" },
+    });
+    expect(left.every((x) => !x.active)).toBe(true);
+    await expectConsistent();
+  });
+
+  it("CSV: dry-run, error report, import of the confirmed plan, idempotent re-import", async () => {
+    const imp = (csv: string, dryRun: boolean, planHash?: string, as: Staff = manager) =>
+      as.post(`${R()}/import`, { csv, dryRun, ...(planHash ? { planHash } : {}) });
+    expectError(
+      await imp("source,target\n/dp211-i1,/dp211-target", true, undefined, bvEditor),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(await imp("from,to\n/a,/b", true), 400, "VALIDATION_FAILED", {
+      path: "csv.1",
+      rule: "header",
+    });
+    const before = await owner.siteRedirect.count({ where: { siteId: BV } });
+    const withErrors = [
+      "source,target,status,active,note",
+      "/dp211-i1,/dp211-target,301,true,first",
+      "/dp211-i2,https://evil.example/,301,true,",
+      "/products,/dp211-target,301,true,",
+      "/dp211-i1,/dp211-other,301,true,",
+      "/dp211-i3,/dp211-i4,302,yes,",
+      "/dp211-i4,/dp211-target,301,true,",
+      "/dp211-target,/x,301,true,",
+      "/dp211-i5,/dp211-target,307,true,",
+      "/dp211-a,/dp211-target,301,true,changed",
+    ].join("\n");
+    const dry = SeoRedirectImportResponseSchema.parse((await imp(withErrors, true)).body);
+    expect(dry.applied).toBe(false);
+    const by = (line: number) => dry.rows.find((r) => r.line === line)!;
+    expect(by(2)).toMatchObject({ action: "create", errors: [] });
+    expect(by(3).errors).toContain("target:external");
+    expect(by(4).errors).toContain("source:reserved");
+    expect(by(5).errors).toContain("source:duplicate_in_file");
+    expect(by(6).errors).toContain("target:chain");
+    expect(by(7).errors).toContain("source:chain");
+    expect(by(8).errors).toContain("source:live_content");
+    expect(by(9).errors).toContain("status:format");
+    expect(by(10)).toMatchObject({ action: "update" });
+    expect(dry.summary).toMatchObject({ rows: 9, create: 1, update: 1, error: 7 });
+    expectError(await imp(withErrors, false, dry.planHash), 409, "CONFLICT_STATE", {
+      path: "import",
+      rule: "has_errors",
+    });
+    expect(await owner.siteRedirect.count({ where: { siteId: BV } })).toBe(before);
+
+    const good = [
+      "target,source,note",
+      "/dp211-target,/dp211-i1,first",
+      "/dp211-target,/dp211-i2,",
+      '/products?category=base-oil,"/dp211-i3?utm=mail",campaign',
+    ].join("\r\n");
+    const plan = SeoRedirectImportResponseSchema.parse((await imp(good, true)).body);
+    expect(plan.summary).toMatchObject({ create: 3, error: 0 });
+    expectError(await imp(good, false), 400, "VALIDATION_FAILED", {
+      path: "planHash",
+      rule: "required",
+    });
+    // Data changed since the dry-run: the import is refused, nothing written.
+    await create("/dp211-i2", "/dp211-target", { note: "manual meanwhile" });
+    expectError(await imp(good, false, plan.planHash), 409, "CONFLICT_STATE", {
+      path: "import",
+      rule: "changed",
+    });
+    expect(await owner.siteRedirect.count({ where: { siteId: BV, origin: "IMPORT" } })).toBe(0);
+    const plan2 = SeoRedirectImportResponseSchema.parse((await imp(good, true)).body);
+    expect(plan2.summary).toMatchObject({ create: 2, update: 1, error: 0 });
+    const done = await imp(good, false, plan2.planHash);
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(SeoRedirectImportResponseSchema.parse(done.body)).toMatchObject({ applied: true });
+    expect(await rowAt("/dp211-i1")).toMatchObject({ origin: "IMPORT", note: "first" });
+    expect(await rowAt("/dp211-i2")).toMatchObject({ origin: "MANUAL", note: null });
+    expect(await rowAt("/dp211-i3", "utm=mail")).toMatchObject({
+      origin: "IMPORT",
+      target: "/products?category=base-oil",
+    });
+    expect((await lastAudit("seo.redirects_imported"))?.metadata).toMatchObject({
+      create: 2,
+      update: 1,
+    });
+    // Re-import: nothing changes, nothing is duplicated.
+    const count = await owner.siteRedirect.count({ where: { siteId: BV } });
+    const again = SeoRedirectImportResponseSchema.parse((await imp(good, true)).body);
+    expect(again.summary).toMatchObject({ create: 0, update: 0, unchanged: 3, error: 0 });
+    const reapplied = await imp(good, false, again.planHash);
+    expect(reapplied.status).toBe(200);
+    expect(await owner.siteRedirect.count({ where: { siteId: BV } })).toBe(count);
+    await expectConsistent();
+  });
+
+  it("public regressions: sitemap without sources, real 404s, live content wins", async () => {
+    const paths = await sitemap();
+    const sources = (
+      await owner.siteRedirect.findMany({ where: { siteId: BV, active: true } })
+    ).map((r) => r.sourcePath);
+    for (const s of sources) expect(paths, s).not.toContain(s);
+    expect(paths).toContain("/dp211-target");
+    for (const p of ["/dp211-nope", "/news/dp211-nope", "/products/dp211-nope", "/DP211", "/a/b"]) {
+      expectError(await resolve(p), 404, "NOT_FOUND");
+    }
+    const live = await resolve("/dp211-target", "ref=mail");
+    expect(live.status).toBe(200);
+    expect(live.body.redirect).toBeUndefined();
+    await expectConsistent();
+  });
+});
+
+function randomUUIDLike(): string {
+  const h = randomBytes(16).toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-7${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}

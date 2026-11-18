@@ -175,7 +175,7 @@ export function noindexMetadata(title: string): Metadata {
 export type Resolve =
   | { status: "found" }
   /** DP-210: an old address of moved content (or a DP-211 redirect). */
-  | { status: "redirect"; target: string; statusCode: 301 | 302 }
+  | { status: "redirect"; target: string; statusCode: 301 | 302; keepQuery?: boolean }
   | { status: "not_found" }
   | { status: "unpublished" }
   /** The API could not answer: the page renders as before (its own not-found handling). */
@@ -192,11 +192,20 @@ function unpublishedDetail(body: unknown): boolean {
 }
 
 /** The fast existence check of an address (DP-207), asked before rendering. */
-export async function resolvePath(path: string, config = catalogConfig()): Promise<Resolve> {
+export async function resolvePath(
+  path: string,
+  config = catalogConfig(),
+  search = "",
+): Promise<Resolve> {
   if (!config) return { status: "unknown" };
+  // DP-211: the request's query, so a redirect bound to it (`/old?id=5`) can match.
+  const query = search.replace(/^\?/, "");
+  const url = `${config.apiUrl}${PUBLIC_SEO_API}/resolve?path=${encodeURIComponent(path)}${
+    query ? `&query=${encodeURIComponent(query.slice(0, 2000))}` : ""
+  }`;
   let res: Response;
   try {
-    res = await fetch(`${config.apiUrl}${PUBLIC_SEO_API}/resolve?path=${encodeURIComponent(path)}`, {
+    res = await fetch(url, {
       headers: { "X-DP-Proxy-Key": config.proxyKey, Accept: "application/json" },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),

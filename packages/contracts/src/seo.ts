@@ -43,6 +43,11 @@ export const PublicSeoResolveRedirectSchema = z.strictObject({
   redirect: z.strictObject({
     target: z.string().min(1).max(500),
     statusCode: z.union([z.literal(301), z.literal(302)]),
+    /**
+     * DP-211: false for a redirect bound to a query (`/old?id=5`): the target is sent as is.
+     * Missing or true: the request's query is kept when the target has none (DP-210).
+     */
+    keepQuery: z.boolean().optional(),
   }),
 });
 
@@ -334,10 +339,15 @@ export function seoRedirectTargetIsSitePath(target: string): boolean {
 /**
  * The absolute Location of a redirect for a request: a site path keeps the request's query when
  * the target has none (campaign parameters survive a moved page), an https URL is used as is.
+ * DP-211: a redirect bound to a query (`keepQuery` false) sends its target unchanged.
  */
-export function seoRedirectLocation(target: string, requestSearch: string): string {
+export function seoRedirectLocation(
+  target: string,
+  requestSearch: string,
+  keepQuery = true,
+): string {
   if (!seoRedirectTargetIsSitePath(target)) return target;
-  return target.includes("?") || !requestSearch || requestSearch === "?"
+  return !keepQuery || target.includes("?") || !requestSearch || requestSearch === "?"
     ? target
     : `${target}${requestSearch.startsWith("?") ? requestSearch : `?${requestSearch}`}`;
 }
