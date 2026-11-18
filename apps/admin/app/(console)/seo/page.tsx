@@ -12,6 +12,7 @@ import { ImportButton } from "../../../components/cms/import-button";
 import { PageHeader } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
 import { SeoPreview } from "../../../components/seo/seo-preview";
+import { SeoTabs } from "../../../components/seo/seo-tabs";
 import {
   buttonStyles,
   cx,
@@ -119,6 +120,7 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
         title="SEO"
         description="Search results and link previews of dreampetroleumbv.com: the site defaults and the SEO of every page, article and product. Changes reach the site when the page or product is published."
       />
+      <SeoTabs current="overview" />
 
       <p className="flex items-start gap-2 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 ring-1 ring-inset ring-line">
         <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />

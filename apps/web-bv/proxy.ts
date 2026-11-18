@@ -16,6 +16,9 @@
  *  - DP-210: an old address of a page, article or product that moved answers 301 (one hop) with
  *    the new address on the site's public origin; the request's query string is kept. Live content always wins (the API
  *    switches a redirect off when content goes live at its source again).
+ *  - DP-211: manual and imported redirects of the admin (Admin > SEO > Redirects) answer the same
+ *    way with their own status (301 or 302). A redirect bound to a query (`/old?id=5`) matches
+ *    only that query and sends its target as is.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -65,11 +68,14 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     return NextResponse.next();
   }
 
-  const res = await resolvePath(request.nextUrl.pathname);
+  const res = await resolvePath(request.nextUrl.pathname, undefined, request.nextUrl.search);
   if (res.status === "redirect") {
     // The public origin (as in canonical URLs) when configured, otherwise the request's own.
     const base = sitePolicy().origin ?? request.url;
-    const location = new URL(seoRedirectLocation(res.target, request.nextUrl.search), base);
+    const location = new URL(
+      seoRedirectLocation(res.target, request.nextUrl.search, res.keepQuery ?? true),
+      base,
+    );
     return NextResponse.redirect(location, res.statusCode);
   }
   if (res.status === "not_found") return notFound(request);
