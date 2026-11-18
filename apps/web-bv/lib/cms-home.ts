@@ -11,10 +11,10 @@
  * in code. A fragment (navigation, footer) that is not published is simply not shown.
  */
 import {
-  BV_FOOTER_FIELDS,
   BV_HOME_FIELDS,
-  BV_NAV_FIELDS,
   BV_NEWS_INDEX_FIELDS,
+  BvFooterPublicSchema,
+  BvNavPublicSchema,
   CmsArticleContentSchema,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
@@ -23,10 +23,11 @@ import {
   cmsAsset,
   cmsFieldsSchema,
   cmsIsArticle,
-  type BvFooterContent,
+  type BvFooterPublic,
   type BvHomeContent,
-  type BvNavContent,
+  type BvNavPublic,
   type BvNewsIndexContent,
+  type MenuPublicLink,
   type CmsLink,
   type CmsPublicArticle,
   type CmsPublicPage,
@@ -41,9 +42,9 @@ import type { ProductGroup, ProductGroupsCopy } from "@/content/product-groups";
 import { PRODUCT_GROUPS_UI } from "@/content/product-groups";
 import type { ServiceItem, ServicesCopy } from "@/content/services-showcase";
 import { SERVICES_UI } from "@/content/services-showcase";
-import type { SiteFooterContent } from "@/content/site-footer";
+import type { FooterLink, SiteFooterContent } from "@/content/site-footer";
 import { SITE_FOOTER_UI } from "@/content/site-footer";
-import type { SiteNavContent } from "@/content/site-nav";
+import type { SiteNavContent, SiteNavItem } from "@/content/site-nav";
 import { SITE_NAV_UI } from "@/content/site-nav";
 import { catalogConfig, type Read } from "@/lib/catalog-api";
 
@@ -170,8 +171,9 @@ export interface CmsPageView {
 }
 
 const HOME = cmsFieldsSchema(BV_HOME_FIELDS);
-const NAV = cmsFieldsSchema(BV_NAV_FIELDS);
-const FOOTER = cmsFieldsSchema(BV_FOOTER_FIELDS);
+// DP-219: the menus arrive in their public shape (references resolved, hidden links dropped).
+const NAV = BvNavPublicSchema;
+const FOOTER = BvFooterPublicSchema;
 const NEWS_INDEX = cmsFieldsSchema(BV_NEWS_INDEX_FIELDS);
 
 /** The list heading of a `bv.news-index` page; null when it is another page or does not validate. */
@@ -297,46 +299,68 @@ export function isCurrentPath(href: string | null, currentPath: string): boolean
   return currentPath === path || currentPath.startsWith(`${path}/`);
 }
 
-export function toNavProps(c: BvNavContent, currentPath: string): SiteNavContent {
+export function toNavProps(c: BvNavPublic, currentPath: string): SiteNavContent {
   const home = currentPath === "/";
   // The navigation's in-page links ("#top", "#services") belong to the home page: on any other
   // page they lead there ("/#services"), and the logo goes home.
   const target = (href: string | null) => (href && !home && href.startsWith("#") ? `/${href}` : href);
+  // The home page marks its own item as current (an in-page link, "#top"); DP-155: any other
+  // page marks the item whose path it is, or is under ("/products" on "/products/<slug>").
+  const current = (href: string | null) =>
+    home ? href === "#top" : isCurrentPath(href, currentPath);
+  const item = (l: MenuPublicLink): SiteNavItem => ({
+    label: l.label,
+    href: target(l.href),
+    ...(l.newTab ? { newTab: true } : {}),
+    current: current(l.href),
+  });
   return {
     ...SITE_NAV_UI,
     homeHref: home ? SITE_NAV_UI.homeHref : "/",
-    // The home page marks its own item as current (an in-page link, "#top"); DP-155: any other
-    // page marks the item whose path it is, or is under ("/products" on "/products/<slug>").
-    items: c.items.map((i) => ({
-      ...i,
-      href: target(i.href),
-      current: home ? i.href === "#top" : isCurrentPath(i.href, currentPath),
-    })),
-    contact: { ...c.contact, href: target(c.contact.href) },
+    items: c.items.map((i) => {
+      const children = i.children.map(item);
+      const own = item(i);
+      // DP-219: an item with a submenu is current when one of its links is.
+      return children.length
+        ? { ...own, current: own.current || children.some((ch) => ch.current), children }
+        : own;
+    }),
+    contact: c.contact ? { ...item(c.contact), current: false } : null,
     noScriptLinks: c.noScriptLinks
-      .filter((l): l is { label: string; href: string } => l.href !== null)
-      .map((l) => ({ ...l, href: target(l.href) as string, current: home && l.href === "#top" })),
+      .filter((l): l is MenuPublicLink & { href: string } => l.href !== null)
+      .map((l) => ({
+        label: l.label,
+        href: target(l.href) as string,
+        ...(l.newTab ? { newTab: true } : {}),
+        current: home && l.href === "#top",
+      })),
     pendingNote: c.pendingNote,
   };
 }
 
-export function toFooterProps(c: BvFooterContent): SiteFooterContent {
+export function toFooterProps(c: BvFooterPublic): SiteFooterContent {
+  const link = (l: MenuPublicLink): FooterLink => ({
+    label: l.label,
+    href: l.href,
+    ...(l.newTab ? { newTab: true } : {}),
+  });
   return {
     ...SITE_FOOTER_UI,
     headline: c.headline,
-    cta: c.cta,
+    cta: link(c.cta),
     intro: c.intro,
     contact: { ...c.contact, addressLines: c.contact.addressLines.map((l) => l.text) },
-    columns: c.columns,
+    columns: c.columns.map((col) => ({ title: col.title, links: col.links.map(link) })),
+    social: c.social.map((s) => ({ label: s.label, href: s.href })),
     copyright: c.copyright,
-    legal: c.legal,
+    legal: c.legal.map(link),
     pendingNote: c.pendingNote,
   };
 }
 
 function fragment<T>(
   page: CmsPublicPage | null | undefined,
-  schema: typeof NAV,
+  schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } },
   map: (c: T) => unknown,
 ): unknown {
   if (!page) return null;
@@ -350,10 +374,10 @@ export function pageView(json: unknown): AnyPageView | null {
   if (!bundle.success) return null;
   const { page, fragments, preview } = bundle.data;
   const path = page.path ?? "/";
-  const nav = fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
+  const nav = fragment<BvNavPublic>(fragments["bv.site-nav"], NAV, (c) =>
     toNavProps(c, path),
   ) as SiteNavContent | null;
-  const footer = fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
     | SiteFooterContent
     | null;
   if (page.kind === "DESIGN" && page.templateKey === "bv.home") {
@@ -517,10 +541,10 @@ async function readNews(currentPath = "/news"): Promise<Read<NewsRead>> {
   if (page && !heading) {
     console.error("public cms: the news heading does not match the contract; not rendered");
   }
-  const nav = fragment<BvNavContent>(fragments["bv.site-nav"], NAV, (c) =>
+  const nav = fragment<BvNavPublic>(fragments["bv.site-nav"], NAV, (c) =>
     toNavProps(c, currentPath),
   ) as SiteNavContent | null;
-  const footer = fragment<BvFooterContent>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
     | SiteFooterContent
     | null;
   return { ok: true, data: { heading, articles, nav, footer } };

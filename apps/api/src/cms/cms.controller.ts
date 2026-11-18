@@ -19,6 +19,7 @@ import type {
   CmsContextResponse,
   CmsHistoryResponse,
   CmsImportResponse,
+  CmsMenuTargetsResponse,
   CmsPageListResponse,
   CmsPageResponse,
   CmsPreviewResponse,
@@ -44,6 +45,15 @@ export class CmsController {
     @Param("siteId") siteId: string,
   ): Promise<CmsPageListResponse> {
     return this.cms.listPages(ctx, siteId);
+  }
+
+  /** DP-219: the pages, products and categories a menu of the site may link to. */
+  @Get("sites/:siteId/menu-targets")
+  menuTargets(
+    @Ctx() ctx: RequestContext,
+    @Param("siteId") siteId: string,
+  ): Promise<CmsMenuTargetsResponse> {
+    return this.cms.menuTargets(ctx, siteId);
   }
 
   @Post("sites/:siteId/pages")

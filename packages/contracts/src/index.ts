@@ -15,6 +15,7 @@ export * from "./admin/staff-roles.js";
 export * from "./admin/owner.js";
 export * from "./admin/cms.js";
 export * from "./admin/cms-bv.js";
+export * from "./admin/cms-menu.js";
 export * from "./admin/cms-publication.js";
 export * from "./admin/seo-admin.js";
 export * from "./admin/seo-redirects.js";

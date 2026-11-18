@@ -12,7 +12,9 @@
  * The TypeScript types describe the validated content (`cmsFieldsSchema(fields)` output); a unit
  * test checks the seed against both.
  */
+import type { z } from "zod";
 import type { CmsField } from "./cms.js";
+import { BV_FOOTER_KEY, BV_NAV_KEY, BvFooterMenuSchema, BvNavMenuSchema } from "./cms-menu.js";
 
 const text = (key: string, label: string, max: number, extra: Partial<CmsField> = {}): CmsField =>
   ({ type: "text", key, label, max, required: true, ...extra }) as CmsField;
@@ -47,15 +49,6 @@ const group = (key: string, label: string, fields: CmsField[]): CmsField => ({
   label,
   fields,
 });
-/** A label with an optional target: empty = the page does not exist yet (shown as plain text). */
-const pendingLink = (): CmsField[] => [
-  text("label", "Label", 80),
-  text("href", "Link", 500, {
-    format: "href",
-    required: false,
-    hint: "Empty while the page does not exist yet: shown as text, never a 404.",
-  }),
-];
 
 // --- bv.home -----------------------------------------------------------------------------------
 
@@ -338,135 +331,13 @@ export interface BvHomeContent {
   };
 }
 
-// --- bv.site-nav -------------------------------------------------------------------------------
+// --- bv.site-nav, bv.site-footer (DP-219) ---------------------------------------------------------
 
-export const BV_NAV_FIELDS: readonly CmsField[] = [
-  {
-    type: "list",
-    key: "items",
-    label: "Menu items",
-    itemLabel: "Item",
-    min: 1,
-    max: 8,
-    fields: pendingLink(),
-  },
-  { type: "group", key: "contact", label: "Contact button", fields: pendingLink() },
-  {
-    type: "list",
-    key: "noScriptLinks",
-    label: "Links without JavaScript (phones)",
-    itemLabel: "Link",
-    min: 0,
-    max: 8,
-    hint: "Real destinations only: shown when a phone has JavaScript off.",
-    fields: pendingLink(),
-  },
-  text("pendingNote", "Note on pages that do not exist yet", 120),
-];
-
-export interface BvNavContent {
-  items: { label: string; href: string | null }[];
-  contact: { label: string; href: string | null };
-  noScriptLinks: { label: string; href: string | null }[];
-  pendingNote: string;
-}
-
-// --- bv.site-footer ----------------------------------------------------------------------------
-
-export const BV_FOOTER_FIELDS: readonly CmsField[] = [
-  text("headline", "Headline", 120),
-  link("cta", "Button"),
-  long("intro", "Intro", 500),
-  {
-    type: "group",
-    key: "contact",
-    label: "Contact details",
-    hint: "Keep address, phone and e-mail identical to the company's official details.",
-    fields: [
-      text("title", "Heading", 60),
-      text("company", "Company", 120),
-      {
-        type: "list",
-        key: "addressLines",
-        label: "Address",
-        itemLabel: "Line",
-        min: 1,
-        max: 4,
-        fields: [text("text", "Line", 120)],
-      },
-      {
-        type: "group",
-        key: "phone",
-        label: "Phone",
-        fields: [
-          text("label", "Shown as", 60),
-          text("href", "Link (tel:)", 60),
-          text("note", "Note", 80),
-        ],
-      },
-      {
-        type: "group",
-        key: "email",
-        label: "E-mail",
-        fields: [
-          text("label", "Shown as", 120),
-          text("href", "Link (mailto:)", 200),
-          text("note", "Note", 80),
-        ],
-      },
-    ],
-  },
-  {
-    type: "list",
-    key: "columns",
-    label: "Link columns",
-    itemLabel: "Column",
-    min: 1,
-    max: 4,
-    fields: [
-      text("title", "Heading", 60),
-      {
-        type: "list",
-        key: "links",
-        label: "Links",
-        itemLabel: "Link",
-        min: 1,
-        max: 8,
-        fields: pendingLink(),
-      },
-    ],
-  },
-  text("copyright", "Copyright line", 200),
-  {
-    type: "list",
-    key: "legal",
-    label: "Legal links",
-    itemLabel: "Link",
-    min: 0,
-    max: 4,
-    hint: "The Privacy Policy link is hidden automatically where the policy is not published.",
-    fields: pendingLink(),
-  },
-  text("pendingNote", "Note on pages that do not exist yet", 120),
-];
-
-export interface BvFooterContent {
-  headline: string;
-  cta: { label: string; href: string };
-  intro: string;
-  contact: {
-    title: string;
-    company: string;
-    addressLines: { text: string }[];
-    phone: { label: string; href: string; note: string };
-    email: { label: string; href: string; note: string };
-  };
-  columns: { title: string; links: { label: string; href: string | null }[] }[];
-  copyright: string;
-  legal: { label: string; href: string | null }[];
-  pendingNote: string;
-}
-
+/**
+ * The header and footer menus have their own schema and editor (cms-menu.ts, content schema
+ * version 2: content references, submenus, visibility, new tab, social links); version 1 content
+ * is read as version 2. They stay fragments of this registry with the shared CMS flow.
+ */
 // --- bv.news-index (DP-153) -----------------------------------------------------------------------
 
 /**
@@ -537,25 +408,32 @@ export interface CmsDesignTemplate {
   title: string;
   path: string | null;
   fields: readonly CmsField[];
+  /**
+   * DP-219: a schema of its own instead of the generic field form (the menus). The admin shows a
+   * dedicated editor for it; `fields` is empty.
+   */
+  schema?: z.ZodType;
 }
 
 export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
   { key: "bv.home", site: "BV", kind: "DESIGN", title: "Home", path: "/", fields: BV_HOME_FIELDS },
   {
-    key: "bv.site-nav",
+    key: BV_NAV_KEY,
     site: "BV",
     kind: "FRAGMENT",
     title: "Navigation",
     path: null,
-    fields: BV_NAV_FIELDS,
+    fields: [],
+    schema: BvNavMenuSchema,
   },
   {
-    key: "bv.site-footer",
+    key: BV_FOOTER_KEY,
     site: "BV",
     kind: "FRAGMENT",
     title: "Footer",
     path: null,
-    fields: BV_FOOTER_FIELDS,
+    fields: [],
+    schema: BvFooterMenuSchema,
   },
   {
     key: "bv.news-index",

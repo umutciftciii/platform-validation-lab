@@ -3,9 +3,11 @@ import { notFound } from "next/navigation";
 import {
   CMS_SITE_REGISTRY,
   CmsHistoryResponseSchema,
+  CmsMenuTargetsResponseSchema,
   CmsPageResponseSchema,
   cmsDesignTemplate,
   cmsIsArticle,
+  cmsIsMenu,
 } from "@dream/contracts";
 import { NoticeProvider } from "../../../../components/catalog/notices";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
@@ -49,9 +51,13 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
   const back = article
     ? { href: `/content/news?site=${sp}`, label: `All articles of ${SITE_SHORT[site.key]}` }
     : { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
-  const [history, siteSeo] = await Promise.all([
+  const [history, siteSeo, menuTargets] = await Promise.all([
     serverRead(`/api/v1/admin/cms/pages/${page.id}/history`, CmsHistoryResponseSchema),
     siteSeoDefaults(site.id),
+    // DP-219: the pages, products and categories the menu editor offers as targets.
+    cmsIsMenu(page.templateKey)
+      ? serverRead(`/api/v1/admin/cms/sites/${site.id}/menu-targets`, CmsMenuTargetsResponseSchema)
+      : null,
   ]);
   const registry = CMS_SITE_REGISTRY.find((e) => e.key === page.templateKey);
   const editable = page.kind === "TEMPLATE" || Boolean(cmsDesignTemplate(page.templateKey));
@@ -90,6 +96,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
             siteLabel={SITE_SHORT[site.key]}
             siteKey={site.key}
             siteSeo={siteSeo}
+            menuTargets={menuTargets?.ok ? menuTargets.data : null}
             origin={site.key === "BV" ? bvPublicOrigin() : null}
           />
         ) : (

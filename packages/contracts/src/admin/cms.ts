@@ -649,7 +649,7 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     path: null,
     managedBy: "cms_pending",
     stage: "S2",
-    note: "Menu items and contact link of every page.",
+    note: "Menu items, submenus and contact button of every page (menu editor, DP-219).",
     importable: true,
   },
   {
@@ -660,7 +660,7 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     path: null,
     managedBy: "cms_pending",
     stage: "S2",
-    note: "Headline, contact details, link columns and legal links.",
+    note: "Headline, contact details, link columns, social and legal links (menu editor, DP-219).",
     importable: true,
   },
   {
