@@ -2,6 +2,7 @@
 
 import {
   SEO_REDIRECT_CSV_MAX_BYTES,
+  SEO_REDIRECT_CSV_MAX_ROWS,
   SEO_REDIRECT_CSV_SAMPLE,
   redirectSourceLabel,
   type SeoRedirectCreateRequest,
@@ -435,7 +436,8 @@ function RedirectForm({
             aria-invalid={invalid("source")}
           />
           <span className="block text-xs text-ink-3">
-            /page, /news/article or /products/product, optionally with ?query
+            /page, /news/article, /products/product or an old-site address such as /en/about-us,
+            optionally with ?query
           </span>
         </label>
         <label className="min-w-0 space-y-1.5" htmlFor={`${id}-target`}>
@@ -517,6 +519,8 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
   const [result, setResult] = useState<SeoRedirectImportResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // DP-212: a legacy map has hundreds of rows; the rows that need attention come first.
+  const [onlyIssues, setOnlyIssues] = useState(true);
 
   async function pick(file: File | undefined) {
     setResult(null);
@@ -548,8 +552,12 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
     onDone(res.data.summary.create + res.data.summary.update);
   }
 
-  const preview = csv?.replace(/^﻿/, "").split(/\r?\n/).slice(0, 6) ?? [];
+  const lines = csv?.replace(/^﻿/, "").split(/\r?\n/) ?? [];
+  const preview = lines.slice(0, 6);
+  const dataLines = Math.max(0, lines.filter((l) => l.trim() !== "").length - 1);
   const changes = result ? result.summary.create + result.summary.update : 0;
+  const issues = result ? result.rows.filter((r) => r.errors.length || r.warnings.length) : [];
+  const shown = result ? (onlyIssues && issues.length ? issues : result.rows) : [];
   return (
     <section
       aria-label="Import redirects from CSV"
@@ -564,7 +572,9 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
         </p>
       </div>
       <label className="block space-y-1.5" htmlFor={`${id}-file`}>
-        <span className="block text-sm font-medium text-ink">CSV file (at most 200 rows)</span>
+        <span className="block text-sm font-medium text-ink">
+          {`CSV file (at most ${SEO_REDIRECT_CSV_MAX_ROWS} rows, ${SEO_REDIRECT_CSV_MAX_BYTES / 1024} KB)`}
+        </span>
         <input
           id={`${id}-file`}
           type="file"
@@ -575,7 +585,9 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
       </label>
       {csv !== null ? (
         <div className="space-y-2">
-          <p className="text-xs text-ink-3">{`${fileName} · first lines`}</p>
+          <p className="text-xs text-ink-3">
+            {`${fileName} · ${dataLines} line${dataLines === 1 ? "" : "s"} · first lines`}
+          </p>
           <pre className="max-h-40 overflow-auto rounded-lg bg-surface-2 p-3 font-mono text-xs text-ink-2 ring-1 ring-inset ring-line">
             {preview.join("\n")}
           </pre>
@@ -603,8 +615,18 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
               {`${result.summary.error} with errors`}
             </StatusPill>
           </p>
+          {issues.length && issues.length < result.rows.length ? (
+            <label className="flex items-center gap-2 text-sm text-ink-2">
+              <input
+                type="checkbox"
+                checked={onlyIssues}
+                onChange={(e) => setOnlyIssues(e.target.checked)}
+              />
+              <span>{`Only rows with errors or warnings (${issues.length} of ${result.rows.length})`}</span>
+            </label>
+          ) : null}
           <ol className="max-h-96 divide-y divide-line overflow-auto rounded-lg ring-1 ring-inset ring-line">
-            {result.rows.map((r) => (
+            {shown.map((r) => (
               <li key={r.line} className="space-y-1 px-3 py-2 text-sm">
                 <p className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="text-xs text-ink-3">{`Line ${r.line}`}</span>

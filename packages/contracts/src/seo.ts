@@ -22,10 +22,71 @@ export const SEO_PATH_KINDS = ["home", "page", "article", "product", "products",
 export type SeoPathKind = (typeof SEO_PATH_KINDS)[number];
 
 const SEGMENT = "[a-z0-9]+(?:-[a-z0-9]+)*";
-/** Addresses the resolve endpoint answers: "/", "/<slug>", "/news/<slug>", "/products/<slug>". */
+/**
+ * Addresses the resolve endpoint answers with live content: "/", "/<slug>", "/news/<slug>",
+ * "/products/<slug>". DP-212: any other address that `seoLegacyPath` accepts is answered with its
+ * redirect only (never with live content).
+ */
 export const SEO_RESOLVABLE_PATH = new RegExp(
   `^/(?:(?:news|products)/${SEGMENT}|(?:${SEGMENT})?)$`,
 );
+
+// --- DP-212: addresses of the old site (legacy URL map, ADR-024 D9) -----------------------------
+
+/** The locale prefixes of the old dreampetroleumbv.com (`/en/…`, `/tr/…`). */
+export const SEO_LEGACY_LOCALES: readonly string[] = ["en", "tr"];
+
+/**
+ * First segments that belong to the site itself (framework, API, previews, forms, documents,
+ * images and the static files under `public/media`): never an old address, never looked up.
+ */
+export const SEO_INTERNAL_SEGMENTS: readonly string[] = [
+  "_next",
+  "__dp",
+  "api",
+  "lead-form",
+  "media",
+  "preview",
+  "product-documents",
+  "product-images",
+];
+
+/** Files the site answers itself at its root. */
+export const SEO_SITE_FILES: readonly string[] = ["/favicon.ico", "/robots.txt", "/sitemap.xml"];
+
+/** At most this many segments and characters in an old address (the old site used at most 3). */
+export const SEO_LEGACY_MAX_SEGMENTS = 6;
+export const SEO_LEGACY_MAX_LENGTH = 300;
+
+/**
+ * One segment of an old address: ASCII letters, digits, ".", "_", "~", "-", starting and ending
+ * with a letter or digit (so no "..", no hidden ".x" segment, no percent-escapes, no "/" tricks).
+ */
+const LEGACY_SEGMENT = /^[A-Za-z0-9](?:[A-Za-z0-9._~-]*[A-Za-z0-9])?$/;
+
+/**
+ * DP-212: the lookup form of an address the site does not serve in its own form (an address of
+ * the old site such as `/en/About-Us`, `/en/blog_detail/<slug>/1`, `/en/contact-us.html`):
+ * lower case, without a trailing slash. null when it can never be a redirect source (malformed,
+ * too long or deep, `..`, an internal segment or a site file); such a request is simply a 404.
+ *
+ * Lower case is the only normalisation: the old site's addresses were lower case, so an
+ * upper-case spelling of one reaches the same redirect. Nothing else is guessed (".html" is not
+ * stripped: `/en/contact-us.html` answered 404 on the old site, so it is a source of its own only
+ * when the map names it).
+ */
+export function seoLegacyPath(path: string): string | null {
+  if (path.length > SEO_LEGACY_MAX_LENGTH || !path.startsWith("/")) return null;
+  const p = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  if (p === "/") return null;
+  const segments = p.slice(1).split("/");
+  if (segments.length > SEO_LEGACY_MAX_SEGMENTS) return null;
+  if (!segments.every((s) => LEGACY_SEGMENT.test(s) && !s.includes(".."))) return null;
+  const lower = p.toLowerCase();
+  if (SEO_INTERNAL_SEGMENTS.includes(lower.split("/")[1] ?? "")) return null;
+  if (SEO_SITE_FILES.includes(lower)) return null;
+  return lower;
+}
 
 /** The address has live content of this kind. */
 export const PublicSeoResolveLiveSchema = z.strictObject({

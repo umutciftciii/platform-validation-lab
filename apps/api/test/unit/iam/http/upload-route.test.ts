@@ -7,6 +7,7 @@ import {
   IMAGE_UPLOAD_MAX_BYTES,
   isDocumentUpload,
   isImageUpload,
+  jsonBodyLimit,
   MAX_BODY_BYTES,
   rawUpload,
 } from "../../../../src/iam/http/security.middleware.js";
@@ -50,5 +51,18 @@ describe("document upload route", () => {
     const img = "/api/v1/admin/catalog/products/0190f2a1-0000-7000-8000-000000000000/images";
     expect(rawUpload("ADMIN", "PUT", img)?.types.has("application/pdf")).toBe(false);
     expect(rawUpload("ADMIN", "POST", p)).toBeNull();
+  });
+});
+
+// DP-212: the one JSON route with a larger limit (the redirect CSV import of the admin app).
+describe("redirect import body limit", () => {
+  const p = "/api/v1/admin/seo/sites/0190f2a1-0000-7000-8000-000000000000/redirects/import";
+  it("is 320 KB only for POST from the admin app on the exact path", () => {
+    expect(jsonBodyLimit("ADMIN", "POST", p)).toBe(320 * 1024);
+    expect(jsonBodyLimit("WEB_BV", "POST", p)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "PUT", p)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "POST", `${p}/x`)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "POST", p.replace("/import", ""))).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "POST", "/api/v1/auth/staff/login")).toBe(MAX_BODY_BYTES);
   });
 });

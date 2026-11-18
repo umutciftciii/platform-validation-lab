@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  bodyLimit,
   clientIpFrom,
   loadProxyConfig,
   MAX_BODY_BYTES,
@@ -238,6 +239,34 @@ describe("bodies (NT-P5)", () => {
     );
     expect(streamed.status).toBe(413);
     expect(u.seen).toHaveLength(0);
+  });
+
+  it("DP-212: the redirect CSV import alone takes up to 320 KB; every other route keeps 16 KB", async () => {
+    const site = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    const importPath = `/api/v1/admin/seo/sites/${site}/redirects/import`;
+    expect(bodyLimit(importPath)).toBe(320 * 1024);
+    for (const p of [
+      `/api/v1/admin/seo/sites/${site}/redirects`,
+      `/api/v1/admin/seo/sites/${site}/redirects/import/x`,
+      "/api/v1/auth/staff/login",
+    ]) {
+      expect(bodyLimit(p), p).toBe(MAX_BODY_BYTES);
+    }
+    const u = upstream(ok);
+    const csv = `source,target\n${"/en/products/x,/products/x\n".repeat(3000)}`;
+    const body = JSON.stringify({ csv, dryRun: true });
+    expect(body.length).toBeGreaterThan(MAX_BODY_BYTES);
+    const post = (p: string, b: string) =>
+      proxyRequest(
+        req(p, { method: "POST", body: b, headers: { "content-type": "application/json" } }),
+        CONFIG,
+        u.deps,
+      );
+    expect((await post(importPath, body)).status).toBe(200);
+    expect(u.seen).toHaveLength(1);
+    expect((await post(`/api/v1/admin/seo/sites/${site}/redirects`, body)).status).toBe(413);
+    expect((await post(importPath, "x".repeat(320 * 1024 + 1))).status).toBe(413);
+    expect(u.seen).toHaveLength(1);
   });
 
   it("415 for anything but JSON", async () => {
