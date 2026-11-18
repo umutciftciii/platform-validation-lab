@@ -7,12 +7,23 @@ import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell
 import { BrowseResults } from "@/components/products/catalog-views";
 import { LIVE_LINKS } from "@/components/products/live-links";
 import { listCategories, listProducts } from "@/lib/catalog-api";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Products | Dream Petroleum BV",
-  description: "Published products of Dream Petroleum BV.",
-  robots: { index: false, follow: false },
-};
+/**
+ * DP-207: the list and each category view are their own canonical address (`?category=`, and
+ * `?page=` beyond the first); a search result (`?q=`) is never indexed.
+ */
+export async function generateMetadata({ searchParams }: PageProps<"/products">): Promise<Metadata> {
+  await connection();
+  const p = parseBrowse(await searchParams);
+  return pageMetadata({
+    path: "/products",
+    query: { category: p.category ?? undefined, page: p.page > 1 ? String(p.page) : undefined },
+    title: "Products | Dream Petroleum BV",
+    description: "Published products of Dream Petroleum BV.",
+    noindex: Boolean(p.q),
+  });
+}
 
 /**
  * Published BV products (PM-3), live from the platform API: only products approved, published

@@ -8,8 +8,11 @@ import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell
 import { ProductDetailView } from "@/components/products/catalog-views";
 import { browseHref, trail } from "@/components/products/browse";
 import { LIVE_LINKS } from "@/components/products/live-links";
+import { ProductJsonLd } from "@/components/seo/json-ld";
+import { noindexMetadata, pageMetadata } from "@/lib/seo";
 import {
   documentHref,
+  imageSrc,
   getProduct,
   getProductCrossReferences,
   getProductDocuments,
@@ -25,15 +28,28 @@ import {
 
 const product = cache(getProduct);
 
-/** The product's own browser title; the catalogue stays out of search engines until launch. */
+/**
+ * DP-207: the product's title, description, canonical URL and Open Graph image from the published
+ * snapshot. An unknown product never reaches this (proxy.ts answers 404); while the API cannot
+ * answer, the page is not indexed.
+ */
 export async function generateMetadata({ params }: PageProps<"/products/[slug]">): Promise<Metadata> {
   await connection();
-  const res = await product((await params).slug);
-  return {
-    title: res.ok ? `${res.data.name} | Dream Petroleum BV` : "Product | Dream Petroleum BV",
-    ...(res.ok && res.data.summary ? { description: res.data.summary } : {}),
-    robots: { index: false, follow: false },
-  };
+  const { slug } = await params;
+  const res = await product(slug);
+  if (!res.ok) return noindexMetadata("Product | Dream Petroleum BV");
+  const p = res.data;
+  return pageMetadata({
+    path: `/products/${p.slug}`,
+    title: `${p.name} | Dream Petroleum BV`,
+    description: p.summary,
+    images: p.images.slice(0, 1).map((i) => ({
+      url: imageSrc(i.id, "display"),
+      alt: i.altText,
+      width: i.width,
+      height: i.height,
+    })),
+  });
 }
 
 /**
@@ -93,6 +109,7 @@ async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">
     : [];
   return (
     <CatalogShell crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}>
+      <ProductJsonLd product={p} />
       <ProductDetailView
         p={p}
         related={related}

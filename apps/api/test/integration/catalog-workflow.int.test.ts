@@ -34,6 +34,8 @@ import {
   PublicProductListResponseSchema,
   PublicProductResponseSchema,
   ReviewQueueResponseSchema,
+  PublicSeoResolveResponseSchema,
+  PublicSitemapResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -171,6 +173,14 @@ async function pub(site: Site, p: string, method = "GET"): Promise<Res> {
     }),
   );
 }
+/** DP-207: the technical SEO reads of a site (existence check, sitemap). */
+async function seo(site: Site, p: string): Promise<Res> {
+  return parse(
+    await fetch(`${base}/api/v1/public/seo${p}`, { headers: { "x-dp-proxy-key": KEY[site] } }),
+  );
+}
+const sitemapPaths = async (site: Site) =>
+  PublicSitemapResponseSchema.parse((await seo(site, "/sitemap")).body).entries.map((e) => e.path);
 async function pubBytes(site: Site, p: string) {
   const res = await fetch(`${base}/api/v1/public/catalog${p}`, {
     headers: { "x-dp-proxy-key": KEY[site] },
@@ -1229,6 +1239,26 @@ describe("6. public read API", () => {
     }
   });
 
+  it("DP-207: resolves and lists the live products only, per site", async () => {
+    const live = await seo("bv", "/resolve?path=/products/wf-p");
+    expect(live.status, JSON.stringify(live.body)).toBe(200);
+    expect(PublicSeoResolveResponseSchema.parse(live.body)).toEqual({
+      path: "/products/wf-p",
+      kind: "product",
+    });
+    for (const slug of ["wf-a", "wf-b", "wf-e", "nope", "WF-P"]) {
+      expect((await seo("bv", `/resolve?path=/products/${slug}`)).status, slug).toBe(404);
+    }
+    const bv = await sitemapPaths("bv");
+    expect(bv).toEqual(expect.arrayContaining(["/products", "/products/wf-p"]));
+    for (const slug of ["wf-a", "wf-b", "wf-e"]) expect(bv).not.toContain(`/products/${slug}`);
+    const entry = PublicSitemapResponseSchema.parse(
+      (await seo("bv", "/sitemap")).body,
+    ).entries.find((e) => e.path === "/products/wf-p");
+    expect(entry).toMatchObject({ kind: "product", lastModified: expect.any(String) });
+    expect((await seo("admin", "/sitemap")).status).toBe(404);
+  });
+
   it("serves published images as WebP display/thumb only, never originals or drafts", async () => {
     const id = P["p"]!;
     const img = await owner.productImage.findFirstOrThrow({ where: { productId: id } });
@@ -1262,6 +1292,9 @@ describe("6. public read API", () => {
       PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items,
     ).toEqual([]);
     expect((await pub("bv", "/products/wf-p")).status).toBe(404);
+    // DP-207: a hidden listing is no address of the site any more (real 404, out of the sitemap).
+    expect((await seo("bv", "/resolve?path=/products/wf-p")).status).toBe(404);
+    expect(await sitemapPaths("bv")).not.toContain("/products/wf-p");
     const img = await owner.productImage.findFirstOrThrow({ where: { productId: id } });
     expect((await pubBytes("bv", `/images/${img.id}/display`)).status).toBe(404);
     expect((await pub("com", "/products/wf-p")).status).toBe(200);

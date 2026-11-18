@@ -5,6 +5,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
 import { NewsList } from "@/components/news/news-pages";
 import { getNews } from "@/lib/cms-home";
+import { noindexMetadata, pageMetadata } from "@/lib/seo";
 
 const news = cache(getNews);
 
@@ -16,13 +17,14 @@ const news = cache(getNews);
 export async function generateMetadata(): Promise<Metadata> {
   await connection();
   const res = await news();
-  if (!res.ok) return { title: "Dream Petroleum BV", robots: { index: false, follow: false } };
+  if (!res.ok) return noindexMetadata("Dream Petroleum BV");
   const { title, seo, copy } = res.data.heading;
-  return {
+  return pageMetadata({
+    path: "/news",
     title: seo.title ?? `${copy.title || title} · Dream Petroleum BV`,
     description: seo.description ?? copy.intro,
-    ...(seo.noindex ? { robots: { index: false, follow: false } } : {}),
-  };
+    noindex: seo.noindex,
+  });
 }
 
 export default function NewsPage() {
