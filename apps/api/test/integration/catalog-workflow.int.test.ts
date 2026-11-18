@@ -36,6 +36,8 @@ import {
   ReviewQueueResponseSchema,
   PublicSeoResolveResponseSchema,
   PublicSitemapResponseSchema,
+  ListingSeoResponseSchema,
+  SeoOverviewResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -4024,5 +4026,196 @@ describe("15. DP-198 atomic APPROVED publication", () => {
     );
     expect(await trail(id)).toEqual(after);
     expect((await pub("bv", "/products/dp198-i")).status).toBe(200);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 16. DP-209 product SEO: saved on the listing, published with the snapshot, sitemap consistent
+// ------------------------------------------------------------------------------------------
+
+describe("16. DP-209 product SEO", () => {
+  let admin: Staff; // approve (platform) + publish (BV): publishes directly
+  let id: string;
+  let imageId: string;
+  const path = "/products/dp209-a";
+  const seoUrl = () => `/products/${id}/listings/${BV}/seo`;
+  const EMPTY = {
+    title: null,
+    description: null,
+    ogTitle: null,
+    ogDescription: null,
+    canonicalPath: null,
+    noindex: false,
+    ogImageId: null,
+  };
+  async function saveSeo(body: Record<string, unknown>, who: Staff = bvEditor) {
+    return who.post(seoUrl(), { version: await listingVersion(id, BV), ...EMPTY, ...body });
+  }
+  async function republish() {
+    const res = await admin.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  const live = async () =>
+    PublicProductResponseSchema.parse((await pub("bv", "/products/dp209-a")).body).product;
+
+  beforeAll(async () => {
+    admin = await staff(
+      "seo-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    id = await completeProduct("seo", "DP209-A");
+    imageId = (await owner.productImage.findFirstOrThrow({ where: { productId: id } })).id;
+    await republish();
+  });
+
+  it("publishes without any SEO; the public product carries empty SEO (fallbacks)", async () => {
+    expect((await live()).seo).toEqual(EMPTY);
+    expect(await sitemapPaths("bv")).toContain(path);
+    // The admin listing answers its SEO.
+    const detail = await bvEditor.get(`/products/${id}?siteId=${BV}`);
+    expect(detail.body.listing.seo).toEqual(EMPTY);
+  });
+
+  it("saves the SEO on the listing (version + 1, audited by field name); live only after publishing", async () => {
+    const before = await listingVersion(id, BV);
+    const res = await saveSeo({
+      title: "DP209-A base oil | Dream Petroleum BV",
+      description: "A base oil for the DP-209 test, with a description long enough to count.",
+      ogTitle: "Share DP209-A",
+      ogDescription: "Share description",
+      ogImageId: imageId,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const saved = ListingSeoResponseSchema.parse(res.body);
+    expect(saved.version).toBe(before + 1);
+    expect(saved.seo).toMatchObject({ ogTitle: "Share DP209-A", ogImageId: imageId });
+    const audit = await lastAudit("catalog.listing_seo_updated");
+    expect(audit).toMatchObject({
+      resourceType: "product_listing",
+      siteId: BV,
+      outcome: "SUCCESS",
+    });
+    expect((audit?.metadata as { changed: string[] }).changed).toEqual([
+      "seoTitle",
+      "seoDescription",
+      "seoOgTitle",
+      "seoOgDescription",
+      "seoOgImageId",
+    ]);
+    expect(JSON.stringify(audit?.metadata)).not.toContain("Share DP209-A");
+    // Not public yet: the snapshot is the published one; the listing reads as changed.
+    expect((await live()).seo).toEqual(EMPTY);
+    const wf = await admin.workflow(id);
+    expect(wf.sites.find((s) => s.siteId === BV)!.outdated.listing).toBe(true);
+    // SEO never blocks publishing.
+    expect(wf.sites.find((s) => s.siteId === BV)!.readiness.ok).toBe(true);
+    await republish();
+    expect((await live()).seo).toMatchObject({
+      title: "DP209-A base oil | Dream Petroleum BV",
+      ogTitle: "Share DP209-A",
+      ogImageId: imageId,
+      noindex: false,
+    });
+    const snap = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+    expect((snap.snapshot as { seo: { ogImageId: string } }).seo.ogImageId).toBe(imageId);
+    // Corporate has its own listing: untouched by the BV SEO.
+    const comListing = await owner.productSiteListing.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: COM } },
+    });
+    expect(comListing).toMatchObject({ seoTitle: null, seoOgTitle: null, seoOgImageId: null });
+  });
+
+  it("noindex and a canonical elsewhere leave the sitemap; the page stays live", async () => {
+    expect((await saveSeo({ noindex: true })).status).toBe(200);
+    expect(await sitemapPaths("bv")).toContain(path); // not published yet
+    await republish();
+    expect((await seo("bv", `/resolve?path=${path}`)).status).toBe(200);
+    expect((await live()).seo.noindex).toBe(true);
+    expect(await sitemapPaths("bv")).not.toContain(path);
+    expect((await saveSeo({ canonicalPath: "/products/wf-p" })).status).toBe(200);
+    await republish();
+    expect(await sitemapPaths("bv")).not.toContain(path);
+    expect((await saveSeo({ canonicalPath: path })).status).toBe(200);
+    await republish();
+    expect(await sitemapPaths("bv")).toContain(path);
+    const o = SeoOverviewResponseSchema.parse(
+      (await bvReader.getAbs(`/api/v1/admin/seo/sites/${BV}/overview`)).body,
+    );
+    expect(o.permissions).toMatchObject({ readProducts: true, editProducts: false });
+    expect(o.items.find((i) => i.id === id)).toMatchObject({
+      source: "product",
+      path,
+      live: true,
+      pendingChanges: false,
+      inSitemap: true,
+    });
+  });
+
+  it("refuses unsafe canonicals, foreign or hidden images, stale versions and missing rights", async () => {
+    expectError(
+      await saveSeo({ canonicalPath: "https://evil.example/x" }),
+      400,
+      "VALIDATION_FAILED",
+      {
+        path: "canonicalPath",
+        rule: "custom",
+      },
+    );
+    const foreign = await owner.productImage.findFirstOrThrow({ where: { productId: P["p"] } });
+    expectError(await saveSeo({ ogImageId: foreign.id }), 400, "VALIDATION_FAILED", {
+      path: "ogImageId",
+      rule: "unknown",
+    });
+    const lv = await listingVersion(id, BV);
+    expectError(
+      await bvEditor.post(seoUrl(), { ...EMPTY, version: lv - 1 }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    for (const who of [bvReader, comPublisher, nobody]) {
+      expectError(await saveSeo({ title: "x" }, who), 403, "FORBIDDEN");
+    }
+    expect(await lastAudit("catalog.access_denied")).toMatchObject({
+      outcome: "DENIED",
+      resourceType: "product_listing",
+    });
+    expectError(
+      await bvEditor.post(`/products/${id}/listings/${COM}/seo`, { ...EMPTY, version: 1 }),
+      403,
+      "FORBIDDEN",
+    );
+    expect(await listingVersion(id, BV)).toBe(lv);
+    // The database refuses an unsafe canonical too.
+    await rejectsDb(
+      owner.productSiteListing.update({
+        where: { productId_siteId: { productId: id, siteId: BV } },
+        data: { seoCanonicalPath: "//evil.example" },
+      }),
+      /ProductSiteListing_seo_canonical_path/,
+    );
+  });
+
+  it("an unpublished or hidden product is never indexed, whatever its SEO says", async () => {
+    expect((await saveSeo({ noindex: false })).status).toBe(200);
+    await republish();
+    expect(await sitemapPaths("bv")).toContain(path);
+    const row = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+    const off = await admin.post(`/products/${id}/publications/${BV}/unpublish`, {
+      version: row.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await seo("bv", `/resolve?path=${path}`)).status).toBe(404);
+    expect(await sitemapPaths("bv")).not.toContain(path);
+    expect((await pub("bv", "/products/dp209-a")).status).toBe(404);
   });
 });

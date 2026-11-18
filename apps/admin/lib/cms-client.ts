@@ -27,6 +27,10 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "content:invalid":
     "This content no longer matches the current fields. Save the draft again and check the highlighted fields.",
   "revisionNumber:unknown": "This revision does not exist. Reload the page.",
+  // DP-209: page SEO.
+  "seo.canonicalPath:custom":
+    "Use a path of this site, such as /about-us (lower-case words and hyphens, no domain).",
+  "seo.ogImage:custom": "Choose one of the registered site images.",
 };
 
 /** A readable name for a field path such as `content.sections.2.button.href`. */

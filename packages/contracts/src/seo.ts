@@ -167,3 +167,130 @@ export function productJsonLd(p: ProductLd): Record<string, unknown> {
 export function jsonLdText(data: unknown): string {
   return JSON.stringify(data).replace(/</g, "\\u003c");
 }
+
+// --- DP-209: admin-managed SEO --------------------------------------------------------------------
+
+/**
+ * DP-209: the SEO fields an editor manages (CMS pages and articles, BV product listings, the site
+ * defaults). Lengths are advice, never a blocker: the stored maximum is the hard limit, the
+ * recommended length only produces a warning in the admin (`seoLengthWarning`).
+ */
+export const SEO_TEXT_LIMITS = {
+  title: { max: 120, recommended: 60 },
+  description: { max: 320, recommended: 160, short: 50 },
+  ogTitle: { max: 120, recommended: 70 },
+  ogDescription: { max: 320, recommended: 200 },
+} as const;
+export type SeoTextField = keyof typeof SEO_TEXT_LIMITS;
+
+/**
+ * A readable warning when a value is longer (or, for the description, shorter) than search
+ * engines and link previews show; null when the length is fine or the field is empty (the
+ * fallback applies). Never a validation error.
+ */
+export function seoLengthWarning(
+  field: SeoTextField,
+  value: string | null | undefined,
+): string | null {
+  const n = (value ?? "").trim().length;
+  if (n === 0) return null;
+  const limit = SEO_TEXT_LIMITS[field];
+  if (n > limit.recommended) {
+    return `${n} characters: about ${limit.recommended} are shown, the rest may be cut off.`;
+  }
+  if ("short" in limit && n < limit.short) {
+    return `${n} characters: a description of ${limit.short}–${limit.recommended} characters works best.`;
+  }
+  return null;
+}
+
+/** First path segments a canonical address may never name (app internals, forms, previews). */
+export const SEO_CANONICAL_BLOCKED_SEGMENTS: readonly string[] = [
+  "_next",
+  "__dp",
+  "api",
+  "lead-form",
+  "preview",
+  "product-documents",
+  "product-images",
+];
+
+const CANONICAL_PATH = new RegExp(`^/(?:${SEGMENT}(?:/${SEGMENT}){0,2})?$`);
+
+/**
+ * DP-209: a canonical override is a path of the same site ("/about-us", "/products/x"), never a
+ * URL: the site makes it absolute with its own public origin, so a canonical can never point at
+ * another host, a scheme such as javascript:, a protocol-relative //host, a query or a fragment.
+ * At most three lower-case kebab-case segments; app internals (`/api`, `/preview`, …) are refused.
+ * Empty, null or missing: the page's own address (stored as null).
+ */
+export const SeoCanonicalPathSchema = z
+  .string()
+  .trim()
+  .max(200)
+  .nullish()
+  .transform((v) => (v ? v : null))
+  .refine(
+    (v) =>
+      v === null ||
+      (CANONICAL_PATH.test(v) && !SEO_CANONICAL_BLOCKED_SEGMENTS.includes(v.split("/")[1] ?? "")),
+    { message: "canonical" },
+  );
+
+/** Whether a stored canonical override is usable (the site checks again before rendering). */
+export function seoCanonicalPathIsValid(path: string | null | undefined): path is string {
+  return typeof path === "string" && SeoCanonicalPathSchema.safeParse(path).success && path !== "";
+}
+
+/**
+ * Whether a page is its own canonical address: no override, or an override equal to its path.
+ * Only such pages belong in the sitemap (a page that names another canonical is a duplicate).
+ */
+export function seoIsSelfCanonical(
+  path: string,
+  canonicalPath: string | null | undefined,
+): boolean {
+  return !canonicalPath || canonicalPath === path;
+}
+
+/** The SEO of a published product (DP-209), carried by its snapshot; null fields fall back. */
+export const ProductSeoSchema = z.strictObject({
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  ogTitle: z.string().nullable(),
+  ogDescription: z.string().nullable(),
+  canonicalPath: z.string().nullable(),
+  noindex: z.boolean(),
+  /** One of the snapshot's images; null: the cover, then the site default. */
+  ogImageId: z.uuid().nullable(),
+});
+export type ProductSeo = z.infer<typeof ProductSeoSchema>;
+
+export const EMPTY_PRODUCT_SEO: ProductSeo = {
+  title: null,
+  description: null,
+  ogTitle: null,
+  ogDescription: null,
+  canonicalPath: null,
+  noindex: false,
+  ogImageId: null,
+};
+
+/**
+ * DP-209: the site-wide SEO defaults, the published `bv.site-seo` fragment (CMS). Used where a
+ * page has no value of its own. `null` while the fragment is not published: the site then uses
+ * the defaults in its code (BV: `apps/web-bv/lib/seo.ts`).
+ */
+export const PublicSiteSeoSettingsSchema = z.strictObject({
+  siteName: z.string(),
+  defaultTitle: z.string(),
+  defaultDescription: z.string(),
+  defaultOgImage: z.string().startsWith("/"),
+});
+export type PublicSiteSeoSettings = z.infer<typeof PublicSiteSeoSettingsSchema>;
+
+export const PublicSiteSeoResponseSchema = z.strictObject({
+  settings: PublicSiteSeoSettingsSchema.nullable(),
+  publishedAt: IsoDate.nullable(),
+});
+export type PublicSiteSeoResponse = z.infer<typeof PublicSiteSeoResponseSchema>;

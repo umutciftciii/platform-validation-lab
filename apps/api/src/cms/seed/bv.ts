@@ -14,6 +14,7 @@ import type {
   BvHomeContent,
   BvNavContent,
   BvNewsIndexContent,
+  BvSiteSeoContent,
 } from "@dream/contracts";
 
 export const BV_HOME_SEED: BvHomeContent = {
@@ -512,9 +513,24 @@ export const BV_NEWS_INDEX_SEED: BvNewsIndexContent = {
 };
 
 /** Import seeds by registry key, with the page title the import gives them. */
+/**
+ * DP-209: the SEO defaults the BV site used in code before the CMS held them (DP-207
+ * `apps/web-bv/lib/seo.ts`): the brand name, the shared link-preview image, and the description
+ * of the product range from the site's own product list. Importing creates them as a draft; the
+ * site keeps its code defaults until the fragment is published.
+ */
+export const BV_SITE_SEO_SEED: BvSiteSeoContent = {
+  siteName: "Dream Petroleum BV",
+  defaultTitle: "Dream Petroleum BV",
+  defaultDescription:
+    "Dream Petroleum BV: base oils, white oils, solvents and specialty products, with technical data and documents where available.",
+  defaultOgImage: "/media/ctl-technology/clear-base-oil.webp",
+};
+
 export const CMS_SEEDS: Readonly<Record<string, { title: string; content: unknown }>> = {
   "bv.home": { title: "Home", content: BV_HOME_SEED },
   "bv.site-nav": { title: "Navigation", content: BV_NAV_SEED },
   "bv.site-footer": { title: "Footer", content: BV_FOOTER_SEED },
   "bv.news-index": { title: "News", content: BV_NEWS_INDEX_SEED },
+  "bv.site-seo": { title: "SEO defaults", content: BV_SITE_SEO_SEED },
 };

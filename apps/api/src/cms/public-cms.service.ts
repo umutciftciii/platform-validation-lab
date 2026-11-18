@@ -30,6 +30,7 @@ import { Clock } from "../iam/http/clock.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import { PublicSiteService, type PublicSite } from "../iam/public-site.js";
 import {
+  SEO_SELECT,
   contentIsValid,
   liveRows,
   publicPage,
@@ -172,9 +173,7 @@ export class PublicCmsService {
         templateKey: true,
         path: true,
         title: true,
-        seoTitle: true,
-        seoDescription: true,
-        noindex: true,
+        ...SEO_SELECT,
         content: true,
       },
     });
@@ -193,9 +192,7 @@ export class PublicCmsService {
           templateKey: true,
           path: true,
           title: true,
-          seoTitle: true,
-          seoDescription: true,
-          noindex: true,
+          ...SEO_SELECT,
           content: true,
         },
       });
@@ -228,9 +225,7 @@ export class PublicCmsService {
         templateKey: true,
         path: true,
         title: true,
-        seoTitle: true,
-        seoDescription: true,
-        noindex: true,
+        ...SEO_SELECT,
         content: true,
       },
     });

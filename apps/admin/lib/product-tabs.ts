@@ -8,6 +8,8 @@ export const PRODUCT_TABS = [
   { id: "content", label: "Content" },
   { id: "technical", label: "Technical" },
   { id: "media", label: "Media & Documents" },
+  // DP-209: the product's SEO on the selected site.
+  { id: "seo", label: "SEO" },
   { id: "publication", label: "Publication" },
 ] as const;
 
@@ -41,6 +43,7 @@ export const SECTION_TAB: Readonly<Record<string, ProductTabId>> = {
   research: "technical",
   images: "media",
   documents: "media",
+  seo: "seo",
   review: "publication",
   publication: "publication",
   history: "publication",

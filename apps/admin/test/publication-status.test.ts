@@ -1,7 +1,12 @@
 // DP-197: Draft / Published / Unpublished, the Publish button's plan and the listing request
 // bodies. The Content save never changes visibility; Publish shows the listing when needed.
 // DP-198 (R-29): in both modes with one request (makeVisible), inside the API's transaction.
-import type { Listing, PublicationIssue, SitePublication } from "@dream/contracts";
+import {
+  EMPTY_PRODUCT_SEO,
+  type Listing,
+  type PublicationIssue,
+  type SitePublication,
+} from "@dream/contracts";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { messageForIssues } from "../lib/catalog-client";
@@ -248,6 +253,7 @@ describe("listing request bodies", () => {
     sortOrder: 5,
     version: 9,
     text: { title: "Title", summary: "Summary", description: null },
+    seo: EMPTY_PRODUCT_SEO,
     updatedAt: T,
   };
   const values = {
