@@ -6,6 +6,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton } from "@/components/home/home-page";
 import { TemplatePage } from "@/components/template/template-page";
 import { getPublishedPage } from "@/lib/cms-home";
+import { noindexMetadata, pageMetadata } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
 const published = cache(getPublishedPage);
@@ -22,15 +23,10 @@ export async function generateMetadata({ params }: PageProps<"/[slug]">): Promis
   const res = await published(slug);
   if (!res.ok) {
     if (res.reason === "not_found") notFound();
-    return { title: "Dream Petroleum BV", robots: { index: false, follow: false } };
+    return noindexMetadata("Dream Petroleum BV");
   }
-  const { title, seo } = res.data;
-  return {
-    title: seo.title ?? title,
-    ...(seo.description ? { description: seo.description } : {}),
-    // noindex of the page; otherwise the site-wide setting of the root layout applies.
-    ...(seo.noindex ? { robots: { index: false, follow: false } } : {}),
-  };
+  const { path, title, seo } = res.data;
+  return pageMetadata({ path, title: seo.title ?? title, description: seo.description, noindex: seo.noindex });
 }
 
 export default function CmsPage({ params }: PageProps<"/[slug]">) {

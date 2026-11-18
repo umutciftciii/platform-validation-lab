@@ -10,9 +10,12 @@ const archivo = Archivo({
   axes: ["wdth"],
 });
 
+// DP-207: static defaults only. noindex is the fail-closed default: a page is indexable only when
+// its own metadata says so at request time (lib/seo.ts pageMetadata: production, DP_SEO_INDEXING=on
+// and a public origin). Canonical URL and Open Graph come per page from the same helper.
 export const metadata: Metadata = {
-  title: "ICCSYN hero prototype",
-  description: "Scroll hero prototype for Dream Petroleum B.V.",
+  title: "Dream Petroleum BV",
+  applicationName: "Dream Petroleum BV",
   robots: { index: false, follow: false },
 };
 

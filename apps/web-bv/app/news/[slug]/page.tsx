@@ -6,6 +6,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
 import { ArticlePage, ArticleRemoved, NEWS_UI } from "@/components/news/news-pages";
 import { getNewsChrome, getPublishedArticle } from "@/lib/cms-home";
+import { noindexMetadata, pageMetadata } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
 const published = cache(getPublishedArticle);
@@ -20,27 +21,21 @@ export async function generateMetadata({ params }: PageProps<"/news/[slug]">): P
   const res = await published(slug);
   if (!res.ok) {
     if (res.reason === "not_found") notFound();
-    return {
-      title: res.reason === "unpublished" ? `${NEWS_UI.removed.title} · Dream Petroleum BV` : "Dream Petroleum BV",
-      robots: { index: false, follow: false },
-    };
+    return noindexMetadata(
+      res.reason === "unpublished" ? `${NEWS_UI.removed.title} · Dream Petroleum BV` : "Dream Petroleum BV",
+    );
   }
-  const { title, seo, excerpt, firstPublishedAt } = res.data;
-  const description = seo.description ?? excerpt;
-  // Canonical URL and og:image need the site's public origin (metadataBase), which the BV app
-  // does not set yet (DP-152); until then they are left out rather than pointing at localhost.
-  return {
+  const { path, title, seo, excerpt, coverImage, coverAlt, firstPublishedAt } = res.data;
+  // DP-207: canonical URL and og:image from the site's public origin (lib/seo.ts).
+  return pageMetadata({
+    path,
+    type: "article",
     title: seo.title ?? title,
-    description,
-    openGraph: {
-      type: "article",
-      title: seo.title ?? title,
-      description,
-      ...(firstPublishedAt ? { publishedTime: firstPublishedAt } : {}),
-    },
-    // noindex of the article; otherwise the site-wide setting of the root layout applies.
-    ...(seo.noindex ? { robots: { index: false, follow: false } } : {}),
-  };
+    description: seo.description ?? excerpt,
+    noindex: seo.noindex,
+    images: coverImage ? [{ url: coverImage, alt: coverAlt }] : [],
+    publishedTime: firstPublishedAt,
+  });
 }
 
 export default function NewsArticlePage({ params }: PageProps<"/news/[slug]">) {
