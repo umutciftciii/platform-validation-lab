@@ -11,7 +11,10 @@
  *  4. CSRF for state-changing methods: an `Origin` allowed for that app, or no `Origin` with
  *     `Sec-Fetch-Site: same-origin`; POST bodies must be `application/json` (403
  *     AUTH_CSRF_REJECTED; NT-C1..3, NT-P8). No query string on state-changing requests (NT-K4).
- *  5. Body: at most 16 KB of JSON (413, 400). Nest's own body parser is off.
+ *  5. Body: at most 16 KB of JSON (413, 400). Nest's own body parser is off. DP-212: the admin
+ *     redirect CSV import (`POST /api/v1/admin/seo/sites/:siteId/redirects/import`) is the one
+ *     JSON route with a larger limit (`SEO_REDIRECT_IMPORT_MAX_BODY_BYTES`, 320 KB: a CSV of at
+ *     most 128 KB, JSON-escaped); it is still read and parsed here like every JSON body.
  *     Two exceptions, both from the admin app and streamed by their controllers: (PM-2)
  *     `PUT /api/v1/admin/catalog/products/:id/images` takes a raw JPEG/PNG/WebP body of at most
  *     10 MB; (PM-5) `PUT /api/v1/admin/catalog/documents/:id/revisions` a raw PDF of at most
@@ -25,6 +28,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
+import { SEO_REDIRECT_IMPORT_MAX_BODY_BYTES, SEO_REDIRECT_IMPORT_PATH } from "@dream/contracts";
 import { ipPrefix } from "../auth/ip-prefix.js";
 import type { ApiConfig } from "./api-config.js";
 import { writeError } from "./api-error.js";
@@ -87,6 +91,13 @@ export function rawUpload(
   return null;
 }
 
+/** DP-212: the JSON body limit of a request (16 KB, the redirect import 320 KB). */
+export function jsonBodyLimit(app: AuthAppValue, method: string, pathname: string): number {
+  return app === "ADMIN" && method === "POST" && SEO_REDIRECT_IMPORT_PATH.test(pathname)
+    ? SEO_REDIRECT_IMPORT_MAX_BODY_BYTES
+    : MAX_BODY_BYTES;
+}
+
 export function isHealthPath(pathname: string): boolean {
   return pathname === "/health" || pathname.startsWith("/health/");
 }
@@ -116,11 +127,12 @@ type Next = (error?: unknown) => void;
 
 async function readJsonBody(
   req: IncomingMessage,
+  maxBytes: number,
 ): Promise<
   { ok: true; body: unknown } | { ok: false; code: "PAYLOAD_TOO_LARGE" | "VALIDATION_FAILED" }
 > {
   const declared = Number(header(req, "content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+  if (Number.isFinite(declared) && declared > maxBytes) {
     req.resume();
     return { ok: false, code: "PAYLOAD_TOO_LARGE" };
   }
@@ -129,7 +141,7 @@ async function readJsonBody(
   for await (const chunk of req) {
     const buf = chunk as Buffer;
     size += buf.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       req.resume();
       return { ok: false, code: "PAYLOAD_TOO_LARGE" };
     }
@@ -211,7 +223,7 @@ export function createSecurityMiddleware(config: ApiConfig, metrics: ProxyKeyMet
         }
         body = undefined;
       } else if (BODY_METHODS.has(method)) {
-        const read = await readJsonBody(req);
+        const read = await readJsonBody(req, jsonBodyLimit(match.app, method, pathname));
         if (!read.ok) {
           const details =
             read.code === "VALIDATION_FAILED" ? [{ path: "(root)", rule: "invalid_json" }] : [];

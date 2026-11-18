@@ -2,7 +2,10 @@
 // CSV import and the API (one set of rules, one set of rule names).
 import { describe, expect, it } from "vitest";
 import {
+  SEO_REDIRECT_CSV_MAX_BYTES,
   SEO_REDIRECT_CSV_MAX_ROWS,
+  SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
+  SEO_REDIRECT_IMPORT_PATH,
   SEO_REDIRECT_CSV_SAMPLE,
   SeoRedirectInputSchema,
   csvCell,
@@ -12,8 +15,10 @@ import {
   parseRedirectCsv,
   parseRedirectSource,
   parseRedirectTarget,
+  redirectSourceIsLegacy,
   redirectSourceLabel,
   redirectTargetPath,
+  seoLegacyPath,
   seoRedirectLocation,
 } from "../src/index.js";
 
@@ -47,29 +52,129 @@ describe("DP-211 redirect sources", () => {
       "/news",
       "/privacy",
       "/api",
-      "/en",
+      "/de",
       "/sitemap",
+      "/sitemap.xml",
+      "/Robots.txt",
+      "/media/brand/logo.svg",
+      "/Products",
       "/lead-form",
     ]) {
       expect(rule(parseRedirectSource(p)), p).toBe("reserved");
     }
     for (const p of ["/api/x", "/_next/static/x"])
       expect(rule(parseRedirectSource(p)), p).toBe("reserved");
+    // DP-212: upper case, deeper paths, ".html" and "_" are old-site addresses now (below);
+    // what stays malformed:
     for (const p of [
       "old",
-      "/Old-Page",
-      "/a/b",
-      "/a/b/c",
       "/a b",
-      "/a.html",
-      "/a--b",
       "//x",
-      "/a_b",
+      "/a//b",
+      "/a/../b",
+      "/a/..",
+      "/.hidden",
+      "/a-",
+      "/a%20b",
+      "/caf\u00e9",
+      "/a/b/c/d/e/f/g",
+      "/a\\b",
     ]) {
       expect(rule(parseRedirectSource(p)), p).toBe("format");
     }
     expect(rule(parseRedirectSource("/a#top"))).toBe("fragment");
     expect(rule(parseRedirectSource(`/a?${"x=1&".repeat(80)}`))).toBe("too_long");
+  });
+});
+
+describe("DP-212 old-site sources (legacy URL map)", () => {
+  const src = (p: string) => {
+    const r = parseRedirectSource(p);
+    return r.ok ? redirectSourceLabel(r.value) : `!${r.rule}`;
+  };
+
+  it("accepts the old site's addresses and stores them in lower case without a trailing slash", () => {
+    expect(src("/en")).toBe("/en");
+    expect(src("/tr/")).toBe("/tr");
+    expect(src("/en/index")).toBe("/en/index");
+    expect(src("/en/About-Us")).toBe("/en/about-us");
+    expect(src("/EN/PRODUCTS/Base-Oil-2-100N")).toBe("/en/products/base-oil-2-100n");
+    expect(src("/en/blog_detail/why-oil/1")).toBe("/en/blog_detail/why-oil/1");
+    expect(src("/en/contact-us.html")).toBe("/en/contact-us.html");
+    expect(src("/assets/specs/base-oil-2-150n.pdf")).toBe("/assets/specs/base-oil-2-150n.pdf");
+    expect(src("/Old-Page")).toBe("/old-page");
+    expect(src("https://dreampetroleumbv.com/en/products?category=base-oil")).toBe(
+      "/en/products?category=base-oil",
+    );
+    // The query keeps its case (values are data) and is normalised as before.
+    expect(src("/en/products?page=2&category=White-Oil")).toBe(
+      "/en/products?category=White-Oil&page=2",
+    );
+  });
+
+  it("tells old-site sources from the site's own forms", () => {
+    expect(redirectSourceIsLegacy("/en")).toBe(true);
+    expect(redirectSourceIsLegacy("/en/products/x")).toBe(true);
+    expect(redirectSourceIsLegacy("/x.html")).toBe(true);
+    expect(redirectSourceIsLegacy("/old-page")).toBe(false);
+    expect(redirectSourceIsLegacy("/products/x")).toBe(false);
+  });
+
+  it("looks request paths up the same way (seoLegacyPath)", () => {
+    expect(seoLegacyPath("/EN/About-Us/")).toBe("/en/about-us");
+    expect(seoLegacyPath("/en/contact-us.html")).toBe("/en/contact-us.html");
+    for (const bad of [
+      "/",
+      "",
+      "en",
+      "/en//x",
+      "/en/../x",
+      "/en/%2e%2e/x",
+      "/_next/static/x.js",
+      "/api/v1/x",
+      "/media/brand/logo.svg",
+      "/Media/x.jpg",
+      "/__dp/not-found",
+      "/sitemap.xml",
+      "/robots.txt",
+      "/favicon.ico",
+      `/${"a".repeat(301)}`,
+      "/a/b/c/d/e/f/g",
+    ]) {
+      expect(seoLegacyPath(bad), bad).toBeNull();
+    }
+  });
+
+  it("has room for the whole legacy map in one file, with a matching request limit", () => {
+    expect(SEO_REDIRECT_CSV_MAX_ROWS).toBe(1000);
+    expect(SEO_REDIRECT_CSV_MAX_BYTES).toBe(128 * 1024);
+    // JSON escaping of quotes and line breaks at most doubles the CSV; plus the envelope.
+    expect(SEO_REDIRECT_IMPORT_MAX_BODY_BYTES).toBeGreaterThan(2 * SEO_REDIRECT_CSV_MAX_BYTES);
+    const id = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    expect(SEO_REDIRECT_IMPORT_PATH.test(`/api/v1/admin/seo/sites/${id}/redirects/import`)).toBe(
+      true,
+    );
+    for (const p of [
+      `/api/v1/admin/seo/sites/${id}/redirects`,
+      `/api/v1/admin/seo/sites/${id}/redirects/import/x`,
+      `/api/v1/admin/cms/sites/${id}/redirects/import`,
+      `/api/v1/admin/seo/sites/x/redirects/import`,
+    ]) {
+      expect(SEO_REDIRECT_IMPORT_PATH.test(p), p).toBe(false);
+    }
+  });
+
+  it("parses a 1000-row legacy file and refuses one row more", () => {
+    const rows = Array.from(
+      { length: 1000 },
+      (_, i) => `/en/products/p-${i},/products/p-${i},301,true,`,
+    );
+    const ok = parseRedirectCsv(["source,target,status,active,note", ...rows].join("\r\n"));
+    expect(ok.ok && ok.rows.length).toBe(1000);
+    expect(parseRedirectCsv(["source,target", ...rows, "/en/x,/x"].join("\n"))).toEqual({
+      ok: false,
+      rule: "too_many_rows",
+    });
   });
 });
 
@@ -180,7 +285,7 @@ describe("DP-211 CSV", () => {
       ...Array.from({ length: SEO_REDIRECT_CSV_MAX_ROWS + 1 }, (_, i) => `/a${i},/b`),
     ];
     expect(parseRedirectCsv(many.join("\n"))).toEqual({ ok: false, rule: "too_many_rows" });
-    expect(parseRedirectCsv(`source,target\n${"/a,/b\n".repeat(3000)}`)).toEqual({
+    expect(parseRedirectCsv(`source,target\n${"/a,/b\n".repeat(25_000)}`)).toEqual({
       ok: false,
       rule: "too_large",
     });

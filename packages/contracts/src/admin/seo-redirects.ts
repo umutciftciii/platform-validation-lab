@@ -15,9 +15,12 @@
  *  - `POST /api/v1/admin/seo/sites/:siteId/redirects/import`          CSV dry-run / import
  *
  * Rules (ADR-024 D9):
- *  - Source: an address the BV site can answer (`/<slug>`, `/news/<slug>`, `/products/<slug>`,
- *    lower case), never a reserved app address, never an address with live content, once per
- *    site (with its optional query). Legacy formats (upper case, `.html`, deeper paths) are DP-212.
+ *  - Source: an address the BV site can answer (`/<slug>`, `/news/<slug>`, `/products/<slug>`),
+ *    never a reserved app address, never an address with live content, once per site (with its
+ *    optional query). DP-212: also an address of the old site (`/en/…`, `/tr/…`, `/en`, upper
+ *    case, `.html`, deeper paths; `seoLegacyPath`). Every source is stored in lower case without a
+ *    trailing slash, and the site looks requests up the same way, so `/en/About-Us` and
+ *    `/en/about-us` are one source.
  *  - Target: a path of the same site (optionally with a query); never another host, never an app
  *    internal, never the source itself. No chain: a target is never another active redirect's
  *    source, a source never another active redirect's target (the database trigger
@@ -31,7 +34,13 @@
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
 import { CMS_RESERVED_SLUGS } from "./cms.js";
-import { SITE_REDIRECT_ORIGINS } from "../seo.js";
+import {
+  SEO_INTERNAL_SEGMENTS,
+  SEO_LEGACY_LOCALES,
+  SEO_SITE_FILES,
+  SITE_REDIRECT_ORIGINS,
+  seoLegacyPath,
+} from "../seo.js";
 
 const IsoDate = z.iso.datetime({ offset: true });
 const VersionSchema = z.number().int().min(1);
@@ -133,7 +142,9 @@ export interface RedirectSource {
 
 /**
  * A redirect source from what an editor typed: a path of the BV site, optionally with a query.
- * A full URL is accepted and reduced to its path and query (the source is always on this site).
+ * A full URL is accepted and reduced to its path and query (the source is always on this site;
+ * DP-212: `https://dreampetroleumbv.com/en/products` is the old site's address `/en/products`).
+ * The path is stored in lower case (DP-212); the query keeps its case (values are data).
  */
 export function parseRedirectSource(input: string): RedirectParse<RedirectSource> {
   let raw = input.trim();
@@ -143,27 +154,39 @@ export function parseRedirectSource(input: string): RedirectParse<RedirectSource
   if (absolute) raw = absolute[1] || "/";
   const split = splitAddress(raw);
   if (!split.ok) return split;
-  const { path, query } = split.value;
+  const { query } = split.value;
+  const path = split.value.path.toLowerCase();
   if (path.length > SEO_REDIRECT_LIMITS.sourcePath) return { ok: false, rule: "too_long" };
-  if (!SOURCE_PATH.test(path)) {
-    // "/", "/news", "/products" and app addresses are the site's own; tell them from typos.
-    const first = path.split("/")[1] ?? "";
-    if (path === "/" || path === "/news" || path === "/products")
-      return { ok: false, rule: "reserved" };
-    if (first === "_next" || first === "__dp" || first === "api")
-      return { ok: false, rule: "reserved" };
-    return { ok: false, rule: "format" };
+  const first = path.split("/")[1] ?? "";
+  // "/", "/news", "/products", app internals and site files are the site's own.
+  if (path === "/" || path === "/news" || path === "/products")
+    return { ok: false, rule: "reserved" };
+  if (SEO_INTERNAL_SEGMENTS.includes(first) || SEO_SITE_FILES.includes(path)) {
+    return { ok: false, rule: "reserved" };
   }
-  const segments = path.split("/").slice(1);
-  if (segments.length === 1) {
-    const slug = segments[0]!;
-    if (CMS_RESERVED_SLUGS.includes(slug) || /^[a-z]{2}$/.test(slug)) {
-      return { ok: false, rule: "reserved" };
+  if (SOURCE_PATH.test(path)) {
+    const segments = path.split("/").slice(1);
+    if (segments.length === 1) {
+      const slug = segments[0]!;
+      // The old site's locale homes (`/en`, `/tr`) are sources (DP-212); other two-letter
+      // slugs stay reserved for locales, like the CMS reserved slugs.
+      const legacyHome = SEO_LEGACY_LOCALES.includes(slug);
+      if (CMS_RESERVED_SLUGS.includes(slug) || (/^[a-z]{2}$/.test(slug) && !legacyHome)) {
+        return { ok: false, rule: "reserved" };
+      }
     }
+  } else if (seoLegacyPath(path) !== path) {
+    return { ok: false, rule: "format" };
   }
   const q = normalizeRedirectQuery(query);
   if (!q.ok) return q;
   return { ok: true, value: { sourcePath: path, sourceQuery: q.value } };
+}
+
+/** DP-212: whether a stored source is an address of the old site (not one of the site's own forms). */
+export function redirectSourceIsLegacy(sourcePath: string): boolean {
+  if (!SOURCE_PATH.test(sourcePath)) return true;
+  return SEO_LEGACY_LOCALES.includes(sourcePath.slice(1));
 }
 
 /**
@@ -331,9 +354,22 @@ export type SeoRedirectHistoryResponse = z.infer<typeof SeoRedirectHistoryRespon
 
 // --- CSV import ---------------------------------------------------------------------------------
 
-/** Kept under the 16 KiB request limit of the admin proxy and the API (JSON-escaped). */
-export const SEO_REDIRECT_CSV_MAX_BYTES = 12 * 1024;
-export const SEO_REDIRECT_CSV_MAX_ROWS = 200;
+/**
+ * DP-212: one file holds the whole legacy URL map of the old site (about 230 rows, 20 KB today),
+ * with room to grow: at most 1000 rows / 128 KiB. The import route is the only JSON route with a
+ * larger request limit (`SEO_REDIRECT_IMPORT_MAX_BODY_BYTES`, both in the admin proxy and the
+ * API); every other route keeps 16 KiB. (DP-211 had 200 rows / 12 KiB, R-33.)
+ */
+export const SEO_REDIRECT_CSV_MAX_BYTES = 128 * 1024;
+export const SEO_REDIRECT_CSV_MAX_ROWS = 1000;
+/**
+ * The request limit of the import route: the CSV JSON-escaped (quotes and line breaks double) plus
+ * the envelope. A file that escapes to more than this is refused with 413 before it is read.
+ */
+export const SEO_REDIRECT_IMPORT_MAX_BODY_BYTES = 320 * 1024;
+/** The import route (API path), the one JSON route with the larger limit. */
+export const SEO_REDIRECT_IMPORT_PATH =
+  /^\/api\/v1\/admin\/seo\/sites\/[0-9A-Fa-f-]{36}\/redirects\/import$/;
 export const SEO_REDIRECT_CSV_COLUMNS = ["source", "target", "status", "active", "note"] as const;
 
 export const SEO_REDIRECT_CSV_SAMPLE = [

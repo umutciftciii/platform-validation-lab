@@ -2839,8 +2839,11 @@ describe("18. redirect management (DP-211)", () => {
     await bad("/dp211-v", "//evil.example", 400, { path: "target", rule: "external" });
     await bad("/dp211-v", "/api/x", 400, { path: "target", rule: "reserved" });
     await bad("/products", "/x", 400, { path: "source", rule: "reserved" });
-    await bad("/en", "/x", 400, { path: "source", rule: "reserved" });
-    await bad("/Dp211", "/x", 400, { path: "source", rule: "format" });
+    // DP-212: /en and /tr are old-site sources now; other language codes stay reserved, and
+    // upper case is lower-cased (so a malformed source is one with a space, "..", "//", ...).
+    await bad("/de", "/x", 400, { path: "source", rule: "reserved" });
+    await bad("/dp211 v", "/x", 400, { path: "source", rule: "format" });
+    await bad("/dp211/../x", "/x", 400, { path: "source", rule: "format" });
     await bad("/dp211-v#x", "/x", 400, { path: "source", rule: "fragment" });
     await bad("/dp211-v", "/dp211-v", 400, { path: "target", rule: "self" });
     // A live page's address is never a source.
@@ -3142,6 +3145,315 @@ describe("18. redirect management (DP-211)", () => {
     expect(live.status).toBe(200);
     expect(live.body.redirect).toBeUndefined();
     await expectConsistent();
+  });
+});
+
+describe("19. old-site addresses and the legacy URL map (DP-212)", () => {
+  let manager: Staff; // site_admin @ BV: content:publish and audit:read
+  const R = () => `/api/v1/admin/seo/sites/${BV}/redirects`;
+  async function seo(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.46" },
+      }),
+    );
+  }
+  const resolve = (p: string, query = "", key?: string) =>
+    seo(
+      `/resolve?path=${encodeURIComponent(p)}${query ? `&query=${encodeURIComponent(query)}` : ""}`,
+      key,
+    );
+  async function livePage(slug: string): Promise<string> {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, { title: `DP-212 ${slug}`, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = CmsPageResponseSchema.parse(created.body).page.id;
+    const p = CmsPageResponseSchema.parse((await bvPublisher.get(`/pages/${id}`)).body).page;
+    const pub = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+    expect(pub.status, JSON.stringify(pub.body)).toBe(200);
+    return id;
+  }
+  const body = (source: string, target: string, over: Record<string, unknown> = {}) => ({
+    source,
+    target,
+    statusCode: 301,
+    active: true,
+    note: null,
+    ...over,
+  });
+  async function create(source: string, target: string, over = {}) {
+    const res = await manager.post(R(), body(source, target, over));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return SeoRedirectResponseSchema.parse(res.body);
+  }
+  const imp = (csv: string, dryRun: boolean, planHash?: string) =>
+    manager.post(`${R()}/import`, { csv, dryRun, ...(planHash ? { planHash } : {}) });
+  const redirectOf = async (p: string, query = "") => {
+    const res = await resolve(p, query);
+    expect(res.status, `${p}?${query} ${JSON.stringify(res.body)}`).toBe(200);
+    return res.body.redirect as { target: string; statusCode: number; keepQuery?: boolean };
+  };
+
+  beforeAll(async () => {
+    manager = await staff("bv-site-admin-212", [{ role: "site_admin", site: BV }], root.userId);
+    await livePage("dp212-about");
+    await livePage("dp212-target");
+    await livePage("dp212-live");
+  });
+
+  it("old-site sources: stored in lower case, answered for any spelling, one hop", async () => {
+    const about = await create("/EN/DP212-About/", "/dp212-about");
+    expect(about.redirect).toMatchObject({ sourcePath: "/en/dp212-about", sourceQuery: "" });
+    expect(about.warnings).toEqual([]);
+    await create("/en/dp212-contact-us.html", "/dp212-about");
+    await create("/en/blog_detail/dp212-post/1", "/dp212-target");
+    await create("/en/dp212-index", "/");
+    await create(
+      "https://dreampetroleumbv.com/en/dp212-products?category=base-oil",
+      "/products?category=base-oil",
+    );
+    await create("/en/dp212-products", "/products");
+    for (const p of ["/en/dp212-about", "/EN/DP212-About", "/En/Dp212-About"]) {
+      expect(await redirectOf(p), p).toEqual({ target: "/dp212-about", statusCode: 301 });
+    }
+    expect((await redirectOf("/en/DP212-CONTACT-US.HTML")).target).toBe("/dp212-about");
+    expect((await redirectOf("/en/blog_detail/dp212-post/1")).target).toBe("/dp212-target");
+    expect((await redirectOf("/en/dp212-index")).target).toBe("/");
+    // A trailing slash is the framework's to normalise (308 first); the API keeps DP-210's 404.
+    expectError(await resolve("/en/dp212-index/"), 404, "NOT_FOUND");
+    // Query-bound source: the target as is; the plain one keeps the request's query.
+    expect(await redirectOf("/en/dp212-products", "category=base-oil")).toEqual({
+      target: "/products?category=base-oil",
+      statusCode: 301,
+      keepQuery: false,
+    });
+    expect(await redirectOf("/en/dp212-products", "page=2")).toEqual({
+      target: "/products",
+      statusCode: 301,
+    });
+    // The duplicate check sees the lower-case form.
+    expectError(await manager.post(R(), body("/en/DP212-ABOUT", "/x")), 409, "CONFLICT_STATE", {
+      path: "source",
+      rule: "duplicate",
+    });
+    // No row, malformed or internal: 404 without guessing (".html" is not stripped).
+    for (const p of [
+      "/en/dp212-nope",
+      "/en/dp212-about.html",
+      "/en//dp212-about",
+      "/en/../dp212-about",
+      "/_next/static/x.js",
+      "/media/brand/x.svg",
+      "/robots.txt",
+      `/en/${"a".repeat(300)}`,
+    ]) {
+      expectError(await resolve(p), 404, "NOT_FOUND");
+    }
+  });
+
+  it("the locale homes /en and /tr are sources; other language codes, internals and files are not", async () => {
+    // (The real /en row comes with the map; the rule is checked on /tr here.)
+    await create("/tr", "/");
+    expect(await redirectOf("/tr")).toEqual({ target: "/", statusCode: 301 });
+    expect(await redirectOf("/TR")).toEqual({ target: "/", statusCode: 301 });
+    for (const [source, rule] of [
+      ["/de", "reserved"],
+      ["/Media/x.jpg", "reserved"],
+      ["/sitemap.xml", "reserved"],
+      ["/api/v1/x", "reserved"],
+      ["/a/b/c/d/e/f/g", "format"],
+    ] as const) {
+      expectError(
+        await manager.post(R(), body(source, "/dp212-target")),
+        400,
+        "VALIDATION_FAILED",
+        {
+          path: "source",
+          rule,
+        },
+      );
+    }
+  });
+
+  it("live content is never overridden; chains and loops are refused for old-site sources too", async () => {
+    // An upper-case spelling of a live address is not a redirect of it (no row, no guess): 404.
+    expectError(await resolve("/DP212-Live"), 404, "NOT_FOUND");
+    expect((await resolve("/dp212-live")).body).toEqual({ path: "/dp212-live", kind: "page" });
+    // Its lower-case form is live, so it cannot be a source.
+    expectError(
+      await manager.post(R(), body("/DP212-Live", "/dp212-target")),
+      409,
+      "CONFLICT_STATE",
+      {
+        path: "source",
+        rule: "live_content",
+      },
+    );
+    // A target that is itself an (old-site) source: chain.
+    expectError(
+      await manager.post(R(), body("/dp212-chain", "/en/dp212-about")),
+      409,
+      "CONFLICT_STATE",
+      { path: "target", rule: "chain" },
+    );
+    const active = await owner.siteRedirect.findMany({ where: { siteId: BV, active: true } });
+    const plain = new Set(active.filter((r) => r.sourceQuery === "").map((r) => r.sourcePath));
+    for (const r of active) expect(plain.has(r.target.split("?")[0]!), r.sourcePath).toBe(false);
+  });
+
+  it("DP-210 automatic 301s still apply: an old-site redirect follows a page that moves (one hop)", async () => {
+    const id = await livePage("dp212-mover");
+    await create("/en/dp212-mover", "/dp212-mover");
+    const p = CmsPageResponseSchema.parse((await bvEditor.get(`/pages/${id}`)).body).page;
+    const saved = await bvEditor.post(`/pages/${id}/draft`, {
+      version: p.version,
+      title: p.title,
+      slug: "dp212-moved",
+      seo: SEO,
+      content: { sections: [HERO] },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const q = CmsPageResponseSchema.parse((await bvPublisher.get(`/pages/${id}`)).body).page;
+    expect((await bvPublisher.post(`/pages/${id}/publish`, { version: q.version })).status).toBe(
+      200,
+    );
+    expect((await redirectOf("/en/dp212-mover")).target).toBe("/dp212-moved");
+    expect((await redirectOf("/dp212-mover")).target).toBe("/dp212-moved");
+    const slugRow = await owner.siteRedirect.findUniqueOrThrow({
+      where: {
+        siteId_sourcePath_sourceQuery: { siteId: BV, sourcePath: "/dp212-mover", sourceQuery: "" },
+      },
+    });
+    expect(slugRow.origin).toBe("SLUG_CHANGE");
+  });
+
+  it("CSV: a 1000-row legacy map in one file, atomic, idempotent, stale plans refused", async () => {
+    const header = "source,target,status,active,note";
+    const rows = Array.from(
+      { length: 1000 },
+      (_, i) =>
+        `/en/products/dp212-legacy-${i},/dp212-target,301,true,DP-212 legacy (product HIGH)`,
+    );
+    const csv = [header, ...rows].join("\r\n");
+    expect(Buffer.byteLength(csv)).toBeGreaterThan(16 * 1024);
+    // One bad row: the whole file is refused, nothing written.
+    const bad = [
+      header,
+      ...rows.slice(0, 999),
+      "/en/dp212-bad,https://evil.example/,301,true,",
+    ].join("\n");
+    const before = await owner.siteRedirect.count({ where: { siteId: BV } });
+    const badDry = SeoRedirectImportResponseSchema.parse((await imp(bad, true)).body);
+    expect(badDry.summary).toMatchObject({ rows: 1000, create: 999, error: 1 });
+    expect(badDry.rows.find((r) => r.action === "error")).toMatchObject({
+      line: 1001,
+      errors: ["target:external"],
+    });
+    expectError(await imp(bad, false, badDry.planHash), 409, "CONFLICT_STATE", {
+      path: "import",
+      rule: "has_errors",
+    });
+    expect(await owner.siteRedirect.count({ where: { siteId: BV } })).toBe(before);
+
+    const t0 = Date.now();
+    const dry = SeoRedirectImportResponseSchema.parse((await imp(csv, true)).body);
+    expect(dry.summary).toEqual({ rows: 1000, create: 1000, update: 0, unchanged: 0, error: 0 });
+    const done = await imp(csv, false, dry.planHash);
+    expect(done.status, JSON.stringify(done.body).slice(0, 500)).toBe(200);
+    expect(SeoRedirectImportResponseSchema.parse(done.body).applied).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(45_000);
+    expect(await owner.siteRedirect.count({ where: { siteId: BV } })).toBe(before + 1000);
+    const one = await owner.siteRedirect.findUniqueOrThrow({
+      where: {
+        siteId_sourcePath_sourceQuery: {
+          siteId: BV,
+          sourcePath: "/en/products/dp212-legacy-999",
+          sourceQuery: "",
+        },
+      },
+    });
+    expect(one).toMatchObject({
+      origin: "IMPORT",
+      target: "/dp212-target",
+      statusCode: 301,
+      active: true,
+    });
+    expect((await redirectOf("/EN/Products/DP212-Legacy-999")).target).toBe("/dp212-target");
+    const audit = await lastAudit("seo.redirects_imported");
+    // (The audit log stores the plan hash redacted.)
+    expect(audit?.metadata).toMatchObject({ rows: 1000, create: 1000, error: 0 });
+
+    // Re-import: nothing to write, no duplicates.
+    const again = SeoRedirectImportResponseSchema.parse((await imp(csv, true)).body);
+    expect(again.summary).toMatchObject({ create: 0, update: 0, unchanged: 1000, error: 0 });
+    expect((await imp(csv, false, again.planHash)).status).toBe(200);
+    expect(await owner.siteRedirect.count({ where: { siteId: BV } })).toBe(before + 1000);
+
+    // Stale: a row changed after the dry-run.
+    const edit = [header, "/en/products/dp212-legacy-0,/dp212-about,301,true,changed"].join("\n");
+    const plan = SeoRedirectImportResponseSchema.parse((await imp(edit, true)).body);
+    expect(plan.summary.update).toBe(1);
+    const row0 = await owner.siteRedirect.findUniqueOrThrow({
+      where: {
+        siteId_sourcePath_sourceQuery: {
+          siteId: BV,
+          sourcePath: "/en/products/dp212-legacy-0",
+          sourceQuery: "",
+        },
+      },
+    });
+    const upd = await manager.post(`${R()}/${row0.id}`, {
+      ...body("/en/products/dp212-legacy-0", "/dp212-target", { note: "meanwhile" }),
+      version: row0.version,
+    });
+    expect(upd.status, JSON.stringify(upd.body)).toBe(200);
+    expectError(await imp(edit, false, plan.planHash), 409, "CONFLICT_STATE", {
+      path: "import",
+      rule: "changed",
+    });
+    // Stale: the target's live state changed after the dry-run (warning part of the plan).
+    const late = [header, "/en/dp212-late,/dp212-late,301,true,"].join("\n");
+    const latePlan = SeoRedirectImportResponseSchema.parse((await imp(late, true)).body);
+    expect(latePlan.rows[0]!.warnings).toEqual(["target:not_live"]);
+    await livePage("dp212-late");
+    expectError(await imp(late, false, latePlan.planHash), 409, "CONFLICT_STATE", {
+      path: "import",
+      rule: "changed",
+    });
+    const fresh = SeoRedirectImportResponseSchema.parse((await imp(late, true)).body);
+    expect(fresh.rows[0]!.warnings).toEqual([]);
+    expect((await imp(late, false, fresh.planHash)).status).toBe(200);
+  });
+
+  it("CSV limits: 1001 rows refused, the larger request limit only on the import route", async () => {
+    const rows = Array.from({ length: 1001 }, (_, i) => `/en/dp212-x-${i},/dp212-target`);
+    expectError(await imp(["source,target", ...rows].join("\n"), true), 400, "VALIDATION_FAILED", {
+      path: "csv",
+      rule: "too_many_rows",
+    });
+    // Over 128 KB of CSV: refused by the schema (400); over 320 KB of JSON: 413 before reading.
+    const big = `source,target,note\n${`/en/dp212-y,/dp212-target,${"n".repeat(400)}\n`.repeat(330)}`;
+    expect(Buffer.byteLength(big)).toBeGreaterThan(128 * 1024);
+    expectError(await imp(big, true), 400, "VALIDATION_FAILED");
+    expectError(await imp(big.repeat(3), true), 413, "PAYLOAD_TOO_LARGE");
+    // Every other JSON route keeps 16 KB.
+    expectError(
+      await manager.post(R(), body("/dp212-z", "/dp212-target", { note: "n".repeat(17 * 1024) })),
+      413,
+      "PAYLOAD_TOO_LARGE",
+    );
+  });
+
+  it("public regressions: sitemap lists live content only; unknown old addresses are 404", async () => {
+    const paths = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries.map(
+      (e) => e.path,
+    );
+    expect(paths).toContain("/dp212-target");
+    expect(paths.some((p) => p.startsWith("/en/") || p === "/en" || p === "/tr")).toBe(false);
+    for (const p of ["/tr/dp212-nope", "/EN/DP212-NOPE", "/assets/specs/dp212.pdf"]) {
+      expectError(await resolve(p), 404, "NOT_FOUND");
+    }
+    // The Corporate site applies no redirects: its own resolve never answers old-site rows.
+    expectError(await resolve("/en/dp212-about", "", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
   });
 });
 

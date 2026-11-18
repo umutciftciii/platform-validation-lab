@@ -16,6 +16,8 @@
  *    Old addresses never appear in the sitemap (it lists live content only).
  *  - DP-211: `resolve(path, query)` also matches a manual or imported redirect bound to the
  *    request's query; redirect sources never have live content, so they never reach the sitemap.
+ *  - DP-212: an old-site address (`/en/…`, upper case, `.html`, deeper paths) is answered with its
+ *    redirect only (lower-case lookup, `seoLegacyPath`); without one it is a 404.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -28,6 +30,7 @@ import {
   cmsIsArticle,
   normalizeRedirectQuery,
   seoIsSelfCanonical,
+  seoLegacyPath,
   type PublicSiteSeoResponse,
   type PublicSeoResolveResponse,
   type PublicSitemapEntry,
@@ -199,7 +202,13 @@ export class PublicSeoService {
     rawQuery: unknown = "",
   ): Promise<PublicSeoResolveResponse> {
     const path = typeof rawPath === "string" ? rawPath : "";
-    if (!SEO_RESOLVABLE_PATH.test(path)) throw new ApiError("NOT_FOUND");
+    // DP-212: an address the site does not serve in its own form (an old-site address such as
+    // `/en/products/x`, `/en/About-Us`, `/en/contact-us.html`) is answered with its redirect only,
+    // looked up in lower case like the stored sources; never with live content. A trailing "/"
+    // stays a 404 here (DP-210): the site's framework sends `/x/` to `/x` (308) before asking.
+    const legacy =
+      SEO_RESOLVABLE_PATH.test(path) || path.endsWith("/") ? null : seoLegacyPath(path);
+    if (!SEO_RESOLVABLE_PATH.test(path) && !legacy) throw new ApiError("NOT_FOUND");
     // DP-211: the request's query in stored form; one that cannot be stored matches no redirect.
     const parsedQuery =
       typeof rawQuery === "string" && rawQuery.length <= 2000
@@ -207,6 +216,11 @@ export class PublicSeoService {
         : null;
     const query = parsedQuery?.ok ? parsedQuery.value : "";
     const site = await this.sites.begin(ctx);
+    if (legacy) {
+      const moved = await PublicSeoService.redirectOf(site, legacy, query);
+      if (moved) return { ...moved, path };
+      throw new ApiError("NOT_FOUND");
+    }
     if (path.startsWith(PRODUCTS_PREFIX)) {
       const [hit] = await PublicSeoService.liveProductPaths(
         site,

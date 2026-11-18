@@ -5,6 +5,8 @@
  */
 import {
   ADMIN_SEO_API,
+  SEO_REDIRECT_CSV_MAX_BYTES,
+  SEO_REDIRECT_CSV_MAX_ROWS,
   SEO_REDIRECT_SORTS,
   csvCell,
   type SeoRedirectImportResponse,
@@ -88,9 +90,9 @@ export function redirectContentHref(item: SeoRedirectItem, siteParam = "bv"): st
 const RULES: Readonly<Record<string, string>> = {
   "source:required": "Enter the old address.",
   "source:format":
-    "Use an address of this site: /old-page, /news/old-article or /products/old-product (lower-case words and hyphens; a query such as ?id=5 is allowed).",
+    "Use an address of this site (/old-page, /news/old-article, /products/old-product) or of the old site (/en/about-us, /tr/products/x, /en/contact-us.html): letters, digits, hyphens, dots or underscores, at most 6 parts; a query such as ?id=5 is allowed.",
   "source:reserved":
-    "This address belongs to the site itself (home, products, news, privacy, a language code or an app address).",
+    "This address belongs to the site itself (home, products, news, privacy, a language code other than the old site's /en and /tr, an app address or a site file).",
   "source:fragment": "Leave out the # part: browsers never send it to the site.",
   "source:query_format": "The query cannot be stored. Use plain name=value pairs.",
   "source:too_long": "The old address is too long.",
@@ -124,8 +126,8 @@ const RULES: Readonly<Record<string, string>> = {
   "csv:header":
     "The first line must name the columns: source, target and optionally status, active, note.",
   "csv:quote": "A quoted value is not closed.",
-  "csv:too_large": "The file is too large (at most 12 KB, about 200 redirects).",
-  "csv:too_many_rows": "At most 200 redirects per file.",
+  "csv:too_large": `The file is too large (at most ${SEO_REDIRECT_CSV_MAX_BYTES / 1024} KB).`,
+  "csv:too_many_rows": `At most ${SEO_REDIRECT_CSV_MAX_ROWS} redirects per file.`,
   "csv:columns": "A line has more values than the header.",
   "site:no_redirects": "This site does not use redirects.",
 };
