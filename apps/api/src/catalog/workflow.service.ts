@@ -51,6 +51,12 @@ import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
 import { listingSeo } from "./listing-seo.js";
 import { lockMaster, type ScopedTx } from "./master.js";
+import {
+  applyAddressChange,
+  keepsOldAddress,
+  lockSitePaths,
+  redirectsTo,
+} from "../seo/redirects.js";
 import { requireMasterRead, toRule, uuidOr404, valueData } from "./specs.service.js";
 
 const MASTER = "product_master:edit";
@@ -67,6 +73,12 @@ const PLATFORM = { scope: "platform" } as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Db = SiteScopedClient | ScopedTx;
+
+/** DP-210: a product's address on a public site is `/products/<snapshot slug>`. */
+const PRODUCTS_PATH = "/products/";
+const snapshotSlug = (snapshot: unknown): string | null =>
+  PublishedSnapshotSchema.shape.slug.safeParse((snapshot as { slug?: unknown } | null)?.slug)
+    .data ?? null;
 type ReviewBlock = "no_permission" | "not_in_review" | "own_change" | "archived";
 
 interface UserRef {
@@ -229,6 +241,13 @@ export class WorkflowService {
       loadProposals(db, id, readable),
     ]);
     const { validation, images } = content.of(id);
+    // DP-210: older addresses of the product per site (BV only; one small read per site).
+    const redirects = new Map<string, string[]>();
+    for (const s of a.sites) {
+      if (readable.includes(s.id) && keepsOldAddress(a.sites, s.id)) {
+        redirects.set(s.id, await redirectsTo(db, s.id, "PRODUCT", id));
+      }
+    }
     const approvesPlatform = a.allows(APPROVE, PLATFORM);
     const block = reviewBlock(a, product);
     const sites: SitePublication[] = a.sites
@@ -262,6 +281,7 @@ export class WorkflowService {
                 unpublishedAt: iso(p.unpublishedAt),
                 unpublishedBy: p.unpublishedBy ? actor(p.unpublishedBy) : null,
                 approvalMode: p.approvalMode,
+                slug: snapshotSlug(p.snapshot),
                 version: p.version,
               }
             : null,
@@ -274,6 +294,15 @@ export class WorkflowService {
           // DP-204: the reviewer or the site's publisher (BV only: only web-bv has the preview).
           canPreview: s.key === "BV" && (a.allows(PREVIEW, site) || canPublish),
           proposal,
+          addresses: {
+            live:
+              p?.status === "PUBLISHED" && snapshotSlug(p.snapshot) !== null
+                ? `${PRODUCTS_PATH}${snapshotSlug(p.snapshot)}`
+                : null,
+            next: `${PRODUCTS_PATH}${product.slug}`,
+            keepsOldAddress: keepsOldAddress(a.sites, s.id),
+            redirectsHere: redirects.get(s.id) ?? [],
+          },
           readiness: checkPublication({
             product,
             listing: l ? { visibility: l.visibility, text: l.texts[0] ?? null } : null,
@@ -608,6 +637,8 @@ export class WorkflowService {
         // publication of this product waits and then sees this one's result: the snapshot is
         // exactly the version checked here, and a repeated request finds the live publication.
         if (!(await lockMaster(tx, id))) throw new ApiError("NOT_FOUND");
+        // DP-210: then the site's addresses (always after the master, never before: no cycle).
+        await lockSitePaths(tx, siteId);
         const product = await tx.product.findUnique({ where: { id } });
         if (!product) throw new ApiError("NOT_FOUND");
         let listing = await tx.productSiteListing.findUnique({
@@ -656,8 +687,26 @@ export class WorkflowService {
             productVersion: true,
             listingVersion: true,
             approvalMode: true,
+            snapshot: true,
           },
         });
+        // DP-210: one product per address. Another product published here under this slug (its
+        // master moved on, its snapshot did not) keeps the address until it is republished or
+        // taken off.
+        const taken = await tx.productPublication.findFirst({
+          where: {
+            siteId,
+            status: "PUBLISHED",
+            productId: { not: id },
+            snapshot: { path: ["slug"], equals: product.slug },
+          },
+          select: { id: true },
+        });
+        if (taken) {
+          throw new ApiError("CONFLICT_STATE", [{ path: "slug", rule: "live_elsewhere" }]);
+        }
+        const previousSlug =
+          existing?.status === "PUBLISHED" ? snapshotSlug(existing.snapshot) : null;
         // DP-198: what is live already is not published twice (a repeated or concurrent request).
         if (
           existing?.status === "PUBLISHED" &&
@@ -781,9 +830,21 @@ export class WorkflowService {
           productVersion: version,
           listingVersion,
           republished: existing !== null,
+          ...(previousSlug !== null && previousSlug !== product.slug ? { slugChanged: true } : {}),
           images: fields.imageIds.length,
           warnings: readiness.warnings.length,
         };
+        // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
+        if (keepsOldAddress(a.sites, siteId)) {
+          await applyAddressChange(tx, a, {
+            siteId,
+            contentType: "PRODUCT",
+            contentId: id,
+            from: previousSlug === null ? null : `${PRODUCTS_PATH}${previousSlug}`,
+            to: `${PRODUCTS_PATH}${product.slug}`,
+            permission: PUBLISH,
+          });
+        }
         await a.audit(tx, {
           action: direct ? "catalog.product_published_direct" : "catalog.product_published",
           resourceType: "product_publication",

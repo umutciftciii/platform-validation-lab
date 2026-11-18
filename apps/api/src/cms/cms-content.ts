@@ -46,7 +46,7 @@ export async function attachPublications(db: CmsDb, rows: PageBase[]): Promise<P
   const revisions = pubs.length
     ? await db.cmsPageRevision.findMany({
         where: { id: { in: pubs.map((p) => p.revisionId) } },
-        select: { id: true, revisionNumber: true, pageVersion: true },
+        select: { id: true, revisionNumber: true, pageVersion: true, path: true },
       })
     : [];
   return rows.map((row) => {
@@ -63,7 +63,11 @@ export async function attachPublications(db: CmsDb, rows: PageBase[]): Promise<P
               version: p.version,
               publishedBy: p.publishedBy,
               unpublishedBy: p.unpublishedBy,
-              revision: { revisionNumber: r.revisionNumber, pageVersion: r.pageVersion },
+              revision: {
+                revisionNumber: r.revisionNumber,
+                pageVersion: r.pageVersion,
+                path: r.path,
+              },
             }
           : null,
     };
@@ -232,7 +236,7 @@ export interface PublicationRow {
   version: number;
   publishedBy: UserRow;
   unpublishedBy: UserRow | null;
-  revision: { revisionNumber: number; pageVersion: number };
+  revision: { revisionNumber: number; pageVersion: number; path: string | null };
 }
 /** A page row as selected with PAGE_SELECT, before its publication is attached. */
 export type PageBase = Omit<PageRow, "publication">;
@@ -283,6 +287,7 @@ function toPublication(p: PublicationRow | null): CmsPublication | null {
     status: p.status,
     revisionNumber: p.revision.revisionNumber,
     pageVersion: p.revision.pageVersion,
+    path: p.revision.path,
     publishedAt: p.publishedAt.toISOString(),
     publishedBy: userRef(p.publishedBy),
     unpublishedAt: p.unpublishedAt?.toISOString() ?? null,
@@ -308,11 +313,19 @@ export function toSummary(row: PageRow): CmsPageSummary {
   };
 }
 
-export function toPage(row: PageRow): CmsPage {
+/** DP-210: the page's older addresses (active redirects to it) and the site's redirect rule. */
+export interface PageAddresses {
+  redirectsHere: string[];
+  keepsOldAddress: boolean;
+}
+
+export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
   return {
     ...toSummary(row),
     slug: row.kind === "TEMPLATE" && row.path ? cmsSlugOfPath(row.path) : null,
     seo: seoValue(row),
+    redirectsHere: addresses.redirectsHere,
+    keepsOldAddress: addresses.keepsOldAddress,
     content: asObject(row.content),
     createdAt: row.createdAt.toISOString(),
     createdBy: userRef(row.createdBy),

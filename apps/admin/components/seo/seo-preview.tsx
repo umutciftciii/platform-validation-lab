@@ -21,7 +21,7 @@ export function SeoPreview({
   noindex: boolean;
   className?: string;
 }) {
-  const { host, crumbs } = displayUrl(view.canonical.url, view.canonical.path);
+  const { host, origin, crumbs } = displayUrl(view.canonical.url, view.canonical.path);
   return (
     <div className={cx("space-y-4", className)}>
       <section aria-label="Search result preview" className="space-y-2">
@@ -34,7 +34,7 @@ export function SeoPreview({
             <span className="min-w-0 leading-tight">
               <span className="block truncate text-[13px] text-[#202124]">{siteName}</span>
               <span className="block truncate text-[12px] text-[#4d5156]">
-                {crumbs ? `https://${host} › ${crumbs}` : `https://${host}`}
+                {crumbs ? `${origin} › ${crumbs}` : origin}
               </span>
             </span>
           </div>

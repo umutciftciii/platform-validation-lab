@@ -94,7 +94,20 @@ describe("DP-209 SEO preview values", () => {
   it("builds the preview URL pieces and image sources", () => {
     expect(displayUrl("https://dreampetroleumbv.com/products/x", "/products/x")).toEqual({
       host: "dreampetroleumbv.com",
+      origin: "https://dreampetroleumbv.com",
       crumbs: "products › x",
+    });
+    // DP-210: the local origin keeps its scheme and port (DP-209 printed https://localhost:3110).
+    expect(displayUrl("http://localhost:3110/about-us", "/about-us")).toEqual({
+      host: "localhost:3110",
+      origin: "http://localhost:3110",
+      crumbs: "about-us",
+    });
+    // No public address configured: the production host as an example.
+    expect(displayUrl(null, "/")).toEqual({
+      host: "dreampetroleumbv.com",
+      origin: "https://dreampetroleumbv.com",
+      crumbs: "",
     });
     expect(previewImageSrc("/media/a.webp", "http://localhost:3110")).toBe(
       "http://localhost:3110/media/a.webp",

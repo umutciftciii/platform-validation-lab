@@ -13,11 +13,16 @@
  *  - Fail open: when the API cannot answer, the page renders as before (its own handling).
  *  - An article taken off the site keeps its "no longer available" page (noindex); a page taken
  *    off is a 404 like any unknown address.
+ *  - DP-210: an old address of a page, article or product that moved answers 301 (one hop) with
+ *    the new address on the site's public origin; the request's query string is kept. Live content always wins (the API
+ *    switches a redirect off when content goes live at its source again).
  */
 import { NextResponse, type NextRequest } from "next/server";
 
+import { seoRedirectLocation } from "@dream/contracts";
+
 import { sitePrivacy } from "@/lib/privacy";
-import { resolvePath } from "@/lib/seo";
+import { resolvePath, sitePolicy } from "@/lib/seo";
 
 const SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** First segments the app serves itself; never a CMS page (the CMS refuses these slugs). */
@@ -61,6 +66,12 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   }
 
   const res = await resolvePath(request.nextUrl.pathname);
+  if (res.status === "redirect") {
+    // The public origin (as in canonical URLs) when configured, otherwise the request's own.
+    const base = sitePolicy().origin ?? request.url;
+    const location = new URL(seoRedirectLocation(res.target, request.nextUrl.search), base);
+    return NextResponse.redirect(location, res.statusCode);
+  }
   if (res.status === "not_found") return notFound(request);
   // Only an article has a "no longer available" page; a page or product taken off is a 404.
   if (res.status === "unpublished" && parts[0] !== "news") return notFound(request);

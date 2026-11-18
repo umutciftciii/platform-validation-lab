@@ -17,6 +17,13 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "version:stale": "Someone else changed this record. Reload the page to see their version.",
   "code:unique": "Another product already uses this code.",
   "slug:unique": "This slug is already in use.",
+  // DP-210: a product's address on a site.
+  "slug:live_elsewhere":
+    "Another product is still published on this site at this address. Republish or unpublish that product first.",
+  "slug:old_address":
+    "This address used to belong to another product on this site and now redirects (301) to it. Choose another slug.",
+  "slug:redirect_loop":
+    "This address change would make old addresses redirect in a circle. Choose another slug.",
   "listing:unique": "This product is already listed on the site. Reload the page.",
   "parentId:too_deep": "Categories can be at most three levels deep.",
   "parentId:cycle": "A category cannot be moved below itself.",

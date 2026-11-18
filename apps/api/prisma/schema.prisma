@@ -151,6 +151,9 @@ model User {
   cmsRevisionsCreated         CmsPageRevision[]
   cmsPublicationsPublished    CmsPagePublication[]         @relation("CmsPublicationPublishedBy")
   cmsPublicationsUnpublished  CmsPagePublication[]         @relation("CmsPublicationUnpublishedBy")
+  // DP-210: redirects this user created or last changed.
+  redirectsCreated            SiteRedirect[]               @relation("SiteRedirectCreatedBy")
+  redirectsUpdated            SiteRedirect[]               @relation("SiteRedirectUpdatedBy")
   // DP-171 (ADR-022): content proposals this user started, decided and their review history.
   contentProposalsCreated     ProductContentProposal[]      @relation("ProductContentProposalCreatedBy")
   contentProposalsDecided     ProductContentProposal[]      @relation("ProductContentProposalDecidedBy")
@@ -204,6 +207,9 @@ model Site {
   // DP-171 (ADR-022): proposed listing content of this site and its review history.
   productContentProposals      ProductContentProposal[]
   productContentProposalEvents ProductContentProposalEvent[]
+  // DP-210 (ADR-024 D7/D8): the site's redirects and the lock that serialises address changes.
+  redirects                    SiteRedirect[]
+  pathLock                     SitePathLock?
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1728,4 +1734,72 @@ model CmsPagePublication {
   /// One-to-one with the page (pageId is unique on its own; the pair carries the site).
   @@unique([pageId, siteId])
   @@index([siteId, status])
+}
+
+// ===========================================================================================
+// DP-210 (ADR-024 D7/D8): redirects of a public site. One table for every origin: SLUG_CHANGE
+// rows are written by the API when a published page, article or product moves to a new address
+// (same transaction as the publication); MANUAL and IMPORT rows arrive with DP-211/DP-212. The
+// site's proxy asks for them through GET /api/v1/public/seo/resolve before rendering. Rules Prisma
+// cannot express (path formats, no chain, no loop, slug-change provenance) are in migration
+// 20261208090000_dp_210_slug_redirects and tested in test/integration/seo-redirects.int.test.ts.
+// ===========================================================================================
+
+enum SiteRedirectOrigin {
+  MANUAL
+  SLUG_CHANGE
+  IMPORT
+}
+
+/// The content a SLUG_CHANGE redirect was made for (no foreign key: two tables).
+enum SiteRedirectContent {
+  CMS_PAGE
+  PRODUCT
+}
+
+/// One redirect of a site: an old address answers 301 (or 302) with the target. Never chained:
+/// the target of an active redirect is never the source of another active one (trigger).
+model SiteRedirect {
+  id          String               @id @default(uuid(7)) @db.Uuid
+  siteId      String               @db.Uuid
+  /// A path of the site ("/old-page", "/news/old", "/products/old"; legacy paths with DP-212).
+  sourcePath  String               @db.VarChar(300)
+  /// DP-211: an optional query string the source must carry ("" = any query).
+  sourceQuery String               @default("") @db.VarChar(300)
+  /// A path of the same site or an https URL (DP-211).
+  target      String               @db.VarChar(500)
+  /// 301 (permanent) or 302 (temporary, DP-211 only).
+  statusCode  Int                  @default(301)
+  /// An inactive redirect is kept for history (and DP-211) but never applied.
+  active      Boolean              @default(true)
+  origin      SiteRedirectOrigin
+  /// SLUG_CHANGE: the page or product that moved.
+  contentType SiteRedirectContent?
+  contentId   String?              @db.Uuid
+  note        String?              @db.VarChar(500)
+  /// Optimistic concurrency for DP-211 edits.
+  version     Int                  @default(1)
+  createdById String               @db.Uuid
+  updatedById String               @db.Uuid
+  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime             @updatedAt @db.Timestamptz(3)
+
+  site      Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  createdBy User @relation("SiteRedirectCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User @relation("SiteRedirectUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([siteId, sourcePath, sourceQuery])
+  @@index([siteId, target])
+  @@index([siteId, contentType, contentId])
+}
+
+/// DP-210: one row per site. Every change of a site's live addresses (publishing a page, article
+/// or product) locks it first, so two publications can never take the same address or build a
+/// redirect chain at the same time.
+model SitePathLock {
+  siteId    String   @id @db.Uuid
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
 }

@@ -138,7 +138,15 @@ export function ProductMasterForm({
             className={cx(FIELD, "font-mono uppercase")}
           />
         </Field>
-        <Field label="URL slug" htmlFor="slug" hint="Lower case and hyphens. Unique.">
+        <Field
+          label="URL slug"
+          htmlFor="slug"
+          hint={
+            product
+              ? "Lower case and hyphens. Unique. A new slug reaches a site when the product is published there again; the BV site then redirects the old address (301)."
+              : "Lower case and hyphens. Unique."
+          }
+        >
           <input
             id="slug"
             name="slug"
