@@ -25,9 +25,21 @@ import {
   errorBody,
   type ErrorCode,
   ERROR_STATUS,
+  SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
+  SEO_REDIRECT_IMPORT_PATH,
 } from "@dream/contracts";
 
 export const MAX_BODY_BYTES = 16 * 1024;
+
+/**
+ * DP-212: the body limit of a POST: 16 KB, except the redirect CSV import (320 KB, the same
+ * limit the API applies to that one route).
+ */
+export function bodyLimit(pathname: string): number {
+  return SEO_REDIRECT_IMPORT_PATH.test(pathname)
+    ? SEO_REDIRECT_IMPORT_MAX_BODY_BYTES
+    : MAX_BODY_BYTES;
+}
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 export const ALLOWED_COOKIES: readonly string[] = [ADMIN_SESSION_COOKIE, ADMIN_CHALLENGE_COOKIE];
 const FORWARDED_HEADERS = [
@@ -113,9 +125,9 @@ export function allowedSetCookies(values: readonly string[]): string[] {
   return values.filter((v) => ALLOWED_COOKIES.includes(v.slice(0, v.indexOf("=")).trim()));
 }
 
-async function readBody(request: Request): Promise<Uint8Array | "too_large"> {
+async function readBody(request: Request, maxBytes: number): Promise<Uint8Array | "too_large"> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return "too_large";
+  if (Number.isFinite(declared) && declared > maxBytes) return "too_large";
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -124,7 +136,7 @@ async function readBody(request: Request): Promise<Uint8Array | "too_large"> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       await reader.cancel();
       return "too_large";
     }
@@ -160,7 +172,7 @@ export async function proxyRequest(
   if (method === "POST") {
     const type = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
     if (type !== "application/json") return errorResponse("UNSUPPORTED_MEDIA_TYPE", requestId);
-    const read = await readBody(request);
+    const read = await readBody(request, bodyLimit(url.pathname));
     if (read === "too_large") return errorResponse("PAYLOAD_TOO_LARGE", requestId);
     body = read;
   } else if (
