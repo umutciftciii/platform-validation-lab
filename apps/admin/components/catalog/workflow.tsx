@@ -27,6 +27,7 @@ import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, SITE_SHORT, SiteStatusPill, TEXTAREA } from "./parts";
 import { PreviewLinkButton } from "./preview-link-button";
+import { AddressSummary } from "../seo/address-summary";
 import { useNotice } from "./notices";
 import { TabLink, useUnsavedChanges } from "./product-tabs";
 
@@ -603,6 +604,21 @@ function SiteCard({
             it is republished.
           </span>
         </p>
+      ) : null}
+
+      {/* DP-210: the live address, the one the next publication uses, and the redirect rule (sites
+          that list the product). */}
+      {site.listing ? (
+        <AddressSummary
+          live={site.addresses.live}
+          next={site.addresses.next}
+          nextLabel={
+            site.addresses.live ? "Address after republishing" : "Address after publishing"
+          }
+          keepsOldAddress={site.addresses.keepsOldAddress}
+          redirectsHere={site.addresses.redirectsHere}
+          className="text-xs"
+        />
       ) : null}
 
       {notListed ? (

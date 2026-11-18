@@ -2084,3 +2084,520 @@ describe("16. admin-managed SEO (DP-209)", () => {
     expect(audit).toMatchObject({ resourceType: "seo_overview", outcome: "DENIED" });
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// DP-210: slug changes keep the old address (automatic 301, no chain, no loop), redirect table
+// rules, draft/publish separation, address reuse, concurrent publications, 404 regression
+// ---------------------------------------------------------------------------------------------
+
+describe("17. slug changes and automatic 301 (DP-210)", () => {
+  let comPublisher: Staff;
+  async function seo(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.44" },
+      }),
+    );
+  }
+  const resolve = (p: string, key?: string) => seo(`/resolve?path=${encodeURIComponent(p)}`, key);
+  const sitemap = async () =>
+    PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries.map((e) => e.path);
+  async function expectLive(p: string) {
+    const res = await resolve(p);
+    expect(res.status, `${p} ${JSON.stringify(res.body)}`).toBe(200);
+    expect(PublicSeoResolveResponseSchema.parse(res.body)).toMatchObject({ path: p });
+    expect(res.body.redirect, p).toBeUndefined();
+  }
+  async function expectRedirect(p: string, target: string) {
+    const res = await resolve(p);
+    expect(res.status, `${p} ${JSON.stringify(res.body)}`).toBe(200);
+    expect(PublicSeoResolveResponseSchema.parse(res.body)).toEqual({
+      path: p,
+      redirect: { target, statusCode: 301 },
+    });
+  }
+  const pageOf = async (id: string) => CmsPageResponseSchema.parse((await page(id)).body).page;
+  async function create(slug: string, as: Staff = bvEditor, site = BV, article = false) {
+    const res = await as.post(`/sites/${site}/pages`, {
+      title: `DP-210 ${slug}`,
+      slug,
+      ...(article ? { template: "article" } : {}),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return CmsPageResponseSchema.parse(res.body).page.id;
+  }
+  async function setSlug(id: string, slug: string, as: Staff = bvEditor): Promise<Res> {
+    const p = CmsPageResponseSchema.parse((await as.get(`/pages/${id}`)).body).page;
+    const article = p.templateKey === "article";
+    return as.post(`/pages/${id}/draft`, {
+      version: p.version,
+      title: p.title,
+      slug,
+      seo: SEO,
+      content: article
+        ? {
+            excerpt: "Summary.",
+            coverImage: null,
+            coverAlt: null,
+            sections: [{ id: "sec-text-0001", type: "text", title: null, body: "Body." }],
+          }
+        : { sections: [HERO] },
+    });
+  }
+  async function publish(id: string, as: Staff = bvPublisher): Promise<Res> {
+    const p = CmsPageResponseSchema.parse((await as.get(`/pages/${id}`)).body).page;
+    return as.post(`/pages/${id}/publish`, { version: p.version });
+  }
+  async function moveAndPublish(id: string, slug: string) {
+    const saved = await setSlug(id, slug);
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const res = await publish(id);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return CmsPageResponseSchema.parse(res.body).page;
+  }
+  /** No active redirect starts at a live address or ends at another redirect's source. */
+  async function expectConsistent(siteId: string = BV) {
+    const active = await owner.siteRedirect.findMany({ where: { siteId, active: true } });
+    const sources = new Set(active.map((r) => r.sourcePath));
+    for (const r of active) {
+      expect(sources.has(r.target.split("?")[0]!), `chain at ${r.sourcePath}`).toBe(false);
+      expect(r.target, `self at ${r.sourcePath}`).not.toBe(r.sourcePath);
+    }
+    for (const r of active) {
+      const res = await resolve(r.sourcePath, siteId === BV ? TEST_KEYS.webBv : undefined);
+      expect(res.body?.redirect, `live content at ${r.sourcePath}`).toBeDefined();
+    }
+  }
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com-cms-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  it("schema: path formats, statuses, provenance; no chain and no loop for any writer", async () => {
+    const base = {
+      siteId: BV,
+      origin: "MANUAL" as const,
+      createdById: root.userId,
+      updatedById: root.userId,
+    };
+    const ins = (data: Record<string, unknown>) =>
+      owner.siteRedirect.create({ data: { ...base, ...data } as never });
+    for (const sourcePath of ["/", "x", "//x", "/api/x", "/_next/static/a", "/a b", "/a?b"]) {
+      await rejectsDb(ins({ sourcePath, target: "/ok" }), /SiteRedirect_source_path/);
+    }
+    for (const target of [
+      "http://evil.example/",
+      "//evil.example",
+      "javascript:alert(1)",
+      "/api",
+    ]) {
+      await rejectsDb(ins({ sourcePath: "/probe-src", target }), /SiteRedirect_target/);
+    }
+    await rejectsDb(
+      ins({ sourcePath: "/probe-self", target: "/probe-self" }),
+      /SiteRedirect_not_self/,
+    );
+    await rejectsDb(
+      ins({ sourcePath: "/probe-s", target: "/x", statusCode: 307 }),
+      /SiteRedirect_status_code/,
+    );
+    await rejectsDb(
+      ins({ sourcePath: "/probe-s", target: "/x", origin: "SLUG_CHANGE" }),
+      /SiteRedirect_slug_change/,
+    );
+    await rejectsDb(
+      ins({
+        sourcePath: "/probe-s",
+        target: "/x",
+        contentType: "CMS_PAGE",
+        contentId: root.userId,
+      }),
+      /SiteRedirect_slug_change/,
+    );
+    // Legacy-style sources (DP-212) and https targets (DP-211) fit the same columns.
+    const legacy = await ins({
+      sourcePath: "/en/Products/Old.html",
+      target: "https://example.com/a",
+    });
+    const withQuery = await ins({ sourcePath: "/probe-q", target: "/products?category=base-oil" });
+    // A -> B exists: B -> C (chain forward) and X -> A (chain backward) are refused; B -> A
+    // (a loop) is a chain too.
+    const a = await ins({ sourcePath: "/probe-a", target: "/probe-b" });
+    await rejectsDb(ins({ sourcePath: "/probe-b", target: "/probe-c" }), /cannot be the target/);
+    await rejectsDb(ins({ sourcePath: "/probe-x", target: "/probe-a" }), /cannot be the source/);
+    await rejectsDb(ins({ sourcePath: "/probe-b", target: "/probe-a" }), /redirect/);
+    // An inactive redirect takes no part; switching it on is checked again.
+    const off = await ins({ sourcePath: "/probe-b", target: "/probe-a", active: false });
+    await rejectsDb(
+      owner.siteRedirect.update({ where: { id: off.id }, data: { active: true } }),
+      /redirect/,
+    );
+    // The same source once per site and query; the other site is separate.
+    await rejectsDb(
+      ins({ sourcePath: "/probe-a", target: "/elsewhere" }),
+      /Unique constraint|unique/i,
+    );
+    const other = await ins({ siteId: COM, sourcePath: "/probe-a", target: "/elsewhere" });
+    await owner.siteRedirect.deleteMany({
+      where: { id: { in: [legacy.id, withQuery.id, a.id, off.id, other.id] } },
+    });
+    // At most one lock row per site (rows of sites made after the migration are created on first
+    // use: this database got its sites after migrating); dp_app never deletes one.
+    expect(await owner.sitePathLock.count()).toBeLessThanOrEqual(await owner.site.count());
+    expect(await owner.sitePathLock.count({ where: { siteId: BV } })).toBe(1);
+    await rejectsDb(asApp.sitePathLock.deleteMany({ where: { siteId: BV } }), /permission denied/);
+  });
+
+  it("a draft slug never changes the live address; publishing moves it with a 301", async () => {
+    const id = await create("dp210-a");
+    expect((await publish(id)).status).toBe(200);
+    await expectLive("/dp210-a");
+    expect(await pageOf(id)).toMatchObject({
+      path: "/dp210-a",
+      keepsOldAddress: true,
+      redirectsHere: [],
+      publication: { status: "PUBLISHED", path: "/dp210-a" },
+    });
+    // Draft: the site still shows /dp210-a; /dp210-b does not exist yet.
+    expect((await setSlug(id, "dp210-b")).status).toBe(200);
+    expect(await pageOf(id)).toMatchObject({
+      path: "/dp210-b",
+      publication: { path: "/dp210-a" },
+    });
+    await expectLive("/dp210-a");
+    expectError(await resolve("/dp210-b"), 404, "NOT_FOUND");
+    expect(await sitemap()).toContain("/dp210-a");
+    expect(await owner.siteRedirect.count({ where: { contentId: id } })).toBe(0);
+    // Publish: new address live, old one 301 to it, sitemap has only the new one.
+    const live = CmsPageResponseSchema.parse((await publish(id)).body).page;
+    expect(live).toMatchObject({
+      path: "/dp210-b",
+      publication: { path: "/dp210-b" },
+      redirectsHere: ["/dp210-a"],
+    });
+    await expectLive("/dp210-b");
+    await expectRedirect("/dp210-a", "/dp210-b");
+    const paths = await sitemap();
+    expect(paths).toContain("/dp210-b");
+    expect(paths).not.toContain("/dp210-a");
+    // The row and the audit trail (paths only; who; the publication's permission).
+    const row = await owner.siteRedirect.findFirstOrThrow({ where: { contentId: id } });
+    expect(row).toMatchObject({
+      siteId: BV,
+      sourcePath: "/dp210-a",
+      sourceQuery: "",
+      target: "/dp210-b",
+      statusCode: 301,
+      active: true,
+      origin: "SLUG_CHANGE",
+      contentType: "CMS_PAGE",
+      createdById: bvPublisher.userId,
+    });
+    const audit = await lastAudit("seo.redirect_created");
+    expect(audit).toMatchObject({
+      actorUserId: bvPublisher.userId,
+      resourceType: "site_redirect",
+      resourceId: row.id,
+      siteId: BV,
+    });
+    expect(audit?.metadata).toEqual({
+      permission: "content:publish",
+      contentType: "CMS_PAGE",
+      contentId: id,
+      sourcePath: "/dp210-a",
+      target: "/dp210-b",
+      origin: "SLUG_CHANGE",
+      statusCode: 301,
+    });
+    expect((await lastAudit("cms.page_published"))?.metadata).toMatchObject({
+      path: "/dp210-b",
+      previousPath: "/dp210-a",
+    });
+    await expectConsistent();
+  });
+
+  it("collapses chains: A -> B, then B -> C makes A -> C and B -> C", async () => {
+    const id = (await owner.siteRedirect.findFirstOrThrow({ where: { sourcePath: "/dp210-a" } }))
+      .contentId!;
+    await moveAndPublish(id, "dp210-c");
+    await expectLive("/dp210-c");
+    await expectRedirect("/dp210-a", "/dp210-c");
+    await expectRedirect("/dp210-b", "/dp210-c");
+    expect((await pageOf(id)).redirectsHere).toEqual(["/dp210-a", "/dp210-b"]);
+    expect((await lastAudit("seo.redirect_retargeted"))?.metadata).toMatchObject({
+      sourcePath: "/dp210-a",
+      previousTarget: "/dp210-b",
+      target: "/dp210-c",
+    });
+    await expectConsistent();
+  });
+
+  it("moving back to an old address never loops: that redirect is switched off", async () => {
+    const id = (await owner.siteRedirect.findFirstOrThrow({ where: { sourcePath: "/dp210-a" } }))
+      .contentId!;
+    await moveAndPublish(id, "dp210-a");
+    await expectLive("/dp210-a");
+    await expectRedirect("/dp210-b", "/dp210-a");
+    await expectRedirect("/dp210-c", "/dp210-a");
+    const a = await owner.siteRedirect.findFirstOrThrow({ where: { sourcePath: "/dp210-a" } });
+    expect(a.active).toBe(false);
+    expect((await pageOf(id)).redirectsHere).toEqual(["/dp210-b", "/dp210-c"]);
+    expect((await lastAudit("seo.redirect_retired"))?.metadata).toMatchObject({
+      sourcePath: "/dp210-a",
+      reason: "address_live_again",
+    });
+    // And forward again: the switched-off row is reused (one row per source).
+    await moveAndPublish(id, "dp210-d");
+    await expectRedirect("/dp210-a", "/dp210-d");
+    expect(await owner.siteRedirect.count({ where: { sourcePath: "/dp210-a", siteId: BV } })).toBe(
+      1,
+    );
+    expect((await lastAudit("seo.redirect_updated"))?.metadata).toMatchObject({
+      sourcePath: "/dp210-a",
+      target: "/dp210-d",
+    });
+    await expectConsistent();
+  });
+
+  it("an old address stays with its content: other pages get 409, the 301 and A -> B -> C stay", async () => {
+    // The moved page lives at /dp210-d; /dp210-a, /dp210-b, /dp210-c answer 301 to it.
+    const before = await owner.siteRedirect.findMany({
+      where: { siteId: BV, active: true },
+      orderBy: { sourcePath: "asc" },
+    });
+    const moved = before.find((r) => r.sourcePath === "/dp210-b")!.contentId!;
+    // A new page cannot be created at an old address, nor move its draft there.
+    expectError(
+      await bvEditor.post(`/sites/${BV}/pages`, { title: "Reuse", slug: "dp210-b" }),
+      409,
+      "CONFLICT_STATE",
+      { path: "slug", rule: "old_address" },
+    );
+    const other = await create("dp210-other");
+    for (const slug of ["dp210-a", "dp210-b", "dp210-c"]) {
+      expectError(await setSlug(other, slug), 409, "CONFLICT_STATE", {
+        path: "slug",
+        rule: "old_address",
+      });
+    }
+    // Nothing changed: the same rows, targets, versions; still one hop to the page.
+    expect(
+      await owner.siteRedirect.findMany({
+        where: { siteId: BV, active: true },
+        orderBy: { sourcePath: "asc" },
+      }),
+    ).toEqual(before);
+    for (const p of ["/dp210-a", "/dp210-b", "/dp210-c"]) await expectRedirect(p, "/dp210-d");
+    expect((await pageOf(moved)).redirectsHere).toEqual(["/dp210-a", "/dp210-b", "/dp210-c"]);
+    expect((await publish(other)).status).toBe(200);
+    await expectLive("/dp210-other");
+    await expectConsistent();
+  });
+
+  it("the same content may return to its old address (and leave again) without a chain", async () => {
+    const id = await create("dp210-p1");
+    expect((await publish(id)).status).toBe(200);
+    await moveAndPublish(id, "dp210-p2");
+    await moveAndPublish(id, "dp210-p3");
+    await expectRedirect("/dp210-p1", "/dp210-p3");
+    await expectRedirect("/dp210-p2", "/dp210-p3");
+    // Return to p2: allowed for the same page; its redirect is switched off, the others follow.
+    await moveAndPublish(id, "dp210-p2");
+    await expectLive("/dp210-p2");
+    await expectRedirect("/dp210-p1", "/dp210-p2");
+    await expectRedirect("/dp210-p3", "/dp210-p2");
+    // Another page still cannot take p1 or p3 (old addresses of this page).
+    const q = await create("dp210-q");
+    for (const slug of ["dp210-p1", "dp210-p3"]) {
+      expectError(await setSlug(q, slug), 409, "CONFLICT_STATE", {
+        path: "slug",
+        rule: "old_address",
+      });
+    }
+    await expectConsistent();
+  });
+
+  it("validates slugs: malformed, reserved and taken (400/409), and addresses of another page", async () => {
+    const id = await create("dp210-v");
+    for (const slug of ["Bad Slug", "a/b", "-x", "x--y", "../x"]) {
+      expectError(await setSlug(id, slug), 400, "VALIDATION_FAILED");
+    }
+    for (const slug of ["products", "news", "privacy", "api", "preview", "sitemap", "en", "tr"]) {
+      expectError(await setSlug(id, slug), 400, "VALIDATION_FAILED", {
+        path: "slug",
+        rule: "custom",
+      });
+    }
+    expectError(await setSlug(id, "dp210-other"), 409, "CONFLICT_STATE", {
+      path: "slug",
+      rule: "unique",
+    });
+    // A page live at /dp210-w whose draft moved on keeps that address until it is published.
+    const w = await create("dp210-w");
+    expect((await publish(w)).status).toBe(200);
+    expect((await setSlug(w, "dp210-w2")).status).toBe(200);
+    expect((await setSlug(id, "dp210-w")).status).toBe(200);
+    expectError(await publish(id), 409, "CONFLICT_STATE", {
+      path: "slug",
+      rule: "live_elsewhere",
+    });
+    // Once w moved, /dp210-w is w's old address: id is refused again (409 old_address), and the
+    // 301 stays. A draft saved before the move is checked again when it is published.
+    expect((await publish(w)).status).toBe(200);
+    await expectRedirect("/dp210-w", "/dp210-w2");
+    expectError(await publish(id), 409, "CONFLICT_STATE", { path: "slug", rule: "old_address" });
+    await expectRedirect("/dp210-w", "/dp210-w2");
+    await moveAndPublish(id, "dp210-w3");
+    await expectLive("/dp210-w3");
+    await expectLive("/dp210-w2");
+    await expectConsistent();
+  });
+
+  it("a page that was never published changes its slug freely, without a redirect", async () => {
+    const id = await create("dp210-draft-1");
+    for (const slug of ["dp210-draft-2", "dp210-draft-3"]) {
+      expect((await setSlug(id, slug)).status).toBe(200);
+    }
+    expect(await owner.siteRedirect.count({ where: { contentId: id } })).toBe(0);
+    expect((await pageOf(id)).redirectsHere).toEqual([]);
+    // A page taken off the site and published again elsewhere was not live: no redirect.
+    expect((await publish(id)).status).toBe(200);
+    const p = await pageOf(id);
+    expect(
+      (
+        await bvPublisher.post(`/pages/${id}/unpublish`, {
+          publicationVersion: p.publication!.version,
+        })
+      ).status,
+    ).toBe(200);
+    await moveAndPublish(id, "dp210-draft-4");
+    expect(await owner.siteRedirect.count({ where: { contentId: id } })).toBe(0);
+    expectError(await resolve("/dp210-draft-3"), 404, "NOT_FOUND");
+  });
+
+  it("articles keep their old /news/ address the same way", async () => {
+    const id = await create("dp210-article", bvEditor, BV, true);
+    expect((await setSlug(id, "dp210-article")).status).toBe(200);
+    expect((await publish(id)).status).toBe(200);
+    await expectLive("/news/dp210-article");
+    await moveAndPublish(id, "dp210-article-renamed");
+    await expectLive("/news/dp210-article-renamed");
+    await expectRedirect("/news/dp210-article", "/news/dp210-article-renamed");
+    const paths = await sitemap();
+    expect(paths).toContain("/news/dp210-article-renamed");
+    expect(paths).not.toContain("/news/dp210-article");
+    // Taken off the site: the new address answers `unpublished`, the old one still one hop away.
+    const p = await pageOf(id);
+    await bvPublisher.post(`/pages/${id}/unpublish`, {
+      publicationVersion: p.publication!.version,
+    });
+    expectError(await resolve("/news/dp210-article-renamed"), 404, "NOT_FOUND", {
+      path: "path",
+      rule: "unpublished",
+    });
+    await expectRedirect("/news/dp210-article", "/news/dp210-article-renamed");
+  });
+
+  it("concurrent publications: the same page twice is stale once; two pages never share an address", async () => {
+    const id = await create("dp210-race");
+    const p = await pageOf(id);
+    const twice = await Promise.all([
+      bvPublisher.post(`/pages/${id}/publish`, { version: p.version }),
+      bvPublisher.post(`/pages/${id}/publish`, { version: p.version }),
+    ]);
+    // Serialised by the site lock: each one is a whole publication (200) or stale (409), never a
+    // half-written one; revisions stay numbered 1, 2, … and the publication shows the last.
+    for (const r of twice) {
+      expect([200, 409], JSON.stringify(r.body)).toContain(r.status);
+      if (r.status === 409) {
+        expect(r.body.error.details).toContainEqual({ path: "version", rule: "stale" });
+      }
+    }
+    const revs = await owner.cmsPageRevision.findMany({
+      where: { pageId: id },
+      orderBy: { revisionNumber: "asc" },
+    });
+    expect(revs.map((r) => r.revisionNumber)).toEqual(revs.map((_, i) => i + 1));
+    expect(revs.length).toBe(twice.filter((r) => r.status === 200).length);
+    const pubRow = await owner.cmsPagePublication.findUniqueOrThrow({ where: { pageId: id } });
+    expect(pubRow.revisionId).toBe(revs.at(-1)!.id);
+    // A publication of a draft version that was saved over is stale; the live address stays.
+    const seen = await pageOf(id);
+    expect((await setSlug(id, "dp210-race-2")).status).toBe(200);
+    expectError(
+      await bvPublisher.post(`/pages/${id}/publish`, { version: seen.version }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    await expectLive("/dp210-race");
+    expectError(await resolve("/dp210-race-2"), 404, "NOT_FOUND");
+    // k1 leaves /dp210-k while k2 takes it, at the same time: either order is consistent.
+    const k1 = await create("dp210-k");
+    expect((await publish(k1)).status).toBe(200);
+    expect((await setSlug(k1, "dp210-k-new")).status).toBe(200);
+    const k2 = await create("dp210-k");
+    const [r1, r2] = await Promise.all([publish(k1), publish(k2)]);
+    // In either order k2 never gets /dp210-k: while k1 is there it is live elsewhere, once k1
+    // moved it is k1's old address.
+    expect(r1.status, JSON.stringify(r1.body)).toBe(200);
+    expect(r2.status, JSON.stringify(r2.body)).toBe(409);
+    expect(["live_elsewhere", "old_address"]).toContain(r2.body.error.details[0].rule);
+    await expectLive("/dp210-k-new");
+    await expectRedirect("/dp210-k", "/dp210-k-new");
+    await expectConsistent();
+  });
+
+  it("the Corporate site moves its pages as before (no redirects there)", async () => {
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Com",
+      slug: "dp210-com",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = CmsPageResponseSchema.parse(created.body).page.id;
+    expect((await publish(id, comPublisher)).status).toBe(200);
+    expect((await setSlug(id, "dp210-com-2", comEditor)).status).toBe(200);
+    const res = await publish(id, comPublisher);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(CmsPageResponseSchema.parse(res.body).page).toMatchObject({
+      keepsOldAddress: false,
+      redirectsHere: [],
+    });
+    expect(await owner.siteRedirect.count({ where: { siteId: COM } })).toBe(0);
+    expectError(await resolve("/dp210-com", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    // A BV redirect is never answered for the Corporate key.
+    expectError(await resolve("/dp210-c", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+  });
+
+  it("404 regression: unknown, draft and malformed addresses stay 404; restore is a draft", async () => {
+    for (const p of [
+      "/dp210-nope",
+      "/dp210-draft-1",
+      "/news/dp210-nope",
+      "/A",
+      "/a/b",
+      "/dp210-a/",
+    ]) {
+      expectError(await resolve(p), 404, "NOT_FOUND");
+    }
+    // Restoring an older revision brings its slug back into the draft only.
+    const id = (await owner.siteRedirect.findFirstOrThrow({ where: { sourcePath: "/dp210-c" } }))
+      .contentId!;
+    const p = await pageOf(id);
+    const restored = await bvEditor.post(`/pages/${id}/restore`, {
+      version: p.version,
+      revisionNumber: 1,
+    });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    expect(CmsPageResponseSchema.parse(restored.body).page).toMatchObject({
+      path: "/dp210-a",
+      publication: { path: "/dp210-d" },
+    });
+    await expectLive("/dp210-d");
+    await expectRedirect("/dp210-a", "/dp210-d");
+  });
+});

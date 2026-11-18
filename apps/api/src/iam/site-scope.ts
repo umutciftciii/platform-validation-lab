@@ -74,6 +74,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // DP-171 (ADR-022): a site's content proposals and their review history.
   ProductContentProposal: { nullable: false },
   ProductContentProposalEvent: { nullable: false },
+  // DP-210 (ADR-024 D7/D8): a site's redirects and its address-change lock.
+  SiteRedirect: { nullable: false },
+  SitePathLock: { nullable: false },
 };
 
 export interface RelationDef {
@@ -123,6 +126,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     contentProposalsCreated: { model: "ProductContentProposal", list: true },
     contentProposalsDecided: { model: "ProductContentProposal", list: true },
     contentProposalEvents: { model: "ProductContentProposalEvent", list: true },
+    redirectsCreated: { model: "SiteRedirect", list: true },
+    redirectsUpdated: { model: "SiteRedirect", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -158,6 +163,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     cmsPagePublications: { model: "CmsPagePublication", list: true },
     productContentProposals: { model: "ProductContentProposal", list: true },
     productContentProposalEvents: { model: "ProductContentProposalEvent", list: true },
+    redirects: { model: "SiteRedirect", list: true },
+    pathLock: { model: "SitePathLock", list: false },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -393,6 +400,14 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     proposal: { model: "ProductContentProposal", list: false },
     site: { model: "Site", list: false },
     actor: { model: "User", list: false },
+  },
+  SiteRedirect: {
+    site: { model: "Site", list: false },
+    createdBy: { model: "User", list: false },
+    updatedBy: { model: "User", list: false },
+  },
+  SitePathLock: {
+    site: { model: "Site", list: false },
   },
 };
 

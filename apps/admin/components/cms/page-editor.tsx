@@ -27,6 +27,7 @@ import { PublicationPanel } from "./publication-panel";
 import { useNotice } from "../catalog/notices";
 import { SeoFields, seoValues, type SeoValues } from "../seo/seo-fields";
 import { SeoPreview } from "../seo/seo-preview";
+import { AddressSummary } from "../seo/address-summary";
 import { previewImageSrc, seoView, type SiteSeoDefaults } from "../../lib/seo-view";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, Spinner } from "../ui";
@@ -237,6 +238,15 @@ export function PageEditor({
               </Field>
             )}
           </div>
+          {!template && page.path ? (
+            <AddressSummary
+              className="mt-4 border-t border-line pt-4"
+              live={page.publication?.status === "PUBLISHED" ? page.publication.path : null}
+              next={`${article ? "/news/" : "/"}${slug.trim().toLowerCase() || page.slug || ""}`}
+              keepsOldAddress={page.keepsOldAddress}
+              redirectsHere={page.redirectsHere}
+            />
+          ) : null}
         </Panel>
 
         {article ? (

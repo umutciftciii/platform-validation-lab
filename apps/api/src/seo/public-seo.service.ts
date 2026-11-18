@@ -11,6 +11,9 @@
  *    page or product with noindex, or whose canonical names another address, is left out too
  *    (from its PUBLISHED state: a draft never changes the sitemap).
  *  - `settings()` (DP-209): the published site SEO defaults (`bv.site-seo`), or null.
+ *  - DP-210: `resolve(path)` answers an address without live content with its active redirect
+ *    (`{ path, redirect: { target, statusCode } }`), so the proxy can send a 301 before rendering.
+ *    Old addresses never appear in the sitemap (it lists live content only).
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -135,6 +138,23 @@ export class PublicSeoService {
     return Boolean(pub);
   }
 
+  /**
+   * DP-210: the active redirect of an address without live content (plain source: a redirect
+   * bound to a query string is DP-211's and needs the query). Live content always wins: the API
+   * switches a redirect off when content goes live at its source again.
+   */
+  private static async redirectOf(
+    site: PublicSite,
+    path: string,
+  ): Promise<PublicSeoResolveResponse | null> {
+    const r = await site.db.siteRedirect.findFirst({
+      where: { siteId: site.siteId, sourcePath: path, sourceQuery: "", active: true },
+      select: { target: true, statusCode: true },
+    });
+    if (!r) return null;
+    return { path, redirect: { target: r.target, statusCode: r.statusCode === 302 ? 302 : 301 } };
+  }
+
   async resolve(ctx: RequestContext, rawPath: unknown): Promise<PublicSeoResolveResponse> {
     const path = typeof rawPath === "string" ? rawPath : "";
     if (!SEO_RESOLVABLE_PATH.test(path)) throw new ApiError("NOT_FOUND");
@@ -145,10 +165,14 @@ export class PublicSeoService {
         path.slice(PRODUCTS_PREFIX.length),
       );
       if (hit?.path === path) return { path, kind: "product" };
+      const moved = await PublicSeoService.redirectOf(site, path);
+      if (moved) return moved;
       throw new ApiError("NOT_FOUND");
     }
     const hit = (await PublicSeoService.livePages(site)).find((p) => p.path === path);
     if (hit) return { path, kind: hit.kind };
+    const moved = await PublicSeoService.redirectOf(site, path);
+    if (moved) return moved;
     if (await PublicSeoService.wasUnpublished(site, path)) {
       throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
     }

@@ -4,6 +4,7 @@
  * 400 VALIDATION_FAILED. Values are never echoed.
  */
 import { ApiError } from "../iam/http/api-error.js";
+import { redirectDbError } from "../seo/redirects.js";
 
 function errorText(error: unknown): string {
   const parts: string[] = [];
@@ -28,6 +29,9 @@ export function staleVersion(): ApiError {
 export function mapCmsDbError(error: unknown): never {
   if (error instanceof ApiError) throw error;
   const text = errorText(error);
+  // DP-210: the redirect table's guards (chain, first use of a site's lock).
+  const redirect = redirectDbError(text);
+  if (redirect) throw redirect;
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "P2002" || /unique constraint/i.test(text)) {
     const registry = text.includes("CmsPage_registry_siteId_templateKey_key");

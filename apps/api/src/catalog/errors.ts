@@ -4,6 +4,7 @@
  * Values are never echoed (contracts errors.ts).
  */
 import { ApiError } from "../iam/http/api-error.js";
+import { redirectDbError } from "../seo/redirects.js";
 
 /** Unique index name -> request field. */
 const UNIQUE_FIELDS: ReadonlyArray<[string, string]> = [
@@ -53,6 +54,9 @@ function prismaCode(error: unknown): string | undefined {
 export function mapDbError(error: unknown): never {
   if (error instanceof ApiError) throw error;
   const text = errorText(error);
+  // DP-210: the redirect table's guards (chain, first use of a site's lock).
+  const redirect = redirectDbError(text);
+  if (redirect) throw redirect;
   if (prismaCode(error) === "P2002" || /unique constraint/i.test(text)) {
     const field =
       UNIQUE_FIELDS.find(([index]) => text.includes(index))?.[1] ??

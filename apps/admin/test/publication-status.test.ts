@@ -48,6 +48,7 @@ function site(over: Partial<SitePublication> = {}): SitePublication {
     canShowListing: true,
     canPreview: true,
     proposal: null,
+    addresses: { live: null, next: "/products/fx-g1", keepsOldAddress: true, redirectsHere: [] },
     readiness: {
       ok: true,
       blocking: [],
@@ -67,6 +68,7 @@ const publication = (status: "PUBLISHED" | "UNPUBLISHED") => ({
   unpublishedAt: status === "UNPUBLISHED" ? T : null,
   unpublishedBy: status === "UNPUBLISHED" ? actor : null,
   approvalMode: "DIRECT" as const,
+  slug: "fx-g1",
   version: 2,
 });
 
