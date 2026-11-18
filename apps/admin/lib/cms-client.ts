@@ -46,6 +46,12 @@ export function describePath(path: string): string {
   if (m)
     return `section ${Number(m[1]) + 1}${m[2] ? ` (${m[2].replace(/\.(\d+)\./g, (_, i: string) => ` ${Number(i) + 1} `)})` : ""}`;
   if (path.startsWith("seo.")) return `SEO ${path.slice(4)}`;
+  // DP-219: menu paths such as content.items.2.children.0.target.
+  const menu = /^content\.(items|columns|noScriptLinks|legal|social)\.(\d+)(.*)$/.exec(path);
+  if (menu) {
+    const rest = (menu[3] ?? "").replace(/\.(\d+)/g, (_, i: string) => ` ${Number(i) + 1}`);
+    return `${menu[1]} ${Number(menu[2]) + 1}${rest.replace(/\./g, " ")}`;
+  }
   if (path === "content.excerpt") return "summary";
   if (path.startsWith("content.cover")) return "cover image";
   return path;
@@ -55,6 +61,10 @@ export function messageForIssues(code: string | null, issues: FieldIssue[]): str
   for (const i of issues) {
     const text = RULE_MESSAGES[`${i.path}:${i.rule}`];
     if (text) return text;
+  }
+  // DP-219: a menu link names a page, product or category that is not of this site (any more).
+  if (issues.some((i) => i.rule === "unknown_reference")) {
+    return "A menu link points at a page, product or category that no longer exists on this site. Choose another target for the highlighted links.";
   }
   if (code === "VALIDATION_FAILED" && issues.length) {
     const fields = [...new Set(issues.map((i) => describePath(i.path)))].slice(0, 4).join(", ");
