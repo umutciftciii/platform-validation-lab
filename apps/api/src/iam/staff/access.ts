@@ -27,6 +27,7 @@ import {
   heldPermissions,
 } from "../authorization.js";
 import { PERMISSION_BY_KEY, ROLE_BY_KEY } from "../catalog.js";
+import type { Prisma } from "../../generated/prisma/client.js";
 import type { Db } from "../db.js";
 import { leadAssigneesBySite, staffNames, type LeadStaffUser } from "../lead-assignees.js";
 import { inStaffContext } from "../iam-context.js";
@@ -172,6 +173,14 @@ export class StaffAccess {
       { kind: "staff", sessionToken: this.sessionToken },
       fn,
     );
+  }
+
+  /**
+   * DP-211: reads in this admin session's database context, where row-level security decides
+   * (e.g. the STANDARD audit events of the sites the caller holds `audit:read` on).
+   */
+  staffData<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    return inStaffContext(this.prisma, this.sessionToken, fn);
   }
 
   /** DP-041: staff who may be assigned the leads of each site (lead:manage there). */
