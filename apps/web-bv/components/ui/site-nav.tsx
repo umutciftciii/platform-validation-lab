@@ -4,9 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
+  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
@@ -53,6 +55,13 @@ function NavLink({
   pendingNote: string;
 }) {
   const current = "current" in item && item.current ? "page" : undefined;
+  // DP-219: a link the CMS opens in a new tab says so to screen readers.
+  const newTab = item.newTab
+    ? ({ target: "_blank", rel: "noopener noreferrer" } as const)
+    : undefined;
+  const newTabNote = item.newTab ? (
+    <span className="sr-only"> {SITE_NAV_UI.newTab}</span>
+  ) : null;
 
   if (item.href === null) {
     const onKeyDown = (event: KeyboardEvent<HTMLAnchorElement>) => {
@@ -79,11 +88,19 @@ function NavLink({
     );
   }
 
-  // A same-page anchor is a plain link: it has no route for the router to resolve.
-  if (item.href.startsWith("#")) {
+  // A same-page anchor is a plain link: it has no route for the router to resolve. DP-219: so is
+  // an external address (https, mailto, tel).
+  if (!item.href.startsWith("/") || item.href.startsWith("//")) {
     return (
-      <a href={item.href} aria-current={current} className={className} onClick={onNavigate}>
+      <a
+        href={item.href}
+        aria-current={current}
+        className={className}
+        onClick={onNavigate}
+        {...newTab}
+      >
         {item.label}
+        {newTabNote}
       </a>
     );
   }
@@ -95,9 +112,144 @@ function NavLink({
       aria-current={current}
       className={className}
       onClick={onNavigate}
+      {...newTab}
     >
       {item.label}
+      {newTabNote}
     </Link>
+  );
+}
+
+/**
+ * DP-219: a desktop item with a submenu. The submenu opens on hover (pointer devices), with its
+ * button (keyboard, touch) and, without script, while focus is inside it; Esc and leaving it close
+ * it. An item whose own page is not set only opens its submenu.
+ */
+function DesktopItem({
+  item,
+  onPending,
+  pendingNote,
+}: {
+  item: SiteNavItem;
+  onPending: () => void;
+  pendingNote: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const children = item.children ?? [];
+  if (children.length === 0) {
+    return (
+      <NavLink item={item} className="site-nav-link" onPending={onPending} pendingNote={pendingNote} />
+    );
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && open) {
+      setOpen(false);
+      event.currentTarget.querySelector("button")?.focus();
+    }
+  };
+  const onBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+  };
+  return (
+    <div
+      className="site-nav-has-sub"
+      data-open={open}
+      onMouseLeave={() => setOpen(false)}
+      onKeyDown={onKeyDown}
+      onBlur={onBlur}
+    >
+      {item.href === null ? (
+        <button
+          type="button"
+          className="site-nav-link"
+          aria-expanded={open}
+          aria-controls={id}
+          data-current={item.current ? "true" : undefined}
+          onClick={() => setOpen(!open)}
+        >
+          {item.label}
+          <span aria-hidden className="site-nav-sub-chevron" />
+        </button>
+      ) : (
+        <>
+          <NavLink
+            item={item}
+            className="site-nav-link"
+            onPending={onPending}
+            pendingNote={pendingNote}
+          />
+          <button
+            type="button"
+            className="site-nav-sub-toggle"
+            aria-label={`${SITE_NAV_UI.openSubmenu} ${item.label}`}
+            aria-expanded={open}
+            aria-controls={id}
+            onClick={() => setOpen(!open)}
+          >
+            <span aria-hidden className="site-nav-sub-chevron" />
+          </button>
+        </>
+      )}
+      <ul id={id} className="site-nav-sub">
+        {children.map((child) => (
+          <li key={child.label}>
+            <NavLink
+              item={child}
+              className="site-nav-sublink"
+              onNavigate={() => setOpen(false)}
+              onPending={onPending}
+              pendingNote={pendingNote}
+            />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** DP-219: an item of the phone menu with its submenu, always open under it. */
+function MenuItem({
+  item,
+  onNavigate,
+  onPending,
+  pendingNote,
+}: {
+  item: SiteNavItem;
+  onNavigate: () => void;
+  onPending: () => void;
+  pendingNote: string;
+}) {
+  const children = item.children ?? [];
+  return (
+    <>
+      {children.length && item.href === null ? (
+        <span className="site-menu-link site-menu-group">{item.label}</span>
+      ) : (
+        <NavLink
+          pendingNote={pendingNote}
+          item={item}
+          className="site-menu-link"
+          onNavigate={onNavigate}
+          onPending={onPending}
+        />
+      )}
+      {children.length ? (
+        <ul className="site-menu-sub">
+          {children.map((child) => (
+            <li key={child.label}>
+              <NavLink
+                pendingNote={pendingNote}
+                item={child}
+                className="site-menu-sublink"
+                onNavigate={onNavigate}
+                onPending={onPending}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </>
   );
 }
 
@@ -185,23 +337,20 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
           <ul>
             {NAV.items.map((item) => (
               <li key={item.label}>
-                <NavLink
-                  item={item}
-                  className="site-nav-link"
-                  onPending={showNotice}
-                  pendingNote={NAV.pendingNote}
-                />
+                <DesktopItem item={item} onPending={showNotice} pendingNote={NAV.pendingNote} />
               </li>
             ))}
           </ul>
         </nav>
 
-        <NavLink
-          pendingNote={NAV.pendingNote}
-          item={NAV.contact}
-          className="site-nav-contact"
-          onPending={showNotice}
-        />
+        {NAV.contact ? (
+          <NavLink
+            pendingNote={NAV.pendingNote}
+            item={NAV.contact}
+            className="site-nav-contact"
+            onPending={showNotice}
+          />
+        ) : null}
 
         <button
           type="button"
@@ -229,6 +378,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
                   href={item.href}
                   aria-current={"current" in item && item.current ? "page" : undefined}
                   className="site-nav-link"
+                  {...(item.newTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
                 >
                   {item.label}
                 </a>
@@ -263,12 +413,11 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
           <ul className="site-menu-list">
             {NAV.items.map((item) => (
               <li key={item.label}>
-                <NavLink
-                  pendingNote={NAV.pendingNote}
+                <MenuItem
                   item={item}
-                  className="site-menu-link"
                   onNavigate={closeMenu}
                   onPending={showNotice}
+                  pendingNote={NAV.pendingNote}
                 />
               </li>
             ))}
@@ -279,12 +428,14 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
           <p role="status" className="site-menu-notice">
             {notice && menuOpen ? NAV.pendingNote : ""}
           </p>
-          <NavLink
-          pendingNote={NAV.pendingNote}
-            item={NAV.contact}
-            className="site-nav-contact site-nav-contact-wide"
-            onPending={showNotice}
-          />
+          {NAV.contact ? (
+            <NavLink
+              pendingNote={NAV.pendingNote}
+              item={NAV.contact}
+              className="site-nav-contact site-nav-contact-wide"
+              onPending={showNotice}
+            />
+          ) : null}
         </div>
       </dialog>
     </header>

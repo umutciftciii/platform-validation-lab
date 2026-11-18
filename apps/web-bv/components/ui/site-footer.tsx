@@ -20,9 +20,18 @@ export default function SiteFooter({
       <div className="site-footer-inner">
         <div className="site-footer-call">
           <h2 className="site-footer-headline">{content.headline}</h2>
-          <a href={content.cta.href} className="site-footer-cta">
-            {content.cta.label}
-          </a>
+          {content.cta.href === null ? (
+            // DP-219: the button's page is not live: text instead of a link that would 404.
+            <span className="site-footer-cta" aria-disabled="true">
+              {content.cta.label}
+              <span className="sr-only"> ({content.pendingNote})</span>
+            </span>
+          ) : (
+            <a href={content.cta.href} className="site-footer-cta" {...newTabProps(content.cta)}>
+              {content.cta.label}
+              {content.cta.newTab ? <span className="sr-only"> {content.newTab}</span> : null}
+            </a>
+          )}
         </div>
 
         <div className="site-footer-line" aria-hidden="true" />
@@ -53,19 +62,41 @@ export default function SiteFooter({
                   </span>
                 ))}
               </p>
-              <p>
-                <a href={contact.phone.href} className="site-footer-link">
-                  {contact.phone.label}
-                </a>
-                <span className="site-footer-note">{contact.phone.note}</span>
-              </p>
-              <p>
-                <a href={contact.email.href} className="site-footer-link">
-                  {contact.email.label}
-                </a>
-                <span className="site-footer-note">{contact.email.note}</span>
-              </p>
+              {contact.phone.visible ? (
+                <p>
+                  <a href={contact.phone.href} className="site-footer-link">
+                    {contact.phone.label}
+                  </a>
+                  <span className="site-footer-note">{contact.phone.note}</span>
+                </p>
+              ) : null}
+              {contact.email.visible ? (
+                <p>
+                  <a href={contact.email.href} className="site-footer-link">
+                    {contact.email.label}
+                  </a>
+                  <span className="site-footer-note">{contact.email.note}</span>
+                </p>
+              ) : null}
             </address>
+            {content.social.length ? (
+              // DP-219: social media links from the CMS, as text links in the footer's own style.
+              <ul aria-label={content.socialLabel} className="site-footer-social">
+                {content.social.map((link) => (
+                  <li key={link.href}>
+                    <a
+                      href={link.href}
+                      className="site-footer-link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {link.label}
+                      <span className="sr-only"> {content.newTab}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
 
           <nav aria-label={content.navLabel} className="site-footer-nav">
@@ -75,7 +106,11 @@ export default function SiteFooter({
                 <ul>
                   {column.links.map((link) => (
                     <li key={link.label}>
-                      <FooterItem link={link} pendingNote={content.pendingNote} />
+                      <FooterItem
+                        link={link}
+                        pendingNote={content.pendingNote}
+                        newTabNote={content.newTab}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -92,6 +127,7 @@ export default function SiteFooter({
                 <FooterItem
                   link={link.href === PRIVACY_PATH ? { ...link, href: privacyHref() } : link}
                   pendingNote={content.pendingNote}
+                  newTabNote={content.newTab}
                 />
               </li>
             ))}
@@ -102,13 +138,19 @@ export default function SiteFooter({
   );
 }
 
+function newTabProps(link: FooterLink) {
+  return link.newTab ? ({ target: "_blank", rel: "noopener noreferrer" } as const) : {};
+}
+
 /** A real link, or plain text when the page does not exist yet. */
 function FooterItem({
   link,
   pendingNote,
+  newTabNote,
 }: {
   link: FooterLink;
   pendingNote: string;
+  newTabNote: string;
 }) {
   if (link.href === null) {
     return (
@@ -119,8 +161,9 @@ function FooterItem({
     );
   }
   return (
-    <a href={link.href} className="site-footer-link">
+    <a href={link.href} className="site-footer-link" {...newTabProps(link)}>
       {link.label}
+      {link.newTab ? <span className="sr-only"> {newTabNote}</span> : null}
     </a>
   );
 }

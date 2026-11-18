@@ -31,12 +31,14 @@ describe("BV import seeds", () => {
     expect(Object.keys(CMS_SEEDS).sort()).toEqual(CMS_DESIGN_TEMPLATES.map((t) => t.key).sort());
     for (const t of CMS_DESIGN_TEMPLATES) {
       const seed = CMS_SEEDS[t.key]!.content;
-      const parsed = cmsFieldsSchema(t.fields).safeParse(seed);
+      const parsed = (t.schema ?? cmsFieldsSchema(t.fields)).safeParse(seed);
       expect(parsed.success, `${t.key}: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`).toBe(
         true,
       );
-      // Validation keeps the content as it was (no trimming or defaults change a word).
-      expect(parsed.data).toEqual(seed);
+      // Validation keeps the content as it was (no trimming or defaults change a word); DP-219:
+      // the menus only gain their defaults (visible, same tab, no submenu, no social links).
+      if (t.schema) expect(parsed.data).toMatchObject(seed as object);
+      else expect(parsed.data).toEqual(seed);
     }
   });
 
@@ -70,14 +72,16 @@ describe("BV import seeds", () => {
   it("keeps the official contact details and pending pages as plain text", () => {
     expect(BV_FOOTER_SEED.contact.phone.href).toBe("tel:+31202101350");
     expect(BV_FOOTER_SEED.contact.email.href).toBe("mailto:info@dreampetroleumbv.com");
+    const path = (l: { target: unknown } | undefined) =>
+      (l?.target as { path?: string } | undefined)?.path ?? null;
     // DP-153: "Blogs" leads to the news list.
-    expect(BV_NAV_SEED.items.filter((i) => i.href === null)).toEqual([]);
-    expect(BV_NAV_SEED.items.find((i) => i.label === "Blogs")?.href).toBe("/news");
+    expect(BV_NAV_SEED.items.filter((i) => i.target.type === "none")).toEqual([]);
+    expect(path(BV_NAV_SEED.items.find((i) => i.label === "Blogs"))).toBe("/news");
     // DP-155: "Products" leads to the catalogue, with and without JavaScript.
-    expect(BV_NAV_SEED.items.find((i) => i.label === "Products")?.href).toBe("/products");
-    expect(BV_NAV_SEED.noScriptLinks.find((i) => i.label === "Products")?.href).toBe("/products");
+    expect(path(BV_NAV_SEED.items.find((i) => i.label === "Products"))).toBe("/products");
+    expect(path(BV_NAV_SEED.noScriptLinks.find((i) => i.label === "Products"))).toBe("/products");
     expect(
-      BV_NAV_SEED.noScriptLinks.every((l) => l.href?.startsWith("/") || l.href === "#top"),
+      BV_NAV_SEED.noScriptLinks.every((l) => path(l)?.startsWith("/") || path(l) === "#top"),
     ).toBe(true);
   });
 
@@ -175,7 +179,7 @@ describe("BV company pages and blog post of the live site (DP-206)", () => {
     const footer = JSON.stringify(BV_FOOTER_SEED);
     expect(footer).not.toContain("dreampetroleumbv.com/en/");
     for (const href of ["/strategic-partnership", "/sustainability", "/our-team", "/news"]) {
-      expect(footer).toContain(`"href":"${href}"`);
+      expect(footer).toContain(`"path":"${href}"`);
     }
   });
 });

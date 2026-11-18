@@ -8,10 +8,13 @@ import {
   CMS_SECTIONS_MAX,
   cmsDesignTemplate,
   cmsIsArticle,
+  cmsIsMenu,
+  cmsMenuSchema,
   type CmsArticleDraftRequest,
   type CmsField,
   type CmsFixedDraftRequest,
   type CmsHistoryResponse,
+  type CmsMenuTargetsResponse,
   type CmsPage,
   type CmsPageDraftRequest,
   type CmsPageResponse,
@@ -23,6 +26,7 @@ import { callCms, type FieldIssue } from "../../lib/cms-client";
 import { Field, FIELD, FormMessage, TEXTAREA } from "../catalog/parts";
 import { Fields, IconButton, move, toContent, toValues, type ItemValue } from "./field-form";
 import { HistoryPanel } from "./history-panel";
+import { MenuEditor, type MenuValue } from "./menu-editor";
 import { PublicationPanel } from "./publication-panel";
 import { useNotice } from "../catalog/notices";
 import { SeoFields, seoValues, type SeoValues } from "../seo/seo-fields";
@@ -65,6 +69,8 @@ function fromPage(page: CmsPage): SectionValue[] {
  *    the order of the blocks and the motion stay in the site's code.
  *  - News articles (DP-020): title, slug under /news/, SEO, the summary and cover image, and the
  *    body as sections of the text-like types.
+ *  - DP-219: the BV header and footer menus get their own editor (MenuEditor) instead of the
+ *    generic field form; draft, preview, publication and history stay the same.
  * Saving replaces the whole draft and names the version it was based on. Publication, preview
  * and unpublishing are in the side panel (PublicationPanel); the publication history and the
  * restore of a revision below it (HistoryPanel).
@@ -78,6 +84,7 @@ export function PageEditor({
   history,
   origin = null,
   siteSeo,
+  menuTargets = null,
 }: {
   page: CmsPage;
   canEdit: boolean;
@@ -89,6 +96,8 @@ export function PageEditor({
   origin?: string | null;
   /** DP-209: the site defaults the site applies now (the preview's fallbacks). */
   siteSeo: SiteSeoDefaults;
+  /** DP-219: what the menus may link to (null when it could not be loaded). */
+  menuTargets?: CmsMenuTargetsResponse | null;
 }) {
   const template = page.kind === "TEMPLATE" ? null : cmsDesignTemplate(page.templateKey);
   const article = cmsIsArticle(page);
@@ -107,6 +116,13 @@ export function PageEditor({
   const [design, setDesign] = useState<ItemValue>(() =>
     template ? toValues(template.fields, page.content) : {},
   );
+  const menuKey = cmsIsMenu(page.templateKey) ? page.templateKey : null;
+  // Version 1 content (label + href) is read as version 2: saving writes version 2.
+  const [menu, setMenu] = useState<MenuValue | null>(() => {
+    if (!menuKey) return null;
+    const parsed = cmsMenuSchema(menuKey).safeParse(page.content);
+    return parsed.success ? (parsed.data as MenuValue) : null;
+  });
   const [articleValues, setArticleValues] = useState<ItemValue>(() =>
     article ? toValues(CMS_ARTICLE_FIELDS, page.content) : {},
   );
@@ -136,6 +152,7 @@ export function PageEditor({
   const updateSections = change(setSections);
   const updateDesign = change(setDesign);
   const updateArticle = change(setArticleValues);
+  const updateMenu = change(setMenu);
 
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -148,7 +165,15 @@ export function PageEditor({
       return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values) : {}) };
     });
     const body: CmsPageDraftRequest | CmsFixedDraftRequest | CmsArticleDraftRequest = template
-      ? { version, title, seo: seoBody, content: toContent(template.fields, design) }
+      ? {
+          version,
+          title,
+          seo: seoBody,
+          content:
+            menuKey && menu
+              ? (menu as unknown as Record<string, unknown>)
+              : toContent(template.fields, design),
+        }
       : article
         ? {
             version,
@@ -270,7 +295,26 @@ export function PageEditor({
           </Panel>
         ) : null}
 
-        {template ? (
+        {menuKey ? (
+          menu ? (
+            <MenuEditor
+              key="menu"
+              menuKey={menuKey}
+              value={menu}
+              targets={menuTargets}
+              readOnly={readOnly}
+              invalid={invalid}
+              onChange={updateMenu}
+            />
+          ) : (
+            <Panel key="menu-invalid" id="menu-invalid" title="Menu">
+              <FormMessage kind="error">
+                The draft of this menu does not match the menu fields. Restore a revision from the
+                history to edit it.
+              </FormMessage>
+            </Panel>
+          )
+        ) : template ? (
           <DesignFields
             fields={template.fields}
             values={design}

@@ -340,7 +340,9 @@ function schemaFor(kind: CmsPage["kind"], templateKey: string) {
   if (cmsIsArticle({ kind, templateKey })) return CmsArticleContentSchema;
   if (kind === "TEMPLATE") return CmsTemplateContentSchema;
   const template = cmsDesignTemplate(templateKey);
-  return template ? cmsFieldsSchema(template.fields) : null;
+  if (!template) return null;
+  // DP-219: the menus have a schema of their own (version 1 content is read as version 2).
+  return template.schema ?? cmsFieldsSchema(template.fields);
 }
 
 /**

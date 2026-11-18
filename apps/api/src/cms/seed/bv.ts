@@ -7,12 +7,14 @@
  * nothing else, and it never overwrites a page that exists (the CMS is the single source).
  *
  * One change against the files: the phone links without JavaScript point at "/" instead of the
- * former demo route.
+ * former demo route. DP-219: the navigation and footer are written in menu content version 2 (each
+ * href as the same fixed path or address); their references to pages, products and categories are
+ * made in the admin (the reference conversion), against the ids of the site they are imported to.
  */
 import type {
-  BvFooterContent,
+  BvFooterMenuInput,
   BvHomeContent,
-  BvNavContent,
+  BvNavMenuInput,
   BvNewsIndexContent,
   BvSiteSeoContent,
 } from "@dream/contracts";
@@ -334,67 +336,67 @@ export const BV_HOME_SEED: BvHomeContent = {
   },
 };
 
-export const BV_NAV_SEED: BvNavContent = {
+export const BV_NAV_SEED: BvNavMenuInput = {
   items: [
     {
       label: "Home",
-      href: "#top",
+      target: { type: "path", path: "#top" },
     },
     {
       label: "Products",
-      href: "/products",
+      target: { type: "path", path: "/products" },
     },
     {
       label: "Services",
-      href: "#services",
+      target: { type: "path", path: "#services" },
     },
     {
       label: "Company",
-      href: "/about-us",
+      target: { type: "path", path: "/about-us" },
     },
     {
       label: "Blogs",
-      href: "/news",
+      target: { type: "path", path: "/news" },
     },
     {
       label: "Contact Us",
-      href: "/contact",
+      target: { type: "path", path: "/contact" },
     },
   ],
   contact: {
     label: "Contact",
-    href: "/contact",
+    target: { type: "path", path: "/contact" },
   },
   noScriptLinks: [
     {
       label: "Home",
-      href: "#top",
+      target: { type: "path", path: "#top" },
     },
     {
       label: "Products",
-      href: "/products",
+      target: { type: "path", path: "/products" },
     },
     {
       label: "Services",
-      href: "/#services",
+      target: { type: "path", path: "/#services" },
     },
     {
       label: "CTL Technology",
-      href: "/#ctl-technology",
+      target: { type: "path", path: "/#ctl-technology" },
     },
     {
       label: "Applications",
-      href: "/#applications",
+      target: { type: "path", path: "/#applications" },
     },
   ],
   pendingNote: "This page isn't ready yet.",
 };
 
-export const BV_FOOTER_SEED: BvFooterContent = {
+export const BV_FOOTER_SEED: BvFooterMenuInput = {
   headline: "Let’s Move Energy Forward.",
   cta: {
     label: "Get in Touch",
-    href: "/contact",
+    target: { type: "path", path: "/contact" },
   },
   intro:
     "Dream Petroleum BV is a global leader in the trading and distribution of high-quality base oils and petrochemical products. We add value to the energy sector through our strategic Rotterdam-based logistics network.",
@@ -426,15 +428,15 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "Base Oils (Group I, II & III)",
-          href: "/products?category=base-oil",
+          target: { type: "path", path: "/products?category=base-oil" },
         },
         {
           label: "High-Quality Solvents",
-          href: "/products?category=solvent-oil",
+          target: { type: "path", path: "/products?category=solvent-oil" },
         },
         {
           label: "Petrochemicals",
-          href: "/products",
+          target: { type: "path", path: "/products" },
         },
       ],
     },
@@ -443,15 +445,15 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "Sea & Road Logistics",
-          href: "/logistics",
+          target: { type: "path", path: "/logistics" },
         },
         {
           label: "Energy Trading & Supply",
-          href: "/energy-trading",
+          target: { type: "path", path: "/energy-trading" },
         },
         {
           label: "Storage & Distribution",
-          href: "/storage-distribution",
+          target: { type: "path", path: "/storage-distribution" },
         },
       ],
     },
@@ -460,27 +462,27 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "About Us",
-          href: "/about-us",
+          target: { type: "path", path: "/about-us" },
         },
         {
           label: "Strategic Partnership",
-          href: "/strategic-partnership",
+          target: { type: "path", path: "/strategic-partnership" },
         },
         {
           label: "Sustainability",
-          href: "/sustainability",
+          target: { type: "path", path: "/sustainability" },
         },
         {
           label: "Leadership Team",
-          href: "/our-team",
+          target: { type: "path", path: "/our-team" },
         },
         {
           label: "News & Insights",
-          href: "/news",
+          target: { type: "path", path: "/news" },
         },
         {
           label: "Contact Us",
-          href: "/contact",
+          target: { type: "path", path: "/contact" },
         },
       ],
     },
@@ -489,11 +491,11 @@ export const BV_FOOTER_SEED: BvFooterContent = {
   legal: [
     {
       label: "Privacy Policy",
-      href: "/privacy",
+      target: { type: "path", path: "/privacy" },
     },
     {
       label: "Terms & Conditions",
-      href: null,
+      target: { type: "none" },
     },
   ],
   pendingNote: "page not available yet",
