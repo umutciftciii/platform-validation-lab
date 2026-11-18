@@ -18,3 +18,4 @@ export * from "./admin/cms-bv.js";
 export * from "./admin/cms-publication.js";
 export * from "./leads.js";
 export * from "./privacy.js";
+export * from "./seo.js";

@@ -167,15 +167,17 @@ try {
 } catch (e) {
   record("bv-route", "/preview/<invalid>", false, String(e));
 }
-// CMS S3: an unknown or unpublished /<slug> renders the not-found page with noindex (Next streams
-// it with status 200, as /products/<unknown>), never a draft.
+// CMS S3: an unknown or unpublished /<slug> renders the not-found page with noindex, never a draft.
+// DP-207: with a real HTTP 404 (proxy.ts checks the address before the page streams).
 try {
   const res = await get(base("web-bv") + "/cms-smoke-no-such-page");
   const html = await res.text();
   record(
     "bv-route",
     "/<unknown slug> not found, noindex",
-    /This page could not be found/.test(html) && /<meta name="robots" content="noindex"/.test(html),
+    res.status === 404 &&
+      /Page not found/.test(html) &&
+      /<meta name="robots" content="noindex/.test(html),
     `HTTP ${res.status}`,
   );
 } catch (e) {
@@ -183,7 +185,7 @@ try {
 }
 // DP-020: /news renders the list (or its empty state) from the CMS, or its unavailable state
 // where the site cannot reach the public CMS API (as "/" above); an unknown article is the
-// not-found page with noindex.
+// not-found page with noindex and (DP-207) HTTP 404.
 try {
   const res = await get(base("web-bv") + "/news");
   const html = await res.text();
@@ -202,7 +204,9 @@ try {
   record(
     "bv-route",
     "/news/<unknown> not found, noindex",
-    /This page could not be found/.test(html) && /<meta name="robots" content="noindex"/.test(html),
+    res.status === 404 &&
+      /Page not found/.test(html) &&
+      /<meta name="robots" content="noindex/.test(html),
     `HTTP ${res.status}`,
   );
 } catch (e) {
