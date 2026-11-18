@@ -36,6 +36,11 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "status:not_published": "The product is not published on this site.",
   "status:transition": "This status change is not possible. Reload the page.",
   "listingVersion:stale": "The site listing changed meanwhile. Reload the page and check it again.",
+  // DP-209: product SEO.
+  "canonicalPath:custom":
+    "Use a path of this site, such as /products/base-oil-sn-150 (lower-case words and hyphens, no domain).",
+  "ogImageId:unknown": "This image is no longer a public image of the product. Choose another one.",
+  "listing:missing": "List the product on this site first.",
   "product:not_approved": "The product master must be approved in its current version.",
   "product:archived": "Archived products cannot be published.",
   "listing:listing_missing": "List the product on this site first.",

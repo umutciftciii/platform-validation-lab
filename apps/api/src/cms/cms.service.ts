@@ -25,6 +25,7 @@ import {
   CmsPageDraftRequestSchema,
   CmsPublishRequestSchema,
   CmsRestoreRequestSchema,
+  CmsSeoSchema,
   CmsUnpublishRequestSchema,
   cmsArticlePath,
   cmsDesignTemplate,
@@ -36,6 +37,7 @@ import {
   type CmsPageListResponse,
   type CmsPageResponse,
   type CmsPreviewResponse,
+  type CmsSeoInput,
   type CmsSite,
 } from "@dream/contracts";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
@@ -45,6 +47,7 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import {
   PAGE_SELECT,
+  SEO_SELECT,
   attachPublications,
   issuePreviewToken,
   liveRows,
@@ -53,8 +56,11 @@ import {
   toPage,
   toSummary,
   userRef,
+  pickSeo,
+  seoColumns,
   validateContent,
   type PageBase,
+  type SeoColumns,
   type PageRow,
 } from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
@@ -78,6 +84,10 @@ function changedFields(before: PageRow, after: Record<string, unknown>): string[
     seoTitle: before.seoTitle,
     seoDescription: before.seoDescription,
     noindex: before.noindex,
+    canonicalPath: before.canonicalPath,
+    ogTitle: before.ogTitle,
+    ogDescription: before.ogDescription,
+    ogImage: before.ogImage,
     content: stableJson(before.content),
   };
   return Object.keys(after).filter((k) => old[k] !== after[k]);
@@ -264,12 +274,9 @@ export class CmsService {
     const a = await this.access.begin(ctx);
     const { row: before, db } = await CmsService.pageIn(a, EDIT, rawId);
     let version: number;
-    let data: {
+    let data: SeoColumns & {
       title: string;
       path: string | null;
-      seoTitle: string | null;
-      seoDescription: string | null;
-      noindex: boolean;
       content: Record<string, unknown>;
     };
     if (cmsIsArticle(before)) {
@@ -278,9 +285,7 @@ export class CmsService {
       data = {
         title: input.title,
         path: cmsArticlePath(input.slug),
-        seoTitle: input.seo.title,
-        seoDescription: input.seo.description,
-        noindex: input.seo.noindex,
+        ...seoColumns(input.seo),
         content: input.content as Record<string, unknown>,
       };
     } else if (before.kind === "TEMPLATE") {
@@ -289,9 +294,7 @@ export class CmsService {
       data = {
         title: input.title,
         path: cmsPathForSlug(input.slug),
-        seoTitle: input.seo.title,
-        seoDescription: input.seo.description,
-        noindex: input.seo.noindex,
+        ...seoColumns(input.seo),
         content: input.content as Record<string, unknown>,
       };
     } else {
@@ -304,9 +307,7 @@ export class CmsService {
       data = {
         title: input.title,
         path: before.path,
-        seoTitle: input.seo.title,
-        seoDescription: input.seo.description,
-        noindex: input.seo.noindex,
+        ...seoColumns(input.seo),
         content: validateContent(before.kind, before.templateKey, input.content),
       };
     }
@@ -376,9 +377,7 @@ export class CmsService {
             path: plan.path,
             locale: site.locale,
             title: plan.title,
-            seoTitle: plan.seo.title,
-            seoDescription: plan.seo.description,
-            noindex: plan.seo.noindex,
+            ...seoColumns(CmsSeoSchema.parse(plan.seo)),
             content: content as never,
             schemaVersion: SCHEMA_VERSION,
             createdById: a.userId,
@@ -416,7 +415,7 @@ export class CmsService {
         templateKey: template.key,
         path: template.path,
         title: seed.title,
-        seo: { title: null, description: null, noindex: false },
+        seo: { title: null, description: null, noindex: false } as CmsSeoInput,
         content: seed.content,
       };
     }
@@ -522,9 +521,7 @@ export class CmsService {
             pageVersion: row.version,
             title: row.title,
             path: row.path,
-            seoTitle: row.seoTitle,
-            seoDescription: row.seoDescription,
-            noindex: row.noindex,
+            ...pickSeo(row),
             content: content as never,
             schemaVersion: row.schemaVersion,
             createdById: a.userId,
@@ -619,9 +616,7 @@ export class CmsService {
       select: {
         title: true,
         path: true,
-        seoTitle: true,
-        seoDescription: true,
-        noindex: true,
+        ...SEO_SELECT,
         content: true,
       },
     });
@@ -635,9 +630,7 @@ export class CmsService {
     const data = {
       title: revision.title,
       path: revision.path,
-      seoTitle: revision.seoTitle,
-      seoDescription: revision.seoDescription,
-      noindex: revision.noindex,
+      ...pickSeo(revision),
       content,
     };
     try {

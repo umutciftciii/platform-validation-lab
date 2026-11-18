@@ -49,6 +49,7 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
+import { listingSeo } from "./listing-seo.js";
 import { lockMaster, type ScopedTx } from "./master.js";
 import { requireMasterRead, toRule, uuidOr404, valueData } from "./specs.service.js";
 
@@ -736,6 +737,12 @@ export class WorkflowService {
               height: display?.height ?? 0,
             };
           }),
+          // DP-209: the listing's SEO as published; an OG image no longer among the published
+          // images falls back to the cover (never a link to an image the site does not serve).
+          seo: ((seo) => ({
+            ...seo,
+            ogImageId: images.some((i) => i.id === seo.ogImageId) ? seo.ogImageId : null,
+          }))(listingSeo(listing)),
         });
         const fields = {
           status: "PUBLISHED" as const,

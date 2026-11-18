@@ -13,6 +13,7 @@ import { PageEditor } from "../../../../components/cms/page-editor";
 import { CmsKindPill, publicationState } from "../../../../components/cms/parts";
 import { EmptyState, ErrorState, StatusPill } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
+import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
 import { requireStaffSession } from "../../../../lib/server-session";
 
 export const metadata: Metadata = { title: "Edit page" };
@@ -48,10 +49,10 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
   const back = article
     ? { href: `/content/news?site=${sp}`, label: `All articles of ${SITE_SHORT[site.key]}` }
     : { href: `/content?site=${sp}`, label: `All pages of ${SITE_SHORT[site.key]}` };
-  const history = await serverRead(
-    `/api/v1/admin/cms/pages/${page.id}/history`,
-    CmsHistoryResponseSchema,
-  );
+  const [history, siteSeo] = await Promise.all([
+    serverRead(`/api/v1/admin/cms/pages/${page.id}/history`, CmsHistoryResponseSchema),
+    siteSeoDefaults(site.id),
+  ]);
   const registry = CMS_SITE_REGISTRY.find((e) => e.key === page.templateKey);
   const editable = page.kind === "TEMPLATE" || Boolean(cmsDesignTemplate(page.templateKey));
   const state = publicationState(page);
@@ -88,6 +89,8 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
             canPublish={site.canPublish}
             siteLabel={SITE_SHORT[site.key]}
             siteKey={site.key}
+            siteSeo={siteSeo}
+            origin={site.key === "BV" ? bvPublicOrigin() : null}
           />
         ) : (
           <div className="rounded-2xl border border-dashed border-line-strong bg-surface">

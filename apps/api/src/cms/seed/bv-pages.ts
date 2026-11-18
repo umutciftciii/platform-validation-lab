@@ -16,7 +16,7 @@
  *
  * Used by the import only; it never overwrites a page that exists (ADR-020 D7).
  */
-import type { CmsArticleContent, CmsSeo } from "@dream/contracts";
+import type { CmsArticleContent, CmsSeoInput } from "@dream/contracts";
 
 const CONTACT = "/contact";
 const TAGLINE =
@@ -33,11 +33,11 @@ const PARTNER_CTA = {
 export interface CmsPageSeed {
   slug: string;
   title: string;
-  seo: CmsSeo;
+  seo: CmsSeoInput;
   content: { sections: ({ id: string; type: string } & Record<string, unknown>)[] };
 }
 
-const seo = (title: string): CmsSeo => ({ title, description: null, noindex: false });
+const seo = (title: string): CmsSeoInput => ({ title, description: null, noindex: false });
 
 export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
   "bv.contact": {
@@ -641,7 +641,7 @@ export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
 export interface CmsArticleSeed {
   slug: string;
   title: string;
-  seo: CmsSeo;
+  seo: CmsSeoInput;
   content: CmsArticleContent;
 }
 

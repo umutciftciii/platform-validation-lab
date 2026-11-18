@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
+import { SEO_TEXT_LIMITS, SeoCanonicalPathSchema } from "../seo.js";
 
 export const CMS_API = "/api/v1/admin/cms";
 
@@ -663,6 +664,17 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     importable: true,
   },
   {
+    key: "bv.site-seo",
+    site: "BV",
+    kind: "FRAGMENT",
+    title: "SEO defaults",
+    path: null,
+    managedBy: "cms_pending",
+    stage: "content",
+    note: "Site name, default title, description and Open Graph image (DP-209). Managed under SEO.",
+    importable: true,
+  },
+  {
     key: "bv.about-us",
     site: "BV",
     kind: "TEMPLATE",
@@ -805,12 +817,46 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
 
 // --- requests --------------------------------------------------------------------------------
 
+/**
+ * The SEO of a page draft (ADR-020 D-S1; DP-209 adds the canonical override and the Open Graph
+ * fields). Every DP-209 field is optional: missing, null or blank is "no value", and the site
+ * falls back (SEO title → page title, OG title → SEO title, OG image → page image → site default).
+ * The canonical is a path of the same site (contracts `SeoCanonicalPathSchema`), the OG image a
+ * registered image asset of the site.
+ */
 export const CmsSeoSchema = z.strictObject({
-  title: optionalText(120),
-  description: optionalText(320),
+  title: optionalText(SEO_TEXT_LIMITS.title.max),
+  description: optionalText(SEO_TEXT_LIMITS.description.max),
   noindex: z.boolean(),
+  canonicalPath: SeoCanonicalPathSchema.optional().transform((v) => v ?? null),
+  ogTitle: optionalText(SEO_TEXT_LIMITS.ogTitle.max),
+  ogDescription: optionalText(SEO_TEXT_LIMITS.ogDescription.max),
+  ogImage: z
+    .string()
+    .trim()
+    .nullish()
+    .transform((v) => (v ? v : null))
+    .refine((v) => v === null || cmsAsset(v)?.kind === "image", { message: "asset" }),
 });
 export type CmsSeo = z.infer<typeof CmsSeoSchema>;
+/** What a draft request or an import seed may carry (the DP-209 fields may be left out). */
+export type CmsSeoInput = z.input<typeof CmsSeoSchema>;
+
+/** The stored SEO of a page or revision as the API answers it (DP-209 fields null when unset). */
+/**
+ * The DP-209 fields default to null when missing, so a site server and an API of different
+ * releases still read each other during a rolling update.
+ */
+export const CmsSeoValueSchema = z.object({
+  title: z.string().nullable(),
+  description: z.string().nullable(),
+  noindex: z.boolean(),
+  canonicalPath: z.string().nullable().default(null),
+  ogTitle: z.string().nullable().default(null),
+  ogDescription: z.string().nullable().default(null),
+  ogImage: z.string().nullable().default(null),
+});
+export type CmsSeoValue = z.infer<typeof CmsSeoValueSchema>;
 
 export const CmsPageCreateRequestSchema = z.strictObject({
   title: requiredText(200),
@@ -904,11 +950,7 @@ export type CmsPageListResponse = z.infer<typeof CmsPageListResponseSchema>;
 
 export const CmsPageSchema = CmsPageSummarySchema.extend({
   slug: z.string().nullable(),
-  seo: z.object({
-    title: z.string().nullable(),
-    description: z.string().nullable(),
-    noindex: z.boolean(),
-  }),
+  seo: CmsSeoValueSchema,
   /** TEMPLATE pages: `{ sections }`; DESIGN pages and fragments: their template's fields. */
   content: z.record(z.string(), z.unknown()),
   createdAt: IsoDate,

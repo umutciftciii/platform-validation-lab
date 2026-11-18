@@ -7,6 +7,7 @@ export type IconName =
   | "overview"
   | "content"
   | "products"
+  | "search"
   | "inbox"
   | "sites"
   | "staff"
@@ -57,6 +58,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: "Products",
         icon: "products",
         summary: "Keep product data sheets and specifications current.",
+        ready: true,
+      },
+      {
+        // DP-209: site SEO defaults and the SEO state of every page, article and product.
+        slug: "seo",
+        href: "/seo",
+        label: "SEO",
+        icon: "search",
+        summary: "Search results and link previews of the BV site.",
         ready: true,
       },
       {

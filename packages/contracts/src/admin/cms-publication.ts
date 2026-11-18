@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
-import { CmsSeoSchema } from "./cms.js";
+import { CmsSeoSchema, CmsSeoValueSchema } from "./cms.js";
 
 const IsoDate = z.iso.datetime({ offset: true });
 const VersionSchema = z.number().int().min(1);
@@ -92,11 +92,7 @@ export const CmsPublicPageSchema = z.object({
   templateKey: z.string(),
   path: z.string().nullable(),
   title: z.string(),
-  seo: z.object({
-    title: z.string().nullable(),
-    description: z.string().nullable(),
-    noindex: z.boolean(),
-  }),
+  seo: CmsSeoValueSchema,
   content: z.record(z.string(), z.unknown()),
   /** null in a preview (the draft has no revision yet). */
   revisionNumber: z.number().int().nullable(),

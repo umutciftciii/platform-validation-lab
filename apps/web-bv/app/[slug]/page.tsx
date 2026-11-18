@@ -6,7 +6,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton } from "@/components/home/home-page";
 import { TemplatePage } from "@/components/template/template-page";
 import { getPublishedPage } from "@/lib/cms-home";
-import { noindexMetadata, pageMetadata } from "@/lib/seo";
+import { cmsPageSeo, noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
 const published = cache(getPublishedPage);
@@ -26,7 +26,10 @@ export async function generateMetadata({ params }: PageProps<"/[slug]">): Promis
     return noindexMetadata("Dream Petroleum BV");
   }
   const { path, title, seo } = res.data;
-  return pageMetadata({ path, title: seo.title ?? title, description: seo.description, noindex: seo.noindex });
+  return pageMetadata(
+    { path, title: seo.title ?? title, description: seo.description, noindex: seo.noindex, ...cmsPageSeo(seo) },
+    await siteSeo(),
+  );
 }
 
 export default function CmsPage({ params }: PageProps<"/[slug]">) {
