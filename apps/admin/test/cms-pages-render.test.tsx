@@ -68,6 +68,7 @@ const homePage = summary({
     status: "PUBLISHED",
     revisionNumber: 1,
     pageVersion: 2,
+    path: "/",
     publishedAt: AT,
     publishedBy: USER,
     unpublishedAt: null,
@@ -95,6 +96,8 @@ const articlePage = summary({
     status: "PUBLISHED",
     revisionNumber: 1,
     pageVersion: 2,
+    // DP-210: published before the slug change of the draft.
+    path: "/news/market-update-2024",
     publishedAt: AT,
     publishedBy: USER,
     unpublishedAt: null,
@@ -106,6 +109,9 @@ const detail = (s: Record<string, unknown>, content: Record<string, unknown>) =>
   ...s,
   slug: s["kind"] === "TEMPLATE" ? String(s["path"]).replace(/^\/(news\/)?/, "") : null,
   seo: { title: null, description: null, noindex: false },
+  // DP-210: the article has an older address already; the BV site keeps old addresses.
+  redirectsHere: s["templateKey"] === "article" ? ["/news/q3-update"] : [],
+  keepsOldAddress: s["kind"] === "TEMPLATE",
   content,
   createdAt: AT,
   createdBy: USER,
@@ -236,6 +242,22 @@ describe("/content/[id] renders on the server", () => {
     expect(html).toContain("Revision 1");
     expect(html).toContain("Restore into draft");
     expect(html).toContain("Hide from search engines");
+    // DP-210: the live address, the draft address, the 301 note and the older addresses.
+    expect(html).toContain("Live address");
+    expect(html).toContain("/news/market-update-2024");
+    expect(html).toContain("Address after publishing");
+    expect(html).toContain("redirects permanently (301)");
+    expect(html).toContain("Older addresses that redirect here (301)");
+    expect(html).toContain("/news/q3-update");
+  });
+
+  it("DP-210: a never-published page shows its draft address and that it is not live", async () => {
+    const html = renderToStaticMarkup(
+      await ContentPageEditor({ params: Promise.resolve({ id: ABOUT }) } as never),
+    );
+    expect(html).toContain("Not on the site");
+    expect(html).toContain("/about-us");
+    expect(html).not.toContain("redirects permanently");
   });
 
   it("answers 404 for a page the API does not return", async () => {

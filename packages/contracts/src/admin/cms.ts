@@ -918,6 +918,12 @@ export const CmsPublicationSchema = z.object({
   revisionNumber: z.number().int(),
   /** The draft version that was published; differs from the page version after an edit. */
   pageVersion: z.number().int(),
+  /**
+   * DP-210: the address of the published revision ("/about-us", "/news/x"; null for fragments).
+   * The live address while PUBLISHED; the draft's `path` may already differ (a slug change takes
+   * effect when it is published).
+   */
+  path: z.string().nullable(),
   publishedAt: IsoDate,
   publishedBy: UserRefSchema,
   unpublishedAt: IsoDate.nullable(),
@@ -951,6 +957,13 @@ export type CmsPageListResponse = z.infer<typeof CmsPageListResponseSchema>;
 export const CmsPageSchema = CmsPageSummarySchema.extend({
   slug: z.string().nullable(),
   seo: CmsSeoValueSchema,
+  /**
+   * DP-210: older addresses of this page that answer 301 to it (active redirects made by its
+   * slug changes), oldest first. Empty on a site without redirects.
+   */
+  redirectsHere: z.array(z.string()).max(100),
+  /** DP-210: whether publishing a new slug keeps the old address as a 301 (the BV site). */
+  keepsOldAddress: z.boolean(),
   /** TEMPLATE pages: `{ sections }`; DESIGN pages and fragments: their template's fields. */
   content: z.record(z.string(), z.unknown()),
   createdAt: IsoDate,

@@ -20,6 +20,13 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "slug:invalid_format": "Use lower-case letters, digits and single hyphens, for example about-us.",
   "slug:reserved":
     "This address is reserved for the site itself (for example products or privacy) or is a language code.",
+  // DP-210: addresses and redirects.
+  "slug:live_elsewhere":
+    "Another published page is live at this address. Move or unpublish that page first, then publish this one.",
+  "slug:old_address":
+    "This address used to belong to another page and now redirects (301) to where that page moved. Choose another address.",
+  "slug:redirect_loop":
+    "This address change would make old addresses redirect in a circle. Choose another address.",
   "kind:not_editable_yet": "This page is managed in code until it is imported into the CMS.",
   "content:article_incomplete":
     "An article needs a summary and at least one body section before it can be published.",

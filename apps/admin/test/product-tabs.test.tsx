@@ -187,6 +187,12 @@ function fixtures(opts: { canEditMaster: boolean }) {
           description: "Research description for BV.",
           claimRisks: ["Food/cosmetic suitability should not be written."],
         },
+        addresses: {
+          live: null,
+          next: "/products/fx-g1",
+          keepsOldAddress: true,
+          redirectsHere: [],
+        },
         readiness: {
           ok: false,
           blocking: [
@@ -226,6 +232,12 @@ function fixtures(opts: { canEditMaster: boolean }) {
         canShowListing: false,
         canPreview: false,
         proposal: null,
+        addresses: {
+          live: null,
+          next: "/products/fx-g1",
+          keepsOldAddress: false,
+          redirectsHere: [],
+        },
         readiness: {
           ok: false,
           blocking: [
@@ -657,6 +669,7 @@ describe("DP-197 publication status without visibility terms", () => {
         ? { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" }
         : null,
     approvalMode: "DIRECT" as const,
+    slug: "fx-g1",
     version: 2,
   });
   const ready = { ok: true, blocking: [], warnings: [] };
@@ -758,6 +771,7 @@ describe("DP-203 product status, review action and Not listed", () => {
     unpublishedAt: null,
     unpublishedBy: null,
     approvalMode: "DIRECT" as const,
+    slug: "fx-g1",
     version: 2,
   };
   const off = {
@@ -1036,6 +1050,7 @@ describe("DP-204 preview access, publication warnings and status texts", () => {
         ? { id: "0190a8c4-7c1e-7000-8000-0000000000a1", name: "Owner" }
         : null,
     approvalMode,
+    slug: "fx-g1",
     version: 2,
   });
   function card(pub: string, name: string): string {

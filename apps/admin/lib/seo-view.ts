@@ -99,16 +99,26 @@ export function seoView(d: SeoDraft, site: SiteSeoDefaults, origin: string | nul
   };
 }
 
-/** The host shown in previews ("dreampetroleumbv.com"); the path as a breadcrumb. */
-export function displayUrl(url: string | null, path: string): { host: string; crumbs: string } {
+/**
+ * The address shown in previews: host ("dreampetroleumbv.com"), the origin with its real scheme
+ * ("https://dreampetroleumbv.com"; DP-210: "http://localhost:3110" locally, where DP-209 always
+ * printed https) and the path as a breadcrumb.
+ */
+export function displayUrl(
+  url: string | null,
+  path: string,
+): { host: string; origin: string; crumbs: string } {
   let host = "dreampetroleumbv.com";
+  let origin = `https://${host}`;
   if (url) {
     try {
-      host = new URL(url).host;
+      const parsed = new URL(url);
+      host = parsed.host;
+      origin = `${parsed.protocol}//${parsed.host}`;
     } catch {
       /* keep the default */
     }
   }
   const crumbs = path.split("/").filter(Boolean).join(" › ");
-  return { host, crumbs };
+  return { host, origin, crumbs };
 }

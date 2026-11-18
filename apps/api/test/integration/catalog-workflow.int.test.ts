@@ -4219,3 +4219,239 @@ describe("16. DP-209 product SEO", () => {
     expect((await pub("bv", "/products/dp209-a")).status).toBe(404);
   });
 });
+
+// ------------------------------------------------------------------------------------------
+// 17. DP-210: a product's slug change keeps its old address (automatic 301)
+// ------------------------------------------------------------------------------------------
+
+describe("17. DP-210 product slug changes and automatic 301", () => {
+  let admin: Staff; // approve (platform) + publish (BV and Corporate): publishes directly
+  let id: string;
+  const resolve = (p: string, site: Site = "bv") =>
+    seo(site, `/resolve?path=${encodeURIComponent(p)}`);
+  async function expectLive(p: string) {
+    const res = await resolve(p);
+    expect(res.status, `${p} ${JSON.stringify(res.body)}`).toBe(200);
+    expect(PublicSeoResolveResponseSchema.parse(res.body)).toEqual({ path: p, kind: "product" });
+  }
+  async function expectRedirect(p: string, target: string) {
+    const res = await resolve(p);
+    expect(res.status, `${p} ${JSON.stringify(res.body)}`).toBe(200);
+    expect(PublicSeoResolveResponseSchema.parse(res.body)).toEqual({
+      path: p,
+      redirect: { target, statusCode: 301 },
+    });
+  }
+  async function setSlug(productId: string, slug: string): Promise<Res> {
+    const p = await owner.product.findUniqueOrThrow({ where: { id: productId } });
+    return pm.post(`/products/${productId}`, {
+      version: p.version,
+      code: p.code,
+      slug,
+      name: p.name,
+      summary: p.summary,
+      description: p.description,
+    });
+  }
+  async function publish(productId: string, siteId: string = BV): Promise<Res> {
+    return admin.post(`/products/${productId}/publications/${siteId}/publish`, {
+      version: await version(productId),
+      listingVersion: await listingVersion(productId, siteId),
+      approvalMode: "DIRECT",
+    });
+  }
+  async function move(productId: string, slug: string) {
+    const saved = await setSlug(productId, slug);
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const res = await publish(productId);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return ProductWorkflowResponseSchema.parse(res.body).sites.find((s) => s.siteKey === "BV")!;
+  }
+  /** No active BV redirect starts at a live address or ends at another redirect's source. */
+  async function expectConsistent() {
+    const active = await owner.siteRedirect.findMany({ where: { siteId: BV, active: true } });
+    const sources = new Set(active.map((r) => r.sourcePath));
+    for (const r of active) {
+      expect(sources.has(r.target.split("?")[0]!), `chain at ${r.sourcePath}`).toBe(false);
+      expect((await resolve(r.sourcePath)).body?.redirect, r.sourcePath).toBeDefined();
+    }
+  }
+
+  beforeAll(async () => {
+    admin = await staff(
+      "slug-admin",
+      [
+        { role: "platform_super_admin" },
+        { role: "product_publisher", site: BV },
+        { role: "product_publisher", site: COM },
+      ],
+      root.userId,
+    );
+    id = await completeProduct("slug", "DP210-A");
+    expect((await publish(id)).status).toBe(200);
+    expect((await publish(id, COM)).status).toBe(200);
+  });
+
+  it("a master slug change is a draft: the live address stays until the product is republished", async () => {
+    await expectLive("/products/dp210-a");
+    expect((await setSlug(id, "dp210-b")).status).toBe(200);
+    await expectLive("/products/dp210-a");
+    expectError(await resolve("/products/dp210-b"), 404, "NOT_FOUND");
+    expect((await pub("bv", "/products/dp210-a")).status).toBe(200);
+    expect(await sitemapPaths("bv")).toContain("/products/dp210-a");
+    const wf = await admin.workflow(id);
+    const bv = wf.sites.find((s) => s.siteKey === "BV")!;
+    expect(bv.publication?.slug).toBe("dp210-a");
+    expect(bv.addresses).toEqual({
+      live: "/products/dp210-a",
+      next: "/products/dp210-b",
+      keepsOldAddress: true,
+      redirectsHere: [],
+    });
+    expect(wf.sites.find((s) => s.siteKey === "CORPORATE")!.addresses.keepsOldAddress).toBe(false);
+    expect(await owner.siteRedirect.count({ where: { contentId: id } })).toBe(0);
+  });
+
+  it("republishing makes the new address live and answers the old one with 301", async () => {
+    const res = await publish(id);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const bv = ProductWorkflowResponseSchema.parse(res.body).sites.find((s) => s.siteKey === "BV")!;
+    expect(bv.addresses).toMatchObject({
+      live: "/products/dp210-b",
+      next: "/products/dp210-b",
+      redirectsHere: ["/products/dp210-a"],
+    });
+    await expectLive("/products/dp210-b");
+    await expectRedirect("/products/dp210-a", "/products/dp210-b");
+    expect((await pub("bv", "/products/dp210-b")).status).toBe(200);
+    const paths = await sitemapPaths("bv");
+    expect(paths).toContain("/products/dp210-b");
+    expect(paths).not.toContain("/products/dp210-a");
+    const row = await owner.siteRedirect.findFirstOrThrow({ where: { contentId: id } });
+    expect(row).toMatchObject({
+      siteId: BV,
+      sourcePath: "/products/dp210-a",
+      target: "/products/dp210-b",
+      statusCode: 301,
+      active: true,
+      origin: "SLUG_CHANGE",
+      contentType: "PRODUCT",
+      createdById: admin.userId,
+    });
+    expect((await lastAudit("seo.redirect_created"))?.metadata).toMatchObject({
+      permission: "product:publish",
+      contentType: "PRODUCT",
+      sourcePath: "/products/dp210-a",
+      target: "/products/dp210-b",
+    });
+    expect((await lastAudit("catalog.product_published_direct"))?.metadata).toMatchObject({
+      republished: true,
+      slugChanged: true,
+    });
+    // The Corporate publication still shows the old slug until it is republished there; the
+    // Corporate site gets no redirects.
+    expect((await pub("com", "/products/dp210-a")).status).toBe(200);
+    expect((await publish(id, COM)).status).toBe(200);
+    expect((await pub("com", "/products/dp210-b")).status).toBe(200);
+    expect(await owner.siteRedirect.count({ where: { siteId: COM } })).toBe(0);
+    expectError(await resolve("/products/dp210-a", "com"), 404, "NOT_FOUND");
+  });
+
+  it("collapses chains and never loops when the product returns to an old slug", async () => {
+    await move(id, "dp210-c");
+    await expectRedirect("/products/dp210-a", "/products/dp210-c");
+    await expectRedirect("/products/dp210-b", "/products/dp210-c");
+    const back = await move(id, "dp210-a");
+    expect(back.addresses.redirectsHere).toEqual(["/products/dp210-b", "/products/dp210-c"]);
+    await expectLive("/products/dp210-a");
+    await expectRedirect("/products/dp210-b", "/products/dp210-a");
+    await expectRedirect("/products/dp210-c", "/products/dp210-a");
+    expect(
+      (await owner.siteRedirect.findFirstOrThrow({ where: { sourcePath: "/products/dp210-a" } }))
+        .active,
+    ).toBe(false);
+    await expectConsistent();
+  });
+
+  it("refuses malformed and taken slugs, a live address and the old addresses of another product", async () => {
+    for (const slug of ["Bad Slug", "a/b", "-x", "x--y"]) {
+      expectError(await setSlug(id, slug), 400, "VALIDATION_FAILED");
+    }
+    const other = await completeProduct("slug-other", "DP210-X");
+    expectError(await setSlug(other, "dp210-a"), 409, "CONFLICT_STATE", {
+      path: "slug",
+      rule: "unique",
+    });
+    // The first product's master moves on (not yet republished): the address is still live.
+    expect((await setSlug(id, "dp210-d")).status).toBe(200);
+    expect((await setSlug(other, "dp210-a")).status).toBe(200);
+    expectError(await publish(other), 409, "CONFLICT_STATE", {
+      path: "slug",
+      rule: "live_elsewhere",
+    });
+    await expectLive("/products/dp210-a");
+    // Once it moved, /products/dp210-a is its old address: the other product is refused again
+    // (409 old_address), the 301 and every row stay as they were.
+    expect((await publish(id)).status).toBe(200);
+    await expectRedirect("/products/dp210-a", "/products/dp210-d");
+    const rows = await owner.siteRedirect.findMany({
+      where: { siteId: BV, active: true },
+      orderBy: { sourcePath: "asc" },
+    });
+    expectError(await publish(other), 409, "CONFLICT_STATE", {
+      path: "slug",
+      rule: "old_address",
+    });
+    expect(
+      await owner.siteRedirect.findMany({
+        where: { siteId: BV, active: true },
+        orderBy: { sourcePath: "asc" },
+      }),
+    ).toEqual(rows);
+    await expectRedirect("/products/dp210-a", "/products/dp210-d");
+    await expectRedirect("/products/dp210-b", "/products/dp210-d");
+    await expectRedirect("/products/dp210-c", "/products/dp210-d");
+    // With a slug of its own the other product publishes normally.
+    expect((await setSlug(other, "dp210-x")).status).toBe(200);
+    expect((await publish(other)).status).toBe(200);
+    await expectLive("/products/dp210-x");
+    await expectLive("/products/dp210-d");
+    const wf = await admin.workflow(id);
+    expect(wf.sites.find((s) => s.siteKey === "BV")!.addresses.redirectsHere).toEqual([
+      "/products/dp210-a",
+      "/products/dp210-b",
+      "/products/dp210-c",
+    ]);
+    await expectConsistent();
+  });
+
+  it("concurrent republishing of one product: exactly one publication, one redirect", async () => {
+    expect((await setSlug(id, "dp210-e")).status).toBe(200);
+    const [r1, r2] = await Promise.all([publish(id), publish(id)]);
+    expect([r1.status, r2.status].sort()).toEqual([200, 409]);
+    await expectLive("/products/dp210-e");
+    await expectRedirect("/products/dp210-d", "/products/dp210-e");
+    expect(
+      await owner.siteRedirect.count({ where: { siteId: BV, sourcePath: "/products/dp210-d" } }),
+    ).toBe(1);
+    await expectConsistent();
+  });
+
+  it("taken off the site: the current address is 404, the old ones still lead there in one hop", async () => {
+    const row = await owner.productPublication.findUniqueOrThrow({
+      where: { productId_siteId: { productId: id, siteId: BV } },
+    });
+    const off = await admin.post(`/products/${id}/publications/${BV}/unpublish`, {
+      version: row.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expectError(await resolve("/products/dp210-e"), 404, "NOT_FOUND");
+    await expectRedirect("/products/dp210-d", "/products/dp210-e");
+    expect(await sitemapPaths("bv")).not.toContain("/products/dp210-e");
+    // Publishing again at the same slug was not a move (it was not live): no new redirect.
+    const before = await owner.siteRedirect.count({ where: { contentId: id } });
+    expect((await publish(id)).status).toBe(200);
+    expect(await owner.siteRedirect.count({ where: { contentId: id } })).toBe(before);
+    await expectLive("/products/dp210-e");
+  });
+});
