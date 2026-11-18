@@ -19,6 +19,7 @@ import {
   CategoryCreateRequestSchema,
   CategoryDefaultRequestSchema,
   CategoryUpdateRequestSchema,
+  ListingSeoUpdateRequestSchema,
   ListingUpsertRequestSchema,
   ProductCreateRequestSchema,
   ProductListQuerySchema,
@@ -27,6 +28,7 @@ import {
   type Category,
   type CatalogContextResponse,
   type Listing,
+  type ListingSeoResponse,
   type Product,
   type ProductDetailResponse,
   type ProductListResponse,
@@ -36,6 +38,7 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
 import { changeMaster } from "./master.js";
+import { LISTING_SEO_SELECT, listingSeo } from "./listing-seo.js";
 import { parentProblem, subtreeIds } from "./tree.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +73,13 @@ interface ListingRow {
   version: number;
   updatedAt: Date;
   texts: { title: string | null; summary: string | null; description: string | null }[];
+  seoTitle: string | null;
+  seoDescription: string | null;
+  seoOgTitle: string | null;
+  seoOgDescription: string | null;
+  seoCanonicalPath: string | null;
+  seoNoindex: boolean;
+  seoOgImageId: string | null;
 }
 
 interface CategoryRow {
@@ -111,6 +121,7 @@ function toListing(l: ListingRow): Listing {
     sortOrder: l.sortOrder,
     version: l.version,
     text: text ? { title: text.title, summary: text.summary, description: text.description } : null,
+    seo: listingSeo(l),
     updatedAt: l.updatedAt.toISOString(),
   };
 }
@@ -149,6 +160,7 @@ const LISTING_SELECT = {
     where: { locale: CATALOG_CONTENT_LOCALE },
     select: { title: true, summary: true, description: true },
   },
+  ...LISTING_SEO_SELECT,
 } as const;
 
 @Injectable()
@@ -601,6 +613,86 @@ export class CatalogService {
         return after;
       });
       return { listing: toListing(listing) };
+    } catch (e) {
+      return mapDbError(e);
+    }
+  }
+
+  /**
+   * DP-209: saves the SEO of the product's listing on one site (`product:edit` of the site, like
+   * the listing texts). A listing change: version + 1, audited with the changed field names only.
+   * Nothing reaches the site until the product is published again (the snapshot carries the SEO);
+   * the publication tab shows the listing as changed meanwhile. The OG image must be a public
+   * image of this product. SEO never blocks a publication.
+   */
+  async updateListingSeo(
+    ctx: RequestContext,
+    rawProductId: string,
+    rawSiteId: string,
+    body: unknown,
+  ): Promise<ListingSeoResponse> {
+    const a = await this.access.begin(ctx);
+    const productId = CatalogService.uuidOr404(rawProductId);
+    const siteId = await CatalogService.requireSite(a, EDIT, rawSiteId, {
+      type: "product_listing",
+      id: productId,
+    });
+    const input = parseBody(ListingSeoUpdateRequestSchema, body);
+    const db = a.db({ siteIds: [siteId], includePlatform: false });
+    try {
+      return await db.$transaction(async (tx) => {
+        const existing = await tx.productSiteListing.findUnique({
+          where: { productId_siteId: { productId, siteId } },
+          select: { id: true, version: true, ...LISTING_SEO_SELECT },
+        });
+        if (!existing) throw new ApiError("NOT_FOUND", [{ path: "listing", rule: "missing" }]);
+        if (existing.version !== input.version) throw staleVersion();
+        if (input.ogImageId) {
+          const image = await tx.productImage.findFirst({
+            where: { id: input.ogImageId, productId, isPublic: true },
+            select: { id: true },
+          });
+          if (!image) {
+            throw new ApiError("VALIDATION_FAILED", [{ path: "ogImageId", rule: "unknown" }]);
+          }
+        }
+        const data = {
+          seoTitle: input.title,
+          seoDescription: input.description,
+          seoOgTitle: input.ogTitle,
+          seoOgDescription: input.ogDescription,
+          seoCanonicalPath: input.canonicalPath,
+          seoNoindex: input.noindex,
+          seoOgImageId: input.ogImageId,
+        };
+        const res = await tx.productSiteListing.updateMany({
+          where: { id: existing.id, version: input.version },
+          data: { ...data, version: { increment: 1 } },
+        });
+        if (res.count !== 1) throw staleVersion();
+        const after = await tx.productSiteListing.findUniqueOrThrow({
+          where: { id: existing.id },
+          select: { id: true, siteId: true, version: true, updatedAt: true, ...LISTING_SEO_SELECT },
+        });
+        const changed = (Object.keys(data) as (keyof typeof data)[]).filter(
+          (k) => existing[k] !== data[k],
+        );
+        await a.audit(tx, {
+          action: "catalog.listing_seo_updated",
+          resourceType: "product_listing",
+          resourceId: existing.id,
+          siteId,
+          permission: EDIT,
+          metadata: { productId, changed, noindex: input.noindex, version: after.version },
+        });
+        return {
+          listingId: after.id,
+          siteId: after.siteId,
+          version: after.version,
+          seo: listingSeo(after),
+          updatedAt: after.updatedAt.toISOString(),
+        };
+      });
     } catch (e) {
       return mapDbError(e);
     }

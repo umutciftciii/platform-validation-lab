@@ -5,7 +5,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
 import { NewsList } from "@/components/news/news-pages";
 import { getNews } from "@/lib/cms-home";
-import { noindexMetadata, pageMetadata } from "@/lib/seo";
+import { cmsPageSeo, noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 
 const news = cache(getNews);
 
@@ -19,12 +19,17 @@ export async function generateMetadata(): Promise<Metadata> {
   const res = await news();
   if (!res.ok) return noindexMetadata("Dream Petroleum BV");
   const { title, seo, copy } = res.data.heading;
-  return pageMetadata({
-    path: "/news",
-    title: seo.title ?? `${copy.title || title} · Dream Petroleum BV`,
-    description: seo.description ?? copy.intro,
-    noindex: seo.noindex,
-  });
+  const site = await siteSeo();
+  return pageMetadata(
+    {
+      path: "/news",
+      title: seo.title ?? `${copy.title || title} · ${site.siteName}`,
+      description: seo.description ?? copy.intro,
+      noindex: seo.noindex,
+      ...cmsPageSeo(seo),
+    },
+    site,
+  );
 }
 
 export default function NewsPage() {

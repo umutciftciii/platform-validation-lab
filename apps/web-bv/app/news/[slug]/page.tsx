@@ -6,7 +6,7 @@ import { cache, Suspense } from "react";
 import { HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
 import { ArticlePage, ArticleRemoved, NEWS_UI } from "@/components/news/news-pages";
 import { getNewsChrome, getPublishedArticle } from "@/lib/cms-home";
-import { noindexMetadata, pageMetadata } from "@/lib/seo";
+import { cmsPageSeo, noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
 const published = cache(getPublishedArticle);
@@ -27,15 +27,19 @@ export async function generateMetadata({ params }: PageProps<"/news/[slug]">): P
   }
   const { path, title, seo, excerpt, coverImage, coverAlt, firstPublishedAt } = res.data;
   // DP-207: canonical URL and og:image from the site's public origin (lib/seo.ts).
-  return pageMetadata({
-    path,
-    type: "article",
-    title: seo.title ?? title,
-    description: seo.description ?? excerpt,
-    noindex: seo.noindex,
-    images: coverImage ? [{ url: coverImage, alt: coverAlt }] : [],
-    publishedTime: firstPublishedAt,
-  });
+  return pageMetadata(
+    {
+      path,
+      type: "article",
+      title: seo.title ?? title,
+      description: seo.description ?? excerpt,
+      noindex: seo.noindex,
+      images: coverImage ? [{ url: coverImage, alt: coverAlt }] : [],
+      publishedTime: firstPublishedAt,
+      ...cmsPageSeo(seo),
+    },
+    await siteSeo(),
+  );
 }
 
 export default function NewsArticlePage({ params }: PageProps<"/news/[slug]">) {

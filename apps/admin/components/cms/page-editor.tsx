@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BV_SITE_SEO_KEY,
   CMS_ARTICLE_FIELDS,
   CMS_ARTICLE_SECTION_TYPES,
   CMS_SECTION_TYPES,
@@ -24,6 +25,9 @@ import { Fields, IconButton, move, toContent, toValues, type ItemValue } from ".
 import { HistoryPanel } from "./history-panel";
 import { PublicationPanel } from "./publication-panel";
 import { useNotice } from "../catalog/notices";
+import { SeoFields, seoValues, type SeoValues } from "../seo/seo-fields";
+import { SeoPreview } from "../seo/seo-preview";
+import { previewImageSrc, seoView, type SiteSeoDefaults } from "../../lib/seo-view";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, Spinner } from "../ui";
 
@@ -71,6 +75,8 @@ export function PageEditor({
   siteLabel,
   siteKey,
   history,
+  origin = null,
+  siteSeo,
 }: {
   page: CmsPage;
   canEdit: boolean;
@@ -78,6 +84,10 @@ export function PageEditor({
   siteLabel: string;
   siteKey: "BV" | "CORPORATE";
   history: CmsHistoryResponse | null;
+  /** DP-209: the site's public origin (canonical URL in the preview), null when unknown. */
+  origin?: string | null;
+  /** DP-209: the site defaults the site applies now (the preview's fallbacks). */
+  siteSeo: SiteSeoDefaults;
 }) {
   const template = page.kind === "TEMPLATE" ? null : cmsDesignTemplate(page.templateKey);
   const article = cmsIsArticle(page);
@@ -88,9 +98,10 @@ export function PageEditor({
   const [version, setVersion] = useState(page.version);
   const [title, setTitle] = useState(page.title);
   const [slug, setSlug] = useState(page.slug ?? "");
-  const [seoTitle, setSeoTitle] = useState(page.seo.title ?? "");
-  const [seoDescription, setSeoDescription] = useState(page.seo.description ?? "");
-  const [noindex, setNoindex] = useState(page.seo.noindex);
+  // DP-209: title, description, canonical, noindex and Open Graph; fragments have none.
+  const [seo, setSeo] = useState<SeoValues>(() => seoValues(page.seo));
+  const [ogImage, setOgImage] = useState<ItemValue>(() => ({ ogImage: page.seo.ogImage ?? "" }));
+  const hasSeo = page.kind !== "FRAGMENT";
   const [sections, setSections] = useState<SectionValue[]>(() => fromPage(page));
   const [design, setDesign] = useState<ItemValue>(() =>
     template ? toValues(template.fields, page.content) : {},
@@ -128,19 +139,21 @@ export function PageEditor({
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (readOnly) return;
-    const seo = { title: seoTitle, description: seoDescription, noindex };
+    const seoBody = hasSeo
+      ? { ...seo, ogImage: (ogImage["ogImage"] as string) || null }
+      : { ...seoValues(page.seo), ogImage: page.seo.ogImage };
     const sectionContent = sections.map((s) => {
       const def = SECTION_BY_TYPE.get(s.type);
       return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values) : {}) };
     });
     const body: CmsPageDraftRequest | CmsFixedDraftRequest | CmsArticleDraftRequest = template
-      ? { version, title, seo, content: toContent(template.fields, design) }
+      ? { version, title, seo: seoBody, content: toContent(template.fields, design) }
       : article
         ? {
             version,
             title,
             slug,
-            seo,
+            seo: seoBody,
             content: {
               ...(toContent(CMS_ARTICLE_FIELDS, articleValues) as {
                 excerpt: string;
@@ -150,7 +163,7 @@ export function PageEditor({
               sections: sectionContent,
             },
           }
-        : { version, title, slug, seo, content: { sections: sectionContent } };
+        : { version, title, slug, seo: seoBody, content: { sections: sectionContent } };
     setPending(true);
     setError(null);
     setIssues([]);
@@ -301,6 +314,34 @@ export function PageEditor({
             ) : null}
           </Panel>
         )}
+        {hasSeo ? (
+          <PageSeoPanel
+            pageId={page.id}
+            path={page.path ?? "/"}
+            fallbackTitle={page.path === "/" ? siteSeo.defaultTitle : title}
+            fallbackDescription={
+              article
+                ? ((articleValues["excerpt"] as string | undefined) ?? null)
+                : page.templateKey === "bv.news-index"
+                  ? ((design["intro"] as string | undefined) ?? null)
+                  : null
+            }
+            pageImage={
+              article ? ((articleValues["coverImage"] as string | undefined) ?? null) : null
+            }
+            values={seo}
+            ogImage={ogImage}
+            readOnly={readOnly}
+            invalid={invalid}
+            siteKey={siteKey}
+            siteSeo={siteSeo}
+            origin={origin}
+            onChange={(patch) => change(setSeo)({ ...seo, ...patch })}
+            onOgImage={change(setOgImage)}
+          />
+        ) : page.templateKey === BV_SITE_SEO_KEY ? (
+          <SiteSeoPreview values={design} origin={origin} />
+        ) : null}
       </div>
 
       <div className="space-y-6 lg:sticky lg:top-6">
@@ -348,57 +389,6 @@ export function PageEditor({
           canEdit={canEdit}
           history={history}
         />
-
-        <Panel id="seo" title="SEO" description="Search results and link previews.">
-          <div className="space-y-4">
-            <Field
-              label="SEO title"
-              htmlFor="seo-title"
-              hint={`${seoTitle.length}/120 · about 60 characters show in results. Empty: the page title.`}
-            >
-              <input
-                id="seo-title"
-                maxLength={120}
-                value={seoTitle}
-                readOnly={readOnly}
-                aria-invalid={invalid("seo.title")}
-                onChange={(e) => change(setSeoTitle)(e.currentTarget.value)}
-                className={FIELD}
-              />
-            </Field>
-            <Field
-              label="Meta description"
-              htmlFor="seo-description"
-              hint={`${seoDescription.length}/320 · about 155 characters show in results.`}
-            >
-              <textarea
-                id="seo-description"
-                maxLength={320}
-                rows={4}
-                value={seoDescription}
-                readOnly={readOnly}
-                aria-invalid={invalid("seo.description")}
-                onChange={(e) => change(setSeoDescription)(e.currentTarget.value)}
-                className={TEXTAREA}
-              />
-            </Field>
-            <label className="flex items-start gap-3 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={noindex}
-                disabled={readOnly}
-                onChange={(e) => change(setNoindex)(e.currentTarget.checked)}
-                className="mt-0.5 size-4 accent-petrol"
-              />
-              <span>
-                Hide from search engines
-                <span className="block text-xs text-ink-3">
-                  Adds noindex when the page is published.
-                </span>
-              </span>
-            </label>
-          </div>
-        </Panel>
       </div>
     </form>
   );
@@ -578,5 +568,144 @@ function DesignFields({
         ) : null,
       )}
     </>
+  );
+}
+
+const OG_IMAGE_FIELD: CmsField = {
+  type: "asset",
+  key: "ogImage",
+  label: "Open Graph image",
+  kinds: ["image"],
+  required: false,
+  hint: "Empty: the page's own image, then the site's default image.",
+};
+
+/**
+ * DP-209: the page's SEO with a live preview (search result, link preview, canonical URL and
+ * length notes). Saved with the draft; the site shows it only after the page is published.
+ */
+function PageSeoPanel({
+  pageId,
+  path,
+  fallbackTitle,
+  fallbackDescription,
+  pageImage,
+  values,
+  ogImage,
+  readOnly,
+  invalid,
+  siteKey,
+  siteSeo,
+  origin,
+  onChange,
+  onOgImage,
+}: {
+  pageId: string;
+  path: string;
+  fallbackTitle: string;
+  fallbackDescription: string | null;
+  pageImage: string | null;
+  values: SeoValues;
+  ogImage: ItemValue;
+  readOnly: boolean;
+  invalid: (path: string) => true | undefined;
+  siteKey: "BV" | "CORPORATE";
+  siteSeo: SiteSeoDefaults;
+  origin: string | null;
+  onChange: (patch: Partial<SeoValues>) => void;
+  onOgImage: (v: ItemValue) => void;
+}) {
+  const chosen = (ogImage["ogImage"] as string | undefined) || null;
+  const view = seoView(
+    {
+      ...values,
+      path,
+      fallbackTitle,
+      fallbackDescription,
+      ogImageUrl: chosen,
+      pageImageUrl: pageImage,
+    },
+    siteSeo,
+    origin,
+  );
+  return (
+    <Panel
+      id="seo"
+      title="SEO"
+      description="Search results and link previews. Saved with the draft; the site shows it after publishing."
+    >
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+        <SeoFields
+          idPrefix={`seo-${pageId.slice(0, 8)}`}
+          values={values}
+          onChange={onChange}
+          readOnly={readOnly}
+          invalid={invalid}
+          pathPrefix="seo."
+          titleFallback={`“${fallbackTitle}”`}
+          descriptionFallback={
+            fallbackDescription ? "the page's summary" : "the site's default description"
+          }
+          ogImage={
+            <Fields
+              fields={[OG_IMAGE_FIELD]}
+              values={ogImage}
+              path="seo"
+              idPrefix={`seo-${pageId.slice(0, 8)}`}
+              readOnly={readOnly}
+              invalid={invalid}
+              onChange={(v) => onOgImage({ ...ogImage, ...v })}
+              site={siteKey}
+            />
+          }
+        />
+        <SeoPreview
+          view={view}
+          siteName={siteSeo.siteName}
+          imageSrc={previewImageSrc(view.ogImageUrl, origin)}
+          noindex={values.noindex}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+/** DP-209: the site defaults as a page without values of its own would show them. */
+function SiteSeoPreview({ values, origin }: { values: ItemValue; origin: string | null }) {
+  const text = (k: string) => ((values[k] as string | undefined) ?? "").trim();
+  const site: SiteSeoDefaults = {
+    siteName: text("siteName") || "Site name",
+    defaultTitle: text("defaultTitle") || "Default title",
+    defaultDescription: text("defaultDescription") || null,
+    defaultOgImage: text("defaultOgImage") || "",
+  };
+  const view = seoView(
+    {
+      path: "/",
+      fallbackTitle: site.defaultTitle,
+      title: "",
+      description: "",
+      canonicalPath: "",
+      noindex: false,
+      ogTitle: "",
+      ogDescription: "",
+      ogImageUrl: null,
+    },
+    site,
+    origin,
+  );
+  return (
+    <Panel
+      id="seo-defaults-preview"
+      title="Preview"
+      description="A page without its own SEO values, with these defaults (as the home page would show them)."
+    >
+      <SeoPreview
+        view={view}
+        siteName={site.siteName}
+        imageSrc={site.defaultOgImage ? previewImageSrc(site.defaultOgImage, origin) : null}
+        noindex={false}
+      />
+    </Panel>
   );
 }

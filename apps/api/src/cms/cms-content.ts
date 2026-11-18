@@ -12,6 +12,8 @@ import {
   cmsFieldsSchema,
   type CmsPage,
   type CmsPageSummary,
+  type CmsSeo,
+  type CmsSeoValue,
   type CmsPublication,
   type CmsPublicPage,
 } from "@dream/contracts";
@@ -68,6 +70,68 @@ export async function attachPublications(db: CmsDb, rows: PageBase[]): Promise<P
   });
 }
 
+// --- SEO columns (ADR-020 D-S1, DP-209) ------------------------------------------------------------
+
+/** The SEO columns a page and its revisions share (DP-209 adds canonical and Open Graph). */
+export const SEO_SELECT = {
+  seoTitle: true,
+  seoDescription: true,
+  noindex: true,
+  canonicalPath: true,
+  ogTitle: true,
+  ogDescription: true,
+  ogImage: true,
+} as const;
+
+export interface SeoColumns {
+  seoTitle: string | null;
+  seoDescription: string | null;
+  noindex: boolean;
+  canonicalPath: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogImage: string | null;
+}
+
+/** The columns of a validated SEO request (contracts `CmsSeoSchema` output). */
+export function seoColumns(seo: CmsSeo): SeoColumns {
+  return {
+    seoTitle: seo.title,
+    seoDescription: seo.description,
+    noindex: seo.noindex,
+    canonicalPath: seo.canonicalPath,
+    ogTitle: seo.ogTitle,
+    ogDescription: seo.ogDescription,
+    ogImage: seo.ogImage,
+  };
+}
+
+/** Exactly the SEO columns of a row (publication and restore copy them unchanged). */
+export function pickSeo(row: SeoColumns): SeoColumns {
+  return {
+    seoTitle: row.seoTitle,
+    seoDescription: row.seoDescription,
+    noindex: row.noindex,
+    canonicalPath: row.canonicalPath,
+    ogTitle: row.ogTitle,
+    ogDescription: row.ogDescription,
+    ogImage: row.ogImage,
+  };
+}
+
+/** The SEO of a stored page or revision as the API answers it. */
+export function seoValue(row: SeoColumns): CmsSeoValue {
+  return {
+    title: row.seoTitle,
+    description: row.seoDescription,
+    noindex: row.noindex,
+    canonicalPath: row.canonicalPath,
+    ogTitle: row.ogTitle,
+    ogDescription: row.ogDescription,
+    ogImage: row.ogImage,
+  };
+}
+
 export interface LiveRow {
   pageId: string;
   publishedAt: Date;
@@ -81,6 +145,10 @@ export interface LiveRow {
     seoTitle: string | null;
     seoDescription: string | null;
     noindex: boolean;
+    canonicalPath: string | null;
+    ogTitle: string | null;
+    ogDescription: string | null;
+    ogImage: string | null;
     content: unknown;
   };
 }
@@ -100,9 +168,7 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
         revisionNumber: true,
         title: true,
         path: true,
-        seoTitle: true,
-        seoDescription: true,
-        noindex: true,
+        ...SEO_SELECT,
         content: true,
       },
     }),
@@ -145,9 +211,7 @@ export const PAGE_SELECT = {
   path: true,
   locale: true,
   title: true,
-  seoTitle: true,
-  seoDescription: true,
-  noindex: true,
+  ...SEO_SELECT,
   content: true,
   schemaVersion: true,
   version: true,
@@ -184,6 +248,10 @@ export interface PageRow {
   seoTitle: string | null;
   seoDescription: string | null;
   noindex: boolean;
+  canonicalPath: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogImage: string | null;
   content: unknown;
   schemaVersion: number;
   version: number;
@@ -244,7 +312,7 @@ export function toPage(row: PageRow): CmsPage {
   return {
     ...toSummary(row),
     slug: row.kind === "TEMPLATE" && row.path ? cmsSlugOfPath(row.path) : null,
-    seo: { title: row.seoTitle, description: row.seoDescription, noindex: row.noindex },
+    seo: seoValue(row),
     content: asObject(row.content),
     createdAt: row.createdAt.toISOString(),
     createdBy: userRef(row.createdBy),
@@ -314,6 +382,10 @@ export function publicPage(
     seoTitle: string | null;
     seoDescription: string | null;
     noindex: boolean;
+    canonicalPath: string | null;
+    ogTitle: string | null;
+    ogDescription: string | null;
+    ogImage: string | null;
     content: unknown;
   },
   revision: { revisionNumber: number; publishedAt: Date; firstPublishedAt: Date } | null,
@@ -323,7 +395,7 @@ export function publicPage(
     templateKey: row.templateKey,
     path: row.path,
     title: row.title,
-    seo: { title: row.seoTitle, description: row.seoDescription, noindex: row.noindex },
+    seo: seoValue(row),
     content: asObject(row.content),
     revisionNumber: revision?.revisionNumber ?? null,
     publishedAt: revision?.publishedAt.toISOString() ?? null,

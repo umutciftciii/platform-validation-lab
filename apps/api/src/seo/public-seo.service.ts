@@ -7,13 +7,22 @@
  *    publication rows and paths (no page content); the page itself still validates its content.
  *  - `sitemap()`: the indexable live addresses with their last publication date. CMS pages and
  *    articles with noindex, fragments, drafts and unpublished pages are left out; products only
- *    while live (published, listing visible, master not archived: catalog/live.ts).
+ *    while live (published, listing visible, master not archived: catalog/live.ts). DP-209: a
+ *    page or product with noindex, or whose canonical names another address, is left out too
+ *    (from its PUBLISHED state: a draft never changes the sitemap).
+ *  - `settings()` (DP-209): the published site SEO defaults (`bv.site-seo`), or null.
  */
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   PublishedSnapshotSchema,
+  BV_SITE_SEO_FIELDS,
+  BV_SITE_SEO_KEY,
+  PublicSiteSeoSettingsSchema,
   SEO_RESOLVABLE_PATH,
+  cmsFieldsSchema,
   cmsIsArticle,
+  seoIsSelfCanonical,
+  type PublicSiteSeoResponse,
   type PublicSeoResolveResponse,
   type PublicSitemapEntry,
   type PublicSitemapResponse,
@@ -28,13 +37,18 @@ interface LivePath {
   path: string;
   kind: SeoPathKind;
   noindex: boolean;
+  /** DP-209: the published canonical override (null: the address itself). */
+  canonicalPath: string | null;
   publishedAt: Date;
 }
+
+/** DP-209: in the sitemap only when indexable and its own canonical address. */
+const listed = (p: LivePath) => !p.noindex && seoIsSelfCanonical(p.path, p.canonicalPath);
 
 const PRODUCTS_PREFIX = "/products/";
 
 /** The kind of a live CMS address; the two list pages are designed pages at fixed paths. */
-function kindOf(path: string, page: { kind: string; templateKey: string }): SeoPathKind {
+export function kindOf(path: string, page: { kind: string; templateKey: string }): SeoPathKind {
   if (path === "/") return "home";
   if (page.templateKey === "bv.news-index") return "news";
   if (page.templateKey === "bv.products-index") return "products";
@@ -45,6 +59,8 @@ const byPath = (a: { path: string }, b: { path: string }) => a.path.localeCompar
 
 @Injectable()
 export class PublicSeoService {
+  private readonly log = new Logger("PublicSeo");
+
   constructor(@Inject(PublicSiteService) private readonly sites: PublicSiteService) {}
 
   /** Published CMS pages and articles of the site with their path (fragments have none). */
@@ -57,7 +73,7 @@ export class PublicSeoService {
     const [revisions, pages] = await Promise.all([
       site.db.cmsPageRevision.findMany({
         where: { id: { in: pubs.map((p) => p.revisionId) } },
-        select: { id: true, path: true, noindex: true },
+        select: { id: true, path: true, noindex: true, canonicalPath: true },
       }),
       site.db.cmsPage.findMany({
         where: { id: { in: pubs.map((p) => p.pageId) } },
@@ -73,6 +89,7 @@ export class PublicSeoService {
         path: r.path,
         kind: kindOf(r.path, page),
         noindex: r.noindex,
+        canonicalPath: r.canonicalPath,
         publishedAt: p.publishedAt,
       });
     }
@@ -92,7 +109,8 @@ export class PublicSeoService {
       out.push({
         path: `${PRODUCTS_PREFIX}${s.data.slug}`,
         kind: "product",
-        noindex: false,
+        noindex: s.data.seo?.noindex ?? false,
+        canonicalPath: s.data.seo?.canonicalPath ?? null,
         publishedAt: row.publishedAt,
       });
     }
@@ -137,6 +155,38 @@ export class PublicSeoService {
     throw new ApiError("NOT_FOUND");
   }
 
+  /**
+   * DP-209: the site's SEO defaults: the PUBLISHED `bv.site-seo` fragment, validated again
+   * against its fields (a revision that no longer matches is not served). null while it is not
+   * published (or for a site without SEO defaults): the site then uses its code defaults.
+   */
+  async settings(ctx: RequestContext): Promise<PublicSiteSeoResponse> {
+    const site = await this.sites.begin(ctx);
+    const none = { settings: null, publishedAt: null };
+    if (site.siteKey !== "BV") return none;
+    const page = await site.db.cmsPage.findFirst({
+      where: { siteId: site.siteId, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
+      select: { id: true },
+    });
+    if (!page) return none;
+    const pub = await site.db.cmsPagePublication.findUnique({
+      where: { pageId: page.id },
+      select: { status: true, revisionId: true, publishedAt: true },
+    });
+    if (pub?.status !== "PUBLISHED") return none;
+    const revision = await site.db.cmsPageRevision.findUnique({
+      where: { id: pub.revisionId },
+      select: { content: true },
+    });
+    const content = cmsFieldsSchema(BV_SITE_SEO_FIELDS).safeParse(revision?.content);
+    const settings = content.success ? PublicSiteSeoSettingsSchema.safeParse(content.data) : null;
+    if (!settings?.success) {
+      this.log.error("the published bv.site-seo revision does not match its schema; not served");
+      return none;
+    }
+    return { settings: settings.data, publishedAt: pub.publishedAt.toISOString() };
+  }
+
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
     const [pages, products] = await Promise.all([
@@ -156,23 +206,17 @@ export class PublicSeoService {
     // The product list is an app page; its designed heading page may switch it to noindex.
     const productsIndex = pages.find((p) => p.kind === "products");
     const entries: PublicSitemapEntry[] = [
-      ...of("home")
-        .filter((p) => !p.noindex)
-        .map(entry),
+      ...of("home").filter(listed).map(entry),
       ...(productsIndex?.noindex
         ? []
         : [{ path: "/products", kind: "products" as const, lastModified: latest(products) }]),
-      ...[...products].sort(byPath).map(entry),
-      ...of("page")
-        .filter((p) => !p.noindex)
-        .map(entry),
+      ...[...products].filter(listed).sort(byPath).map(entry),
+      ...of("page").filter(listed).map(entry),
       // The news list exists only while its heading page is published (DP-153).
       ...of("news")
-        .filter((p) => !p.noindex)
+        .filter(listed)
         .map((p) => ({ ...entry(p), lastModified: latest([p, ...of("article")]) })),
-      ...of("article")
-        .filter((p) => !p.noindex)
-        .map(entry),
+      ...of("article").filter(listed).map(entry),
     ];
     const seen = new Set<string>();
     return { entries: entries.filter((e) => !seen.has(e.path) && Boolean(seen.add(e.path))) };

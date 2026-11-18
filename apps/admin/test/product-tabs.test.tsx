@@ -387,7 +387,7 @@ function panel(html: string, tab: string): string {
 describe("product page tabs", () => {
   beforeEach(() => fixtures({ canEditMaster: true }));
 
-  it("shows the header (name, SKU, status) and four tabs, Content active by default", async () => {
+  it("shows the header (name, SKU, status) and five tabs, Content active by default", async () => {
     const html = await render({ site: "bv" });
     expect(html).toContain("ICCSYN 6 Synthetic");
     expect(html).toContain("ICC-SYN-6");
@@ -396,10 +396,10 @@ describe("product page tabs", () => {
     expect(html).not.toContain("Not live");
     expect(html).toContain(">Archive<");
     const tabs = [...html.matchAll(/role="tab"[^>]*aria-selected="(true|false)"/g)];
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(5);
     for (const t of PRODUCT_TABS) expect(html).toContain(`>${t.label.replace("&", "&amp;")}`);
     expect(panel(html, "content")).not.toMatch(/^<div[^>]*hidden/);
-    for (const t of ["technical", "media", "publication"])
+    for (const t of ["technical", "media", "seo", "publication"])
       expect(panel(html, t)).toMatch(/^<div[^>]*hidden=""/);
   });
 
@@ -1311,5 +1311,90 @@ describe("product tab helpers", () => {
       expect(SECTION_TAB[fix!.section], code).toBe(fix!.tab);
     }
     expect(fixForIssue("something_new")).toBeNull();
+  });
+});
+
+// DP-209: the SEO tab — the product's SEO on the selected site, saved on the listing and shown on
+// the site after the next publication; previews apply the site's published defaults.
+describe("DP-209 product SEO tab", () => {
+  const DETAIL = `${C}/products/${PRODUCT}?siteId=${BV}`;
+  const SETTINGS = `/api/v1/admin/seo/sites/${BV}/overview?part=settings`;
+  type Detail = { listing: Record<string, unknown> };
+
+  beforeEach(() => fixtures({ canEditMaster: true }));
+
+  it("renders the SEO form with previews, built-in defaults and the product's address", async () => {
+    const seo = panel(await render({ site: "bv", tab: "seo" }), "seo");
+    for (const id of [
+      "title",
+      "description",
+      "canonical",
+      "og-title",
+      "og-description",
+      "og-image",
+    ])
+      expect(seo).toContain(`id="product-seo-22222222-${id}"`);
+    expect(seo).toContain("Save SEO");
+    expect(seo).toContain("Search result");
+    expect(seo).toContain("Link preview");
+    // No SEO title: the product name and the site name (built-in default).
+    expect(seo).toContain("ICCSYN 6 Synthetic | Dream Petroleum BV");
+    expect(seo).toContain("http://localhost:3110/products/iccsyn-6");
+    expect(seo).toContain("Cover image (default)");
+  });
+
+  it("shows saved values: noindex, a canonical override and length warnings, never as errors", async () => {
+    (reads.get(DETAIL) as Detail).listing["seo"] = {
+      title: "A very long SEO title that goes on and on beyond what a search result shows",
+      description: null,
+      ogTitle: null,
+      ogDescription: null,
+      canonicalPath: "/products/iccsyn-6-plus",
+      noindex: true,
+      ogImageId: null,
+    };
+    const seo = panel(await render({ site: "bv", tab: "seo" }), "seo");
+    expect(seo).toContain("Hidden from search engines (noindex): this result is not shown.");
+    expect(seo).toContain("http://localhost:3110/products/iccsyn-6-plus");
+    expect(seo).toContain("this page stays out of the sitemap");
+    expect(seo).toContain("SEO title: 75 characters: about 60 are shown");
+    expect(seo).not.toContain('aria-invalid="true"');
+  });
+
+  it("uses the published site defaults (bv.site-seo) in the preview", async () => {
+    reads.set(SETTINGS, {
+      site: { id: BV, key: "BV", name: "Dream Petroleum BV" },
+      permissions: {
+        readPages: true,
+        editPages: true,
+        publishPages: true,
+        readProducts: true,
+        editProducts: true,
+      },
+      settings: null,
+      liveSettings: {
+        siteName: "Dream Petroleum B.V.",
+        defaultTitle: "Dream Petroleum B.V.",
+        defaultDescription: "Base oils and specialty products.",
+        defaultOgImage: "/media/ctl-technology/industrial-process.webp",
+      },
+      items: [],
+    });
+    const seo = panel(await render({ site: "bv", tab: "seo" }), "seo");
+    expect(seo).toContain("ICCSYN 6 Synthetic | Dream Petroleum B.V.");
+    expect(seo).toContain("Base oils and specialty products.");
+    expect(seo).toContain("http://localhost:3110/media/ctl-technology/industrial-process.webp");
+  });
+
+  it("is read only without product:edit on the site", async () => {
+    fixtures({ canEditMaster: false });
+    const seo = panel(await render({ site: "bv", tab: "seo" }), "seo");
+    expect(seo).not.toContain("Save SEO");
+    expect(seo).toContain("Read only for you on this site.");
+  });
+
+  it("keeps #seo links in the SEO tab", () => {
+    expect(tabForHash("#seo")).toBe("seo");
+    expect(parseProductTab("seo")).toBe("seo");
   });
 });

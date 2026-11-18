@@ -20,6 +20,7 @@ import type {
   CategoryListResponse,
   CategoryResponse,
   ListingResponse,
+  ListingSeoResponse,
   ProductDetailResponse,
   ProductListResponse,
 } from "@dream/contracts";
@@ -85,6 +86,18 @@ export class CatalogController {
     @Body() body: unknown,
   ): Promise<ListingResponse> {
     return this.catalog.upsertListing(ctx, id, siteId, body);
+  }
+
+  /** DP-209: the SEO of the product's listing on a site (published with the next publication). */
+  @Post("products/:id/listings/:siteId/seo")
+  @HttpCode(200)
+  updateListingSeo(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Param("siteId") siteId: string,
+    @Body() body: unknown,
+  ): Promise<ListingSeoResponse> {
+    return this.catalog.updateListingSeo(ctx, id, siteId, body);
   }
 
   @Get("sites/:siteId/categories")

@@ -31,6 +31,7 @@ import {
   ReviewPanel,
 } from "../../../../components/catalog/workflow";
 import { ListingForm } from "../../../../components/catalog/listing-form";
+import { ProductSeoForm } from "../../../../components/catalog/product-seo-form";
 import {
   PageHeader,
   pickSite,
@@ -44,7 +45,7 @@ import {
   ProductStateButton,
 } from "../../../../components/catalog/product-master-form";
 import { Icon } from "../../../../components/icons";
-import { EmptyState, ErrorState, Panel } from "../../../../components/ui";
+import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
 import { parseProductTab } from "../../../../lib/product-tabs";
 import {
   blockedSiteCount,
@@ -52,6 +53,7 @@ import {
   siteDisplayStatus,
 } from "../../../../lib/publication-status";
 import { serverRead } from "../../../../lib/server-api";
+import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
 import { requireStaffSession } from "../../../../lib/server-session";
 
 const CATALOG = "/api/v1/admin/catalog";
@@ -148,9 +150,12 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
     : null;
   const tab = parseProductTab(query["tab"]);
   // DP-180: the research notes of this site's proposal (review items and sources), read only.
-  const research = siteProposal
-    ? await serverRead(`${CATALOG}/proposals/${siteProposal.id}`, ProposalResponseSchema)
-    : null;
+  const [research, siteSeo] = await Promise.all([
+    siteProposal
+      ? serverRead(`${CATALOG}/proposals/${siteProposal.id}`, ProposalResponseSchema)
+      : null,
+    siteSeoDefaults(site.id),
+  ]);
 
   return (
     <NoticeProvider>
@@ -236,21 +241,24 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                     category to list products here.
                   </EmptyState>
                 ) : (
-                  <ListingForm
-                    key={`${site.id}-${listing?.version ?? 0}`}
-                    productId={product.id}
-                    siteId={site.id}
-                    siteName={SITE_SHORT[site.key]}
-                    listing={listing}
-                    categories={categories.ok ? categories.data.items : []}
-                    canEdit={site.canEdit}
-                    proposal={siteProposal}
-                    shared={{
-                      name: product.name,
-                      summary: product.summary,
-                      description: product.description,
-                    }}
-                  />
+                  // DP-209: kept while it has unsaved edits (an SEO save also raises the
+                  // listing version); remounted with the new version once it is clean.
+                  <KeepUnsaved resetKey={`${site.id}-${listing?.version ?? 0}`}>
+                    <ListingForm
+                      productId={product.id}
+                      siteId={site.id}
+                      siteName={SITE_SHORT[site.key]}
+                      listing={listing}
+                      categories={categories.ok ? categories.data.items : []}
+                      canEdit={site.canEdit}
+                      proposal={siteProposal}
+                      shared={{
+                        name: product.name,
+                        summary: product.summary,
+                        description: product.description,
+                      }}
+                    />
+                  </KeepUnsaved>
                 )}
               </Panel>
               <p className="px-1 text-xs text-ink-3">
@@ -433,7 +441,59 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             </Panel>
           </ProductTabPanel>
 
-          {/* 4. Publication: review, per-site readiness and blockers, publish, history. */}
+          {/* 4. SEO (DP-209): the product's search and link-preview data on the selected site. */}
+          <ProductTabPanel tab="seo">
+            <div id="seo" className="scroll-mt-32 space-y-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <ProductSiteSwitcher sites={sites} current={site.id} />
+                <p className="text-sm text-ink-3">Choose the site whose SEO you edit.</p>
+              </div>
+              <Panel
+                id="seo-panel"
+                title={`SEO on ${SITE_SHORT[site.key]}`}
+                description={
+                  site.key === "BV"
+                    ? "Search result and link preview of the product page. Saved on the site listing; the site shows it after the next publication. A product that is not published or not shown is never indexed."
+                    : "Only the BV site uses product SEO for now."
+                }
+                action={
+                  currentSite?.outdated.listing ? (
+                    <StatusPill tone="amber">Changes not published</StatusPill>
+                  ) : undefined
+                }
+              >
+                {!listing ? (
+                  <p className="text-sm text-ink-3">
+                    List the product on this site first (Content tab).
+                  </p>
+                ) : (
+                  <KeepUnsaved resetKey={`seo-${site.id}-${listing.version}`}>
+                    <ProductSeoForm
+                      productId={product.id}
+                      siteId={site.id}
+                      siteName={SITE_SHORT[site.key]}
+                      listing={listing}
+                      canEdit={site.canEdit}
+                      productName={listing.text?.title ?? product.name}
+                      productSummary={listing.text?.summary ?? product.summary}
+                      path={`/products/${product.slug}`}
+                      images={imageItems
+                        .filter((i) => i.isPublic)
+                        .map((i) => ({
+                          id: i.id,
+                          isCover: i.isCover,
+                          label: `${i.isCover ? "Cover · " : ""}${i.altText ?? i.originalFilename}`,
+                        }))}
+                      siteSeo={siteSeo}
+                      origin={site.key === "BV" ? bvPublicOrigin() : null}
+                    />
+                  </KeepUnsaved>
+                )}
+              </Panel>
+            </div>
+          </ProductTabPanel>
+
+          {/* 5. Publication: review, per-site readiness and blockers, publish, history. */}
           <ProductTabPanel tab="publication">
             {workflow.ok ? (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">

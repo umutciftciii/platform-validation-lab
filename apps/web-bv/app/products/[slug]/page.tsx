@@ -9,7 +9,7 @@ import { ProductDetailView } from "@/components/products/catalog-views";
 import { browseHref, trail } from "@/components/products/browse";
 import { LIVE_LINKS } from "@/components/products/live-links";
 import { ProductJsonLd } from "@/components/seo/json-ld";
-import { noindexMetadata, pageMetadata } from "@/lib/seo";
+import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 import {
   documentHref,
   imageSrc,
@@ -39,17 +39,29 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
   const res = await product(slug);
   if (!res.ok) return noindexMetadata("Product | Dream Petroleum BV");
   const p = res.data;
-  return pageMetadata({
-    path: `/products/${p.slug}`,
-    title: `${p.name} | Dream Petroleum BV`,
-    description: p.summary,
-    images: p.images.slice(0, 1).map((i) => ({
-      url: imageSrc(i.id, "display"),
-      alt: i.altText,
-      width: i.width,
-      height: i.height,
-    })),
+  const site = await siteSeo();
+  const image = (i: (typeof p.images)[number]) => ({
+    url: imageSrc(i.id, "display"),
+    alt: i.altText,
+    width: i.width,
+    height: i.height,
   });
+  // DP-209: the published SEO of the product (snapshot); the OG image is one of its images.
+  const og = p.seo.ogImageId ? p.images.find((i) => i.id === p.seo.ogImageId) : undefined;
+  return pageMetadata(
+    {
+      path: `/products/${p.slug}`,
+      title: p.seo.title ?? `${p.name} | ${site.siteName}`,
+      description: p.seo.description ?? p.summary,
+      noindex: p.seo.noindex,
+      canonicalPath: p.seo.canonicalPath,
+      ogTitle: p.seo.ogTitle,
+      ogDescription: p.seo.ogDescription,
+      ogImage: og ? image(og) : null,
+      images: p.images.slice(0, 1).map(image),
+    },
+    site,
+  );
 }
 
 /**

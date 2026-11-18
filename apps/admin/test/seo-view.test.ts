@@ -1,0 +1,151 @@
+// DP-209: the admin's SEO previews compute what the BV site renders (lib/seo-view.ts) and the
+// overview's notes and filters (lib/seo-overview.ts). Warnings only; nothing is refused here.
+import type { SeoOverviewItem } from "@dream/contracts";
+import { describe, expect, it } from "vitest";
+import {
+  filterSeoItems,
+  needsAttention,
+  parseSeoFilter,
+  seoEditHref,
+  seoNotes,
+} from "../lib/seo-overview";
+import {
+  CODE_SITE_SEO,
+  displayUrl,
+  previewImageSrc,
+  seoView,
+  type SeoDraft,
+} from "../lib/seo-view";
+
+const ORIGIN = "https://dreampetroleumbv.com";
+const draft = (d: Partial<SeoDraft> = {}): SeoDraft => ({
+  path: "/about-us",
+  fallbackTitle: "About Us",
+  title: "",
+  description: "",
+  canonicalPath: "",
+  noindex: false,
+  ogTitle: "",
+  ogDescription: "",
+  ogImageUrl: null,
+  ...d,
+});
+
+describe("DP-209 SEO preview values", () => {
+  it("falls back like the site: page title, page summary, site default, site image", () => {
+    const site = { ...CODE_SITE_SEO, defaultDescription: "Site default description." };
+    const v = seoView(draft(), site, ORIGIN);
+    expect(v).toMatchObject({
+      title: "About Us",
+      description: "Site default description.",
+      ogTitle: "About Us",
+      ogDescription: "Site default description.",
+      ogImageUrl: CODE_SITE_SEO.defaultOgImage,
+      sources: { title: "fallback", description: "site" },
+    });
+    expect(v.canonical).toEqual({
+      url: "https://dreampetroleumbv.com/about-us",
+      path: "/about-us",
+      override: false,
+      invalid: false,
+    });
+    const own = seoView(
+      draft({
+        title: "Own title",
+        fallbackDescription: "Summary",
+        ogImageUrl: null,
+        pageImageUrl: "/media/news/why-are-oil-prices-falling.jpg",
+      }),
+      site,
+      ORIGIN,
+    );
+    expect(own).toMatchObject({
+      title: "Own title",
+      description: "Summary",
+      ogImageUrl: "/media/news/why-are-oil-prices-falling.jpg",
+      sources: { title: "own", description: "fallback" },
+    });
+  });
+
+  it("uses a valid canonical override and ignores an invalid one (flagged)", () => {
+    expect(seoView(draft({ canonicalPath: "/our-team" }), CODE_SITE_SEO, ORIGIN).canonical).toEqual(
+      {
+        url: "https://dreampetroleumbv.com/our-team",
+        path: "/our-team",
+        override: true,
+        invalid: false,
+      },
+    );
+    expect(
+      seoView(draft({ canonicalPath: "https://evil.example" }), CODE_SITE_SEO, ORIGIN).canonical,
+    ).toMatchObject({ path: "/about-us", override: false, invalid: true });
+    expect(seoView(draft(), CODE_SITE_SEO, null).canonical.url).toBeNull();
+  });
+
+  it("lists length warnings without refusing anything", () => {
+    const v = seoView(
+      draft({ title: "x".repeat(70), description: "short" }),
+      CODE_SITE_SEO,
+      ORIGIN,
+    );
+    expect(v.warnings.map((w) => w.field)).toEqual(["title", "description"]);
+  });
+
+  it("builds the preview URL pieces and image sources", () => {
+    expect(displayUrl("https://dreampetroleumbv.com/products/x", "/products/x")).toEqual({
+      host: "dreampetroleumbv.com",
+      crumbs: "products › x",
+    });
+    expect(previewImageSrc("/media/a.webp", "http://localhost:3110")).toBe(
+      "http://localhost:3110/media/a.webp",
+    );
+    expect(previewImageSrc("/media/a.webp", null)).toBeNull();
+  });
+});
+
+const item = (i: Partial<SeoOverviewItem>): SeoOverviewItem => ({
+  id: "0190a8c4-7c1e-7000-8000-0000000000a1",
+  source: "cms",
+  kind: "page",
+  name: "Page",
+  path: "/page",
+  title: "Title",
+  description: "A description that is long enough to be a fine meta description for tests.",
+  ogTitle: null,
+  ogDescription: null,
+  hasOgImage: false,
+  canonicalPath: null,
+  noindex: false,
+  live: true,
+  pendingChanges: false,
+  inSitemap: true,
+  ...i,
+});
+
+describe("DP-209 SEO overview", () => {
+  it("notes missing descriptions, long texts and canonicals", () => {
+    expect(seoNotes(item({}))).toEqual([]);
+    expect(seoNotes(item({ description: null }))).toEqual(["No meta description (fallback used)"]);
+    expect(seoNotes(item({ title: "x".repeat(61) }))).toEqual(["Title may be cut off"]);
+    expect(seoNotes(item({ canonicalPath: "/other" }))).toEqual(["Canonical → /other"]);
+    expect(needsAttention(item({ canonicalPath: "/other" }))).toBe(false);
+    expect(needsAttention(item({ description: null }))).toBe(true);
+  });
+
+  it("filters and links each row to its existing editor", () => {
+    const rows = [
+      item({ noindex: true }),
+      item({ source: "product", kind: "product", pendingChanges: true }),
+      item({ live: false, description: null }),
+    ];
+    expect(filterSeoItems(rows, "noindex")).toHaveLength(1);
+    expect(filterSeoItems(rows, "products")).toHaveLength(1);
+    expect(filterSeoItems(rows, "pending")).toHaveLength(2);
+    expect(filterSeoItems(rows, "attention")).toHaveLength(1);
+    expect(filterSeoItems(rows, "all")).toHaveLength(3);
+    expect(parseSeoFilter("nope")).toBe("all");
+    expect(parseSeoFilter(["noindex"])).toBe("noindex");
+    expect(seoEditHref(rows[0]!, "bv")).toBe(`/content/${rows[0]!.id}#seo`);
+    expect(seoEditHref(rows[1]!, "bv")).toBe(`/products/${rows[1]!.id}?site=bv&tab=seo`);
+  });
+});

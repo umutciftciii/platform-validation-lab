@@ -1,5 +1,9 @@
 import { Controller, Get, Header, Inject, Query } from "@nestjs/common";
-import type { PublicSeoResolveResponse, PublicSitemapResponse } from "@dream/contracts";
+import type {
+  PublicSeoResolveResponse,
+  PublicSiteSeoResponse,
+  PublicSitemapResponse,
+} from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { PublicSeoService } from "./public-seo.service.js";
 
@@ -19,6 +23,13 @@ export class PublicSeoController {
     @Query("path") path: unknown,
   ): Promise<PublicSeoResolveResponse> {
     return this.seo.resolve(ctx, path);
+  }
+
+  /** DP-209: the published SEO defaults of the site (null until published). */
+  @Get("settings")
+  @Header("Cache-Control", "no-store")
+  settings(@Ctx() ctx: RequestContext): Promise<PublicSiteSeoResponse> {
+    return this.seo.settings(ctx);
   }
 
   /** The indexable live addresses of the site (sitemap.xml). */
