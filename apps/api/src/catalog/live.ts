@@ -13,7 +13,7 @@ export interface LiveRow {
 }
 
 export async function liveRows(
-  site: PublicSite,
+  site: Pick<PublicSite, "db" | "siteId">,
   where: Record<string, unknown> = {},
 ): Promise<LiveRow[]> {
   const rows = await site.db.productPublication.findMany({

@@ -21,8 +21,9 @@ export class PublicSeoController {
   resolve(
     @Ctx() ctx: RequestContext,
     @Query("path") path: unknown,
+    @Query("query") query: unknown,
   ): Promise<PublicSeoResolveResponse> {
-    return this.seo.resolve(ctx, path);
+    return this.seo.resolve(ctx, path, query ?? "");
   }
 
   /** DP-209: the published SEO defaults of the site (null until published). */

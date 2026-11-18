@@ -14,6 +14,8 @@
  *  - DP-210: `resolve(path)` answers an address without live content with its active redirect
  *    (`{ path, redirect: { target, statusCode } }`), so the proxy can send a 301 before rendering.
  *    Old addresses never appear in the sitemap (it lists live content only).
+ *  - DP-211: `resolve(path, query)` also matches a manual or imported redirect bound to the
+ *    request's query; redirect sources never have live content, so they never reach the sitemap.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -24,6 +26,7 @@ import {
   SEO_RESOLVABLE_PATH,
   cmsFieldsSchema,
   cmsIsArticle,
+  normalizeRedirectQuery,
   seoIsSelfCanonical,
   type PublicSiteSeoResponse,
   type PublicSeoResolveResponse,
@@ -60,6 +63,21 @@ export function kindOf(path: string, page: { kind: string; templateKey: string }
 
 const byPath = (a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path, "en");
 
+/** The reads the live-address helpers need: a site-scoped client and the site (DP-211 shares them). */
+export type SiteReader = Pick<PublicSite, "db" | "siteId">;
+
+/**
+ * DP-211: every address of the site that has live content now (published CMS pages and articles,
+ * live products). The admin redirect checks use it: a redirect never starts at a live address.
+ */
+export async function liveAddresses(site: SiteReader): Promise<Set<string>> {
+  const [pages, products] = await Promise.all([
+    PublicSeoService.livePages(site),
+    PublicSeoService.liveProductPaths(site),
+  ]);
+  return new Set([...pages, ...products].map((p) => p.path));
+}
+
 @Injectable()
 export class PublicSeoService {
   private readonly log = new Logger("PublicSeo");
@@ -67,7 +85,7 @@ export class PublicSeoService {
   constructor(@Inject(PublicSiteService) private readonly sites: PublicSiteService) {}
 
   /** Published CMS pages and articles of the site with their path (fragments have none). */
-  private static async livePages(site: PublicSite): Promise<LivePath[]> {
+  static async livePages(site: SiteReader): Promise<LivePath[]> {
     const pubs = await site.db.cmsPagePublication.findMany({
       where: { siteId: site.siteId, status: "PUBLISHED" },
       select: { pageId: true, revisionId: true, publishedAt: true },
@@ -100,7 +118,7 @@ export class PublicSeoService {
   }
 
   /** Slugs of the live products of the site, from their published snapshot. */
-  private static async liveProductPaths(site: PublicSite, slug?: string): Promise<LivePath[]> {
+  static async liveProductPaths(site: SiteReader, slug?: string): Promise<LivePath[]> {
     const rows = await liveProducts(
       site,
       slug ? { snapshot: { path: ["slug"], equals: slug } } : {},
@@ -139,25 +157,55 @@ export class PublicSeoService {
   }
 
   /**
-   * DP-210: the active redirect of an address without live content (plain source: a redirect
-   * bound to a query string is DP-211's and needs the query). Live content always wins: the API
-   * switches a redirect off when content goes live at its source again.
+   * DP-210: the active redirect of an address without live content. Live content always wins:
+   * the API switches a redirect off when content goes live at its source again, and DP-211 never
+   * lets a redirect start at a live address.
+   * DP-211: a redirect bound to the request's exact query (parameters in any order) comes first
+   * and sends its target as is (`keepQuery: false`); otherwise the plain redirect of the path.
    */
   private static async redirectOf(
     site: PublicSite,
     path: string,
+    query: string,
   ): Promise<PublicSeoResolveResponse | null> {
+    const status = (code: number) => (code === 302 ? 302 : 301);
+    if (query) {
+      const bound = await site.db.siteRedirect.findFirst({
+        where: { siteId: site.siteId, sourcePath: path, sourceQuery: query, active: true },
+        select: { target: true, statusCode: true },
+      });
+      if (bound) {
+        return {
+          path,
+          redirect: {
+            target: bound.target,
+            statusCode: status(bound.statusCode),
+            keepQuery: false,
+          },
+        };
+      }
+    }
     const r = await site.db.siteRedirect.findFirst({
       where: { siteId: site.siteId, sourcePath: path, sourceQuery: "", active: true },
       select: { target: true, statusCode: true },
     });
     if (!r) return null;
-    return { path, redirect: { target: r.target, statusCode: r.statusCode === 302 ? 302 : 301 } };
+    return { path, redirect: { target: r.target, statusCode: status(r.statusCode) } };
   }
 
-  async resolve(ctx: RequestContext, rawPath: unknown): Promise<PublicSeoResolveResponse> {
+  async resolve(
+    ctx: RequestContext,
+    rawPath: unknown,
+    rawQuery: unknown = "",
+  ): Promise<PublicSeoResolveResponse> {
     const path = typeof rawPath === "string" ? rawPath : "";
     if (!SEO_RESOLVABLE_PATH.test(path)) throw new ApiError("NOT_FOUND");
+    // DP-211: the request's query in stored form; one that cannot be stored matches no redirect.
+    const parsedQuery =
+      typeof rawQuery === "string" && rawQuery.length <= 2000
+        ? normalizeRedirectQuery(rawQuery)
+        : null;
+    const query = parsedQuery?.ok ? parsedQuery.value : "";
     const site = await this.sites.begin(ctx);
     if (path.startsWith(PRODUCTS_PREFIX)) {
       const [hit] = await PublicSeoService.liveProductPaths(
@@ -165,13 +213,13 @@ export class PublicSeoService {
         path.slice(PRODUCTS_PREFIX.length),
       );
       if (hit?.path === path) return { path, kind: "product" };
-      const moved = await PublicSeoService.redirectOf(site, path);
+      const moved = await PublicSeoService.redirectOf(site, path, query);
       if (moved) return moved;
       throw new ApiError("NOT_FOUND");
     }
     const hit = (await PublicSeoService.livePages(site)).find((p) => p.path === path);
     if (hit) return { path, kind: hit.kind };
-    const moved = await PublicSeoService.redirectOf(site, path);
+    const moved = await PublicSeoService.redirectOf(site, path, query);
     if (moved) return moved;
     if (await PublicSeoService.wasUnpublished(site, path)) {
       throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
