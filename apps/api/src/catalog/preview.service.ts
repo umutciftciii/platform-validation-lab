@@ -36,6 +36,7 @@ import {
   type PublicCategory,
   type PublishedSnapshot,
 } from "@dream/contracts";
+import { LISTING_SEO_SELECT, listingSeo } from "./listing-seo.js";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError } from "../iam/http/api-error.js";
 import { Clock } from "../iam/http/clock.js";
@@ -154,6 +155,7 @@ export class CatalogPreviewService {
           where: { locale: "en" },
           select: { title: true, summary: true, description: true },
         },
+        ...LISTING_SEO_SELECT,
       },
       take: 500,
     });
@@ -252,6 +254,11 @@ export class CatalogPreviewService {
         sortOrder: l.sortOrder,
         specs,
         images: imgs,
+        // DP-209: the CURRENT listing SEO, as the next publication would carry it.
+        seo: {
+          ...listingSeo(l),
+          ogImageId: imgs.some((i) => i.id === l.seoOgImageId) ? l.seoOgImageId : null,
+        },
       });
       const prop = proposalByProduct.get(p.id);
       out.push({

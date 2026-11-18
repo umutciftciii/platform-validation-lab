@@ -34,6 +34,7 @@
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
+import { EMPTY_PRODUCT_SEO, ProductSeoSchema } from "../seo.js";
 import {
   ProductStatusSchema,
   ListingVisibilitySchema,
@@ -551,6 +552,11 @@ export const PublishedSnapshotSchema = z.strictObject({
       }),
     )
     .max(100),
+  /**
+   * DP-209: the listing's SEO at publication. Snapshots taken before DP-209 have none (the site
+   * falls back to the product's own fields). Changing it takes a new publication, like the texts.
+   */
+  seo: ProductSeoSchema.optional(),
 });
 export type PublishedSnapshot = z.infer<typeof PublishedSnapshotSchema>;
 
@@ -619,6 +625,8 @@ export const PublicProductSchema = PublicProductBaseSchema.extend({
   description: z.string().nullable(),
   specs: PublishedSnapshotSchema.shape.specs,
   images: z.array(PublicImageSchema).max(100),
+  /** DP-209: the published SEO; `ogImageId` is always one of `images` or null. */
+  seo: ProductSeoSchema.default(EMPTY_PRODUCT_SEO),
 });
 export type PublicProduct = z.infer<typeof PublicProductSchema>;
 
@@ -645,6 +653,12 @@ export function toPublicProduct(s: PublishedSnapshot, publishedAt: string): Publ
     description: s.description,
     specs: s.specs,
     images: [...(cover ? [cover] : []), ...s.images.filter((i) => !i.isCover)].map(img),
+    seo: s.seo
+      ? {
+          ...s.seo,
+          ogImageId: s.images.some((i) => i.id === s.seo?.ogImageId) ? s.seo.ogImageId : null,
+        }
+      : EMPTY_PRODUCT_SEO,
   };
 }
 

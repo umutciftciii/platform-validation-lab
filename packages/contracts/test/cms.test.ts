@@ -159,7 +159,16 @@ describe("CMS page requests", () => {
 
   it("saves a whole draft with SEO fields", () => {
     const parsed = CmsPageDraftRequestSchema.parse(draft({ sections: [] }));
-    expect(parsed.seo).toEqual({ title: null, description: null, noindex: false });
+    // DP-209: the canonical and Open Graph fields may be left out (null when missing).
+    expect(parsed.seo).toEqual({
+      title: null,
+      description: null,
+      noindex: false,
+      canonicalPath: null,
+      ogTitle: null,
+      ogDescription: null,
+      ogImage: null,
+    });
     expect(
       CmsPageDraftRequestSchema.safeParse({ ...draft({ sections: [] }), seo: { noindex: "yes" } })
         .success,

@@ -492,6 +492,42 @@ export interface BvNewsIndexContent {
   empty: { title: string; text: string };
 }
 
+// --- bv.site-seo (DP-209) ---------------------------------------------------------------------------
+
+/**
+ * The site-wide SEO defaults of the BV site: used where a page has no value of its own (a page
+ * without a meta description, an Open Graph image or a title of its own), and the site name of
+ * link previews and of the titles the site builds (e.g. "Products | <site name>"). A fragment:
+ * edited, published and restored like the navigation and the footer, so the defaults change on
+ * the site only when they are published. Lengths are advice in the admin, not limits.
+ */
+export const BV_SITE_SEO_FIELDS: readonly CmsField[] = [
+  text("siteName", "Site name", 80, {
+    hint: "Shown as the site name of link previews and after the page name in browser titles.",
+  }),
+  text("defaultTitle", "Default SEO title", 120, {
+    hint: "For pages without a title of their own (e.g. the home page without an SEO title).",
+  }),
+  long("defaultDescription", "Default meta description", 320),
+  {
+    type: "asset",
+    key: "defaultOgImage",
+    label: "Default Open Graph image",
+    kinds: ["image"],
+    hint: "Shown in link previews of pages without an image of their own. About 1200×630 works best.",
+  },
+];
+
+export interface BvSiteSeoContent {
+  siteName: string;
+  defaultTitle: string;
+  defaultDescription: string;
+  defaultOgImage: string;
+}
+
+/** DP-209: the registry key of the site SEO defaults. */
+export const BV_SITE_SEO_KEY = "bv.site-seo";
+
 // --- registry of designed templates --------------------------------------------------------------
 
 export interface CmsDesignTemplate {
@@ -528,6 +564,14 @@ export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
     title: "News",
     path: "/news",
     fields: BV_NEWS_INDEX_FIELDS,
+  },
+  {
+    key: BV_SITE_SEO_KEY,
+    site: "BV",
+    kind: "FRAGMENT",
+    title: "SEO defaults",
+    path: null,
+    fields: BV_SITE_SEO_FIELDS,
   },
 ];
 

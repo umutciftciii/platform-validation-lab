@@ -10,6 +10,7 @@
  * - Text inputs are trimmed; an empty optional text is stored as null.
  */
 import { z } from "zod";
+import { EMPTY_PRODUCT_SEO, ProductSeoSchema } from "../seo.js";
 import { UuidSchema } from "../auth/common.js";
 
 const IsoDate = z.iso.datetime({ offset: true });
@@ -136,6 +137,8 @@ export const ListingSchema = z.strictObject({
   version: z.number().int(),
   /** English texts (PM-1); null when none were entered. */
   text: ListingTextSchema.nullable(),
+  /** DP-209: the listing's SEO (saved separately, published with the product). */
+  seo: ProductSeoSchema.default(EMPTY_PRODUCT_SEO),
   updatedAt: IsoDate,
 });
 export type Listing = z.infer<typeof ListingSchema>;

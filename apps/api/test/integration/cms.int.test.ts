@@ -28,7 +28,9 @@ import {
   CmsPageResponseSchema,
   ErrorBodySchema,
   PublicSeoResolveResponseSchema,
+  PublicSiteSeoResponseSchema,
   PublicSitemapResponseSchema,
+  SeoOverviewResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -509,10 +511,15 @@ describe("4. save a draft", () => {
     const { page } = CmsPageResponseSchema.parse(res.body);
     expect(page.version).toBe(2);
     expect(page.sectionCount).toBe(4);
+    // DP-209: a request without the canonical and Open Graph fields stores them as null.
     expect(page.seo).toEqual({
       title: "About Dream Petroleum BV",
       description: "Who we are.",
       noindex: true,
+      canonicalPath: null,
+      ogTitle: null,
+      ogDescription: null,
+      ogImage: null,
     });
     expect((page.content["sections"] as unknown[])[0]).toEqual({
       ...HERO,
@@ -1787,5 +1794,293 @@ describe("15. technical SEO reads (DP-207)", () => {
     );
     expect(com.entries.map((e) => e.path)).not.toContain("/our-team");
     expect((await seo("/sitemap", TEST_KEYS.admin)).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// DP-209: admin-managed SEO — page SEO (canonical, Open Graph), draft/publish separation, site
+// defaults (bv.site-seo), sitemap consistency, permissions, audit and versions
+// ---------------------------------------------------------------------------------------------
+
+describe("16. admin-managed SEO (DP-209)", () => {
+  async function seoRead(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.43" },
+      }),
+    );
+  }
+  const sitemap = async () =>
+    PublicSitemapResponseSchema.parse((await seoRead("/sitemap")).body).entries.map((e) => e.path);
+  async function overview(as: Staff, siteId: string = BV, part?: string): Promise<Res> {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": TEST_KEYS.admin,
+      "x-dp-client-ip": "10.20.30.40",
+      cookie: `__Host-dp_admin_session=${(as as unknown as { token: string }).token}`,
+    };
+    return parse(
+      await fetch(
+        `${base}/api/v1/admin/seo/sites/${siteId}/overview${part ? `?part=${part}` : ""}`,
+        { headers },
+      ),
+    );
+  }
+  const FULL_SEO = {
+    title: "Our SEO page | Dream Petroleum BV",
+    description: "A page about SEO for the integration test, long enough to be a description.",
+    noindex: false,
+    canonicalPath: null,
+    ogTitle: "Share title",
+    ogDescription: "Share description",
+    ogImage: "/media/ctl-technology/industrial-process.webp",
+  };
+  let id: string;
+  let version: number;
+
+  async function save(seo: Record<string, unknown>, as: Staff = bvEditor, v = version) {
+    return as.post(`/pages/${id}/draft`, {
+      version: v,
+      title: "SEO admin page",
+      slug: "seo-admin",
+      seo,
+      content: { sections: [HERO] },
+    });
+  }
+
+  it("saves canonical and Open Graph fields with the draft and audits field names only", async () => {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "SEO admin page",
+      slug: "seo-admin",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    id = p.id;
+    version = p.version;
+    const res = await save(FULL_SEO);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const saved = CmsPageResponseSchema.parse(res.body).page;
+    expect(saved.seo).toEqual(FULL_SEO);
+    version = saved.version;
+    const audit = await lastAudit("cms.page_draft_saved");
+    const meta = audit?.metadata as { changed: string[] };
+    expect(meta.changed).toEqual(
+      expect.arrayContaining(["seoTitle", "seoDescription", "ogTitle", "ogDescription", "ogImage"]),
+    );
+    expect(JSON.stringify(audit?.metadata)).not.toContain("Share title");
+  });
+
+  it("refuses unsafe canonical addresses and unregistered images (400), stored nothing", async () => {
+    for (const canonicalPath of [
+      "https://evil.example/x",
+      "//evil.example/x",
+      "javascript:alert(1)",
+      "/About",
+      "/api/v1/x",
+      "/preview/abc",
+      "/a/b/c/d",
+      "/x?y=1",
+      "/x#y",
+    ]) {
+      const res = await save({ ...FULL_SEO, canonicalPath });
+      expectError(res, 400, "VALIDATION_FAILED", { path: "seo.canonicalPath", rule: "custom" });
+    }
+    expectError(
+      await save({ ...FULL_SEO, ogImage: "https://evil.example/a.png" }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "seo.ogImage", rule: "custom" },
+    );
+    const now = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect(now.version).toBe(version);
+    expect(now.seo.canonicalPath).toBeNull();
+    // The database refuses the same values directly.
+    await rejectsDb(
+      owner.cmsPage.update({ where: { id }, data: { canonicalPath: "https://evil.example" } }),
+      /CmsPage_seo_canonical_path/,
+    );
+    await rejectsDb(
+      owner.cmsPage.update({ where: { id }, data: { ogImage: "javascript:x" } }),
+      /CmsPage_seo_og_image/,
+    );
+    await rejectsDb(
+      owner.cmsPage.update({ where: { id }, data: { ogTitle: " padded " } }),
+      /CmsPage_seo_og_trimmed/,
+    );
+  });
+
+  it("keeps the published SEO until the next publication (draft/publish separation)", async () => {
+    let p = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect((await bvPublisher.post(`/pages/${id}/publish`, { version: p.version })).status).toBe(
+      200,
+    );
+    const live1 = CmsPublicBundleSchema.parse((await pub("/page?path=/seo-admin")).body).page;
+    expect(live1.seo).toMatchObject({ ogTitle: "Share title", canonicalPath: null });
+    // A later draft change is not public.
+    const res = await save(
+      { ...FULL_SEO, ogTitle: "Draft share title", noindex: true },
+      bvEditor,
+      p.version,
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    version = CmsPageResponseSchema.parse(res.body).page.version;
+    const live2 = CmsPublicBundleSchema.parse((await pub("/page?path=/seo-admin")).body).page;
+    expect(live2.seo).toMatchObject({ ogTitle: "Share title", noindex: false });
+    expect(await sitemap()).toContain("/seo-admin");
+    // The overview says the draft differs from what the site shows.
+    const o = SeoOverviewResponseSchema.parse((await overview(bvEditor)).body);
+    expect(o.items.find((i) => i.id === id)).toMatchObject({
+      live: true,
+      pendingChanges: true,
+      inSitemap: true,
+      noindex: true,
+    });
+    // Published: noindex reaches the page and the sitemap at once.
+    p = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect((await bvPublisher.post(`/pages/${id}/publish`, { version: p.version })).status).toBe(
+      200,
+    );
+    const live3 = CmsPublicBundleSchema.parse((await pub("/page?path=/seo-admin")).body).page;
+    expect(live3.seo).toMatchObject({ ogTitle: "Draft share title", noindex: true });
+    expect(await sitemap()).not.toContain("/seo-admin");
+    // The revision is immutable, the DP-209 columns included.
+    const rev = await owner.cmsPageRevision.findFirstOrThrow({
+      where: { pageId: id },
+      orderBy: { revisionNumber: "desc" },
+    });
+    expect(rev.ogTitle).toBe("Draft share title");
+    await rejectsDb(
+      owner.cmsPageRevision.update({ where: { id: rev.id }, data: { ogTitle: "x" } }),
+      /published revision cannot be changed/,
+    );
+  });
+
+  it("leaves a page whose canonical names another address out of the sitemap", async () => {
+    let p = CmsPageResponseSchema.parse((await page(id)).body).page;
+    const res = await save({ ...FULL_SEO, canonicalPath: "/our-team" }, bvEditor, p.version);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    p = CmsPageResponseSchema.parse(res.body).page;
+    expect((await bvPublisher.post(`/pages/${id}/publish`, { version: p.version })).status).toBe(
+      200,
+    );
+    expect((await seoRead(`/resolve?path=/seo-admin`)).status).toBe(200);
+    const paths = await sitemap();
+    expect(paths).not.toContain("/seo-admin");
+    expect(paths).toContain("/our-team");
+    // Its own address as canonical counts as no override.
+    const self = await save({ ...FULL_SEO, canonicalPath: "/seo-admin" }, bvEditor, p.version);
+    p = CmsPageResponseSchema.parse(self.body).page;
+    expect((await bvPublisher.post(`/pages/${id}/publish`, { version: p.version })).status).toBe(
+      200,
+    );
+    expect(await sitemap()).toContain("/seo-admin");
+    version = p.version;
+  });
+
+  it("restores the SEO of a revision with the rest of the draft", async () => {
+    const history = CmsHistoryResponseSchema.parse(
+      (await bvEditor.get(`/pages/${id}/history`)).body,
+    );
+    const first = history.revisions.at(-1)!;
+    const res = await bvEditor.post(`/pages/${id}/restore`, {
+      version,
+      revisionNumber: first.revisionNumber,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const p = CmsPageResponseSchema.parse(res.body).page;
+    expect(p.seo).toMatchObject({ ogTitle: "Share title", noindex: false, canonicalPath: null });
+    version = p.version;
+  });
+
+  it("refuses stale versions and editors without content:edit on the site", async () => {
+    expectError(await save(FULL_SEO, bvEditor, version - 1), 409, "CONFLICT_STATE", {
+      path: "version",
+      rule: "stale",
+    });
+    expect((await save(FULL_SEO, bvReader)).status).toBe(404);
+    expect((await save(FULL_SEO, bvPublisher)).status).toBe(404);
+    expect((await save(FULL_SEO, comEditor)).status).toBe(404);
+    const now = CmsPageResponseSchema.parse((await page(id)).body).page;
+    expect(now.version).toBe(version);
+  });
+
+  it("site defaults: built-in until bv.site-seo is published, then the published values", async () => {
+    const none = PublicSiteSeoResponseSchema.parse((await seoRead("/settings")).body);
+    expect(none).toEqual({ settings: null, publishedAt: null });
+    const imported = await bvEditor.post(`/sites/${BV}/import`, {
+      key: "bv.site-seo",
+      dryRun: false,
+    });
+    expect(imported.status, JSON.stringify(imported.body)).toBe(200);
+    const fragmentId = CmsImportResponseSchema.parse(imported.body).pageId!;
+    let f = CmsPageResponseSchema.parse((await page(fragmentId)).body).page;
+    expect(f).toMatchObject({ kind: "FRAGMENT", templateKey: "bv.site-seo", path: null });
+    // The draft is not public.
+    expect(
+      PublicSiteSeoResponseSchema.parse((await seoRead("/settings")).body).settings,
+    ).toBeNull();
+    const saved = await bvEditor.post(`/pages/${fragmentId}/draft`, {
+      version: f.version,
+      title: f.title,
+      seo: { title: null, description: null, noindex: false },
+      content: {
+        siteName: "Dream Petroleum B.V.",
+        defaultTitle: "Dream Petroleum B.V. — base oils",
+        defaultDescription: "Base oils, white oils and solvents.",
+        defaultOgImage: "/media/ctl-technology/industrial-process.webp",
+      },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    f = CmsPageResponseSchema.parse(saved.body).page;
+    // An unregistered image is refused like any asset field.
+    expectError(
+      await bvEditor.post(`/pages/${fragmentId}/draft`, {
+        version: f.version,
+        title: f.title,
+        seo: { title: null, description: null, noindex: false },
+        content: { ...f.content, defaultOgImage: "https://evil.example/x.png" },
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expect(
+      (await bvPublisher.post(`/pages/${fragmentId}/publish`, { version: f.version })).status,
+    ).toBe(200);
+    const live = PublicSiteSeoResponseSchema.parse((await seoRead("/settings")).body);
+    expect(live.settings).toEqual({
+      siteName: "Dream Petroleum B.V.",
+      defaultTitle: "Dream Petroleum B.V. — base oils",
+      defaultDescription: "Base oils, white oils and solvents.",
+      defaultOgImage: "/media/ctl-technology/industrial-process.webp",
+    });
+    expect(live.publishedAt).not.toBeNull();
+    // A fragment is never a sitemap address; the Corporate key has no BV defaults.
+    expect(await sitemap()).not.toContain(null);
+    expect(
+      PublicSiteSeoResponseSchema.parse((await seoRead("/settings", TEST_KEYS.webCorporate)).body)
+        .settings,
+    ).toBeNull();
+    expect((await seoRead("/settings", TEST_KEYS.admin)).status).toBe(404);
+    // The overview shows the defaults and the live values.
+    const o = SeoOverviewResponseSchema.parse((await overview(bvEditor)).body);
+    expect(o.settings).toMatchObject({
+      pageId: fragmentId,
+      published: true,
+      pendingChanges: false,
+    });
+    expect(o.liveSettings?.siteName).toBe("Dream Petroleum B.V.");
+    const part = SeoOverviewResponseSchema.parse((await overview(bvEditor, BV, "settings")).body);
+    expect(part.items).toEqual([]);
+    expect(part.liveSettings?.siteName).toBe("Dream Petroleum B.V.");
+  });
+
+  it("overview: content readers see pages, others are refused or see their own site only", async () => {
+    const reader = SeoOverviewResponseSchema.parse((await overview(bvReader)).body);
+    expect(reader.permissions).toMatchObject({ readPages: true, editPages: false });
+    expect(reader.items.some((i) => i.path === "/our-team")).toBe(true);
+    expect(reader.items.every((i) => i.kind !== undefined)).toBe(true);
+    expectError(await overview(nobody), 403, "FORBIDDEN");
+    expectError(await overview(comEditor), 403, "FORBIDDEN");
+    const audit = await lastAudit("cms.access_denied");
+    expect(audit).toMatchObject({ resourceType: "seo_overview", outcome: "DENIED" });
   });
 });

@@ -680,6 +680,17 @@ model ProductSiteListing {
   categoryId String            @db.Uuid
   visibility ListingVisibility @default(HIDDEN)
   sortOrder  Int               @default(0)
+  /// DP-209: the product's SEO on this site (null: the site falls back). Saved separately from
+  /// the texts (listing version + 1) and reaches the site with the next publication (snapshot).
+  seoTitle         String?  @db.VarChar(120)
+  seoDescription   String?  @db.VarChar(320)
+  seoOgTitle       String?  @db.VarChar(120)
+  seoOgDescription String?  @db.VarChar(320)
+  /// A path of the same site (CHECK in migration 20261207090000_dp_209_admin_seo).
+  seoCanonicalPath String?  @db.VarChar(200)
+  seoNoindex       Boolean  @default(false)
+  /// One of the product's images (checked by the API; a deleted image falls back to the cover).
+  seoOgImageId     String?  @db.Uuid
   version    Int               @default(1)
   createdAt  DateTime          @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime          @updatedAt @db.Timestamptz(3)
@@ -1619,6 +1630,13 @@ model CmsPage {
   seoTitle       String?     @db.VarChar(120)
   seoDescription String?     @db.VarChar(320)
   noindex        Boolean     @default(false)
+  /// DP-209: a path of the same site that is the canonical address (null: the page's own path).
+  canonicalPath  String?     @db.VarChar(200)
+  /// DP-209: Open Graph title and description (null: the SEO title and description).
+  ogTitle        String?     @db.VarChar(120)
+  ogDescription  String?     @db.VarChar(320)
+  /// DP-209: a registered image asset of the site (null: the page image, then the site default).
+  ogImage        String?     @db.VarChar(300)
   /// The draft, validated against the contracts schema of its kind and template on every save.
   content        Json
   /// Version of the content schema the draft was written with.
@@ -1664,6 +1682,11 @@ model CmsPageRevision {
   seoTitle       String?  @db.VarChar(120)
   seoDescription String?  @db.VarChar(320)
   noindex        Boolean
+  /// DP-209: copied from the draft with the rest of the SEO.
+  canonicalPath  String?  @db.VarChar(200)
+  ogTitle        String?  @db.VarChar(120)
+  ogDescription  String?  @db.VarChar(320)
+  ogImage        String?  @db.VarChar(300)
   content        Json
   schemaVersion  Int
   createdById    String   @db.Uuid
