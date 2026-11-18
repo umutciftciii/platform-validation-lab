@@ -64,6 +64,13 @@ import {
   type PageRow,
 } from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
+import {
+  applyAddressChange,
+  assertAddressFree,
+  keepsOldAddress,
+  lockSitePaths,
+  redirectsTo,
+} from "../seo/redirects.js";
 import { CMS_SEEDS } from "./seed/bv.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 
@@ -168,7 +175,21 @@ export class CmsService {
       select: PAGE_SELECT,
     })) as PageBase;
     const [row] = (await attachPublications(scoped, [base])) as [PageRow];
-    return { page: toPage(row), site: await CmsService.site(a, row.siteId) };
+    return CmsService.pageResponse(a, scoped, row);
+  }
+
+  /** The page with its DP-210 addresses (older addresses that redirect to it). */
+  private static async pageResponse(
+    a: StaffAccess,
+    db: StaffDb,
+    row: PageRow,
+  ): Promise<CmsPageResponse> {
+    const keeps = row.path !== null && keepsOldAddress(a.sites, row.siteId);
+    const redirectsHere = keeps ? await redirectsTo(db, row.siteId, "CMS_PAGE", row.id) : [];
+    return {
+      page: toPage(row, { redirectsHere, keepsOldAddress: keeps }),
+      site: await CmsService.site(a, row.siteId),
+    };
   }
 
   // --- reads ---------------------------------------------------------------------------------
@@ -195,8 +216,8 @@ export class CmsService {
 
   async getPage(ctx: RequestContext, rawId: string): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
-    const { row } = await CmsService.pageIn(a, READ, rawId);
-    return { page: toPage(row), site: await CmsService.site(a, row.siteId) };
+    const { row, db } = await CmsService.pageIn(a, READ, rawId);
+    return CmsService.pageResponse(a, db, row);
   }
 
   // --- drafts --------------------------------------------------------------------------------
@@ -236,6 +257,10 @@ export class CmsService {
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     try {
       const id = await db.$transaction(async (tx) => {
+        // DP-210: an old address of another page stays its 301 (409 old_address).
+        if (keepsOldAddress(a.sites, siteId)) {
+          await assertAddressFree(tx, siteId, plan.path, "CMS_PAGE", null);
+        }
         const created = await tx.cmsPage.create({
           data: {
             siteId,
@@ -313,6 +338,9 @@ export class CmsService {
     }
     try {
       await db.$transaction(async (tx) => {
+        if (data.path !== before.path && keepsOldAddress(a.sites, before.siteId)) {
+          await assertAddressFree(tx, before.siteId, data.path, "CMS_PAGE", before.id);
+        }
         const res = await tx.cmsPage.updateMany({
           where: { id: before.id, version },
           data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,
@@ -501,11 +529,27 @@ export class CmsService {
       await db.$transaction(async (tx) => {
         // The revision copies the draft exactly as checked above (version `row.version`); a save
         // that lands meanwhile becomes a newer draft, shown as "changes not published".
+        // DP-210: a page with an address locks the site's addresses first, then reads the live
+        // state again: a concurrent publication of this page (same version) is stale, and one of
+        // another page at the same address is refused, deterministically.
+        let previousPath: string | null = null;
         if (row.path) {
+          await lockSitePaths(tx, row.siteId);
+          const current = await tx.cmsPagePublication.findUnique({
+            where: { pageId: row.id },
+            select: { version: true, status: true, revisionId: true },
+          });
+          if ((current?.version ?? null) !== (row.publication?.version ?? null)) {
+            throw staleVersion();
+          }
           const live = await liveRows(tx, row.siteId);
           if (live.some((l) => l.pageId !== row.id && l.revision.path === row.path)) {
             throw new ApiError("CONFLICT_STATE", [{ path: "slug", rule: "live_elsewhere" }]);
           }
+          previousPath =
+            current?.status === "PUBLISHED"
+              ? (live.find((l) => l.pageId === row.id)?.revision.path ?? null)
+              : null;
         }
         const last = await tx.cmsPageRevision.findFirst({
           where: { pageId: row.id },
@@ -553,8 +597,24 @@ export class CmsService {
           resourceId: row.id,
           siteId: row.siteId,
           permission: PUBLISH,
-          metadata: { revisionNumber, pageVersion: row.version, path: row.path },
+          metadata: {
+            revisionNumber,
+            pageVersion: row.version,
+            path: row.path,
+            ...(previousPath !== null && previousPath !== row.path ? { previousPath } : {}),
+          },
         });
+        // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
+        if (row.path && keepsOldAddress(a.sites, row.siteId)) {
+          await applyAddressChange(tx, a, {
+            siteId: row.siteId,
+            contentType: "CMS_PAGE",
+            contentId: row.id,
+            from: previousPath,
+            to: row.path,
+            permission: PUBLISH,
+          });
+        }
       });
       return this.response(a, db, row.id);
     } catch (e) {
@@ -635,6 +695,9 @@ export class CmsService {
     };
     try {
       await db.$transaction(async (tx) => {
+        if (data.path !== row.path && keepsOldAddress(a.sites, row.siteId)) {
+          await assertAddressFree(tx, row.siteId, data.path, "CMS_PAGE", row.id);
+        }
         const res = await tx.cmsPage.updateMany({
           where: { id: row.id, version: input.version },
           data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,

@@ -20,6 +20,7 @@ import { cache } from "react";
 import {
   PUBLIC_SEO_API,
   PRIVACY_CONTROLLER,
+  PublicSeoResolveResponseSchema,
   PublicSiteSeoResponseSchema,
   PublicSitemapResponseSchema,
   canonicalUrl,
@@ -173,6 +174,8 @@ export function noindexMetadata(title: string): Metadata {
 
 export type Resolve =
   | { status: "found" }
+  /** DP-210: an old address of moved content (or a DP-211 redirect). */
+  | { status: "redirect"; target: string; statusCode: 301 | 302 }
   | { status: "not_found" }
   | { status: "unpublished" }
   /** The API could not answer: the page renders as before (its own not-found handling). */
@@ -202,7 +205,15 @@ export async function resolvePath(path: string, config = catalogConfig()): Promi
     console.error("public seo: resolve failed (network)");
     return { status: "unknown" };
   }
-  if (res.ok) return { status: "found" };
+  if (res.ok) {
+    // DP-210: the body tells a live address from a redirect; an unreadable body is treated as
+    // live (the page renders and does its own checks, as before).
+    const parsed = PublicSeoResolveResponseSchema.safeParse(await res.json().catch(() => null));
+    if (parsed.success && "redirect" in parsed.data) {
+      return { status: "redirect", ...parsed.data.redirect };
+    }
+    return { status: "found" };
+  }
   if (res.status === 404) {
     const body: unknown = await res.json().catch(() => null);
     return { status: unpublishedDetail(body) ? "unpublished" : "not_found" };

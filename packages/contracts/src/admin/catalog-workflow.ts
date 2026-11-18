@@ -408,6 +408,8 @@ export const PublicationSchema = z.strictObject({
   unpublishedBy: ActorSchema.nullable(),
   /** DP-193: how the live (or last live) snapshot was authorised. */
   approvalMode: PublicationModeSchema,
+  /** DP-210: the slug of the published snapshot (the live address while PUBLISHED). */
+  slug: z.string().nullable(),
   version: z.number().int(),
 });
 export type Publication = z.infer<typeof PublicationSchema>;
@@ -459,6 +461,18 @@ export const SitePublicationSchema = z.strictObject({
   canPreview: z.boolean(),
   /** DP-193: the site's research proposal for this product, if any. */
   proposal: SiteProposalSchema.nullable(),
+  /**
+   * DP-210: the product's addresses on this site. `live`: the published address (null while not
+   * published); `next`: the address the next publication uses (from the master slug);
+   * `keepsOldAddress`: publishing a changed slug keeps `live` as a 301 to `next` (BV);
+   * `redirectsHere`: older addresses that answer 301 to the product.
+   */
+  addresses: z.strictObject({
+    live: z.string().nullable(),
+    next: z.string(),
+    keepsOldAddress: z.boolean(),
+    redirectsHere: z.array(z.string()).max(100),
+  }),
   readiness: PublicationReadinessSchema,
 });
 export type SitePublication = z.infer<typeof SitePublicationSchema>;

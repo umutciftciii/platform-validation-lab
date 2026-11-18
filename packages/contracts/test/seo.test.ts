@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   BV_LOCAL_ORIGIN,
+  PublicSeoResolveResponseSchema,
   PublicSitemapResponseSchema,
+  REDIRECT_SITE_KEYS,
   SEO_RESOLVABLE_PATH,
   canonicalUrl,
   jsonLdText,
@@ -10,6 +12,8 @@ import {
   seoDeployEnv,
   seoPolicy,
   seoPublicOrigin,
+  seoRedirectLocation,
+  seoRedirectTargetIsSitePath,
 } from "../src/index.js";
 
 describe("DP-207 indexing policy", () => {
@@ -152,5 +156,44 @@ describe("DP-207 structured data", () => {
     const text = jsonLdText({ name: "</script><script>alert(1)</script>" });
     expect(text).not.toContain("</script");
     expect(JSON.parse(text)).toEqual({ name: "</script><script>alert(1)</script>" });
+  });
+});
+
+describe("DP-210 redirects", () => {
+  it("answers a live address or a redirect, never both", () => {
+    expect(PublicSeoResolveResponseSchema.parse({ path: "/about-us", kind: "page" })).toEqual({
+      path: "/about-us",
+      kind: "page",
+    });
+    expect(
+      PublicSeoResolveResponseSchema.parse({
+        path: "/old",
+        redirect: { target: "/new", statusCode: 301 },
+      }),
+    ).toEqual({ path: "/old", redirect: { target: "/new", statusCode: 301 } });
+    for (const bad of [
+      { path: "/x", kind: "page", redirect: { target: "/y", statusCode: 301 } },
+      { path: "/x", redirect: { target: "/y", statusCode: 307 } },
+      { path: "/x", redirect: { target: "", statusCode: 301 } },
+      { path: "/x" },
+    ]) {
+      expect(PublicSeoResolveResponseSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("keeps the request's query on a same-site target without one", () => {
+    expect(seoRedirectLocation("/new", "")).toBe("/new");
+    expect(seoRedirectLocation("/new", "?")).toBe("/new");
+    expect(seoRedirectLocation("/new", "?utm_source=x")).toBe("/new?utm_source=x");
+    expect(seoRedirectLocation("/new", "a=1")).toBe("/new?a=1");
+    // A target with its own query, or an https URL, is used as it is.
+    expect(seoRedirectLocation("/products?category=base-oil", "?a=1")).toBe(
+      "/products?category=base-oil",
+    );
+    expect(seoRedirectLocation("https://example.com/a", "?a=1")).toBe("https://example.com/a");
+    expect(seoRedirectTargetIsSitePath("//evil.example")).toBe(false);
+    expect(REDIRECT_SITE_KEYS).toEqual(["BV"]);
   });
 });

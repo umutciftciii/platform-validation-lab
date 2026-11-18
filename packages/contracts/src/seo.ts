@@ -27,10 +27,29 @@ export const SEO_RESOLVABLE_PATH = new RegExp(
   `^/(?:(?:news|products)/${SEGMENT}|(?:${SEGMENT})?)$`,
 );
 
-export const PublicSeoResolveResponseSchema = z.strictObject({
+/** The address has live content of this kind. */
+export const PublicSeoResolveLiveSchema = z.strictObject({
   path: z.string(),
   kind: z.enum(SEO_PATH_KINDS),
 });
+
+/**
+ * DP-210: the address has no live content but an active redirect (a page, article or product
+ * moved; DP-211/DP-212 add manual and imported ones). `target` is a path of the same site
+ * (optionally with a query) or an https URL; never another redirect's source (no chain).
+ */
+export const PublicSeoResolveRedirectSchema = z.strictObject({
+  path: z.string(),
+  redirect: z.strictObject({
+    target: z.string().min(1).max(500),
+    statusCode: z.union([z.literal(301), z.literal(302)]),
+  }),
+});
+
+export const PublicSeoResolveResponseSchema = z.union([
+  PublicSeoResolveLiveSchema,
+  PublicSeoResolveRedirectSchema,
+]);
 export type PublicSeoResolveResponse = z.infer<typeof PublicSeoResolveResponseSchema>;
 
 export const PublicSitemapEntrySchema = z.strictObject({
@@ -294,3 +313,31 @@ export const PublicSiteSeoResponseSchema = z.strictObject({
   publishedAt: IsoDate.nullable(),
 });
 export type PublicSiteSeoResponse = z.infer<typeof PublicSiteSeoResponseSchema>;
+
+// --- DP-210: slug changes and redirects (ADR-024 D7/D8) -------------------------------------------
+
+/** Where a redirect came from (DP-210 writes SLUG_CHANGE; DP-211 MANUAL, DP-212 IMPORT). */
+export const SITE_REDIRECT_ORIGINS = ["MANUAL", "SLUG_CHANGE", "IMPORT"] as const;
+export type SiteRedirectOrigin = (typeof SITE_REDIRECT_ORIGINS)[number];
+
+/**
+ * Sites whose frontend applies the redirects (the BV proxy). Only there does a slug change of a
+ * published page, article or product keep the old address; elsewhere it moves as before.
+ */
+export const REDIRECT_SITE_KEYS: readonly string[] = ["BV"];
+
+/** Whether an https URL target or a same-site path (the DB CHECK of SiteRedirect, simplified). */
+export function seoRedirectTargetIsSitePath(target: string): boolean {
+  return target.startsWith("/") && !target.startsWith("//");
+}
+
+/**
+ * The absolute Location of a redirect for a request: a site path keeps the request's query when
+ * the target has none (campaign parameters survive a moved page), an https URL is used as is.
+ */
+export function seoRedirectLocation(target: string, requestSearch: string): string {
+  if (!seoRedirectTargetIsSitePath(target)) return target;
+  return target.includes("?") || !requestSearch || requestSearch === "?"
+    ? target
+    : `${target}${requestSearch.startsWith("?") ? requestSearch : `?${requestSearch}`}`;
+}
