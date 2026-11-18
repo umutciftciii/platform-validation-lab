@@ -3,7 +3,9 @@ import { connection } from "next/server";
 import { cache, Suspense } from "react";
 
 import { HomePage, HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
+import { OrganizationJsonLd } from "@/components/seo/json-ld";
 import { getPublishedHome } from "@/lib/cms-home";
+import { noindexMetadata, pageMetadata } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
 const published = cache(getPublishedHome);
@@ -16,14 +18,10 @@ const published = cache(getPublishedHome);
 export async function generateMetadata(): Promise<Metadata> {
   await connection();
   const res = await published();
-  if (!res.ok) return { title: "Dream Petroleum BV", robots: { index: false, follow: false } };
+  if (!res.ok) return noindexMetadata("Dream Petroleum BV");
   const { title, seo } = res.data;
-  return {
-    title: seo.title ?? title,
-    ...(seo.description ? { description: seo.description } : {}),
-    // The whole site stays out of search engines until launch (root layout); noindex per page.
-    robots: { index: false, follow: false },
-  };
+  // DP-207: indexable only under the site policy (production + DP_SEO_INDEXING=on), lib/seo.ts.
+  return pageMetadata({ path: "/", title: seo.title ?? title, description: seo.description, noindex: seo.noindex });
 }
 
 export default function Home() {
@@ -38,5 +36,10 @@ async function PublishedHome() {
   await connection();
   const res = await published();
   if (!res.ok) return <HomeUnavailable reason={res.reason} />;
-  return <HomePage view={res.data} />;
+  return (
+    <>
+      <OrganizationJsonLd />
+      <HomePage view={res.data} />
+    </>
+  );
 }

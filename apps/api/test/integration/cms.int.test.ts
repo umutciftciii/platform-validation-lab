@@ -27,6 +27,8 @@ import {
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
   ErrorBodySchema,
+  PublicSeoResolveResponseSchema,
+  PublicSitemapResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1665,5 +1667,125 @@ describe("14. company pages and the blog post of the live site (DP-206)", () => 
       }
     }
     expect(await owner.cmsPage.count()).toBe(count);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// DP-207: technical SEO reads (existence check before rendering, sitemap)
+// ---------------------------------------------------------------------------------------------
+
+describe("15. technical SEO reads (DP-207)", () => {
+  const ARTICLE =
+    "/news/why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets";
+  async function seo(p: string, key: string = TEST_KEYS.webBv): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.42" },
+      }),
+    );
+  }
+  const resolve = (p: string, key?: string) => seo(`/resolve?path=${encodeURIComponent(p)}`, key);
+  const sitemap = async () =>
+    PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries.map((e) => e.path);
+
+  /** A TEMPLATE page at /<slug>, published (optionally with noindex). */
+  async function livePage(slug: string, noindex = false) {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, { title: `SEO ${slug}`, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const saved = await bvEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title: `SEO ${slug}`,
+      slug,
+      seo: { title: null, description: null, noindex },
+      content: { sections: [HERO] },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const draft = CmsPageResponseSchema.parse(saved.body).page;
+    expect(
+      (await bvPublisher.post(`/pages/${p.id}/publish`, { version: draft.version })).status,
+    ).toBe(200);
+    return p.id;
+  }
+
+  it("resolves the live pages, articles and home of the key's site only", async () => {
+    for (const [p, kind] of [
+      ["/", "home"],
+      ["/our-team", "page"],
+      ["/sustainability", "page"],
+      [ARTICLE, "article"],
+    ] as const) {
+      const res = await resolve(p);
+      expect(res.status, `${p} ${JSON.stringify(res.body)}`).toBe(200);
+      expect(PublicSeoResolveResponseSchema.parse(res.body)).toEqual({ path: p, kind });
+    }
+    // The Corporate key never sees BV content; the admin key and no key have no public routes.
+    expectError(await resolve("/our-team", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    expect((await resolve("/our-team", TEST_KEYS.admin)).status).toBe(404);
+    expect((await fetch(`${base}/api/v1/public/seo/resolve?path=/our-team`)).status).toBe(404);
+  });
+
+  it("answers 404 for unknown, draft and malformed addresses", async () => {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "SEO draft",
+      slug: "seo-draft",
+    });
+    expect(created.status).toBe(201);
+    for (const p of [
+      "/seo-draft",
+      "/nope",
+      "/news/nope",
+      "/products/nope",
+      "/About-Us",
+      "/a/b",
+      "/news/a/b",
+      "/../our-team",
+      "/our-team/",
+      "our-team",
+      "",
+    ]) {
+      expectError(await resolve(p), 404, "NOT_FOUND");
+    }
+    expectError(await seo("/resolve"), 404, "NOT_FOUND");
+  });
+
+  it("an unpublished page answers 404 with `unpublished`, and leaves the sitemap", async () => {
+    const id = await livePage("seo-off");
+    expect((await resolve("/seo-off")).status).toBe(200);
+    expect(await sitemap()).toContain("/seo-off");
+    const after = CmsPageResponseSchema.parse((await page(id)).body).page;
+    const off = await bvPublisher.post(`/pages/${id}/unpublish`, {
+      publicationVersion: after.publication!.version,
+    });
+    expect(off.status).toBe(200);
+    expectError(await resolve("/seo-off"), 404, "NOT_FOUND", { path: "path", rule: "unpublished" });
+    expect(await sitemap()).not.toContain("/seo-off");
+  });
+
+  it("lists only indexable live addresses in the sitemap, once each", async () => {
+    await livePage("seo-hidden", true);
+    // noindex: the page is live (resolves) but never in the sitemap.
+    expect((await resolve("/seo-hidden")).status).toBe(200);
+    const res = await seo("/sitemap");
+    expect(res.status).toBe(200);
+    const entries = PublicSitemapResponseSchema.parse(res.body).entries;
+    const paths = entries.map((e) => e.path);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(paths).toEqual(expect.arrayContaining(["/", "/products", "/our-team", ARTICLE]));
+    for (const p of ["/seo-hidden", "/seo-draft", "/seo-off", "/nope"]) {
+      expect(paths, p).not.toContain(p);
+    }
+    expect(entries.find((e) => e.path === ARTICLE)?.kind).toBe("article");
+    // Every CMS entry is live; fragments (no path) never appear.
+    for (const e of entries.filter((x) => x.kind === "page" || x.kind === "article")) {
+      expect((await resolve(e.path)).status, e.path).toBe(200);
+      expect(e.lastModified).not.toBeNull();
+    }
+    // The Corporate site has no BV address; the admin key has no sitemap.
+    const com = PublicSitemapResponseSchema.parse(
+      (await seo("/sitemap", TEST_KEYS.webCorporate)).body,
+    );
+    expect(com.entries.map((e) => e.path)).not.toContain("/our-team");
+    expect((await seo("/sitemap", TEST_KEYS.admin)).status).toBe(404);
   });
 });

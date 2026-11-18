@@ -81,7 +81,7 @@ export const BV_HOME_SEED: BvHomeContent = {
         samples: "SN 150 / SN 500 / Bright Stock",
         cta: {
           label: "Explore Group I",
-          href: "https://dreampetroleumbv.com/en/products?category=base-oil-group-i",
+          href: "/products?category=base-oil-group-i",
         },
         animation: "/media/iccsyn-groups/temp/group-1-loop.gif",
         poster: "/media/iccsyn-groups/temp/group-1-poster.webp",
@@ -98,7 +98,7 @@ export const BV_HOME_SEED: BvHomeContent = {
         samples: "100N / 150N / 500N",
         cta: {
           label: "Explore Group II",
-          href: "https://dreampetroleumbv.com/en/products?category=base-oil-group-ii",
+          href: "/products?category=base-oil-group-ii",
         },
         animation: "/media/iccsyn-groups/temp/group-2-loop.gif",
         poster: "/media/iccsyn-groups/temp/group-2-poster.webp",
@@ -115,7 +115,7 @@ export const BV_HOME_SEED: BvHomeContent = {
         samples: "ICCSYN 2 / 4 / 6 / 8",
         cta: {
           label: "Explore Group III",
-          href: "https://dreampetroleumbv.com/en/products?category=base-oil-group-iii",
+          href: "/products?category=base-oil-group-iii",
         },
         animation: "/media/iccsyn-groups/temp/group-3-loop.gif",
         poster: "/media/iccsyn-groups/temp/group-3-poster.webp",
@@ -132,7 +132,7 @@ export const BV_HOME_SEED: BvHomeContent = {
         samples: "ICCSYN 6 / 10",
         cta: {
           label: "Explore Group III+",
-          href: "https://dreampetroleumbv.com/en/products?category=base-oil-group-iii-plus",
+          href: "/products?category=base-oil-group-iii-plus",
         },
         animation: "/media/iccsyn-groups/temp/group-3-plus-loop.gif",
         poster: "/media/iccsyn-groups/temp/group-3-plus-poster.webp",
@@ -425,11 +425,11 @@ export const BV_FOOTER_SEED: BvFooterContent = {
       links: [
         {
           label: "Base Oils (Group I, II & III)",
-          href: "/products",
+          href: "/products?category=base-oil",
         },
         {
           label: "High-Quality Solvents",
-          href: "/products",
+          href: "/products?category=solvent-oil",
         },
         {
           label: "Petrochemicals",
