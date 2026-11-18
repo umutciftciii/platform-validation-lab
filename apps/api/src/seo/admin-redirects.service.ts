@@ -138,6 +138,38 @@ function chainIssues(subject: Planned, active: readonly Planned[]): Issue[] {
   return issues;
 }
 
+/**
+ * DP-212: the same rules as `chainIssues` for a whole import (up to 1000 rows): the active set is
+ * indexed once by plain source path and by target path, so each row is checked in constant time
+ * instead of scanning every other row.
+ */
+function chainIndex(active: readonly Planned[]) {
+  const sources = new Map<string, string[]>();
+  const targets = new Map<string, string[]>();
+  const add = (m: Map<string, string[]>, k: string, v: string) => {
+    const list = m.get(k);
+    if (list) list.push(v);
+    else m.set(k, [v]);
+  };
+  for (const r of active) {
+    if (r.sourceQuery === "") add(sources, r.sourcePath, keyOf(r));
+    add(targets, redirectTargetPath(r.target), keyOf(r));
+  }
+  return (subject: Planned): Issue[] => {
+    if (!subject.active) return [];
+    const key = keyOf(subject);
+    const other = (list: string[] | undefined) => (list ?? []).some((k) => k !== key);
+    const issues: Issue[] = [];
+    if (other(sources.get(redirectTargetPath(subject.target)))) {
+      issues.push({ path: "target", rule: "chain" });
+    }
+    if (subject.sourceQuery === "" && other(targets.get(subject.sourcePath))) {
+      issues.push({ path: "source", rule: "chain" });
+    }
+    return issues;
+  };
+}
+
 function mapDbError(e: unknown): never {
   if (e instanceof ApiError) throw e;
   const text =
@@ -197,6 +229,38 @@ export class AdminRedirectsService {
       return (await d.product.count({ where: { slug, status: { not: "ARCHIVED" } } })) > 0;
     }
     return (await d.cmsPage.count({ where: { siteId, path } })) > 0;
+  }
+
+  /**
+   * DP-212: the addresses among `paths` that a page or product that is not live uses (one query
+   * per kind for a whole import instead of one per row).
+   */
+  private static async draftPaths(
+    db: SiteScopedClient | ScopedTx,
+    siteId: string,
+    paths: readonly string[],
+  ): Promise<Set<string>> {
+    const d = db as SiteScopedClient;
+    const prefix = "/products/";
+    const slugs = [...new Set(paths.filter((p) => p.startsWith(prefix)))].map((p) =>
+      p.slice(prefix.length),
+    );
+    const pages = [...new Set(paths.filter((p) => !p.startsWith(prefix)))];
+    const [products, cms] = await Promise.all([
+      slugs.length
+        ? d.product.findMany({
+            where: { slug: { in: slugs }, status: { not: "ARCHIVED" } },
+            select: { slug: true },
+          })
+        : [],
+      pages.length
+        ? d.cmsPage.findMany({ where: { siteId, path: { in: pages } }, select: { path: true } })
+        : [],
+    ]);
+    return new Set([
+      ...products.map((p) => `${prefix}${p.slug}`),
+      ...cms.flatMap((c) => (c.path ? [c.path] : [])),
+    ]);
   }
 
   private static async warningsFor(
@@ -725,15 +789,25 @@ export class AdminRedirectsService {
         .filter((r) => r.planned && !r.errors.length && r.planned.active)
         .map((r) => r.planned!),
     ];
+    const chainOf = chainIndex(after);
+    const drafts = await AdminRedirectsService.draftPaths(
+      db,
+      siteId,
+      rows.flatMap((r) => (r.planned && !r.errors.length ? [r.planned.sourcePath] : [])),
+    );
     for (const r of rows) {
       if (!r.planned || r.errors.length) continue;
-      for (const i of chainIssues(r.planned, after)) r.errors.push(`${i.path}:${i.rule}`);
+      for (const i of chainOf(r.planned)) r.errors.push(`${i.path}:${i.rule}`);
       if (r.errors.length) {
         r.action = "error";
         continue;
       }
       if (r.action !== "unchanged") {
-        r.warnings = await AdminRedirectsService.warningsFor(db, siteId, r.planned, live);
+        // The same warnings as the form (warningsFor), from the batched reads.
+        const targetPath = redirectTargetPath(r.planned.target);
+        if (!live.has(targetPath) && !ALWAYS_LIVE.has(targetPath))
+          r.warnings.push("target:not_live");
+        if (drafts.has(r.planned.sourcePath)) r.warnings.push("source:draft_content");
       }
     }
     const summary = { rows: rows.length, create: 0, update: 0, unchanged: 0, error: 0 };
@@ -750,6 +824,9 @@ export class AdminRedirectsService {
             r.note,
             r.action,
             r.errors,
+            // DP-212: the warnings too, so a target that went live or off between the dry-run
+            // and the import makes the confirmed plan stale (409 import:changed).
+            r.warnings,
             r.existing?.version ?? 0,
           ]),
         ),
