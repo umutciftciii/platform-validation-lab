@@ -12,6 +12,10 @@
  *
  * Content read back is validated again against its template; a row that no longer matches is not
  * served (logged, 404), so a schema change can never break the site with half-valid content.
+ *
+ * DP-219: the navigation and footer leave the API in their public shape (contracts `BvNavPublic`,
+ * `BvFooterPublic`): hidden links dropped, content references resolved to the addresses of the
+ * live content now (menu-links.ts); the site never sees a reference or a draft address.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -37,6 +41,7 @@ import {
   verifyPreviewToken,
   type LiveRow,
 } from "./cms-content.js";
+import { resolvePublicMenus } from "./menu-links.js";
 
 /** "/", "/<slug>" or a news article "/news/<slug>" (DP-020). */
 const PATH = /^\/(news\/[a-z0-9]+(-[a-z0-9]+)*|([a-z0-9]+(-[a-z0-9]+)*)?)$/;
@@ -73,6 +78,16 @@ export class PublicCmsService {
     );
   }
 
+  /** The published fragments in their public shape (DP-219: menus resolved). */
+  private async fragments(
+    site: PublicSite,
+    live: LiveRow[],
+  ): Promise<Record<string, CmsPublicPage | null>> {
+    const out = this.liveFragments(site, live);
+    await resolvePublicMenus(site, live, out);
+    return out;
+  }
+
   private liveFragments(site: PublicSite, live: LiveRow[]): Record<string, CmsPublicPage | null> {
     const out: Record<string, CmsPublicPage | null> = {};
     for (const key of FRAGMENTS[site.siteKey]) {
@@ -97,7 +112,7 @@ export class PublicCmsService {
       }
       throw new ApiError("NOT_FOUND");
     }
-    return { page, fragments: this.liveFragments(site, live), preview: false };
+    return { page, fragments: await this.fragments(site, live), preview: false };
   }
 
   /** Whether the page last published at `path` is UNPUBLISHED now. */
@@ -153,7 +168,7 @@ export class PublicCmsService {
     return {
       page: index ? this.served(index) : null,
       articles,
-      fragments: this.liveFragments(site, live),
+      fragments: await this.fragments(site, live),
     };
   }
 
@@ -207,8 +222,10 @@ export class PublicCmsService {
       fragments[target.templateKey] = target;
       const home = await this.homeForFragmentPreview(site, live);
       if (!home) throw new ApiError("NOT_FOUND");
+      await resolvePublicMenus(site, live, fragments);
       return { page: home, fragments, preview: true };
     }
+    await resolvePublicMenus(site, live, fragments);
     return { page: target, fragments, preview: true };
   }
 

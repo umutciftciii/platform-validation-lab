@@ -16,14 +16,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
-  BV_FOOTER_FIELDS,
+  BvFooterPublicSchema,
+  BvNavMenuSchema,
+  BvNavPublicSchema,
   CmsContextResponseSchema,
   CmsHistoryResponseSchema,
   CmsImportResponseSchema,
+  CmsMenuTargetsResponseSchema,
   CmsPreviewResponseSchema,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
-  cmsFieldsSchema,
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
   ErrorBodySchema,
@@ -35,6 +37,8 @@ import {
   SeoRedirectImportResponseSchema,
   SeoRedirectListResponseSchema,
   SeoRedirectResponseSchema,
+  menuReferencePlan,
+  menuTargetCheck,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -907,10 +911,10 @@ describe("8. publication and the public read model", () => {
     }
     const bundle = CmsPublicBundleSchema.parse((await pub("/page?path=/")).body);
     expect(bundle.fragments["bv.site-nav"]?.templateKey).toBe("bv.site-nav");
-    const footer = cmsFieldsSchema(BV_FOOTER_FIELDS).parse(
-      bundle.fragments["bv.site-footer"]?.content,
-    );
-    expect(footer["headline"]).toBe("Let’s move energy forward, together.");
+    // DP-219: the menus leave the API in their public shape (references resolved).
+    const footer = BvFooterPublicSchema.parse(bundle.fragments["bv.site-footer"]?.content);
+    expect(footer.headline).toBe("Let’s move energy forward, together.");
+    expect(BvNavPublicSchema.parse(bundle.fragments["bv.site-nav"]?.content).items.length).toBe(6);
   });
 
   it("unpublishes: the page is gone from the site (no fallback); republishing brings the draft", async () => {
@@ -3461,3 +3465,521 @@ function randomUUIDLike(): string {
   const h = randomBytes(16).toString("hex");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-7${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
+
+describe("20. header and footer menus (DP-219)", () => {
+  // Products and categories are written as dp_owner within the catalogue's own rules (the
+  // publication guard checks an approved master and a visible current listing).
+  let pageA: string; // a live content page, moved later
+  let pageB: string; // a live content page, unpublished later
+  let draftOnly: string; // never published
+  let category: string;
+  let product: string;
+  let hiddenProduct: string; // listed on BV, never live
+  let comCategory: string;
+  const pageOf = async (id: string) => CmsPageResponseSchema.parse((await page(id)).body).page;
+  const fragments = async () =>
+    CmsPublicNewsSchema.parse((await pub("/news")).body).fragments as Record<
+      string,
+      { content: Record<string, unknown>; revisionNumber: number | null } | null
+    >;
+  const publicNav = async () =>
+    BvNavPublicSchema.parse((await fragments())["bv.site-nav"]?.content);
+  const publicFooter = async () =>
+    BvFooterPublicSchema.parse((await fragments())["bv.site-footer"]?.content);
+  async function livePage(slug: string, publish = true): Promise<string> {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, { title: `DP-219 ${slug}`, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = CmsPageResponseSchema.parse(created.body).page.id;
+    if (publish) {
+      const p = await pageOf(id);
+      const res = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    return id;
+  }
+  async function publishPage(id: string) {
+    const p = await pageOf(id);
+    const res = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return CmsPageResponseSchema.parse(res.body).page;
+  }
+  const saveMenu = async (id: string, content: unknown, as: Staff = bvEditor) => {
+    const p = await pageOf(id);
+    return as.post(`/pages/${id}/draft`, {
+      version: p.version,
+      title: p.title,
+      seo: p.seo,
+      content,
+    });
+  };
+  const snapshot = (slug: string) => ({
+    schemaVersion: 1,
+    slug,
+    code: "DP219-OIL",
+    name: "DP-219 Oil",
+    summary: null,
+    description: null,
+    category: { slug: "dp219-oils", name: "DP-219 oils" },
+    sortOrder: 0,
+    specs: [],
+    images: [],
+  });
+  const link = (label: string, target: unknown, over: Record<string, unknown> = {}) => ({
+    label,
+    target,
+    newTab: false,
+    visible: true,
+    ...over,
+  });
+
+  beforeAll(async () => {
+    pageA = await livePage("dp219-a");
+    pageB = await livePage("dp219-b");
+    draftOnly = await livePage("dp219-draft", false);
+    const now = new Date();
+    category = (
+      await owner.productCategory.create({
+        data: { siteId: BV, name: "DP-219 oils", slug: "dp219-oils" },
+      })
+    ).id;
+    comCategory = (
+      await owner.productCategory.create({
+        data: { siteId: COM, name: "DP-219 corporate", slug: "dp219-corp" },
+      })
+    ).id;
+    const master = (code: string, slug: string) =>
+      owner.product.create({
+        data: {
+          code,
+          slug,
+          name: `DP-219 ${code}`,
+          status: "APPROVED",
+          approvedAt: now,
+          approvedById: root.userId,
+          approvedVersion: 1,
+        } as never,
+      });
+    product = (await master("DP219-OIL", "dp219-oil")).id;
+    hiddenProduct = (await master("DP219-HID", "dp219-hidden")).id;
+    const listing = await owner.productSiteListing.create({
+      data: { productId: product, siteId: BV, categoryId: category, visibility: "VISIBLE" },
+    });
+    await owner.productSiteListing.create({
+      data: { productId: hiddenProduct, siteId: BV, categoryId: category },
+    });
+    await owner.productPublication.create({
+      data: {
+        productId: product,
+        siteId: BV,
+        listingId: listing.id,
+        status: "PUBLISHED",
+        productVersion: 1,
+        listingVersion: 1,
+        snapshot: snapshot("dp219-oil"),
+        imageIds: [],
+        publishedAt: now,
+        publishedById: root.userId,
+      },
+    });
+  });
+
+  it("menu targets: content:read of the site; products not live only with product:read", async () => {
+    const asEditor = CmsMenuTargetsResponseSchema.parse(
+      (await bvEditor.get(`/sites/${BV}/menu-targets`)).body,
+    );
+    expect(asEditor.productsComplete).toBe(true);
+    expect(asEditor.pages.find((p) => p.id === pageA)).toMatchObject({
+      livePath: "/dp219-a",
+      status: "PUBLISHED",
+    });
+    expect(asEditor.pages.find((p) => p.id === draftOnly)).toMatchObject({
+      livePath: null,
+      status: "DRAFT",
+    });
+    expect(asEditor.pages.some((p) => p.id === navId)).toBe(false); // fragments are not targets
+    expect(asEditor.products.find((p) => p.id === product)?.livePath).toBe("/products/dp219-oil");
+    expect(asEditor.products.find((p) => p.id === hiddenProduct)?.livePath).toBeNull();
+    expect(asEditor.categories.find((c) => c.id === category)).toMatchObject({
+      path: "/products?category=dp219-oils",
+      liveProducts: 1,
+    });
+    expect(asEditor.categories.some((c) => c.id === comCategory)).toBe(false);
+
+    // content_publisher has no product:read: live products only.
+    const asPublisher = CmsMenuTargetsResponseSchema.parse(
+      (await bvPublisher.get(`/sites/${BV}/menu-targets`)).body,
+    );
+    expect(asPublisher.productsComplete).toBe(false);
+    expect(asPublisher.products.map((p) => p.id)).toContain(product);
+    expect(asPublisher.products.map((p) => p.id)).not.toContain(hiddenProduct);
+
+    expectError(await nobody.get(`/sites/${BV}/menu-targets`), 403, "FORBIDDEN");
+    expectError(await comEditor.get(`/sites/${BV}/menu-targets`), 403, "FORBIDDEN");
+  });
+
+  it("saves a header with a submenu, references, visibility and new tab; the draft stays off the site", async () => {
+    const liveBefore = await publicNav();
+    const content = {
+      items: [
+        link("Home", { type: "path", path: "#top" }),
+        link(
+          "Products",
+          { type: "path", path: "/products" },
+          {
+            children: [
+              link("DP-219 oils", { type: "category", categoryId: category }),
+              link("DP-219 Oil", { type: "product", productId: product }),
+              link("Hidden child", { type: "path", path: "/x" }, { visible: false }),
+            ],
+          },
+        ),
+        link("About", { type: "page", pageId: pageA }, { children: [] }),
+        link(
+          "Company",
+          { type: "none" },
+          {
+            children: [link("Team", { type: "page", pageId: pageB })],
+          },
+        ),
+        link(
+          "Partner",
+          { type: "url", url: "https://example.com/partner" },
+          {
+            newTab: true,
+            children: [],
+          },
+        ),
+        link("Secret", { type: "path", path: "/secret" }, { visible: false, children: [] }),
+      ],
+      contact: link("Contact", { type: "page", pageId: pageA }),
+      noScriptLinks: [
+        link("Home", { type: "path", path: "#top" }),
+        link("Not ready", { type: "none" }),
+        link("Draft page", { type: "page", pageId: draftOnly }),
+      ],
+      pendingNote: "This page isn't ready yet.",
+    };
+    const res = await saveMenu(navId, content);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const saved = CmsPageResponseSchema.parse(res.body).page;
+    expect((saved.content["items"] as unknown[]).length).toBe(6);
+    const row = await owner.cmsPage.findUniqueOrThrow({ where: { id: navId } });
+    expect(row.schemaVersion).toBe(2);
+    expect((await lastAudit("cms.page_draft_saved"))?.metadata).toMatchObject({
+      changed: ["content"],
+    });
+    // The draft does not reach the site: the published navigation is unchanged.
+    expect(await publicNav()).toEqual(liveBefore);
+  });
+
+  it("refuses references outside the site, unsafe addresses and broken limits", async () => {
+    const nav = (await pageOf(navId)).content as Record<string, unknown>;
+    const items = nav["items"] as Record<string, unknown>[];
+    const withFirst = (patch: Record<string, unknown>) => ({
+      ...nav,
+      items: [{ ...items[0], ...patch }, ...items.slice(1)],
+    });
+    for (const target of [
+      { type: "page", pageId: randomUUIDLike() },
+      { type: "category", categoryId: comCategory },
+      { type: "product", productId: randomUUIDLike() },
+      { type: "page", pageId: footerId }, // a fragment is not a target
+    ]) {
+      const r = await saveMenu(navId, withFirst({ target }));
+      expectError(r, 400, "VALIDATION_FAILED", {
+        path: "content.items.0.target",
+        rule: "unknown_reference",
+      });
+    }
+    for (const target of [
+      { type: "url", url: "javascript:alert(1)" },
+      { type: "url", url: "http://example.com" },
+      { type: "url", url: "//evil.example" },
+      { type: "path", path: "https://example.com" },
+      { type: "page", pageId: "not-a-uuid" },
+    ]) {
+      expectError(await saveMenu(navId, withFirst({ target })), 400, "VALIDATION_FAILED");
+    }
+    const many = Array.from({ length: 9 }, (_, i) => link(`C${i}`, { type: "none" }));
+    expectError(await saveMenu(navId, withFirst({ children: many })), 400, "VALIDATION_FAILED");
+    const nested = withFirst({ children: [{ ...link("x", { type: "none" }), children: [] }] });
+    expectError(await saveMenu(navId, nested), 400, "VALIDATION_FAILED");
+    // Only editors save drafts; a publisher's attempt is not found (and audited).
+    expectError(await saveMenu(navId, nav, bvPublisher), 404, "NOT_FOUND");
+  });
+
+  it("publishes: hidden links dropped, references resolved now, submenus and new tab kept", async () => {
+    const before = await owner.siteRedirect.count();
+    const nav = await pageOf(navId);
+    expectError(
+      await bvEditor.post(`/pages/${navId}/publish`, { version: nav.version }),
+      404,
+      "NOT_FOUND",
+    );
+    await publishPage(navId);
+    const live = await publicNav();
+    expect(live.items.map((i) => i.label)).toEqual([
+      "Home",
+      "Products",
+      "About",
+      "Company",
+      "Partner",
+    ]);
+    expect(live.items[1]).toEqual({
+      label: "Products",
+      href: "/products",
+      newTab: false,
+      children: [
+        { label: "DP-219 oils", href: "/products?category=dp219-oils", newTab: false },
+        { label: "DP-219 Oil", href: "/products/dp219-oil", newTab: false },
+      ],
+    });
+    expect(live.items[2]).toMatchObject({ href: "/dp219-a", children: [] });
+    expect(live.items[3]).toMatchObject({
+      href: null,
+      children: [{ label: "Team", href: "/dp219-b", newTab: false }],
+    });
+    expect(live.items[4]).toMatchObject({ href: "https://example.com/partner", newTab: true });
+    expect(live.contact).toEqual({ label: "Contact", href: "/dp219-a", newTab: false });
+    // Without JavaScript only real destinations: "not ready" and the draft page are left out.
+    expect(live.noScriptLinks.map((l) => l.label)).toEqual(["Home"]);
+    expect(JSON.stringify(live)).not.toMatch(/pageId|productId|categoryId|Secret|Hidden child/);
+    // Publishing a menu writes no redirect.
+    expect(await owner.siteRedirect.count()).toBe(before);
+    expect(
+      (
+        await owner.cmsPageRevision.findFirstOrThrow({
+          where: { pageId: navId },
+          orderBy: { revisionNumber: "desc" },
+        })
+      ).schemaVersion,
+    ).toBe(2);
+    expect((await lastAudit("cms.page_published"))?.resourceId).toBe(navId);
+  });
+
+  it("follows slug changes of pages and products without republishing the menu", async () => {
+    const moved = await pageOf(pageA);
+    const save = await bvEditor.post(`/pages/${pageA}/draft`, {
+      version: moved.version,
+      title: moved.title,
+      slug: "dp219-a-moved",
+      seo: SEO,
+      content: moved.content,
+    });
+    expect(save.status, JSON.stringify(save.body)).toBe(200);
+    // A draft slug is not live: the menu keeps the live address.
+    expect((await publicNav()).items[2]?.href).toBe("/dp219-a");
+    await publishPage(pageA);
+    const nav = await publicNav();
+    expect(nav.items[2]?.href).toBe("/dp219-a-moved");
+    expect(nav.contact?.href).toBe("/dp219-a-moved");
+
+    // A product published again under a new slug.
+    await owner.productPublication.update({
+      where: { productId_siteId: { productId: product, siteId: BV } },
+      data: { snapshot: snapshot("dp219-oil-v2"), publishedAt: new Date() },
+    });
+    expect((await publicNav()).items[1]?.children[1]?.href).toBe("/products/dp219-oil-v2");
+  });
+
+  it("shows content that is no longer live as text; the admin sees why", async () => {
+    const b = await pageOf(pageB);
+    const off = await bvPublisher.post(`/pages/${pageB}/unpublish`, {
+      publicationVersion: b.publication!.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    await owner.productPublication.update({
+      where: { productId_siteId: { productId: product, siteId: BV } },
+      data: { status: "UNPUBLISHED", unpublishedAt: new Date(), unpublishedById: root.userId },
+    });
+    const nav = await publicNav();
+    expect(nav.items[3]?.children[0]).toEqual({ label: "Team", href: null, newTab: false });
+    expect(nav.items[1]?.children[1]).toEqual({ label: "DP-219 Oil", href: null, newTab: false });
+    const targets = CmsMenuTargetsResponseSchema.parse(
+      (await bvEditor.get(`/sites/${BV}/menu-targets`)).body,
+    );
+    expect(menuTargetCheck({ type: "page", pageId: pageB }, targets).problem).toBe(
+      "page_unpublished",
+    );
+    expect(menuTargetCheck({ type: "product", productId: product }, targets).problem).toBe(
+      "product_not_live",
+    );
+    expect(menuTargetCheck({ type: "category", categoryId: category }, targets).problem).toBe(
+      "category_empty",
+    );
+    // The draft with these references still saves: the warning is the admin's, not a refusal.
+    const nav2 = await pageOf(navId);
+    expect((await saveMenu(navId, nav2.content)).status).toBe(200);
+  });
+
+  it("footer: columns, visibility, social links and contact details; contact page keeps them", async () => {
+    const f = await pageOf(footerId);
+    const c = f.content as Record<string, unknown> & {
+      contact: Record<string, Record<string, unknown>>;
+      columns: { title: string; links: unknown[] }[];
+    };
+    const content = {
+      ...c,
+      cta: { label: "Get in Touch", target: { type: "page", pageId: pageA }, newTab: false },
+      contact: { ...c.contact, phone: { ...c.contact["phone"], visible: false } },
+      columns: [
+        { ...c.columns[1]!, visible: true },
+        { ...c.columns[0]!, visible: false },
+        {
+          title: "DP-219",
+          visible: true,
+          links: [
+            link("Oils", { type: "category", categoryId: category }),
+            link("Hidden", { type: "path", path: "/x" }, { visible: false }),
+          ],
+        },
+      ],
+      social: [
+        {
+          network: "linkedin",
+          label: "LinkedIn",
+          url: "https://www.linkedin.com/company/x",
+          visible: true,
+        },
+        { network: "x", label: "X", url: "https://x.com/x", visible: false },
+      ],
+    };
+    expectError(
+      await saveMenu(footerId, { ...content, cta: { ...content.cta, target: { type: "none" } } }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await saveMenu(footerId, {
+        ...content,
+        social: [{ network: "x", label: "X", url: "http://x.com/x", visible: true }],
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const res = await saveMenu(footerId, content);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await publishPage(footerId);
+    const live = await publicFooter();
+    expect(live.cta).toEqual({ label: "Get in Touch", href: "/dp219-a-moved", newTab: false });
+    expect(live.columns.map((col) => col.title)).toEqual([c.columns[1]!.title, "DP-219"]);
+    expect(live.columns[1]!.links).toEqual([
+      { label: "Oils", href: "/products?category=dp219-oils", newTab: false },
+    ]);
+    expect(live.social).toEqual([
+      { network: "linkedin", label: "LinkedIn", href: "https://www.linkedin.com/company/x" },
+    ]);
+    // Hidden in the footer only: the details stay for the contact page.
+    expect(live.contact.phone).toMatchObject({ href: "tel:+31202101350", visible: false });
+    expect(live.contact.email.visible).toBe(true);
+  });
+
+  it("reads version 1 revisions as before and restores them as version 2 drafts", async () => {
+    // A revision as DEV holds it today (DP-134 content: label + href), published.
+    const last = await owner.cmsPageRevision.findFirstOrThrow({
+      where: { pageId: navId },
+      orderBy: { revisionNumber: "desc" },
+    });
+    const v1 = {
+      items: [
+        { label: "Home", href: "#top" },
+        { label: "Products", href: "/products" },
+        { label: "Company", href: "/about-us" },
+        { label: "Blogs", href: "/news" },
+        { label: "Soon", href: null },
+      ],
+      contact: { label: "Contact", href: "/contact" },
+      noScriptLinks: [
+        { label: "Home", href: "#top" },
+        { label: "Services", href: "/#services" },
+      ],
+      pendingNote: "This page isn't ready yet.",
+    };
+    const rev = await owner.cmsPageRevision.create({
+      data: {
+        pageId: navId,
+        siteId: BV,
+        revisionNumber: last.revisionNumber + 1,
+        pageVersion: last.pageVersion,
+        title: "Navigation",
+        noindex: false,
+        content: v1,
+        schemaVersion: 1,
+        createdById: root.userId,
+      },
+    });
+    await owner.cmsPagePublication.update({
+      where: { pageId: navId },
+      data: { revisionId: rev.id },
+    });
+    const nav = await publicNav();
+    expect(nav.items.map((i) => [i.label, i.href])).toEqual([
+      ["Home", "#top"],
+      ["Products", "/products"],
+      ["Company", "/about-us"],
+      ["Blogs", "/news"],
+      ["Soon", null],
+    ]);
+    expect(nav.items.every((i) => i.children.length === 0 && !i.newTab)).toBe(true);
+    expect(nav.contact).toEqual({ label: "Contact", href: "/contact", newTab: false });
+
+    const draft = await pageOf(navId);
+    const restored = await bvEditor.post(`/pages/${navId}/restore`, {
+      version: draft.version,
+      revisionNumber: rev.revisionNumber,
+    });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    const after = CmsPageResponseSchema.parse(restored.body).page;
+    expect((after.content["items"] as { target: unknown }[])[2]?.target).toEqual({
+      type: "path",
+      path: "/about-us",
+    });
+    expect((after.content["items"] as { target: unknown }[])[4]?.target).toEqual({
+      type: "none",
+    });
+    expect((await owner.cmsPage.findUniqueOrThrow({ where: { id: navId } })).schemaVersion).toBe(2);
+    expect((await lastAudit("cms.page_revision_restored"))?.metadata).toMatchObject({
+      revisionNumber: rev.revisionNumber,
+    });
+    // Restoring changes the draft only: the site still shows the published revision.
+    expect((await fragments())["bv.site-nav"]?.revisionNumber).toBe(rev.revisionNumber);
+  });
+
+  it("the reference conversion keeps every address and is idempotent", async () => {
+    // pageA now lives at /dp219-a-moved; the category at /products?category=dp219-oils.
+    const draft = await pageOf(navId);
+    const content = {
+      ...(draft.content as Record<string, unknown>),
+      items: [
+        link("Home", { type: "path", path: "#top" }, { children: [] }),
+        link("Moved", { type: "path", path: "/dp219-a-moved" }, { children: [] }),
+        link("Oils", { type: "path", path: "/products?category=dp219-oils" }, { children: [] }),
+        link("Catalogue", { type: "path", path: "/products" }, { children: [] }),
+      ],
+    };
+    expect((await saveMenu(navId, content)).status).toBe(200);
+    const targets = CmsMenuTargetsResponseSchema.parse(
+      (await bvEditor.get(`/sites/${BV}/menu-targets`)).body,
+    );
+    const parsed = BvNavMenuSchema.parse((await pageOf(navId)).content);
+    const plan = menuReferencePlan("bv.site-nav", parsed, targets);
+    const byPath = Object.fromEntries(plan.changes.map((ch) => [ch.path, ch]));
+    expect(byPath["items.1"]?.to).toEqual({ type: "page", pageId: pageA });
+    expect(byPath["items.2"]?.to).toEqual({ type: "category", categoryId: category });
+    // Anchors and site routes stay fixed paths.
+    expect(byPath["items.0"]).toBeUndefined();
+    expect(byPath["items.3"]).toBeUndefined();
+    // Every conversion keeps the address the link opens now.
+    for (const ch of plan.changes) expect(menuTargetCheck(ch.to, targets).href).toBe(ch.from);
+    expect(menuReferencePlan("bv.site-nav", plan.content, targets).changes).toEqual([]);
+    expect((await saveMenu(navId, plan.content)).status).toBe(200);
+    await publishPage(navId);
+    const live = await publicNav();
+    expect(live.items.map((i) => i.href)).toEqual([
+      "#top",
+      "/dp219-a-moved",
+      "/products?category=dp219-oils",
+      "/products",
+    ]);
+  });
+});

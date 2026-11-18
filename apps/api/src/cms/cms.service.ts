@@ -28,12 +28,15 @@ import {
   CmsSeoSchema,
   CmsUnpublishRequestSchema,
   cmsArticlePath,
+  CMS_MENU_SCHEMA_VERSION,
   cmsDesignTemplate,
   cmsIsArticle,
+  cmsIsMenu,
   cmsPathForSlug,
   type CmsContextResponse,
   type CmsHistoryResponse,
   type CmsImportResponse,
+  type CmsMenuTargetsResponse,
   type CmsPageListResponse,
   type CmsPageResponse,
   type CmsPreviewResponse,
@@ -72,6 +75,7 @@ import {
   redirectsTo,
 } from "../seo/redirects.js";
 import { CMS_SEEDS } from "./seed/bv.js";
+import { assertMenuReferences, menuTargets } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 
 const READ = "content:read";
@@ -82,6 +86,9 @@ const NO_SITE = "00000000-0000-0000-0000-000000000000";
 const RESOURCE = "cms_page";
 /** Version of the content schemas; raised when a template's fields change. */
 const SCHEMA_VERSION = 1;
+/** DP-219: the menus are written in content schema version 2 (version 1 is read as 2). */
+const schemaVersionOf = (templateKey: string) =>
+  cmsIsMenu(templateKey) ? CMS_MENU_SCHEMA_VERSION : SCHEMA_VERSION;
 
 /** Field names whose value differs (audit metadata: names only, never values). */
 function changedFields(before: PageRow, after: Record<string, unknown>): string[] {
@@ -341,9 +348,16 @@ export class CmsService {
         if (data.path !== before.path && keepsOldAddress(a.sites, before.siteId)) {
           await assertAddressFree(tx, before.siteId, data.path, "CMS_PAGE", before.id);
         }
+        // DP-219: a menu may reference only pages, products and categories of its own site.
+        await assertMenuReferences(tx, before.siteId, before.templateKey, data.content);
         const res = await tx.cmsPage.updateMany({
           where: { id: before.id, version },
-          data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,
+          data: {
+            ...data,
+            schemaVersion: schemaVersionOf(before.templateKey),
+            updatedById: a.userId,
+            version: { increment: 1 },
+          } as never,
         });
         if (res.count !== 1) throw staleVersion();
         await a.audit(tx, {
@@ -407,7 +421,7 @@ export class CmsService {
             title: plan.title,
             ...seoColumns(CmsSeoSchema.parse(plan.seo)),
             content: content as never,
-            schemaVersion: SCHEMA_VERSION,
+            schemaVersion: schemaVersionOf(plan.templateKey),
             createdById: a.userId,
             updatedById: a.userId,
           },
@@ -567,7 +581,8 @@ export class CmsService {
             path: row.path,
             ...pickSeo(row),
             content: content as never,
-            schemaVersion: row.schemaVersion,
+            // DP-219: a menu's content is stored as validated, i.e. in version 2.
+            schemaVersion: cmsIsMenu(row.templateKey) ? CMS_MENU_SCHEMA_VERSION : row.schemaVersion,
             createdById: a.userId,
           },
           select: { id: true },
@@ -662,9 +677,23 @@ export class CmsService {
   }
 
   /**
+   * DP-219: what the menus of a site may link to (the admin's target picker and its warnings).
+   * `content:read` of the site (403 otherwise, audited); the products not live on the site only
+   * with `product:read` there as well.
+   */
+  async menuTargets(ctx: RequestContext, rawSiteId: unknown): Promise<CmsMenuTargetsResponse> {
+    const a = await this.access.begin(ctx);
+    const siteId = await CmsService.requireSite(a, READ, rawSiteId);
+    const db = a.db({ siteIds: [siteId], includePlatform: false });
+    return menuTargets(db, siteId, a.sitesWith("product:read").includes(siteId));
+  }
+
+  /**
    * DP-020: copies a published revision (title, address, SEO, content) back into the draft. A
    * normal draft save (`content:edit`, names the draft version, audited); nothing is published.
-   * The content is validated again, so a revision of an older schema is refused (409).
+   * The content is validated again, so a revision of an older schema is refused (409). DP-219: a
+   * menu revision of version 1 is read as version 2; its references are not checked again (the
+   * editor shows a target that no longer exists, and the next save asks for another one).
    */
   async restore(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
@@ -700,7 +729,12 @@ export class CmsService {
         }
         const res = await tx.cmsPage.updateMany({
           where: { id: row.id, version: input.version },
-          data: { ...data, updatedById: a.userId, version: { increment: 1 } } as never,
+          data: {
+            ...data,
+            schemaVersion: schemaVersionOf(row.templateKey),
+            updatedById: a.userId,
+            version: { increment: 1 },
+          } as never,
         });
         if (res.count !== 1) throw staleVersion();
         await a.audit(tx, {
