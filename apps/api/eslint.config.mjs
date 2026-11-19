@@ -16,6 +16,10 @@ const INFRASTRUCTURE = [
   "src/leads/retention.ts",
   "src/leads/leads-cli.ts",
   "src/leads/retention-report.service.ts",
+  // DP-221 (ADR-026 D4): the notification sender works the outbox of every site outside any
+  // request; it reads only the notification rows, settings, sites and staff e-mail addresses
+  // (no lead table).
+  "src/leads/lead-notification-sender.service.ts",
   "test/**",
 ];
 // F1-002: the throttle's row lock (SELECT … FOR UPDATE) and the clean-up's advisory lock have no

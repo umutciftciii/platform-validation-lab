@@ -32,6 +32,8 @@ import {
   LeadDetailResponseSchema,
   LeadDocumentRequestResponseSchema,
   LeadListResponseSchema,
+  LeadNotificationSaveResponseSchema,
+  LeadNotificationSettingsResponseSchema,
   LeadWorkflowResponseSchema,
   ProductDocumentResponseSchema,
   ProductWorkflowResponseSchema,
@@ -84,6 +86,8 @@ const MEDIA_DIR = mkdtempSync(path.join(tmpdir(), "dp-leads-media-"));
 
 interface App {
   listen(port: number, host: string): Promise<unknown>;
+  /** Nest's container (DP-221: the mail sink and the notification sender by name). */
+  get(token: string): unknown;
   getHttpServer(): { address(): unknown };
   close(): Promise<void>;
 }
@@ -463,6 +467,9 @@ beforeAll(async () => {
     DB_EXPECTED_NAME: DB_NAME,
     DP_MEDIA_STORAGE: "filesystem",
     DP_MEDIA_DIR: MEDIA_DIR,
+    // DP-221: e-mail stays in the process (capture); the sender runs only when a test asks.
+    DP_MAIL_TRANSPORT: "capture",
+    LEAD_NOTIFICATION_INTERVAL_SECONDS: "0",
   });
   delete process.env["DP_DEPLOY_ENV"];
   const factory = (await import(pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href)) as {
@@ -2926,6 +2933,11 @@ describe("DP-151 contact-form messages", () => {
     );
     expectError(await send("bv", contact({ message: "Hi" })), 400, "VALIDATION_FAILED");
     expectError(await send("bv", contact({ phone: "call me" })), 400, "VALIDATION_FAILED");
+    // DP-221: the subject is required (only the phone is optional).
+    expectError(await send("bv", contact({ subject: "  " })), 400, "VALIDATION_FAILED", {
+      path: "subject",
+      rule: "too_small",
+    });
     // No consent fields on this form (owner decision 2026-11-13): sending one is refused.
     expectError(
       await send("bv", contact({ privacyNoticeAccepted: true })),
@@ -2960,7 +2972,7 @@ describe("DP-151 contact-form messages", () => {
     const before = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
     const res = await send(
       "bv",
-      contact({ email, company: "Renamed Firm", phone: "", subject: "  " }),
+      contact({ email, company: "Renamed Firm", phone: "", subject: "Follow-up" }),
     );
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const after = await owner.lead.findFirstOrThrow({ where: { id: before.id } });
@@ -2968,14 +2980,17 @@ describe("DP-151 contact-form messages", () => {
     expect(after.company).toBe("Renamed Firm");
     expect(after.lastRequestAt.getTime()).toBeGreaterThanOrEqual(before.lastRequestAt.getTime());
     const msg = await owner.leadContactMessage.findFirstOrThrow({ where: { leadId: before.id } });
-    // Blank optional fields are stored as null.
-    expect(msg).toMatchObject({ phone: null, subject: null, company: "Renamed Firm" });
+    // A blank optional field is stored as null.
+    expect(msg).toMatchObject({ phone: null, subject: "Follow-up", company: "Renamed Firm" });
+    // DP-221: the lead came from the document form and keeps that source.
+    expect(after.source).toBe("DOCUMENT_REQUEST");
   });
 
   it("limits messages per e-mail before anything is written", async () => {
     const email = "limit.contact@firm.example";
     for (let i = 0; i < 3; i++) {
-      const ok = await send("bv", contact({ email }));
+      // Three different messages (DP-221 stores a resend of the same message once).
+      const ok = await send("bv", contact({ email, message: `Question number ${i + 1}, please.` }));
       expect(ok.status, JSON.stringify(ok.body)).toBe(201);
     }
     const lead = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
@@ -3084,5 +3099,567 @@ describe("DP-151 contact-form messages", () => {
     const leads = await owner.lead.findMany({ where: { siteId: BV, email } });
     expect(leads).toHaveLength(1);
     expect(leads[0]!.id).not.toBe(lead.id);
+  });
+});
+
+describe("DP-221 contact form → CRM lead, source and staff notifications", () => {
+  interface Mail {
+    to: string[];
+    subject: string;
+    text: string;
+  }
+  interface Capture {
+    captured(): readonly Mail[];
+    clear(): void;
+    failNext: { code: string; permanent: boolean }[];
+  }
+  interface Sender {
+    runOnce(): Promise<{ sent: number; skipped: number; retried: number; failed: number }>;
+  }
+  const mailbox = () => app.get("DP_MAIL_SENDER") as Capture;
+  const sender = () => app.get("DP_LEAD_NOTIFICATION_SENDER") as Sender;
+  const MailError = async (code: string, permanent: boolean) => {
+    const mod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/notifications/mail.js")).href
+    )) as {
+      MailDeliveryError: new (c: string, p: boolean) => { code: string; permanent: boolean };
+    };
+    return new mod.MailDeliveryError(code, permanent);
+  };
+
+  const contact = (input: Record<string, unknown> = {}) => ({
+    fullName: "Katherine Johnson",
+    company: "Orbital Fuels BV",
+    email: "katherine@orbital.example",
+    country: "NL",
+    phone: "",
+    subject: "Bulk base oil quote",
+    message: "Please send a quote for 20 tonnes of Group III base oil.",
+    privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    website: "",
+    ...input,
+  });
+  async function send(body: Record<string, unknown>, site: "bv" | "com" = "bv"): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/leads/contact-messages`, {
+        method: "POST",
+        headers: {
+          "x-dp-proxy-key": KEY[site],
+          origin: site === "bv" ? BV_ORIGIN : COM_ORIGIN,
+          "content-type": "application/json",
+          "x-dp-client-ip": freshIp(),
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+  async function settings(who: Staff): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/admin/lead-notifications`, {
+        headers: {
+          "x-dp-proxy-key": TEST_KEYS.admin,
+          "x-dp-client-ip": "10.20.30.40",
+          cookie: `__Host-dp_admin_session=${who.token}`,
+        },
+      }),
+    );
+  }
+  async function save(who: Staff, siteId: string, body: unknown): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/admin/lead-notifications/sites/${siteId}`, {
+        method: "POST",
+        headers: {
+          "x-dp-proxy-key": TEST_KEYS.admin,
+          "x-dp-client-ip": "10.20.30.40",
+          cookie: `__Host-dp_admin_session=${who.token}`,
+          origin: ADMIN_ORIGIN,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+  const notificationOf = async (email: string, siteId = BV) => {
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { siteId, email, anonymisedAt: null },
+    });
+    const messages = await owner.leadContactMessage.findMany({
+      where: { leadId: lead.id },
+      orderBy: { createdAt: "desc" },
+    });
+    const notes = await owner.leadNotification.findMany({ where: { leadId: lead.id } });
+    return {
+      lead,
+      messages,
+      notes,
+      last: notes.find((n) => n.contactMessageId === messages[0]?.id),
+    };
+  };
+  /** Mark every open notification as no longer due (other tests' messages stay out of the way). */
+  const settle = () =>
+    owner.leadNotification.updateMany({
+      where: { status: "PENDING" },
+      data: { status: "SKIPPED", reason: "test_settled" },
+    });
+
+  let manager: Staff; // sales_crm_user @ BV: lead:read + lead:manage
+  let officer: Staff; // platform customer-data officer: lead:read everywhere, no lead:manage
+  let comManager: Staff; // sales_crm_user @ CORPORATE
+
+  beforeAll(async () => {
+    manager = await staff("notify-bv", [], root.userId, undefined, { memberships: [BV] });
+    await assignRole(manager, "sales_crm_user", BV);
+    officer = await staff("notify-officer", [], root.userId);
+    await assignRole(officer, "platform_customer_data_officer", null);
+    comManager = await staff("notify-com", [], root.userId, undefined, { memberships: [COM] });
+    await assignRole(comManager, "sales_crm_user", COM);
+    await settle();
+    mailbox().clear();
+  });
+
+  it("creates a CONTACT_FORM lead with the message and one PENDING notification in one step", async () => {
+    const res = await send(contact());
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toEqual({ received: true });
+    const { lead, messages, notes } = await notificationOf("katherine@orbital.example");
+    expect(lead).toMatchObject({
+      source: "CONTACT_FORM",
+      fullName: "Katherine Johnson",
+      requestCount: 0,
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      subject: "Bulk base oil quote",
+      message: "Please send a quote for 20 tonnes of Group III base oil.",
+      phone: null,
+    });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
+      status: "PENDING",
+      attempts: 0,
+      siteId: BV,
+      contactMessageId: messages[0]!.id,
+    });
+    // The public request never touches the mail server.
+    expect(mailbox().captured()).toHaveLength(0);
+    const audit = await lastAudit("leads.contact_message_created");
+    expect(audit?.metadata).toMatchObject({ leadId: lead.id, notificationId: notes[0]!.id });
+    expect(JSON.stringify(audit)).not.toMatch(/katherine|Johnson|Orbital|tonnes/i);
+  });
+
+  it("stores a resend of the same message once; a different message is stored", async () => {
+    const again = await send(contact());
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+    let state = await notificationOf("katherine@orbital.example");
+    expect(state.messages).toHaveLength(1);
+    expect(state.notes).toHaveLength(1);
+    const dup = await lastAudit("leads.contact_message_duplicate");
+    expect(dup).toMatchObject({ resourceId: state.messages[0]!.id, siteId: BV });
+    // Another subject or text is a new message. (A resend still counts for the per-e-mail rate
+    // limit of 3 an hour: this was the third.)
+    expect((await send(contact({ subject: "Delivery terms" }))).status).toBe(201);
+    state = await notificationOf("katherine@orbital.example");
+    expect(state.messages).toHaveLength(2);
+    expect(state.notes).toHaveLength(2);
+    // Outside the window the same text is a new message again.
+    const email = "window.contact@firm.example";
+    expect((await send(contact({ email }))).status).toBe(201);
+    const first = await notificationOf(email);
+    await owner.$executeRaw`ALTER TABLE "LeadContactMessage" DISABLE TRIGGER "LeadContactMessage_guard"`;
+    try {
+      await owner.leadContactMessage.updateMany({
+        where: { leadId: first.lead.id },
+        data: { createdAt: new Date(Date.now() - 11 * 60_000) },
+      });
+    } finally {
+      await owner.$executeRaw`ALTER TABLE "LeadContactMessage" ENABLE TRIGGER "LeadContactMessage_guard"`;
+    }
+    expect((await send(contact({ email }))).status).toBe(201);
+    expect((await notificationOf(email)).messages).toHaveLength(2);
+  });
+
+  it("refuses an empty subject and a bad e-mail before anything is written", async () => {
+    const before = await owner.leadContactMessage.count();
+    expectError(await send(contact({ subject: "" })), 400, "VALIDATION_FAILED", {
+      path: "subject",
+      rule: "too_small",
+    });
+    expectError(await send(contact({ email: "not-an-email" })), 400, "VALIDATION_FAILED");
+    expectError(await send(contact({ fullName: "" })), 400, "VALIDATION_FAILED");
+    // An address without a dot in the domain passes HTML5 but not the database CHECK: before
+    // DP-221 it ended in a 500; now both lead forms answer a field error.
+    expectError(await send(contact({ email: "browser@test" })), 400, "VALIDATION_FAILED", {
+      path: "email",
+      rule: "invalid_format",
+    });
+    expectError(
+      await requestLead("bv", form({ documentId: leadDoc, email: "browser@test" })),
+      400,
+      "VALIDATION_FAILED",
+      { path: "email", rule: "invalid_format" },
+    );
+    expect(await owner.leadContactMessage.count()).toBe(before);
+  });
+
+  it("keeps the document form's leads as they were: DOCUMENT_REQUEST, no notification", async () => {
+    const email = "pdf.only@firm.example";
+    const res = await requestLead("bv", form({ documentId: leadDoc, email }));
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    LeadDocumentRequestResponseSchema.parse(res.body);
+    const lead = await owner.lead.findFirstOrThrow({ where: { siteId: BV, email } });
+    expect(lead).toMatchObject({ source: "DOCUMENT_REQUEST", requestCount: 1 });
+    expect(await owner.leadNotification.count({ where: { leadId: lead.id } })).toBe(0);
+  });
+
+  it("never changes a lead's source, for dp_app or the owner", async () => {
+    const { lead } = await notificationOf("katherine@orbital.example");
+    await rejectsDb(
+      owner.lead.update({ where: { id: lead.id }, data: { source: "DOCUMENT_REQUEST" } }),
+      /source of a lead never changes/,
+    );
+    await rejectsDb(
+      appIn({ site: BV, email: "katherine@orbital.example" }, (tx) =>
+        tx.lead.update({ where: { id: lead.id }, data: { source: "DOCUMENT_REQUEST" } }),
+      ),
+      // dp_app holds no UPDATE privilege on the column at all; the trigger is the second line.
+      /permission denied for table Lead|source of a lead never changes/,
+    );
+  });
+
+  it("filters the lead list by source and shows the source and notification state", async () => {
+    const list = await manager.leads("?source=CONTACT_FORM");
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    const items = LeadListResponseSchema.parse(list.body).items;
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((l) => l.source === "CONTACT_FORM")).toBe(true);
+    expect(items.some((l) => l.email === "katherine@orbital.example")).toBe(true);
+    const docs = LeadListResponseSchema.parse(
+      (await manager.leads("?source=document_request")).body,
+    );
+    expect(docs.items.every((l) => l.source === "DOCUMENT_REQUEST")).toBe(true);
+    expect(docs.items.some((l) => l.email === "pdf.only@firm.example")).toBe(true);
+    expectError(await manager.leads("?source=FAIR"), 400, "VALIDATION_FAILED", {
+      path: "source",
+      rule: "invalid",
+    });
+    const { lead } = await notificationOf("katherine@orbital.example");
+    const detail = LeadDetailResponseSchema.parse((await manager.leads(`/${lead.id}`)).body);
+    expect(detail.lead.source).toBe("CONTACT_FORM");
+    expect(detail.contactMessages).toHaveLength(2);
+    for (const m of detail.contactMessages) {
+      expect(m.notification).toMatchObject({ status: "PENDING", attempts: 0, sentAt: null });
+    }
+  });
+
+  it("skips notifications while a site has no settings (the message stays in the CRM)", async () => {
+    const run = await sender().runOnce();
+    expect(run.skipped).toBeGreaterThanOrEqual(4);
+    expect(run.sent).toBe(0);
+    const { notes, messages } = await notificationOf("katherine@orbital.example");
+    expect(notes.every((n) => n.status === "SKIPPED" && n.reason === "disabled")).toBe(true);
+    expect(messages).toHaveLength(2);
+    expect(mailbox().captured()).toHaveLength(0);
+    expect((await lastAudit("leads.notification_skipped"))?.metadata).toMatchObject({
+      reason: "disabled",
+    });
+  });
+
+  it("lets lead managers only read and change the settings of their own sites", async () => {
+    const mine = await settings(manager);
+    expect(mine.status, JSON.stringify(mine.body)).toBe(200);
+    const body = LeadNotificationSettingsResponseSchema.parse(mine.body);
+    expect(body.transport).toBe("capture");
+    expect(body.sites.map((s) => s.site.id)).toEqual([BV]);
+    const bvSettings = body.sites[0]!;
+    expect(bvSettings).toMatchObject({ enabled: false, version: 0, recipients: [] });
+    // Candidates read the site's leads: the manager and the platform officer, not a product editor.
+    const ids = bvSettings.candidates.map((c) => c.id);
+    expect(ids).toEqual(expect.arrayContaining([manager.userId, officer.userId]));
+    expect(ids).not.toContain(bvEditor.userId);
+    expect(ids).not.toContain(comManager.userId);
+    // lead:read without lead:manage, or no lead permission at all: refused and audited.
+    expectError(await settings(officer), 403, "FORBIDDEN");
+    expectError(await settings(bvEditor), 403, "FORBIDDEN");
+    expectError(
+      await save(officer, BV, { version: 0, enabled: true, recipientUserIds: [officer.userId] }),
+      403,
+      "FORBIDDEN",
+    );
+    // Another site's manager cannot touch BV.
+    expectError(
+      await save(comManager, BV, {
+        version: 0,
+        enabled: true,
+        recipientUserIds: [comManager.userId],
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    expect(await lastAudit("leads.access_denied")).toMatchObject({ outcome: "DENIED" });
+  });
+
+  it("validates the list: eligible people only, at least one when on, no duplicates, fresh version", async () => {
+    expectError(
+      await save(manager, BV, { version: 0, enabled: true, recipientUserIds: [bvEditor.userId] }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "recipientUserIds", rule: "recipient_not_eligible" },
+    );
+    expectError(
+      await save(manager, BV, { version: 0, enabled: true, recipientUserIds: [] }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await save(manager, BV, {
+        version: 0,
+        enabled: true,
+        recipientUserIds: [manager.userId, manager.userId],
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const ok = await save(manager, BV, {
+      version: 0,
+      enabled: true,
+      recipientUserIds: [manager.userId, officer.userId],
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const saved = LeadNotificationSaveResponseSchema.parse(ok.body).site;
+    expect(saved).toMatchObject({ enabled: true, version: 1 });
+    expect(saved.recipients.map((r) => [r.id, r.eligible])).toEqual([
+      [manager.userId, true],
+      [officer.userId, true],
+    ]);
+    expect(saved.updatedBy?.id).toBe(manager.userId);
+    expectError(
+      await save(manager, BV, { version: 0, enabled: false, recipientUserIds: [] }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    const audit = await lastAudit("leads.notification_settings_changed");
+    expect(audit).toMatchObject({ actorUserId: manager.userId, siteId: BV, resourceId: BV });
+    expect(audit?.metadata).toMatchObject({
+      enabled: true,
+      version: 1,
+      added: [manager.userId, officer.userId],
+    });
+  });
+
+  it("keeps the settings under the database's own rules", async () => {
+    // No staff context: dp_app reads but cannot write.
+    expect(await asApp.leadNotificationSetting.count()).toBe(1);
+    await rejectsDb(
+      asApp.leadNotificationSetting.update({
+        where: { siteId: BV },
+        data: { enabled: false, version: 2 },
+      }),
+      /No record was found|row-level security|0 rows|not found/i,
+    );
+    await rejectsDb(
+      asApp.$executeRaw`DELETE FROM "LeadNotificationSetting" WHERE "siteId" = ${BV}::uuid`,
+      /permission denied/,
+    );
+    // Even the owner cannot put someone without lead:read on the list or skip a version.
+    await rejectsDb(
+      owner.leadNotificationSetting.update({
+        where: { siteId: BV },
+        data: { recipientUserIds: [manager.userId, bvEditor.userId], version: 2 },
+      }),
+      /needs lead:read on the site/,
+    );
+    await rejectsDb(
+      owner.leadNotificationSetting.update({ where: { siteId: BV }, data: { version: 5 } }),
+      /one version at a time/,
+    );
+    // A manager's session context writes only its own site.
+    await rejectsDb(
+      appIn({ staff: comManager.token }, (tx) =>
+        tx.leadNotificationSetting.create({
+          data: {
+            siteId: BV,
+            enabled: false,
+            recipientUserIds: [],
+            updatedById: comManager.userId,
+          },
+        }),
+      ),
+      /row-level security|duplicate key|unique/i,
+    );
+  });
+
+  it("e-mails the eligible people after the message is stored, without any personal data", async () => {
+    mailbox().clear();
+    const email = "mae.jemison@launch.example";
+    const res = await send(
+      contact({
+        email,
+        fullName: "Mae Jemison",
+        company: "Launch Lubricants",
+        phone: "+31 6 1234 5678",
+        subject: "Turbine oil",
+        message: "We need ISO VG 46 turbine oil for two sites.",
+      }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mailbox().captured()).toHaveLength(0);
+    const run = await sender().runOnce();
+    expect(run).toMatchObject({ sent: 1, failed: 0, retried: 0 });
+    const mails = mailbox().captured();
+    expect(mails).toHaveLength(1);
+    const mail = mails[0]!;
+    expect([...mail.to].sort()).toEqual(
+      [`notify-bv@staff.dp.test`, `notify-officer@staff.dp.test`].sort(),
+    );
+    const { lead, last } = await notificationOf(email);
+    expect(mail.text).toContain(`${ADMIN_ORIGIN}/leads/${lead.id}`);
+    expect(mail.subject).toMatch(/New contact form message/);
+    expect(`${mail.subject}\n${mail.text}`).not.toMatch(
+      /Mae|Jemison|mae\.jemison|Launch Lubricants|Turbine|ISO VG|1234 5678/i,
+    );
+    expect(last).toMatchObject({ status: "SENT", attempts: 1, recipientCount: 2, reason: null });
+    expect(last?.sentAt).not.toBeNull();
+    const audit = await lastAudit("leads.notification_sent");
+    expect(audit?.metadata).toMatchObject({ leadId: lead.id, transport: "capture", attempts: 1 });
+    expect(JSON.stringify(audit)).not.toMatch(/@|Mae|Turbine/);
+    const detail = LeadDetailResponseSchema.parse((await manager.leads(`/${lead.id}`)).body);
+    expect(detail.contactMessages[0]?.notification).toMatchObject({
+      status: "SENT",
+      recipientCount: 2,
+    });
+    // A second run sends nothing more.
+    expect(await sender().runOnce()).toMatchObject({ sent: 0 });
+    expect(mailbox().captured()).toHaveLength(1);
+  });
+
+  it("retries a temporary mail failure later; the CRM record is there all along", async () => {
+    mailbox().clear();
+    const email = "retry.contact@firm.example";
+    expect((await send(contact({ email }))).status).toBe(201);
+    mailbox().failNext.push(await MailError("smtp_unavailable", false));
+    expect(await sender().runOnce()).toMatchObject({ retried: 1, sent: 0 });
+    let state = await notificationOf(email);
+    expect(state.messages).toHaveLength(1);
+    expect(state.last).toMatchObject({
+      status: "PENDING",
+      attempts: 1,
+      reason: "smtp_unavailable",
+    });
+    expect(state.last!.nextAttemptAt.getTime()).toBeGreaterThan(Date.now() + 30_000);
+    // Not due yet: nothing happens.
+    expect(await sender().runOnce()).toMatchObject({ retried: 0, sent: 0 });
+    await owner.leadNotification.update({
+      where: { id: state.last!.id },
+      data: { nextAttemptAt: new Date(Date.now() - 1000) },
+    });
+    expect(await sender().runOnce()).toMatchObject({ sent: 1 });
+    state = await notificationOf(email);
+    expect(state.last).toMatchObject({ status: "SENT", attempts: 2, reason: null });
+    expect(mailbox().captured()).toHaveLength(1);
+  });
+
+  it("gives up on a permanent failure or after the fifth attempt; final states never change", async () => {
+    mailbox().clear();
+    const email = "rejected.contact@firm.example";
+    expect((await send(contact({ email }))).status).toBe(201);
+    mailbox().failNext.push(await MailError("smtp_rejected", true));
+    expect(await sender().runOnce()).toMatchObject({ failed: 1 });
+    const state = await notificationOf(email);
+    expect(state.last).toMatchObject({ status: "FAILED", attempts: 1, reason: "smtp_rejected" });
+    expect(state.messages).toHaveLength(1);
+    expect(await lastAudit("leads.notification_failed")).toMatchObject({
+      outcome: "FAILURE",
+      reason: "smtp_rejected",
+    });
+    await rejectsDb(
+      owner.leadNotification.update({ where: { id: state.last!.id }, data: { status: "PENDING" } }),
+      /is final/,
+    );
+    await rejectsDb(
+      asApp.$executeRaw`DELETE FROM "LeadNotification" WHERE "id" = ${state.last!.id}::uuid`,
+      /permission denied/,
+    );
+
+    const tries = "five.tries@firm.example";
+    expect((await send(contact({ email: tries }))).status).toBe(201);
+    for (let i = 1; i <= 5; i++) {
+      mailbox().failNext.push(await MailError("smtp_timeout", false));
+      const run = await sender().runOnce();
+      expect(run, `attempt ${i}`).toMatchObject(i < 5 ? { retried: 1 } : { failed: 1 });
+      await owner.leadNotification.updateMany({
+        where: { status: "PENDING" },
+        data: { nextAttemptAt: new Date(Date.now() - 1000) },
+      });
+    }
+    expect((await notificationOf(tries)).last).toMatchObject({
+      status: "FAILED",
+      attempts: 5,
+      reason: "smtp_timeout",
+    });
+  });
+
+  it("stops e-mailing someone who lost lead access, and skips when nobody is left", async () => {
+    mailbox().clear();
+    // The officer's platform role ends: only the manager gets the next e-mail.
+    await owner.roleAssignment.updateMany({
+      where: { userId: officer.userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedById: root.userId },
+    });
+    expect((await send(contact({ email: "after.revoke@firm.example" }))).status).toBe(201);
+    expect(await sender().runOnce()).toMatchObject({ sent: 1 });
+    expect(mailbox().captured()[0]?.to).toEqual(["notify-bv@staff.dp.test"]);
+    const view = LeadNotificationSettingsResponseSchema.parse((await settings(manager)).body);
+    expect(view.sites[0]!.recipients.find((r) => r.id === officer.userId)?.eligible).toBe(false);
+    // Nobody eligible left on the list.
+    await owner.user.update({ where: { id: manager.userId }, data: { status: "SUSPENDED" } });
+    try {
+      expect((await send(contact({ email: "nobody.left@firm.example" }))).status).toBe(201);
+      expect(await sender().runOnce()).toMatchObject({ skipped: 1, sent: 0 });
+      expect((await notificationOf("nobody.left@firm.example")).last).toMatchObject({
+        status: "SKIPPED",
+        reason: "no_recipients",
+      });
+    } finally {
+      await owner.user.update({ where: { id: manager.userId }, data: { status: "ACTIVE" } });
+    }
+  });
+
+  it("keeps notification rows tied to their message and free of personal data", async () => {
+    const { lead, messages } = await notificationOf("katherine@orbital.example");
+    const other = await owner.lead.findFirstOrThrow({ where: { email: "pdf.only@firm.example" } });
+    await rejectsDb(
+      owner.leadNotification.create({
+        data: { siteId: BV, leadId: other.id, contactMessageId: messages[0]!.id },
+      }),
+      /same lead and site|unique/i,
+    );
+    // dp_app outside the form's context cannot add notifications.
+    await rejectsDb(
+      asApp.leadNotification.create({
+        data: { siteId: BV, leadId: lead.id, contactMessageId: messages[0]!.id },
+      }),
+      // Without the form's context dp_app sees no message: the guard refuses before the policy.
+      /row-level security|same lead and site|unique/i,
+    );
+    const columns = await owner.$queryRaw<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'LeadNotification'`;
+    expect(columns.map((c) => c.column_name).sort()).toEqual(
+      [
+        "attempts",
+        "contactMessageId",
+        "createdAt",
+        "id",
+        "leadId",
+        "lockedUntil",
+        "nextAttemptAt",
+        "reason",
+        "recipientCount",
+        "sentAt",
+        "siteId",
+        "status",
+        "updatedAt",
+      ].sort(),
+    );
   });
 });

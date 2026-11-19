@@ -23,12 +23,14 @@ import {
   LEADS_PAGE_SIZE,
   LeadActivityInputSchema,
   LeadAssigneeFilterSchema,
+  LeadSourceSchema,
   LeadStatusSchema,
   LeadWorkflowInputSchema,
   UuidSchema,
   canTransition,
   type LeadActivity,
   type LeadActivityResponse,
+  type LeadSource,
   type LeadDetailResponse,
   type LeadListResponse,
   type LeadStatus,
@@ -70,6 +72,7 @@ interface LeadRow {
   company: string;
   country: string;
   freeMailDomain: boolean;
+  source: LeadSource;
   marketingConsentAt: Date | null;
   requestCount: number;
   firstRequestAt: Date;
@@ -128,6 +131,7 @@ const LEAD_SELECT = {
   company: true,
   country: true,
   freeMailDomain: true,
+  source: true,
   marketingConsentAt: true,
   requestCount: true,
   firstRequestAt: true,
@@ -148,6 +152,8 @@ export interface LeadListQuery {
   /** DP-041 filters. */
   status?: string | undefined;
   assignee?: string | undefined;
+  /** DP-221: DOCUMENT_REQUEST or CONTACT_FORM. */
+  source?: string | undefined;
 }
 
 /** Cursor: base64url of "<lastRequestAt ISO>|<id>" (keyset pagination, newest first). */
@@ -206,6 +212,7 @@ export class AdminLeadsService {
       company: row.company,
       country: row.country,
       freeMailDomain: row.freeMailDomain,
+      source: row.source,
       marketingConsentAt: row.marketingConsentAt?.toISOString() ?? null,
       requestCount: row.requestCount,
       firstRequestAt: row.firstRequestAt.toISOString(),
@@ -269,6 +276,13 @@ export class AdminLeadsService {
         throw new ApiError("VALIDATION_FAILED", [{ path: "status", rule: "invalid" }]);
       status = parsed.data;
     }
+    let source: LeadSource | undefined;
+    if (query.source !== undefined) {
+      const parsed = LeadSourceSchema.safeParse(query.source.toUpperCase());
+      if (!parsed.success)
+        throw new ApiError("VALIDATION_FAILED", [{ path: "source", rule: "invalid" }]);
+      source = parsed.data;
+    }
     let assignedToId: string | null | undefined;
     let assigneeFilter: "me" | "none" | "user" | undefined;
     if (query.assignee !== undefined) {
@@ -288,6 +302,7 @@ export class AdminLeadsService {
         where: {
           siteId: { in: siteIds },
           ...(status ? { status } : {}),
+          ...(source ? { source } : {}),
           ...(assignedToId !== undefined ? { assignedToId } : {}),
           ...(q
             ? {
@@ -335,6 +350,7 @@ export class AdminLeadsService {
         searched: Boolean(q),
         paged: Boolean(cursor),
         ...(status ? { status } : {}),
+        ...(source ? { source } : {}),
         ...(assigneeFilter ? { assignee: assigneeFilter } : {}),
         accessAssignmentIds: access.grantRefs(PERMISSION, siteIds),
       },
@@ -432,6 +448,19 @@ export class AdminLeadsService {
         select: { id: true, revisionNumber: true },
       }),
     ]);
+    // DP-221: delivery state of each message's staff notification (ids and states only).
+    const notifications = await db.leadNotification.findMany({
+      where: { siteId: lead.siteId, contactMessageId: { in: messages.map((m) => m.id) } },
+      select: {
+        contactMessageId: true,
+        status: true,
+        reason: true,
+        attempts: true,
+        sentAt: true,
+        recipientCount: true,
+      },
+    });
+    const notificationOf = new Map(notifications.map((n) => [n.contactMessageId, n]));
     const grantOf = new Map(grants.map((g) => [g.requestId, g]));
     const productOf = new Map(products.map((p) => [p.id, p]));
     const documentOf = new Map(documents.map((d) => [d.id, d]));
@@ -467,6 +496,18 @@ export class AdminLeadsService {
         privacyNoticeVersion: m.privacyNoticeVersion,
         privacyNoticeSha256: m.privacyNoticeSha256,
         redactedAt: m.redactedAt?.toISOString() ?? null,
+        notification: (() => {
+          const n = notificationOf.get(m.id);
+          return n
+            ? {
+                status: n.status,
+                reason: n.reason,
+                attempts: n.attempts,
+                sentAt: n.sentAt?.toISOString() ?? null,
+                recipientCount: n.recipientCount,
+              }
+            : null;
+        })(),
       })),
       requests: requests.map((r) => {
         const g = grantOf.get(r.id);

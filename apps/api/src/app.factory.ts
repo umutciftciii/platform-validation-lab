@@ -17,6 +17,7 @@ import type { LoggerService, LogLevel } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { AppModule } from "./app.module.js";
 import { API_CONFIG, loadApiConfig, type ApiConfig } from "./iam/http/api-config.js";
+import { loadMailConfig } from "./notifications/mail.js";
 import { frameProtection } from "./iam/http/frame-protection.js";
 import { ProxyKeyMetrics } from "./iam/http/proxy-keys.js";
 import { createSecurityMiddleware } from "./iam/http/security.middleware.js";
@@ -32,6 +33,8 @@ export async function createApiApp(
   options: CreateApiAppOptions = {},
 ): Promise<NestExpressApplication> {
   const preflight = loadApiConfig(process.env);
+  // DP-221: refuse a bad or unsafe mail configuration before anything starts.
+  loadMailConfig(process.env, preflight.deployEnv);
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
     ...(options.logger !== undefined ? { logger: options.logger } : {}),

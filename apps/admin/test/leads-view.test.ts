@@ -22,6 +22,7 @@ describe("lead list filters", () => {
       cursor: "abc_-1",
       status: "",
       assignee: "",
+      source: "",
     });
     expect(readLeadFilters({ site: "BV", q: ["a", "b"], cursor: "x y" })).toEqual({
       site: "",
@@ -29,6 +30,7 @@ describe("lead list filters", () => {
       cursor: "",
       status: "",
       assignee: "",
+      source: "",
     });
     expect(readLeadFilters({ status: "qualified", assignee: "ME" })).toMatchObject({
       status: "QUALIFIED",
@@ -39,9 +41,12 @@ describe("lead list filters", () => {
       assignee: "",
     });
     expect(readLeadFilters({ q: "x".repeat(300) }).q).toHaveLength(100);
+    // DP-221: only the two known sources.
+    expect(readLeadFilters({ source: "contact_form" }).source).toBe("CONTACT_FORM");
+    expect(readLeadFilters({ source: "FAIR" }).source).toBe("");
   });
   it("builds the API query and the console links", () => {
-    const none = { site: "", q: "", cursor: "", status: "", assignee: "" };
+    const none = { site: "", q: "", cursor: "", status: "", assignee: "", source: "" };
     expect(leadListQuery(none)).toBe("");
     expect(leadListQuery({ ...none, site: SITE, q: "a&b", cursor: "c" })).toBe(
       `?siteId=${SITE}&q=a%26b&cursor=c`,
@@ -49,6 +54,9 @@ describe("lead list filters", () => {
     expect(leadListQuery({ ...none, status: "NEW", assignee: "none" })).toBe(
       "?status=NEW&assignee=none",
     );
+    // DP-221: the source filter.
+    expect(leadListQuery({ ...none, source: "CONTACT_FORM" })).toBe("?source=CONTACT_FORM");
+    expect(leadListHref({ source: "DOCUMENT_REQUEST" })).toBe("/leads?source=DOCUMENT_REQUEST");
     expect(leadListHref({})).toBe("/leads");
     expect(leadListHref({ q: "acme", cursor: "n" })).toBe("/leads?q=acme&cursor=n");
     expect(leadListHref({ status: "CONTACTED", assignee: "me" })).toBe(
