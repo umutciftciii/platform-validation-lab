@@ -40,6 +40,11 @@ import {
   PublicDocumentListResponseSchema,
   StaffListResponseSchema,
   type ProductDocument,
+  LEAD_EXPORT_BATCH_SIZE,
+  LEAD_EXPORT_COLUMNS,
+  LEAD_EXPORT_MAX_ROWS,
+  LEAD_EXPORT_PATH,
+  LeadExportSummaryResponseSchema,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -3661,5 +3666,373 @@ describe("DP-221 contact form → CRM lead, source and staff notifications", () 
         "updatedAt",
       ].sort(),
     );
+  });
+});
+
+// DP-227 (owner brief "CRM CSV Export", 2026-11-19): the filtered lead list as a CSV file.
+// lead:export (step-up) decides who may export; the rows come through lead:read and row-level
+// security. Every export is audited before the first byte, without personal data.
+describe("DP-227 lead CSV export", () => {
+  /** RFC 4180: quoted cells, doubled quotes, CRLF rows (the API quotes every cell). */
+  function parseCsv(text: string): string[][] {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let cell = "";
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]!;
+      if (quoted) {
+        if (c === '"' && text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else if (c === '"') quoted = false;
+        else cell += c;
+      } else if (c === '"') quoted = true;
+      else if (c === ",") {
+        row.push(cell);
+        cell = "";
+      } else if (c === "\r" && text[i + 1] === "\n") {
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = "";
+        i++;
+      } else cell += c;
+    }
+    if (cell !== "" || row.length > 0) {
+      row.push(cell);
+      rows.push(row);
+    }
+    return rows;
+  }
+  async function exportCsv(who: Staff | null, query = "") {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": TEST_KEYS.admin,
+      "x-dp-client-ip": "10.20.30.40",
+    };
+    if (who) headers["cookie"] = `__Host-dp_admin_session=${who.token}`;
+    const res = await fetch(`${base}${LEAD_EXPORT_PATH}${query}`, { headers });
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const text = bytes.toString("utf8");
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = undefined;
+    }
+    return { status: res.status, headers: res.headers, bytes, text, json: json as any }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  }
+  /** Rows as objects keyed by the column names; asserts the BOM and the header. */
+  function table(text: string): Record<string, string>[] {
+    expect(text.charCodeAt(0)).toBe(0xfeff);
+    const [header, ...rows] = parseCsv(text.slice(1));
+    expect(header).toEqual([...LEAD_EXPORT_COLUMNS]);
+    return rows.map((r) => {
+      expect(r).toHaveLength(LEAD_EXPORT_COLUMNS.length);
+      return Object.fromEntries(LEAD_EXPORT_COLUMNS.map((c, i) => [c, r[i] ?? ""]));
+    });
+  }
+  const summary = async (who: Staff, query = "") => {
+    const res = await who.leads(`/export/summary${query}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return LeadExportSummaryResponseSchema.parse(res.body);
+  };
+  async function sendContact(body: Record<string, unknown>, site: "bv" | "com" = "bv") {
+    const res = await fetch(`${base}/api/v1/public/leads/contact-messages`, {
+      method: "POST",
+      headers: {
+        "x-dp-proxy-key": KEY[site],
+        origin: site === "bv" ? BV_ORIGIN : COM_ORIGIN,
+        "content-type": "application/json",
+        "x-dp-client-ip": freshIp(),
+      },
+      body: JSON.stringify({
+        country: "TR",
+        phone: "",
+        privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+        website: "",
+        message: "Gizli mesaj metni: fiyat teklifi rica ediyoruz, 20 ton.",
+        ...body,
+      }),
+    });
+    expect(res.status, await res.text()).toBe(201);
+  }
+
+  let exporter: Staff; // platform customer-data officer: lead:read + lead:export, fresh step-up
+  let staleExporter: Staff; // the same role, MFA verified an hour ago (step-up not fresh)
+  let seller: Staff; // sales_crm_user @ BV: lead:read + lead:manage, no lead:export
+  const BULK = "bulk-export.example";
+
+  beforeAll(async () => {
+    exporter = await staff("export-officer", [], root.userId);
+    await assignRole(exporter, "platform_customer_data_officer", null);
+    staleExporter = await staff("export-stale", [], root.userId, undefined, {
+      mfaVerifiedAt: new Date(Date.now() - 60 * 60_000),
+    });
+    await assignRole(staleExporter, "platform_customer_data_officer", null);
+    seller = await staff("export-seller", [], root.userId, undefined, { memberships: [BV] });
+    await assignRole(seller, "sales_crm_user", BV);
+    await sendContact({
+      fullName: "Şükrü Çağlar-İnce",
+      company: '=HYPERLINK("http://evil.example","tıkla")',
+      email: "sukru.export@firma.example",
+      phone: "+31 6 1234 5678",
+      subject: '@SUM(1,2) teklif, "acil"',
+    });
+    await sendContact(
+      {
+        fullName: "Ömer Güneş",
+        company: "Güneş Yağ, Ltd. Şti.",
+        email: "omer.export@firma.example",
+        subject: "Kurumsal teklif",
+      },
+      "com",
+    );
+  });
+
+  afterAll(async () => {
+    // The bulk rows exist only for the size tests (no request, message or activity rows).
+    await owner.lead.deleteMany({ where: { email: { endsWith: `@${BULK}` } } });
+  });
+
+  it("exports contact-form leads with Turkish characters, escaping and formula protection", async () => {
+    const res = await exportCsv(exporter, `?source=CONTACT_FORM&siteId=${BV}`);
+    expect(res.status, res.text.slice(0, 300)).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-disposition")).toMatch(
+      /^attachment; filename="leads-bv-\d{4}-\d{2}-\d{2}-\d{4}\.csv"$/,
+    );
+    // UTF-8 with a BOM, CRLF rows.
+    expect([...res.bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(res.text).toContain("\r\n");
+    const rows = table(res.text);
+    const expected = await owner.lead.count({ where: { siteId: BV, source: "CONTACT_FORM" } });
+    expect(rows).toHaveLength(expected);
+    expect(res.headers.get("x-dp-export-rows")).toBe(String(expected));
+    expect(rows.every((r) => r["Source"] === "CONTACT_FORM" && r["Site"] === "BV")).toBe(true);
+    const sukru = rows.find((r) => r["E-mail"] === "sukru.export@firma.example");
+    expect(sukru).toMatchObject({
+      "Full name": "Şükrü Çağlar-İnce",
+      // Formula starts are neutralised with an apostrophe; quotes and commas stay in the cell.
+      Company: `'=HYPERLINK("http://evil.example","tıkla")`,
+      Subject: `'@SUM(1,2) teklif, "acil"`,
+      Phone: "'+31 6 1234 5678",
+      Country: "TR",
+      Status: "NEW",
+      "Products / documents": "",
+    });
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { email: "sukru.export@firma.example" },
+    });
+    expect(sukru?.["Lead ID"]).toBe(lead.id);
+    expect(sukru?.["Created"]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // Message text and marketing consent are never exported.
+    expect(res.text).not.toMatch(/Gizli mesaj|20 ton|Marketing|consent/i);
+    // Another site's lead is not in a BV export.
+    expect(res.text).not.toContain("omer.export@firma.example");
+  });
+
+  it("exports document-request leads with their products and documents", async () => {
+    const res = await exportCsv(exporter, `?source=DOCUMENT_REQUEST&siteId=${BV}`);
+    expect(res.status).toBe(200);
+    const rows = table(res.text);
+    expect(rows).toHaveLength(
+      await owner.lead.count({ where: { siteId: BV, source: "DOCUMENT_REQUEST" } }),
+    );
+    expect(rows.every((r) => r["Source"] === "DOCUMENT_REQUEST")).toBe(true);
+    const sule = rows.find((r) => r["E-mail"] === "sule@oztyag.example");
+    expect(sule?.["Products / documents"]).toMatch(/^LEAD-A /);
+    expect(sule?.["Country"]).toBe("TR");
+    expect(sule?.["Phone"]).toBe("");
+    // Anonymised leads keep id, dates, source and status; their personal fields are empty.
+    const anonymised = await owner.lead.findMany({
+      where: { siteId: BV, source: "DOCUMENT_REQUEST", anonymisedAt: { not: null } },
+      select: { id: true },
+    });
+    for (const a of anonymised) {
+      const row = rows.find((r) => r["Lead ID"] === a.id);
+      expect(row).toMatchObject({ "Full name": "", Company: "", "E-mail": "", Phone: "" });
+    }
+    expect(res.text).not.toMatch(/anonymised\.invalid/);
+  });
+
+  it("applies the list filters: status, search, assignee and the creation date range", async () => {
+    const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Amsterdam" }).format(
+      new Date(),
+    );
+    const search = table((await exportCsv(exporter, "?q=SUKRU.EXPORT")).text);
+    expect(search.map((r) => r["E-mail"])).toEqual(["sukru.export@firma.example"]);
+    const byStatus = table((await exportCsv(exporter, `?status=NEW&siteId=${BV}`)).text);
+    expect(byStatus.every((r) => r["Status"] === "NEW")).toBe(true);
+    expect(byStatus).toHaveLength(await owner.lead.count({ where: { siteId: BV, status: "NEW" } }));
+    const unassigned = table((await exportCsv(exporter, "?assignee=none")).text);
+    expect(unassigned).toHaveLength(await owner.lead.count({ where: { assignedToId: null } }));
+    const dated = table((await exportCsv(exporter, `?from=${today}&to=${today}`)).text);
+    expect(dated.map((r) => r["E-mail"])).toContain("sukru.export@firma.example");
+    const future = await exportCsv(exporter, "?from=2999-01-01");
+    expect(future.status).toBe(200);
+    expect(table(future.text)).toEqual([]);
+    expect((await summary(exporter, "?from=2999-01-01")).count).toBe(0);
+    expect((await summary(exporter, "?from=2000-01-01&to=2000-01-02")).count).toBe(0);
+    for (const bad of ["?from=2026-02-30", "?to=19-11-2026", "?status=WON", "?source=FAIR"]) {
+      expect((await exportCsv(exporter, bad)).status).toBe(400);
+    }
+    const reversed = await exportCsv(exporter, "?from=2026-11-20&to=2026-11-19");
+    expect(reversed.status).toBe(400);
+    expect(reversed.json.error.details).toContainEqual({ path: "to", rule: "before_from" });
+    // The list takes the same date filters.
+    const list = LeadListResponseSchema.parse(
+      (await exporter.leads(`?from=${today}&q=sukru.export`)).body,
+    );
+    expect(list.items.map((l) => l.email)).toEqual(["sukru.export@firma.example"]);
+  });
+
+  it("keeps the site scope: one site, all readable sites, and what the database lets through", async () => {
+    const com = table((await exportCsv(exporter, `?siteId=${COM}`)).text);
+    expect(com.length).toBe(await owner.lead.count({ where: { siteId: COM } }));
+    expect(com.every((r) => r["Site"] === "CORPORATE")).toBe(true);
+    expect(com.map((r) => r["E-mail"])).toContain("omer.export@firma.example");
+    const omer = com.find((r) => r["E-mail"] === "omer.export@firma.example");
+    expect(omer).toMatchObject({ Company: "Güneş Yağ, Ltd. Şti.", "Full name": "Ömer Güneş" });
+    const all = await exportCsv(exporter);
+    expect(all.headers.get("content-disposition")).toMatch(/filename="leads-all-/);
+    expect(table(all.text)).toHaveLength(await owner.lead.count());
+    // The database (RLS, DP-103) decides from the session itself: the officer's context sees
+    // every lead, a BV sales user's context only BV, whatever the query names.
+    expect(await appIn({ staff: exporter.token }, (tx) => tx.lead.count())).toBe(
+      await owner.lead.count(),
+    );
+    expect(await appIn({ staff: seller.token }, (tx) => tx.lead.count())).toBe(
+      await owner.lead.count({ where: { siteId: BV } }),
+    );
+  });
+
+  it("refuses staff without lead:export, without lead:read, without a session or a fresh step-up", async () => {
+    // A BV sales user reads leads but may not export them (lead:export is not in its role).
+    const s = await summary(seller);
+    expect(s.canExport).toBe(false);
+    expect(s.count).toBe(await owner.lead.count({ where: { siteId: BV } }));
+    const refused = await exportCsv(seller, `?siteId=${BV}`);
+    expectError(
+      { status: refused.status, body: refused.json, headers: refused.headers },
+      403,
+      "FORBIDDEN",
+    );
+    const denied = await owner.auditEvent.findFirst({
+      where: { action: "leads.access_denied", actorUserId: seller.userId },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(denied).toMatchObject({ outcome: "DENIED", reason: "no_grant", siteId: BV });
+    expect(denied?.metadata).toMatchObject({ permission: "lead:export" });
+    // No lead:read at all (a product manager): the summary and the file are refused.
+    expectError(await pm.leads("/export/summary"), 403, "FORBIDDEN");
+    expect((await exportCsv(pm)).status).toBe(403);
+    // A sales user cannot reach another site's leads through the export either.
+    expect((await exportCsv(seller, `?siteId=${COM}`)).status).toBe(403);
+    // No session.
+    expect((await exportCsv(null)).status).toBe(401);
+    // The step-up: the officer role holds lead:export, but the session's MFA is an hour old.
+    expect((await summary(staleExporter)).canExport).toBe(true);
+    const stale = await exportCsv(staleExporter);
+    expect(stale.status).toBe(403);
+    expect(stale.json.error.code).toBe("AUTH_STEP_UP_REQUIRED");
+    const stepUp = await owner.auditEvent.findFirst({
+      where: { action: "leads.access_denied", actorUserId: staleExporter.userId },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(stepUp?.reason).toBe("mfa_required");
+    // None of the refusals wrote an export event.
+    expect(
+      await owner.auditEvent.count({
+        where: {
+          action: "leads.exported",
+          actorUserId: { in: [seller.userId, pm.userId, staleExporter.userId] },
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("audits every export with the count and filter kinds, never personal data", async () => {
+    const res = await exportCsv(exporter, `?q=firma.example&source=CONTACT_FORM&from=2020-01-01`);
+    expect(res.status).toBe(200);
+    const rows = table(res.text);
+    const audit = await lastAudit("leads.exported");
+    expect(audit).toMatchObject({
+      actorUserId: exporter.userId,
+      outcome: "SUCCESS",
+      siteId: null,
+      resourceType: "lead",
+    });
+    const officerAssignment = await owner.roleAssignment.findFirstOrThrow({
+      where: { userId: exporter.userId, revokedAt: null },
+    });
+    expect(audit?.metadata).toEqual({
+      permission: "lead:export",
+      siteIds: expect.arrayContaining([BV, COM]),
+      count: rows.length,
+      format: "csv",
+      columns: LEAD_EXPORT_COLUMNS.length,
+      searched: true,
+      source: "CONTACT_FORM",
+      from: "2020-01-01",
+      accessAssignmentIds: [officerAssignment.id],
+    });
+    expect(JSON.stringify(audit)).not.toMatch(/firma|sukru|Şükrü|omer|Güneş/i);
+  });
+
+  it("streams a large export in batches and refuses more than the limit", async () => {
+    const now = Date.now();
+    const bulk = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => {
+        const n = from + i;
+        return {
+          siteId: BV,
+          email: `lead-${n}@${BULK}`,
+          fullName: `Bulk İşletme ${n}`,
+          company: `Toplu, "Şirket" ${n}`,
+          country: "NL",
+          source: "CONTACT_FORM" as const,
+          firstRequestAt: new Date(now - n * 1000),
+          lastRequestAt: new Date(now - n * 1000),
+        };
+      });
+    for (let i = 0; i < LEAD_EXPORT_MAX_ROWS; i += 5000) {
+      await owner.lead.createMany({ data: bulk(i, Math.min(i + 5000, LEAD_EXPORT_MAX_ROWS)) });
+    }
+    const q = `?q=${BULK}&siteId=${BV}`;
+    expect((await summary(exporter, q)).count).toBe(LEAD_EXPORT_MAX_ROWS);
+    const heapBefore = process.memoryUsage().heapUsed;
+    const res = await exportCsv(exporter, q);
+    expect(res.status).toBe(200);
+    const rows = table(res.text);
+    expect(rows).toHaveLength(LEAD_EXPORT_MAX_ROWS);
+    expect(new Set(rows.map((r) => r["Lead ID"])).size).toBe(LEAD_EXPORT_MAX_ROWS);
+    // Newest first across every batch boundary (keyset pagination, no gaps or repeats).
+    expect(rows[0]?.["E-mail"]).toBe(`lead-0@${BULK}`);
+    expect(rows[LEAD_EXPORT_MAX_ROWS - 1]?.["E-mail"]).toBe(
+      `lead-${LEAD_EXPORT_MAX_ROWS - 1}@${BULK}`,
+    );
+    expect(rows[LEAD_EXPORT_BATCH_SIZE]?.["E-mail"]).toBe(`lead-${LEAD_EXPORT_BATCH_SIZE}@${BULK}`);
+    expect(rows[1234]?.["Company"]).toBe('Toplu, "Şirket" 1234');
+    expect(res.text.split("﻿")).toHaveLength(2);
+    // The API and this test share the process: the whole round trip (file text included) stays
+    // well below what buffering every lead row as objects would take.
+    expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(256 * 1024 * 1024);
+    // One more matching lead: refused before any byte, audited as a FAILURE.
+    await owner.lead.createMany({ data: bulk(LEAD_EXPORT_MAX_ROWS, LEAD_EXPORT_MAX_ROWS + 1) });
+    const s = await summary(exporter, q);
+    expect(s).toEqual({
+      count: LEAD_EXPORT_MAX_ROWS + 1,
+      maxRows: LEAD_EXPORT_MAX_ROWS,
+      canExport: true,
+    });
+    const tooMany = await exportCsv(exporter, q);
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.json.error.details).toContainEqual({ path: "filters", rule: "too_many_rows" });
+    const failure = await lastAudit("leads.exported");
+    expect(failure).toMatchObject({ outcome: "FAILURE", reason: "too_many_rows" });
+    expect(failure?.metadata).toMatchObject({ count: LEAD_EXPORT_MAX_ROWS + 1 });
   });
 });

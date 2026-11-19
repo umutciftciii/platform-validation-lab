@@ -23,6 +23,9 @@ export interface LeadFilters {
   assignee: string;
   /** DP-221: a LeadSource or "". */
   source: string;
+  /** DP-227: creation date range, `YYYY-MM-DD` (Europe/Amsterdam, inclusive) or "". */
+  from: string;
+  to: string;
 }
 
 /** DP-221: how the lead first reached us. */
@@ -96,6 +99,21 @@ const SOURCE_SET = new Set<string>(LEAD_SOURCES);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CURSOR = /^[A-Za-z0-9_-]{1,200}$/;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** DP-227: `YYYY-MM-DD` and a real calendar day, else "". */
+export function calendarDay(value: string): string {
+  if (!DAY.test(value)) return "";
+  const [y, m, d] = value.split("-").map(Number) as [number, number, number];
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return y >= 2000 &&
+    y <= 2999 &&
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+    ? value
+    : "";
+}
 
 function one(value: string | string[] | undefined): string {
   return typeof value === "string" ? value : "";
@@ -109,6 +127,10 @@ export function readLeadFilters(
   const status = one(params["status"]).toUpperCase();
   const assignee = one(params["assignee"]).toLowerCase();
   const source = one(params["source"]).toUpperCase();
+  const from = calendarDay(one(params["from"]));
+  let to = calendarDay(one(params["to"]));
+  // A range that ends before it starts is dropped at the end (the API would refuse it).
+  if (from && to && to < from) to = "";
   return {
     site: UUID.test(site) ? site.toLowerCase() : "",
     q: one(params["q"]).trim().slice(0, 100),
@@ -116,7 +138,19 @@ export function readLeadFilters(
     status: STATUS_SET.has(status) ? status : "",
     assignee: assignee === "me" || assignee === "none" ? assignee : "",
     source: SOURCE_SET.has(source) ? source : "",
+    from,
+    to,
   };
+}
+
+/** DP-227: any filter beyond the site (search, status, assignee, source, dates). */
+export function hasLeadFilters(f: LeadFilters): boolean {
+  return Boolean(f.q || f.status || f.assignee || f.source || f.from || f.to);
+}
+
+/** DP-227: the API query of the CSV export and its summary: the list filters, no cursor. */
+export function leadExportQuery(f: LeadFilters): string {
+  return leadListQuery({ ...f, cursor: "" });
 }
 
 export function leadListQuery(f: LeadFilters): string {
@@ -126,6 +160,8 @@ export function leadListQuery(f: LeadFilters): string {
   if (f.status) qs.set("status", f.status);
   if (f.assignee) qs.set("assignee", f.assignee);
   if (f.source) qs.set("source", f.source);
+  if (f.from) qs.set("from", f.from);
+  if (f.to) qs.set("to", f.to);
   if (f.cursor) qs.set("cursor", f.cursor);
   const s = qs.toString();
   return s ? `?${s}` : "";
@@ -138,6 +174,8 @@ export function leadListHref(f: Partial<LeadFilters>): string {
   if (f.status) qs.set("status", f.status);
   if (f.assignee) qs.set("assignee", f.assignee);
   if (f.source) qs.set("source", f.source);
+  if (f.from) qs.set("from", f.from);
+  if (f.to) qs.set("to", f.to);
   if (f.cursor) qs.set("cursor", f.cursor);
   const s = qs.toString();
   return s ? `/leads?${s}` : "/leads";
@@ -159,3 +197,23 @@ export const DOC_TYPE_LABEL: Readonly<Record<string, string>> = {
   COA: "Certificate of analysis",
   OTHER: "Document",
 };
+
+const NUMBER = new Intl.NumberFormat("en-GB");
+
+/** DP-227: "1 lead", "1,234 leads". */
+export function leadCount(n: number): string {
+  return `${NUMBER.format(n)} lead${n === 1 ? "" : "s"}`;
+}
+
+/** DP-227: what the export would download, said before the click. */
+export function exportSummaryText(count: number, maxRows: number, filtered: boolean): string {
+  if (count === 0) {
+    return filtered
+      ? "No leads match these filters, so there is nothing to export."
+      : "There are no leads to export yet.";
+  }
+  if (count > maxRows) {
+    return `${leadCount(count)} match. One export holds at most ${NUMBER.format(maxRows)}; narrow the filters (for example the dates) to export.`;
+  }
+  return `${leadCount(count)} ${filtered ? "match these filters" : "in total"} and will be exported.`;
+}

@@ -12,6 +12,8 @@
  * - Client IP: from the hosting edge's `X-Forwarded-For`, counted DP_TRUSTED_PROXY_HOPS from the
  *   right; with 0 hops (local development) none is sent.
  * - `Cache-Control: no-store`; 10 s timeout; an unreachable API gives a generic 502.
+ * - DP-227: the lead CSV export (`LEAD_EXPORT_PATH`) streams through unbuffered (bounded memory
+ *   for large files) and may take up to 120 s; every other response is read whole, as before.
  * - Logs: never a body, cookie or key; only the request id on upstream failure.
  *
  * The key is read from the server environment at request time (DP_PROXY_KEY_ADMIN, never a
@@ -25,6 +27,7 @@ import {
   errorBody,
   type ErrorCode,
   ERROR_STATUS,
+  LEAD_EXPORT_PATH,
   SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
   SEO_REDIRECT_IMPORT_PATH,
 } from "@dream/contracts";
@@ -41,6 +44,13 @@ export function bodyLimit(pathname: string): number {
     : MAX_BODY_BYTES;
 }
 export const UPSTREAM_TIMEOUT_MS = 10_000;
+/** DP-227: the lead CSV export streams a larger body. */
+export const EXPORT_TIMEOUT_MS = 120_000;
+
+/** DP-227: the one path whose response streams through unbuffered. */
+export function isStreamedPath(pathname: string): boolean {
+  return pathname === LEAD_EXPORT_PATH;
+}
 export const ALLOWED_COOKIES: readonly string[] = [ADMIN_SESSION_COOKIE, ADMIN_CHALLENGE_COOKIE];
 const FORWARDED_HEADERS = [
   "origin",
@@ -202,7 +212,9 @@ export async function proxyRequest(
       ...(body ? { body: body as BodyInit } : {}),
       redirect: "manual",
       cache: "no-store",
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(
+        isStreamedPath(url.pathname) ? EXPORT_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
+      ),
     });
   } catch {
     deps.log(`api proxy: upstream unavailable (request ${requestId})`);
@@ -220,11 +232,15 @@ export async function proxyRequest(
     "retry-after",
     "x-content-type-options",
     "content-disposition",
+    "x-dp-export-rows",
   ]) {
     const v = upstream.headers.get(name);
     if (v !== null) out.set(name, v);
   }
   for (const c of allowedSetCookies(upstream.headers.getSetCookie())) out.append("set-cookie", c);
+  if (isStreamedPath(url.pathname) && upstream.ok && upstream.body) {
+    return new Response(upstream.body, { status: upstream.status, headers: out });
+  }
   const payload = upstream.status === 204 ? null : await upstream.arrayBuffer();
   return new Response(payload, { status: upstream.status, headers: out });
 }

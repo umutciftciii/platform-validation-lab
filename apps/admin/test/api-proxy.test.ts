@@ -2,9 +2,11 @@
 // Covers AC-PX-6, NT-P3, NT-P4, NT-P5, NT-P6 and the proxy part of AC-PX-7 / AC-SEC-2.
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { LEAD_EXPORT_PATH } from "@dream/contracts";
 import {
   bodyLimit,
   clientIpFrom,
+  isStreamedPath,
   loadProxyConfig,
   MAX_BODY_BYTES,
   proxyRequest,
@@ -340,5 +342,60 @@ describe("upstream failures and logs (NT-P6)", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("8");
     expect(res.headers.get("x-internal")).toBeNull();
+  });
+});
+
+// DP-227: the lead CSV export streams through unbuffered; every other path is read whole.
+describe("lead CSV export streaming (DP-227)", () => {
+  it("passes the CSV body through as a stream with its download headers", async () => {
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls > 3) controller.close();
+        else controller.enqueue(new TextEncoder().encode(`chunk-${pulls}\r\n`));
+      },
+    });
+    const { deps } = upstream(
+      () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "content-type": "text/csv; charset=utf-8",
+            "content-disposition": 'attachment; filename="leads-bv-2026-11-19-1644.csv"',
+            "x-dp-export-rows": "3",
+            "x-content-type-options": "nosniff",
+            "x-internal": "dropped",
+          },
+        }),
+    );
+    const res = await proxyRequest(req(LEAD_EXPORT_PATH + "?source=CONTACT_FORM"), CONFIG, deps);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+    expect(res.headers.get("content-disposition")).toBe(
+      'attachment; filename="leads-bv-2026-11-19-1644.csv"',
+    );
+    expect(res.headers.get("x-dp-export-rows")).toBe("3");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-internal")).toBeNull();
+    // Not read ahead by the proxy: the client pulls the stream.
+    expect(pulls).toBeLessThanOrEqual(1);
+    expect(await res.text()).toBe("chunk-1\r\nchunk-2\r\nchunk-3\r\n");
+  });
+
+  it("keeps JSON errors of the export as they are, and streams no other path", async () => {
+    const { deps } = upstream(
+      () =>
+        new Response(JSON.stringify({ error: { code: "FORBIDDEN" } }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const res = await proxyRequest(req(LEAD_EXPORT_PATH), CONFIG, deps);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: { code: "FORBIDDEN" } });
+    expect(isStreamedPath(LEAD_EXPORT_PATH)).toBe(true);
+    expect(isStreamedPath("/api/v1/admin/leads")).toBe(false);
+    expect(isStreamedPath(`${LEAD_EXPORT_PATH}/x`)).toBe(false);
   });
 });
