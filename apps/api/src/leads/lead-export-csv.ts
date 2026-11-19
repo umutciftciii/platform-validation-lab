@@ -1,8 +1,11 @@
 /**
  * CSV encoding of the lead export (DP-227). Pure functions, unit-tested on their own.
  *
- * - RFC 4180: comma separator, CRLF line ends, every cell in double quotes, a quote inside a
- *   cell doubled. Commas, quotes and line breaks in a value therefore stay inside their cell.
+ * - RFC 4180 with a chosen separator (DP-229): `;` (default, Excel with a Turkish or Dutch
+ *   locale) or `,`. CRLF line ends, every cell in double quotes, a quote inside a cell doubled.
+ *   Commas, semicolons, quotes and line breaks in a value therefore stay inside their cell,
+ *   whichever separator the file uses. No `sep=` first line: Excel ignores it after a BOM and
+ *   every other CSV reader would take it as a data row.
  * - The file starts with a UTF-8 byte order mark so that Excel opens accented and Turkish
  *   characters (ç, ğ, ı, İ, ö, ş, ü) correctly.
  * - Formula injection (CSV injection): a cell whose text starts with `=`, `+`, `-`, `@`, a tab
@@ -29,9 +32,15 @@ export function csvCell(value: string | null | undefined): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-/** One CSV line (with its CRLF). */
-export function csvLine(values: readonly (string | null | undefined)[]): string {
-  return values.map(csvCell).join(",") + CSV_EOL;
+/** The separators a file may use (DP-229); anything else never reaches csvLine. */
+export type CsvSeparator = ";" | ",";
+
+/** One CSV line (with its CRLF), cells joined with the file's separator. */
+export function csvLine(
+  values: readonly (string | null | undefined)[],
+  separator: CsvSeparator,
+): string {
+  return values.map(csvCell).join(separator) + CSV_EOL;
 }
 
 const PART_FORMAT = new Intl.DateTimeFormat("en-US", {

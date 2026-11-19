@@ -1,6 +1,12 @@
-// DP-227: the browser side of the lead CSV export: file name and the real error for staff.
+// DP-227 / DP-229: the browser side of the lead CSV export: separator, file name and the real
+// error for staff.
 import { describe, expect, it } from "vitest";
-import { exportErrorMessage, exportFilenameOf } from "../lib/leads-client";
+import {
+  EXPORT_SEPARATOR_OPTIONS,
+  exportErrorMessage,
+  exportFilenameOf,
+  exportQueryWithSeparator,
+} from "../lib/leads-client";
 
 const body = (code: string, details: unknown[] = []) => ({
   error: { code, message: "x", requestId: "req-123", details },
@@ -45,5 +51,36 @@ describe("lead export download", () => {
       "The export failed (HTTP 502). Try again in a moment.",
     );
     expect(exportErrorMessage(0, null)).toMatch(/cannot be reached/);
+  });
+
+  it("DP-229: adds the chosen separator to the filters and keeps them", () => {
+    expect(exportQueryWithSeparator("", ";")).toBe("?separator=%3B");
+    expect(exportQueryWithSeparator("", ",")).toBe("?separator=%2C");
+    expect(
+      exportQueryWithSeparator(
+        "?source=CONTACT_FORM&from=2026-11-01&q=G%C3%BCne%C5%9F+Ya%C4%9F",
+        ",",
+      ),
+    ).toBe("?source=CONTACT_FORM&from=2026-11-01&q=G%C3%BCne%C5%9F+Ya%C4%9F&separator=%2C");
+    // A separator already in the query never wins over the one chosen on screen.
+    expect(exportQueryWithSeparator("?separator=%7C&siteId=bv", ";")).toBe(
+      "?separator=%3B&siteId=bv",
+    );
+    const q = new URLSearchParams(exportQueryWithSeparator("?q=a%26b%3Bc", ";").slice(1));
+    expect(q.get("q")).toBe("a&b;c");
+    expect(q.getAll("separator")).toEqual([";"]);
+  });
+
+  it("DP-229: offers semicolon first (the default), then comma", () => {
+    expect(EXPORT_SEPARATOR_OPTIONS.map((o) => o.value)).toEqual([";", ","]);
+    expect(EXPORT_SEPARATOR_OPTIONS[0]?.label).toBe("Semicolon (;)");
+  });
+
+  it("DP-229: names a refused separator plainly", () => {
+    expect(
+      exportErrorMessage(400, body("VALIDATION_FAILED", [{ path: "separator", rule: "invalid" }])),
+    ).toBe(
+      "Choose a separator: semicolon (;) or comma (,). (HTTP 400, VALIDATION_FAILED, request req-123)",
+    );
   });
 });

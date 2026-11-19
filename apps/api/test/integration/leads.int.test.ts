@@ -3673,36 +3673,37 @@ describe("DP-221 contact form → CRM lead, source and staff notifications", () 
 // lead:export (step-up) decides who may export; the rows come through lead:read and row-level
 // security. Every export is audited before the first byte, without personal data.
 describe("DP-227 lead CSV export", () => {
-  /** RFC 4180: quoted cells, doubled quotes, CRLF rows (the API quotes every cell). */
-  function parseCsv(text: string): string[][] {
+  /**
+   * Strict RFC 4180 with the file's separator (DP-229): every cell quoted, doubled quotes, CRLF
+   * rows. A character other than the separator or CRLF after a closing quote fails, so a file
+   * read with the wrong separator, or a cell spilling into the next one, never passes.
+   */
+  function parseCsv(text: string, separator: string): string[][] {
     const rows: string[][] = [];
     let row: string[] = [];
-    let cell = "";
-    let quoted = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i]!;
-      if (quoted) {
-        if (c === '"' && text[i + 1] === '"') {
-          cell += '"';
-          i++;
-        } else if (c === '"') quoted = false;
-        else cell += c;
-      } else if (c === '"') quoted = true;
-      else if (c === ",") {
-        row.push(cell);
-        cell = "";
-      } else if (c === "\r" && text[i + 1] === "\n") {
-        row.push(cell);
+    let i = 0;
+    while (i < text.length) {
+      if (text[i] !== '"') throw new Error(`unquoted cell at ${i}`);
+      let cell = "";
+      i += 1;
+      for (;;) {
+        const quote = text.indexOf('"', i);
+        if (quote < 0) throw new Error("unterminated cell");
+        cell += text.slice(i, quote);
+        i = quote + 1;
+        if (text[i] !== '"') break;
+        cell += '"';
+        i += 1;
+      }
+      row.push(cell);
+      if (text[i] === separator) i += 1;
+      else if (text.startsWith("\r\n", i)) {
         rows.push(row);
         row = [];
-        cell = "";
-        i++;
-      } else cell += c;
+        i += 2;
+      } else throw new Error(`stray ${JSON.stringify(text[i])} at ${i}`);
     }
-    if (cell !== "" || row.length > 0) {
-      row.push(cell);
-      rows.push(row);
-    }
+    if (row.length > 0) throw new Error("last row without CRLF");
     return rows;
   }
   async function exportCsv(who: Staff | null, query = "") {
@@ -3722,10 +3723,13 @@ describe("DP-227 lead CSV export", () => {
     }
     return { status: res.status, headers: res.headers, bytes, text, json: json as any }; // eslint-disable-line @typescript-eslint/no-explicit-any
   }
-  /** Rows as objects keyed by the column names; asserts the BOM and the header. */
-  function table(text: string): Record<string, string>[] {
+  /**
+   * Rows as objects keyed by the column names; asserts the BOM and the header. The API's default
+   * separator is `;` (DP-229).
+   */
+  function table(text: string, separator: ";" | "," = ";"): Record<string, string>[] {
     expect(text.charCodeAt(0)).toBe(0xfeff);
-    const [header, ...rows] = parseCsv(text.slice(1));
+    const [header, ...rows] = parseCsv(text.slice(1), separator);
     expect(header).toEqual([...LEAD_EXPORT_COLUMNS]);
     return rows.map((r) => {
       expect(r).toHaveLength(LEAD_EXPORT_COLUMNS.length);
@@ -3973,6 +3977,7 @@ describe("DP-227 lead CSV export", () => {
       siteIds: expect.arrayContaining([BV, COM]),
       count: rows.length,
       format: "csv",
+      separator: ";",
       columns: LEAD_EXPORT_COLUMNS.length,
       searched: true,
       source: "CONTACT_FORM",
@@ -3980,6 +3985,87 @@ describe("DP-227 lead CSV export", () => {
       accessAssignmentIds: [officerAssignment.id],
     });
     expect(JSON.stringify(audit)).not.toMatch(/firma|sukru|Şükrü|omer|Güneş/i);
+  });
+
+  it("DP-229: writes the chosen separator in every row, the same cells either way", async () => {
+    const q = `source=CONTACT_FORM&siteId=${BV}`;
+    const semi = await exportCsv(exporter, `?${q}&separator=%3B`);
+    const raw = await exportCsv(exporter, `?${q}&separator=;`);
+    const byDefault = await exportCsv(exporter, `?${q}`);
+    const comma = await exportCsv(exporter, `?${q}&separator=%2C`);
+    for (const r of [semi, raw, byDefault, comma]) {
+      expect(r.status, r.text.slice(0, 200)).toBe(200);
+      expect([...r.bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+      expect(r.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+      expect(r.headers.get("content-disposition")).toMatch(
+        /^attachment; filename="leads-bv-\d{4}-\d{2}-\d{2}-\d{4}\.csv"$/,
+      );
+      // CRLF only: no bare LF outside quoted cells (the strict reader checks the rest).
+      expect(r.text.endsWith("\r\n")).toBe(true);
+    }
+    expect(semi.text).toBe(raw.text);
+    expect(semi.text).toBe(byDefault.text);
+    const semiRows = table(semi.text, ";");
+    const commaRows = table(comma.text, ",");
+    expect(commaRows).toEqual(semiRows);
+    // The header line shows the separator; no `sep=` line (it would be a data row elsewhere).
+    expect(semi.text.slice(1).split("\r\n")[0]).toBe(
+      LEAD_EXPORT_COLUMNS.map((c) => `"${c}"`).join(";"),
+    );
+    expect(comma.text.slice(1).split("\r\n")[0]).toBe(
+      LEAD_EXPORT_COLUMNS.map((c) => `"${c}"`).join(","),
+    );
+    expect(semi.text).not.toMatch(/^\ufeff?sep=/i);
+    // Read with the other separator, the file does not parse: the separator is used everywhere.
+    expect(() => parseCsv(semi.text.slice(1), ",")).toThrow();
+    expect(() => parseCsv(comma.text.slice(1), ";")).toThrow();
+    // Commas, semicolons, quotes and formula starts stay in their cell with both separators.
+    for (const rows of [semiRows, commaRows]) {
+      expect(rows.find((r) => r["E-mail"] === "sukru.export@firma.example")).toMatchObject({
+        "Full name": "Şükrü Çağlar-İnce",
+        Company: `'=HYPERLINK("http://evil.example","tıkla")`,
+        Subject: `'@SUM(1,2) teklif, "acil"`,
+        Phone: "'+31 6 1234 5678",
+      });
+    }
+    const audits = await owner.auditEvent.findMany({
+      where: { action: "leads.exported", actorUserId: exporter.userId },
+      orderBy: { occurredAt: "desc" },
+      take: 4,
+    });
+    // Same millisecond is possible: compare the four events as a set.
+    expect(audits.map((a) => (a.metadata as { separator?: string }).separator).sort()).toEqual(
+      [",", ";", ";", ";"].sort(),
+    );
+  });
+
+  it("DP-229: refuses any other separator with 400, before any byte and without an export event", async () => {
+    const before = await owner.auditEvent.count({ where: { action: "leads.exported" } });
+    for (const bad of [
+      "",
+      "%7C",
+      "%09",
+      "%3B%3B",
+      "%2C%20",
+      "semicolon",
+      "%3B&separator=%2C",
+      "%22",
+    ]) {
+      const res = await exportCsv(exporter, `?siteId=${BV}&separator=${bad}`);
+      expectError(
+        { status: res.status, body: res.json, headers: res.headers },
+        400,
+        "VALIDATION_FAILED",
+      );
+      expect(res.json.error.details).toContainEqual({ path: "separator", rule: "invalid" });
+      expect(res.headers.get("content-disposition")).toBeNull();
+    }
+    expect(await owner.auditEvent.count({ where: { action: "leads.exported" } })).toBe(before);
+    // Permissions are unchanged by a valid separator: no lead:export, no step-up, no session.
+    expect((await exportCsv(seller, `?siteId=${BV}&separator=%2C`)).status).toBe(403);
+    const stale = await exportCsv(staleExporter, "?separator=%2C");
+    expect(stale.json.error.code).toBe("AUTH_STEP_UP_REQUIRED");
+    expect((await exportCsv(null, "?separator=%3B")).status).toBe(401);
   });
 
   it("streams a large export in batches and refuses more than the limit", async () => {
@@ -4017,6 +4103,13 @@ describe("DP-227 lead CSV export", () => {
     expect(rows[LEAD_EXPORT_BATCH_SIZE]?.["E-mail"]).toBe(`lead-${LEAD_EXPORT_BATCH_SIZE}@${BULK}`);
     expect(rows[1234]?.["Company"]).toBe('Toplu, "Şirket" 1234');
     expect(res.text.split("﻿")).toHaveLength(2);
+    // The same 20,000 rows with the comma separator (DP-229): identical cells, one BOM.
+    const comma = await exportCsv(exporter, `${q}&separator=%2C`);
+    expect(comma.status).toBe(200);
+    const commaRows = table(comma.text, ",");
+    expect(commaRows).toHaveLength(LEAD_EXPORT_MAX_ROWS);
+    expect(commaRows[1234]).toEqual(rows[1234]);
+    expect(commaRows[LEAD_EXPORT_MAX_ROWS - 1]).toEqual(rows[LEAD_EXPORT_MAX_ROWS - 1]);
     // The API and this test share the process: the whole round trip (file text included) stays
     // well below what buffering every lead row as objects would take.
     expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(256 * 1024 * 1024);
