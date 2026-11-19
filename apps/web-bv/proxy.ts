@@ -24,30 +24,21 @@
  *    an imported redirect answers 301 in one hop, anything else is the site's 404. The site's own
  *    addresses, its internals (`/_next`, `/api`, `/media`, …) and its files are never redirected,
  *    and live content is never overridden (the resolve endpoint answers live content first).
+ *  - DP-220: `/products/<slug>/documents/<id>` (the lead form of a lead-gated document) is one of
+ *    the site's own addresses, not an old one: it renders where the product lists that document as
+ *    requestable and is a 404 otherwise. The address forms are told apart in `lib/proxy-routes.ts`.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { SEO_INTERNAL_SEGMENTS, seoLegacyPath, seoRedirectLocation } from "@dream/contracts";
+import { seoRedirectLocation } from "@dream/contracts";
 
+import { getProductDocuments } from "@/lib/catalog-api";
 import { sitePrivacy } from "@/lib/privacy";
+import { classifyPath, documentRequestStatus } from "@/lib/proxy-routes";
 import { resolvePath, sitePolicy } from "@/lib/seo";
 
-const SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-/** First segments the app serves itself; never a CMS page (the CMS refuses these slugs). */
-const APP_ROUTES = new Set([
-  "api",
-  "lead-form",
-  "news",
-  "preview",
-  "privacy",
-  "product-documents",
-  "product-images",
-  "products",
-]);
 /** No route serves this address, so Next answers with the not-found page and status 404. */
 const NOT_FOUND_TARGET = "/__dp/not-found";
-/** DP-212: file names an old page address may end with (other extensions are files, not pages). */
-const LEGACY_PAGE_FILE = /\.(?:html?|php|aspx?|pdf)$/i;
 
 export const config = {
   // DP-212: every address except the framework, the API, previews, forms, documents, images and
@@ -64,28 +55,26 @@ function notFound(request: NextRequest): NextResponse {
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   if (request.method !== "GET" && request.method !== "HEAD") return NextResponse.next();
   const pathname = request.nextUrl.pathname;
-  const parts = pathname.split("/").slice(1);
-
-  if (parts.length === 1) {
-    const [slug = ""] = parts;
-    if (slug === "privacy") return sitePrivacy().publish ? NextResponse.next() : notFound(request);
-    // The app's own pages, and files (favicon.ico, robots.txt, sitemap.xml) unless they look like
-    // an old page address (`/index.html`).
-    if (APP_ROUTES.has(slug)) return NextResponse.next();
-    if (slug.includes(".") && !LEGACY_PAGE_FILE.test(slug)) return NextResponse.next();
-    if (SEGMENT.test(slug)) return answer(request, pathname, parts);
-  } else if (parts.length === 2) {
-    const [section = "", slug = ""] = parts;
-    if ((section === "news" || section === "products") && SEGMENT.test(slug)) {
-      return answer(request, pathname, parts);
+  const route = classifyPath(pathname);
+  switch (route.kind) {
+    case "next":
+      return NextResponse.next();
+    case "privacy":
+      return sitePrivacy().publish ? NextResponse.next() : notFound(request);
+    case "content":
+      return answer(request, pathname, pathname.split("/").slice(1));
+    case "document-request": {
+      // DP-220: the lead form of a requestable document (metadata read only, no file access).
+      const docs = await getProductDocuments(route.slug);
+      return documentRequestStatus(docs, route.id) === "page"
+        ? NextResponse.next()
+        : notFound(request);
     }
+    case "legacy":
+      return answer(request, pathname, pathname.split("/").slice(1), true);
+    case "not-found":
+      return notFound(request);
   }
-  // DP-212: not one of the site's own address forms. An old-site address is looked up (redirect
-  // only); anything else, and internals the matcher let through, is left alone or a 404.
-  if (SEO_INTERNAL_SEGMENTS.includes(parts[0] ?? "")) return NextResponse.next();
-  const legacy = seoLegacyPath(pathname);
-  if (!legacy) return notFound(request);
-  return answer(request, pathname, parts, true);
 }
 
 /** Asks the API about the address and answers the redirect, the 404 or the page. */
