@@ -13,8 +13,8 @@
  * site; its personal fields are empty.
  *
  * Audit: `leads.exported` is written BEFORE the first byte (an export that started is always on
- * record), with the row count, the filter kinds (never the search text) and the role assignments
- * that allowed it. Refusals are DENIED events (step-up, no grant).
+ * record), with the row count, the separator (DP-229), the filter kinds (never the search text)
+ * and the role assignments that allowed it. Refusals are DENIED events (step-up, no grant).
  *
  * Memory: the file streams in batches of LEAD_EXPORT_BATCH_SIZE (keyset pagination); nothing
  * holds the whole file. No row content is ever logged.
@@ -23,8 +23,12 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   LEAD_EXPORT_BATCH_SIZE,
   LEAD_EXPORT_COLUMNS,
+  LEAD_EXPORT_DEFAULT_SEPARATOR,
   LEAD_EXPORT_MAX_DOCUMENTS,
   LEAD_EXPORT_MAX_ROWS,
+  LEAD_EXPORT_SEPARATOR_PARAM,
+  LeadExportSeparatorSchema,
+  type LeadExportSeparator,
   type LeadExportSummaryResponse,
   type LeadSource,
   type LeadStatus,
@@ -39,9 +43,25 @@ import { resolveLeadFilter, type LeadFilterQuery, type LeadWhere } from "./lead-
 
 export const LEAD_EXPORT = "lead:export";
 
+/**
+ * DP-229: the `separator` query value. Absent: the default (`;`). Present, it must be exactly `;`
+ * or `,`; an empty value, a repeated parameter or any other text is a 400.
+ */
+export function exportSeparator(raw: unknown): LeadExportSeparator {
+  if (raw === undefined) return LEAD_EXPORT_DEFAULT_SEPARATOR;
+  const parsed = LeadExportSeparatorSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ApiError("VALIDATION_FAILED", [
+      { path: LEAD_EXPORT_SEPARATOR_PARAM, rule: "invalid" },
+    ]);
+  }
+  return parsed.data;
+}
+
 export interface LeadExport {
   filename: string;
   count: number;
+  separator: LeadExportSeparator;
   /** The file, in pieces: the BOM and header first, then one piece per batch. */
   chunks: AsyncGenerator<string, void, undefined>;
 }
@@ -105,9 +125,14 @@ export class LeadExportService {
     };
   }
 
-  async open(ctx: RequestContext, query: LeadFilterQuery): Promise<LeadExport> {
+  async open(
+    ctx: RequestContext,
+    query: LeadFilterQuery,
+    rawSeparator: unknown,
+  ): Promise<LeadExport> {
     const access = await this.access.begin(ctx);
     const filter = await resolveLeadFilter(access, query);
+    const separator = exportSeparator(rawSeparator);
     const { siteIds, where } = filter;
     for (const siteId of siteIds) {
       const reason = access.refusal(LEAD_EXPORT, { scope: "site", siteId });
@@ -134,6 +159,7 @@ export class LeadExportService {
       siteIds,
       count,
       format: "csv",
+      separator,
       columns: LEAD_EXPORT_COLUMNS.length,
       ...filter.audit,
       accessAssignmentIds: access.grantRefs(LEAD_EXPORT, siteIds),
@@ -148,7 +174,8 @@ export class LeadExportService {
     return {
       filename: exportFilename(label, this.clock.now()),
       count,
-      chunks: this.rows(access, siteIds, where, count, keyOf),
+      separator,
+      chunks: this.rows(access, siteIds, where, count, keyOf, separator),
     };
   }
 
@@ -158,8 +185,9 @@ export class LeadExportService {
     where: LeadWhere,
     limit: number,
     keyOf: Map<string, string>,
+    separator: LeadExportSeparator,
   ): AsyncGenerator<string, void, undefined> {
-    yield CSV_BOM + csvLine(LEAD_EXPORT_COLUMNS);
+    yield CSV_BOM + csvLine(LEAD_EXPORT_COLUMNS, separator);
     const scope = { siteIds, includePlatform: false };
     const db = access.db(scope);
     let cursor: { at: Date; id: string } | null = null;
@@ -205,7 +233,7 @@ export class LeadExportService {
         return { leads, messages, requests };
       });
       if (batch.leads.length === 0) break;
-      const lines = await this.lines(db, batch, keyOf);
+      const lines = await this.lines(db, batch, keyOf, separator);
       written += batch.leads.length;
       const last = batch.leads[batch.leads.length - 1] as ExportLead;
       cursor = { at: last.lastRequestAt, id: last.id };
@@ -222,6 +250,7 @@ export class LeadExportService {
       requests: { leadId: string; productId: string; documentId: string }[];
     },
     keyOf: Map<string, string>,
+    separator: LeadExportSeparator,
   ): Promise<string> {
     const [products, documents] = await Promise.all([
       db.product.findMany({
@@ -259,20 +288,23 @@ export class LeadExportService {
     let out = "";
     for (const l of batch.leads) {
       const anonymised = l.anonymisedAt !== null;
-      out += csvLine([
-        l.id,
-        csvDateTime(l.createdAt),
-        l.source,
-        anonymised ? "" : l.fullName,
-        anonymised ? "" : l.company,
-        anonymised ? "" : l.email,
-        anonymised ? "" : (phoneOf.get(l.id) ?? ""),
-        l.country,
-        anonymised ? "" : (subjectOf.get(l.id) ?? ""),
-        l.status,
-        keyOf.get(l.siteId) ?? "",
-        (docsOf.get(l.id) ?? []).join(" | "),
-      ]);
+      out += csvLine(
+        [
+          l.id,
+          csvDateTime(l.createdAt),
+          l.source,
+          anonymised ? "" : l.fullName,
+          anonymised ? "" : l.company,
+          anonymised ? "" : l.email,
+          anonymised ? "" : (phoneOf.get(l.id) ?? ""),
+          l.country,
+          anonymised ? "" : (subjectOf.get(l.id) ?? ""),
+          l.status,
+          keyOf.get(l.siteId) ?? "",
+          (docsOf.get(l.id) ?? []).join(" | "),
+        ],
+        separator,
+      );
     }
     return out;
   }

@@ -8,8 +8,10 @@ import {
   ErrorBodySchema,
   LEAD_EXPORT_MAX_ROWS,
   LEAD_EXPORT_PATH,
+  LEAD_EXPORT_SEPARATOR_PARAM,
 } from "@dream/contracts";
 import type {
+  LeadExportSeparator,
   LeadActivityInput,
   LeadActivityResponse,
   LeadWorkflowInput,
@@ -53,6 +55,34 @@ const EXPORT_RULE_MESSAGES: Readonly<Record<string, string>> = {
   before_from: "The end date is before the start date.",
 };
 
+/** DP-229: the separator choices of the export, in the order the console shows them. */
+export const EXPORT_SEPARATOR_OPTIONS: readonly {
+  value: LeadExportSeparator;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: ";",
+    label: "Semicolon (;)",
+    hint: "Opens in columns in Excel with Dutch or Turkish settings.",
+  },
+  {
+    value: ",",
+    label: "Comma (,)",
+    hint: "For Excel with English settings, Google Sheets and other tools.",
+  },
+];
+
+/**
+ * The list filters (`?a=1&b=2` or empty) plus the separator (DP-229). Any separator already in the
+ * query is replaced, so the file always uses the one chosen on screen.
+ */
+export function exportQueryWithSeparator(query: string, separator: LeadExportSeparator): string {
+  const params = new URLSearchParams(query.startsWith("?") ? query.slice(1) : query);
+  params.set(LEAD_EXPORT_SEPARATOR_PARAM, separator);
+  return `?${params.toString()}`;
+}
+
 /** The file name the API chose (`attachment; filename="…"`), or a dated fallback. */
 export function exportFilenameOf(disposition: string | null, now: Date = new Date()): string {
   const m = /filename="([A-Za-z0-9._-]{1,120})"/.exec(disposition ?? "");
@@ -76,6 +106,10 @@ export function exportErrorMessage(status: number, body: unknown): string {
     .find((r) => r in EXPORT_RULE_MESSAGES);
   const ref = ` (HTTP ${status}, ${code}, request ${requestId})`;
   if (rule) return `${EXPORT_RULE_MESSAGES[rule]}${ref}`;
+  const badSeparator = details.some(
+    (d) => typeof d === "object" && d && "path" in d && d.path === LEAD_EXPORT_SEPARATOR_PARAM,
+  );
+  if (badSeparator) return `Choose a separator: semicolon (;) or comma (,).${ref}`;
   if (code === "FORBIDDEN") {
     return `You may not export these leads. Exporting needs the lead export permission (customer-data officer or platform administrator) on every selected site.${ref}`;
   }
@@ -87,11 +121,14 @@ export function exportErrorMessage(status: number, body: unknown): string {
   return `${text}${ref}`;
 }
 
-/** Downloads the filtered leads as CSV through the same-origin proxy. */
-export async function downloadLeadExport(query: string): Promise<LeadExportResult> {
+/** Downloads the filtered leads as CSV (chosen separator, DP-229) through the same-origin proxy. */
+export async function downloadLeadExport(
+  query: string,
+  separator: LeadExportSeparator,
+): Promise<LeadExportResult> {
   let res: Response;
   try {
-    res = await fetch(`${LEAD_EXPORT_PATH}${query}`, {
+    res = await fetch(`${LEAD_EXPORT_PATH}${exportQueryWithSeparator(query, separator)}`, {
       method: "GET",
       headers: { Accept: "text/csv, application/json" },
       credentials: "same-origin",

@@ -1,4 +1,5 @@
-// DP-227: CSV encoding of the lead export (RFC 4180, BOM, formula injection, Amsterdam dates).
+// DP-227 / DP-229: CSV encoding of the lead export (RFC 4180 with ; or , separators, BOM,
+// formula injection, Amsterdam dates).
 import { describe, expect, it } from "vitest";
 import {
   CSV_BOM,
@@ -11,6 +12,8 @@ import {
   isCalendarDay,
   neutraliseFormula,
 } from "../../../src/leads/lead-export-csv.js";
+import { ApiError } from "../../../src/iam/http/api-error.js";
+import { exportSeparator } from "../../../src/leads/lead-export.service.js";
 
 describe("cells", () => {
   it("quotes every cell and doubles quotes inside", () => {
@@ -50,8 +53,131 @@ describe("cells", () => {
     expect(csvCell('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
   });
 
-  it("joins a line with commas and ends it with CRLF", () => {
-    expect(csvLine(["a", 'b"c', "=d", null])).toBe(`"a","b""c","'=d",""\r\n`);
+  it("joins a line with the chosen separator and ends it with CRLF (DP-229)", () => {
+    expect(csvLine(["a", 'b"c', "=d", null], ",")).toBe(`"a","b""c","'=d",""\r\n`);
+    expect(csvLine(["a", 'b"c', "=d", null], ";")).toBe(`"a";"b""c";"'=d";""\r\n`);
+  });
+});
+
+/**
+ * A strict RFC 4180 reader with a configurable separator, as Excel (Data > From Text/CSV, or a
+ * double click with a `;` locale), LibreOffice and Python's csv module read a quoted file: a quoted
+ * cell ends only at `"` followed by the separator, CRLF or the end. Any stray character after a
+ * closing quote fails the test, so a cell can never spill into its neighbour unnoticed.
+ */
+function parseCsv(text: string, separator: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let i = 0;
+  for (;;) {
+    if (text[i] !== '"') throw new Error(`unquoted cell at ${i}`);
+    i += 1;
+    let cell = "";
+    for (;;) {
+      const quote = text.indexOf('"', i);
+      if (quote < 0) throw new Error("unterminated cell");
+      cell += text.slice(i, quote);
+      if (text[quote + 1] === '"') {
+        cell += '"';
+        i = quote + 2;
+        continue;
+      }
+      i = quote + 1;
+      break;
+    }
+    row.push(cell);
+    if (text[i] === separator) {
+      i += 1;
+      continue;
+    }
+    if (text.startsWith("\r\n", i)) {
+      rows.push(row);
+      row = [];
+      i += 2;
+      if (i === text.length) return rows;
+      continue;
+    }
+    throw new Error(`stray character ${JSON.stringify(text[i])} at ${i}`);
+  }
+}
+
+describe("separator (DP-229)", () => {
+  const tricky = [
+    "Lead; with semicolon",
+    "Comma, Inc.",
+    'He said "yes"; then, "no"',
+    "line 1\nline 2\r\nline 3",
+    ";",
+    ",",
+    '"',
+    '";"',
+    "=SUM(A1;A2)",
+    "+31 6 1234 5678",
+    "@cmd",
+    "-1",
+    "Şükrü Çağlar-İnce; Güneş Yağ Ltd. Şti., ığüşöç ĞÜŞİÖÇ",
+    "IJsselmeer B.V.; Zoë van 't Hoff, Curaçao",
+    "",
+  ];
+
+  for (const separator of [";", ","] as const) {
+    it(`keeps every cell in its column with "${separator}"`, () => {
+      const header = ["A", "B", "C"];
+      const rows = tricky.map((v, n) => [String(n), v, `${v}|${separator}`]);
+      const text = [header, ...rows].map((r) => csvLine(r, separator)).join("");
+      // Excel / LibreOffice / csv reading with the same separator: same rows, same cells.
+      const parsed = parseCsv(text, separator);
+      expect(parsed).toHaveLength(rows.length + 1);
+      for (const r of parsed) expect(r).toHaveLength(3);
+      expect(parsed[0]).toEqual(header);
+      rows.forEach((r, n) => {
+        expect(parsed[n + 1]?.[0]).toBe(r[0]);
+        expect(parsed[n + 1]?.[1]).toBe(neutraliseFormula(r[1] as string));
+        expect(parsed[n + 1]?.[2]).toBe(neutraliseFormula(r[2] as string));
+      });
+      // The other separator never appears as a cell boundary: only inside quoted cells.
+      const other = separator === ";" ? "," : ";";
+      expect(() => parseCsv(text, other)).toThrow();
+      // CRLF ends every record; bare LF and CR only inside a quoted cell.
+      expect(text.endsWith("\r\n")).toBe(true);
+    });
+  }
+
+  it("formula-injection protection is the same with both separators", () => {
+    for (const separator of [";", ","] as const) {
+      const line = csvLine(["=1+1", "+1", "-1", "@a", "\t=1", " =1"], separator);
+      const cells = parseCsv(line, separator)[0] as string[];
+      for (const c of cells) expect(c.startsWith("'")).toBe(true);
+    }
+  });
+
+  it("accepts only ; and , (absent: ;)", () => {
+    expect(exportSeparator(undefined)).toBe(";");
+    expect(exportSeparator(";")).toBe(";");
+    expect(exportSeparator(",")).toBe(",");
+    for (const bad of [
+      "",
+      " ",
+      "\t",
+      "|",
+      ";;",
+      ", ",
+      "%3B",
+      "semicolon",
+      [";"],
+      [";", ","],
+      0,
+      null,
+    ]) {
+      let error: unknown = null;
+      try {
+        exportSeparator(bad);
+      } catch (e) {
+        error = e;
+      }
+      expect(error, JSON.stringify(bad)).toBeInstanceOf(ApiError);
+      expect((error as ApiError).code).toBe("VALIDATION_FAILED");
+    }
   });
 });
 
