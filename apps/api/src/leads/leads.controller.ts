@@ -18,6 +18,7 @@ import {
   Query,
   Res,
 } from "@nestjs/common";
+import { LEAD_EXPORT_SEPARATOR_PARAM } from "@dream/contracts";
 import type {
   LeadActivityResponse,
   LeadContactMessageResponse,
@@ -120,7 +121,8 @@ export class AdminLeadsController {
   }
 
   /**
-   * DP-227: the filtered leads as a CSV file (lead:export with step-up). Refusals answer the usual
+   * DP-227: the filtered leads as a CSV file (lead:export with step-up), cells separated by the
+   * `separator` query value (DP-229: `;` by default, or `,`; anything else is a 400). Refusals answer the usual
    * JSON error before any byte of the file. The body streams batch by batch; a failure after the
    * first byte aborts the connection (the browser sees a failed download, never a cut file that
    * looks complete). Nothing of the content is logged.
@@ -131,7 +133,7 @@ export class AdminLeadsController {
     @Query() query: Record<string, unknown>,
     @Res() res: ServerResponse,
   ): Promise<void> {
-    const file = await this.exports.open(ctx, filters(query));
+    const file = await this.exports.open(ctx, filters(query), query[LEAD_EXPORT_SEPARATOR_PARAM]);
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
