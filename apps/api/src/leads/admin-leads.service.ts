@@ -22,9 +22,6 @@ import {
   LEAD_ACTIVITY_LIMIT,
   LEADS_PAGE_SIZE,
   LeadActivityInputSchema,
-  LeadAssigneeFilterSchema,
-  LeadSourceSchema,
-  LeadStatusSchema,
   LeadWorkflowInputSchema,
   UuidSchema,
   canTransition,
@@ -41,6 +38,7 @@ import { ApiError, parseBody } from "../iam/http/api-error.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
+import { readableLeadSites, resolveLeadFilter, type LeadFilterQuery } from "./lead-filters.js";
 
 const PERMISSION = "lead:read";
 const MANAGE = "lead:manage";
@@ -145,15 +143,8 @@ const LEAD_SELECT = {
   workflowVersion: true,
 } as const;
 
-export interface LeadListQuery {
-  siteId?: string | undefined;
+export interface LeadListQuery extends LeadFilterQuery {
   cursor?: string | undefined;
-  q?: string | undefined;
-  /** DP-041 filters. */
-  status?: string | undefined;
-  assignee?: string | undefined;
-  /** DP-221: DOCUMENT_REQUEST or CONTACT_FORM. */
-  source?: string | undefined;
 }
 
 /** Cursor: base64url of "<lastRequestAt ISO>|<id>" (keyset pagination, newest first). */
@@ -175,13 +166,8 @@ function decodeCursor(raw: string): { at: Date; id: string } {
 export class AdminLeadsService {
   constructor(@Inject(StaffAccessService) private readonly access: StaffAccessService) {}
 
-  private async readableSites(access: StaffAccess) {
-    const ids = access.sitesWith(PERMISSION);
-    if (ids.length === 0) {
-      // No lead:read anywhere: refused and audited like any other permission check.
-      await access.require(PERMISSION, { scope: "platform" }, { type: "lead", id: null });
-    }
-    return access.sites.filter((s) => ids.includes(s.id));
+  private readableSites(access: StaffAccess) {
+    return readableLeadSites(access);
   }
 
   private async people(
@@ -254,65 +240,17 @@ export class AdminLeadsService {
 
   async list(ctx: RequestContext, query: LeadListQuery): Promise<LeadListResponse> {
     const access = await this.access.begin(ctx);
-    const sites = await this.readableSites(access);
-    let siteIds = sites.map((s) => s.id);
-    if (query.siteId !== undefined) {
-      const wanted = query.siteId.toLowerCase();
-      if (!siteIds.includes(wanted)) {
-        await access.require(
-          PERMISSION,
-          { scope: "site", siteId: wanted },
-          { type: "lead", id: null },
-        );
-      }
-      siteIds = [wanted];
-    }
-    const q = query.q?.trim().slice(0, 100);
+    // DP-227: the filters are shared with the CSV export (lead-filters.ts).
+    const filter = await resolveLeadFilter(access, query);
+    const { sites, siteIds } = filter;
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
-    let status: LeadStatus | undefined;
-    if (query.status !== undefined) {
-      const parsed = LeadStatusSchema.safeParse(query.status);
-      if (!parsed.success)
-        throw new ApiError("VALIDATION_FAILED", [{ path: "status", rule: "invalid" }]);
-      status = parsed.data;
-    }
-    let source: LeadSource | undefined;
-    if (query.source !== undefined) {
-      const parsed = LeadSourceSchema.safeParse(query.source.toUpperCase());
-      if (!parsed.success)
-        throw new ApiError("VALIDATION_FAILED", [{ path: "source", rule: "invalid" }]);
-      source = parsed.data;
-    }
-    let assignedToId: string | null | undefined;
-    let assigneeFilter: "me" | "none" | "user" | undefined;
-    if (query.assignee !== undefined) {
-      const parsed = LeadAssigneeFilterSchema.safeParse(query.assignee.toLowerCase());
-      if (!parsed.success) {
-        throw new ApiError("VALIDATION_FAILED", [{ path: "assignee", rule: "invalid" }]);
-      }
-      assigneeFilter = parsed.data === "me" || parsed.data === "none" ? parsed.data : "user";
-      assignedToId =
-        parsed.data === "me" ? access.userId : parsed.data === "none" ? null : parsed.data;
-    }
     const scope = { siteIds, includePlatform: false };
     const db = access.db(scope);
     // DP-103: the lead rows come through the session's database context (row-level security).
     const rows: LeadRow[] = await access.leadData(scope, (tx) =>
       tx.lead.findMany({
         where: {
-          siteId: { in: siteIds },
-          ...(status ? { status } : {}),
-          ...(source ? { source } : {}),
-          ...(assignedToId !== undefined ? { assignedToId } : {}),
-          ...(q
-            ? {
-                OR: [
-                  { email: { contains: q, mode: "insensitive" } },
-                  { company: { contains: q, mode: "insensitive" } },
-                  { fullName: { contains: q, mode: "insensitive" } },
-                ],
-              }
-            : {}),
+          ...filter.where,
           ...(cursor
             ? {
                 AND: [
@@ -347,11 +285,8 @@ export class AdminLeadsService {
       metadata: {
         siteIds,
         count: page.length,
-        searched: Boolean(q),
+        ...filter.audit,
         paged: Boolean(cursor),
-        ...(status ? { status } : {}),
-        ...(source ? { source } : {}),
-        ...(assigneeFilter ? { assignee: assigneeFilter } : {}),
         accessAssignmentIds: access.grantRefs(PERMISSION, siteIds),
       },
     });
