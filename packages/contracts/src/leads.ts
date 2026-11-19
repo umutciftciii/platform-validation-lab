@@ -905,3 +905,47 @@ export const LeadNotificationSaveResponseSchema = z.strictObject({
   site: LeadNotificationSiteSettingsSchema,
 });
 export type LeadNotificationSaveResponse = z.infer<typeof LeadNotificationSaveResponseSchema>;
+
+// --- CSV export (DP-227; lead:export with its MFA step-up, rows through lead:read) ---------------
+
+/** The CSV file of the filtered leads (`GET`, same filters as the list, without `cursor`). */
+export const LEAD_EXPORT_PATH = `${ADMIN_LEADS_API}/export.csv`;
+/** How many leads the filters match and whether the caller may export them (`GET`). */
+export const LEAD_EXPORT_SUMMARY_PATH = `${ADMIN_LEADS_API}/export/summary`;
+/** One export holds at most this many leads; more must be narrowed with the filters. */
+export const LEAD_EXPORT_MAX_ROWS = 20_000;
+/** Leads read from the database per round while the file streams (bounded memory). */
+export const LEAD_EXPORT_BATCH_SIZE = 500;
+/** Products and documents named per lead in the file (newest first). */
+export const LEAD_EXPORT_MAX_DOCUMENTS = 20;
+
+/**
+ * The columns of the file, in order. Message text, marketing consent and the consent evidence
+ * are deliberately not exported (sensitive; they stay in the console, owner rule DP-227).
+ */
+export const LEAD_EXPORT_COLUMNS = [
+  "Lead ID",
+  "Created",
+  "Source",
+  "Full name",
+  "Company",
+  "E-mail",
+  "Phone",
+  "Country",
+  "Subject",
+  "Status",
+  "Site",
+  "Products / documents",
+] as const;
+
+/** A calendar day `YYYY-MM-DD` of the date filters (Europe/Amsterdam, inclusive). */
+export const LeadDayFilterSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const LeadExportSummaryResponseSchema = z.strictObject({
+  /** Leads the filters match on the sites the caller may read. */
+  count: z.number().int().min(0),
+  maxRows: z.number().int().min(1),
+  /** The caller holds lead:export on every site of the filters (the step-up is asked later). */
+  canExport: z.boolean(),
+});
+export type LeadExportSummaryResponse = z.infer<typeof LeadExportSummaryResponseSchema>;

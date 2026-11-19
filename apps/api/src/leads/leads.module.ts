@@ -3,6 +3,7 @@ import { IamModule } from "../iam/iam.module.js";
 import { AdminLeadsService } from "./admin-leads.service.js";
 import { ContactMessagesService } from "./contact-messages.service.js";
 import { DocumentGrantsService } from "./document-grants.service.js";
+import { LeadExportService } from "./lead-export.service.js";
 import { NotificationsModule } from "../notifications/notifications.module.js";
 import {
   AdminLeadNotificationsController,
@@ -31,6 +32,7 @@ import { LeadRetentionReportService } from "./retention-report.service.js";
     LeadRequestsService,
     ContactMessagesService,
     AdminLeadsService,
+    LeadExportService,
     DocumentGrantsService,
     LeadRetentionReportService,
     LeadNotificationSender,

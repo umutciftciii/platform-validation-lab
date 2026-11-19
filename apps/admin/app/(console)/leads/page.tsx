@@ -1,8 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { LEAD_SOURCES, LEAD_STATUSES, LeadListResponseSchema } from "@dream/contracts";
+import {
+  LEAD_EXPORT_SUMMARY_PATH,
+  LEAD_SOURCES,
+  LEAD_STATUSES,
+  LeadExportSummaryResponseSchema,
+  LeadListResponseSchema,
+} from "@dream/contracts";
 import { FIELD, PageHeader, SITE_SHORT } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
+import { LeadExport } from "../../../components/leads/lead-export";
 import {
   buttonStyles,
   cx,
@@ -13,6 +20,8 @@ import {
 } from "../../../components/ui";
 import {
   countryName,
+  hasLeadFilters,
+  leadExportQuery,
   leadListHref,
   leadListQuery,
   readLeadFilters,
@@ -38,15 +47,19 @@ const DATE = new Intl.DateTimeFormat("en-GB", {
  * DP-042 (ADR-016 D8): document requests left on the public sites. Customer data: the API answers
  * only with lead:read on the lead's site (customer-data roles, DP-076/DP-077); every read is
  * audited. DP-041 (ADR-019): status and assignee filters; the workflow itself is on the detail
- * page. Export is DP-126.
+ * page. DP-227: creation date range and the CSV export of the filtered leads (lead:export).
  */
 export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   await requireStaffSession();
   const filters = readLeadFilters(await searchParams);
-  const list = await serverRead(
-    `/api/v1/admin/leads${leadListQuery(filters)}`,
-    LeadListResponseSchema,
-  );
+  const [list, summary] = await Promise.all([
+    serverRead(`/api/v1/admin/leads${leadListQuery(filters)}`, LeadListResponseSchema),
+    serverRead(
+      `${LEAD_EXPORT_SUMMARY_PATH}${leadExportQuery(filters)}`,
+      LeadExportSummaryResponseSchema,
+    ),
+  ]);
+  const filtered = hasLeadFilters(filters);
   if (!list.ok) {
     return (
       <div className="space-y-8">
@@ -91,80 +104,115 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
           action="/leads"
           role="search"
           aria-label="Filter leads"
-          className="grid grid-cols-1 gap-3 border-b border-line px-5 pb-4 sm:grid-cols-2 sm:px-6 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]"
+          className="space-y-3 border-b border-line px-5 pb-4 sm:px-6"
         >
-          <label className="relative block">
-            <span className="sr-only">Search by name, company or e-mail</span>
-            <Icon
-              name="search"
-              size={17}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
-            />
-            <input
-              type="search"
-              name="q"
-              defaultValue={filters.q}
-              maxLength={100}
-              placeholder="Search name, company or e-mail"
-              className={cx(FIELD, "pl-9")}
-            />
-          </label>
-          <label>
-            <span className="sr-only">Site</span>
-            <select name="site" defaultValue={filters.site} className={FIELD}>
-              <option value="">All my sites</option>
-              {sites.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="sr-only">Status</span>
-            <select name="status" defaultValue={filters.status} className={FIELD}>
-              <option value="">Any status</option>
-              {LEAD_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABEL[s]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="sr-only">Source</span>
-            <select name="source" defaultValue={filters.source} className={FIELD}>
-              <option value="">Any source</option>
-              {LEAD_SOURCES.map((s) => (
-                <option key={s} value={s}>
-                  {SOURCE_LABEL[s]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="sr-only">Assigned to</span>
-            <select name="assignee" defaultValue={filters.assignee} className={FIELD}>
-              <option value="">Anyone</option>
-              <option value="me">Assigned to me</option>
-              <option value="none">Unassigned</option>
-            </select>
-          </label>
-          <button type="submit" className={buttonStyles.primary}>
-            Apply
-          </button>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]">
+            <label className="relative block">
+              <span className="sr-only">Search by name, company or e-mail</span>
+              <Icon
+                name="search"
+                size={17}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
+              />
+              <input
+                type="search"
+                name="q"
+                defaultValue={filters.q}
+                maxLength={100}
+                placeholder="Search name, company or e-mail"
+                className={cx(FIELD, "pl-9")}
+              />
+            </label>
+            <label>
+              <span className="sr-only">Site</span>
+              <select name="site" defaultValue={filters.site} className={FIELD}>
+                <option value="">All my sites</option>
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Status</span>
+              <select name="status" defaultValue={filters.status} className={FIELD}>
+                <option value="">Any status</option>
+                {LEAD_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUS_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Source</span>
+              <select name="source" defaultValue={filters.source} className={FIELD}>
+                <option value="">Any source</option>
+                {LEAD_SOURCES.map((s) => (
+                  <option key={s} value={s}>
+                    {SOURCE_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Assigned to</span>
+              <select name="assignee" defaultValue={filters.assignee} className={FIELD}>
+                <option value="">Anyone</option>
+                <option value="me">Assigned to me</option>
+                <option value="none">Unassigned</option>
+              </select>
+            </label>
+            <button type="submit" className={buttonStyles.primary}>
+              Apply
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-end">
+            <label className="block min-w-0 sm:w-44">
+              <span className="mb-1 block text-xs font-medium text-ink-3">Created from</span>
+              <input type="date" name="from" defaultValue={filters.from} className={FIELD} />
+            </label>
+            <label className="block min-w-0 sm:w-44">
+              <span className="mb-1 block text-xs font-medium text-ink-3">Created to</span>
+              <input type="date" name="to" defaultValue={filters.to} className={FIELD} />
+            </label>
+            {filtered ? (
+              <Link
+                key="clear"
+                href={leadListHref({ site: filters.site })}
+                className={cx(
+                  buttonStyles.ghost,
+                  "justify-self-start min-[360px]:col-span-2 sm:col-span-1",
+                )}
+              >
+                Clear filters
+              </Link>
+            ) : null}
+          </div>
         </form>
-        {items.length === 0 ? (
-          <EmptyState
-            icon="inbox"
-            title={
-              filters.q || filters.status || filters.assignee || filters.source
-                ? "No matching leads"
-                : "No leads yet"
-            }
+        {summary.ok ? (
+          <LeadExport
+            key="export"
+            count={summary.data.count}
+            maxRows={summary.data.maxRows}
+            canExport={summary.data.canExport}
+            query={leadExportQuery(filters)}
+            filtered={filtered}
+          />
+        ) : (
+          <p
+            key="export-unavailable"
+            role="alert"
+            className="border-b border-line px-5 py-3 text-sm text-danger sm:px-6"
           >
-            {filters.q || filters.status || filters.assignee || filters.source
-              ? "Try another search or filter."
+            The export is unavailable: the lead count could not be loaded (HTTP {summary.status}).
+          </p>
+        )}
+        {items.length === 0 ? (
+          <EmptyState icon="inbox" title={filtered ? "No matching leads" : "No leads yet"}>
+            {filtered
+              ? "Try another search, filter or date range."
               : "Contact-form messages and document requests from the public sites appear here."}
           </EmptyState>
         ) : (

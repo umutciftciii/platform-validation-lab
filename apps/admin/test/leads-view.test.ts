@@ -3,7 +3,12 @@
 import { LEAD_STATUSES } from "@dream/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  calendarDay,
   countryName,
+  exportSummaryText,
+  hasLeadFilters,
+  leadCount,
+  leadExportQuery,
   leadListHref,
   leadListQuery,
   readLeadFilters,
@@ -23,6 +28,8 @@ describe("lead list filters", () => {
       status: "",
       assignee: "",
       source: "",
+      from: "",
+      to: "",
     });
     expect(readLeadFilters({ site: "BV", q: ["a", "b"], cursor: "x y" })).toEqual({
       site: "",
@@ -31,6 +38,8 @@ describe("lead list filters", () => {
       status: "",
       assignee: "",
       source: "",
+      from: "",
+      to: "",
     });
     expect(readLeadFilters({ status: "qualified", assignee: "ME" })).toMatchObject({
       status: "QUALIFIED",
@@ -46,7 +55,16 @@ describe("lead list filters", () => {
     expect(readLeadFilters({ source: "FAIR" }).source).toBe("");
   });
   it("builds the API query and the console links", () => {
-    const none = { site: "", q: "", cursor: "", status: "", assignee: "", source: "" };
+    const none = {
+      site: "",
+      q: "",
+      cursor: "",
+      status: "",
+      assignee: "",
+      source: "",
+      from: "",
+      to: "",
+    };
     expect(leadListQuery(none)).toBe("");
     expect(leadListQuery({ ...none, site: SITE, q: "a&b", cursor: "c" })).toBe(
       `?siteId=${SITE}&q=a%26b&cursor=c`,
@@ -73,5 +91,66 @@ describe("lead list filters", () => {
   it("names countries and falls back to the code", () => {
     expect(countryName("NL")).toBe("Netherlands");
     expect(countryName("not-a-code")).toBe("not-a-code");
+  });
+});
+
+// DP-227: creation date range and the CSV export of the filtered leads.
+describe("date range and export", () => {
+  it("keeps real calendar days only and drops an end before the start", () => {
+    expect(readLeadFilters({ from: "2026-11-01", to: "2026-11-19" })).toMatchObject({
+      from: "2026-11-01",
+      to: "2026-11-19",
+    });
+    expect(readLeadFilters({ from: "2026-02-30", to: "19-11-2026" })).toMatchObject({
+      from: "",
+      to: "",
+    });
+    expect(readLeadFilters({ from: "2026-11-19", to: "2026-11-01" })).toMatchObject({
+      from: "2026-11-19",
+      to: "",
+    });
+    expect(calendarDay("2028-02-29")).toBe("2028-02-29");
+    expect(calendarDay("1999-12-31")).toBe("");
+  });
+
+  it("sends the same filters to the list, the export and its summary (no cursor)", () => {
+    const f = readLeadFilters({
+      site: SITE,
+      q: "acme",
+      status: "NEW",
+      source: "CONTACT_FORM",
+      assignee: "me",
+      from: "2026-11-01",
+      to: "2026-11-19",
+      cursor: "abc",
+    });
+    expect(leadListQuery(f)).toBe(
+      `?siteId=${SITE}&q=acme&status=NEW&assignee=me&source=CONTACT_FORM&from=2026-11-01&to=2026-11-19&cursor=abc`,
+    );
+    expect(leadExportQuery(f)).toBe(
+      `?siteId=${SITE}&q=acme&status=NEW&assignee=me&source=CONTACT_FORM&from=2026-11-01&to=2026-11-19`,
+    );
+    expect(leadListHref({ ...f, cursor: "" })).toBe(
+      `/leads?site=${SITE}&q=acme&status=NEW&assignee=me&source=CONTACT_FORM&from=2026-11-01&to=2026-11-19`,
+    );
+    expect(leadExportQuery(readLeadFilters({}))).toBe("");
+    expect(hasLeadFilters(readLeadFilters({ site: SITE }))).toBe(false);
+    expect(hasLeadFilters(readLeadFilters({ from: "2026-11-01" }))).toBe(true);
+  });
+
+  it("says how many leads the export holds, or why there is nothing to export", () => {
+    expect(leadCount(1)).toBe("1 lead");
+    expect(leadCount(1234)).toBe("1,234 leads");
+    expect(exportSummaryText(0, 20000, true)).toBe(
+      "No leads match these filters, so there is nothing to export.",
+    );
+    expect(exportSummaryText(0, 20000, false)).toBe("There are no leads to export yet.");
+    expect(exportSummaryText(12, 20000, true)).toBe(
+      "12 leads match these filters and will be exported.",
+    );
+    expect(exportSummaryText(1, 20000, false)).toBe("1 lead in total and will be exported.");
+    expect(exportSummaryText(20001, 20000, false)).toMatch(
+      /^20,001 leads match\. One export holds at most 20,000; narrow the filters/,
+    );
   });
 });
