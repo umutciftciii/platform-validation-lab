@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { LEAD_STATUSES, LeadListResponseSchema } from "@dream/contracts";
+import { LEAD_SOURCES, LEAD_STATUSES, LeadListResponseSchema } from "@dream/contracts";
 import { FIELD, PageHeader, SITE_SHORT } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
 import {
@@ -16,6 +16,7 @@ import {
   leadListHref,
   leadListQuery,
   readLeadFilters,
+  SOURCE_LABEL,
   STATUS_LABEL,
   STATUS_TONE,
 } from "../../../lib/leads-view";
@@ -71,7 +72,13 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
       <PageHeader
         icon="inbox"
         title="Leads"
-        description="People who requested a lead-gated document on a public site, newest first. Work them through the sales pipeline. Customer data: every view is audited."
+        description="People who wrote through a site's contact form or requested a lead-gated document, newest first. Work them through the sales pipeline. Customer data: every view is audited."
+        actions={
+          <Link href="/leads/notifications" className={buttonStyles.secondary}>
+            <Icon name="bell" size={16} />
+            Notifications
+          </Link>
+        }
       />
       <Panel
         id="leads"
@@ -84,7 +91,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
           action="/leads"
           role="search"
           aria-label="Filter leads"
-          className="grid grid-cols-1 gap-3 border-b border-line px-5 pb-4 sm:grid-cols-2 sm:px-6 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))_auto]"
+          className="grid grid-cols-1 gap-3 border-b border-line px-5 pb-4 sm:grid-cols-2 sm:px-6 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]"
         >
           <label className="relative block">
             <span className="sr-only">Search by name, company or e-mail</span>
@@ -125,6 +132,17 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
             </select>
           </label>
           <label>
+            <span className="sr-only">Source</span>
+            <select name="source" defaultValue={filters.source} className={FIELD}>
+              <option value="">Any source</option>
+              {LEAD_SOURCES.map((s) => (
+                <option key={s} value={s}>
+                  {SOURCE_LABEL[s]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <span className="sr-only">Assigned to</span>
             <select name="assignee" defaultValue={filters.assignee} className={FIELD}>
               <option value="">Anyone</option>
@@ -140,12 +158,14 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
           <EmptyState
             icon="inbox"
             title={
-              filters.q || filters.status || filters.assignee ? "No matching leads" : "No leads yet"
+              filters.q || filters.status || filters.assignee || filters.source
+                ? "No matching leads"
+                : "No leads yet"
             }
           >
-            {filters.q || filters.status || filters.assignee
+            {filters.q || filters.status || filters.assignee || filters.source
               ? "Try another search or filter."
-              : "Document requests from the public sites appear here."}
+              : "Contact-form messages and document requests from the public sites appear here."}
           </EmptyState>
         ) : (
           <ul className="divide-y divide-line">
@@ -183,13 +203,18 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                   </span>
                   <span className="flex flex-wrap items-center gap-2 text-sm text-ink-3 sm:justify-end">
                     <StatusPill tone="neutral">{SITE_SHORT[l.siteKey]}</StatusPill>
+                    <StatusPill tone={l.source === "CONTACT_FORM" ? "petrol" : "neutral"}>
+                      {SOURCE_LABEL[l.source]}
+                    </StatusPill>
                     {l.retentionHold ? <StatusPill tone="amber">Hold</StatusPill> : null}
                     {l.marketingConsentAt ? (
                       <StatusPill tone="success">Marketing OK</StatusPill>
                     ) : null}
                     {l.freeMailDomain ? <StatusPill tone="amber">Free mail</StatusPill> : null}
                     <span className="tabular-nums">
-                      {l.requestCount} request{l.requestCount === 1 ? "" : "s"} ·{" "}
+                      {l.requestCount > 0
+                        ? `${l.requestCount} document request${l.requestCount === 1 ? "" : "s"} · `
+                        : ""}
                       {DATE.format(new Date(l.lastRequestAt))}
                     </span>
                   </span>

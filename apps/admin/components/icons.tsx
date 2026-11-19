@@ -33,6 +33,8 @@ const PATHS = {
   refresh:
     "M15.5 8.5A5.75 5.75 0 0 0 5 6.4M4.5 11.5A5.75 5.75 0 0 0 15 13.6M5 3.5v3h3M15 16.5v-3h-3",
   inbox: "M3.5 11 5.5 4.5h9l2 6.5v4.5h-13zM3.5 11h4l1 2h3l1-2h4",
+  // DP-221: contact-form notifications
+  bell: "M10 3.5A4.5 4.5 0 0 0 5.5 8v3L4 13.5h12L14.5 11V8A4.5 4.5 0 0 0 10 3.5ZM8.25 16a1.75 1.75 0 0 0 3.5 0",
   // PM-1 (product catalogue)
   search: "M9 14.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11ZM13 13l3.5 3.5",
   folder: "M3.5 5.5h4.5l1.5 1.75h7v8.25h-13z",

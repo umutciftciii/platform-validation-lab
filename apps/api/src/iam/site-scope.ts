@@ -59,6 +59,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   LeadDocumentRequest: { nullable: false },
   // DP-151: contact-form messages, attached to a lead of the same site.
   LeadContactMessage: { nullable: false },
+  // DP-221 (ADR-026): a message's staff notification and the site's notification settings.
+  LeadNotification: { nullable: false },
+  LeadNotificationSetting: { nullable: false },
   DocumentDownloadGrant: { nullable: false },
   LeadDocumentDownload: { nullable: false },
   // DP-041 (ADR-019): the sales history of a lead belongs to the lead's site.
@@ -128,6 +131,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     contentProposalEvents: { model: "ProductContentProposalEvent", list: true },
     redirectsCreated: { model: "SiteRedirect", list: true },
     redirectsUpdated: { model: "SiteRedirect", list: true },
+    leadNotificationSettings: { model: "LeadNotificationSetting", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -154,6 +158,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leads: { model: "Lead", list: true },
     leadDocumentRequests: { model: "LeadDocumentRequest", list: true },
     leadContactMessages: { model: "LeadContactMessage", list: true },
+    leadNotifications: { model: "LeadNotification", list: true },
+    leadNotificationSetting: { model: "LeadNotificationSetting", list: false },
     documentGrants: { model: "DocumentDownloadGrant", list: true },
     leadDocumentDownloads: { model: "LeadDocumentDownload", list: true },
     leadActivities: { model: "LeadActivity", list: true },
@@ -330,6 +336,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     contactMessages: { model: "LeadContactMessage", list: true },
     assignedTo: { model: "User", list: false },
     activities: { model: "LeadActivity", list: true },
+    notifications: { model: "LeadNotification", list: true },
   },
   LeadActivity: {
     site: { model: "Site", list: false },
@@ -350,6 +357,16 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   LeadContactMessage: {
     lead: { model: "Lead", list: false },
     site: { model: "Site", list: false },
+    notification: { model: "LeadNotification", list: false },
+  },
+  LeadNotification: {
+    site: { model: "Site", list: false },
+    lead: { model: "Lead", list: false },
+    contactMessage: { model: "LeadContactMessage", list: false },
+  },
+  LeadNotificationSetting: {
+    site: { model: "Site", list: false },
+    updatedBy: { model: "User", list: false },
   },
   DocumentDownloadGrant: {
     request: { model: "LeadDocumentRequest", list: false },

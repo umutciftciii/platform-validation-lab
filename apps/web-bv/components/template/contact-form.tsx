@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { LEAD_MESSAGE_MAX, LEAD_TEXT_OUTDATED } from "@dream/contracts";
+import { LEAD_MESSAGE_MAX, LEAD_SUBJECT_MIN, LEAD_TEXT_OUTDATED } from "@dream/contracts";
 
 /**
  * DP-151: the contact form. Posts to this site's server (`/lead-form/contact`), which forwards it
@@ -15,6 +15,10 @@ import { LEAD_MESSAGE_MAX, LEAD_TEXT_OUTDATED } from "@dream/contracts";
  *
  * When the notice changed after the page was loaded (LEAD_TEXT_OUTDATED), the visitor is asked to
  * reload the page, read the current text and send again.
+ *
+ * DP-221: the thank-you panel appears only on the API's 201, which means the message is stored as
+ * a CRM lead (the staff e-mail follows separately and never decides this answer). The subject is
+ * required; a resend of the same message is answered 201 without a second record.
  */
 interface Props {
   idPrefix: string;
@@ -202,9 +206,13 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
             />
           </label>
           <label className="tp-contact-field">
-            <span className="tp-contact-field-label">Subject</span>
+            <span className="tp-contact-field-label">
+              Subject<span aria-hidden="true"> *</span>
+            </span>
             <input
               name="subject"
+              required
+              minLength={LEAD_SUBJECT_MIN}
               maxLength={160}
               autoComplete="off"
               className="tp-contact-input"

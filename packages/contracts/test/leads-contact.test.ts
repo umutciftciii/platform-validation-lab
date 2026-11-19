@@ -5,6 +5,7 @@ import {
   LEAD_MESSAGE_MAX,
   LEAD_PRIVACY_NOTICE,
   LeadContactMessageInputSchema,
+  LeadEmailSchema,
 } from "../src/index.js";
 
 const valid = {
@@ -29,17 +30,30 @@ describe("DP-151 contact form input", () => {
     expect(out.message).toBe("Line one.\n\nLine two.\nLine three.");
   });
 
-  it("stores blank optional fields as null", () => {
-    const out = LeadContactMessageInputSchema.parse({ ...valid, phone: " ", subject: "" });
+  it("stores a blank phone as null", () => {
+    const out = LeadContactMessageInputSchema.parse({ ...valid, phone: " " });
     expect(out.phone).toBeNull();
-    expect(out.subject).toBeNull();
   });
 
-  it("requires name, company, e-mail, country, message and the notice version shown", () => {
-    for (const field of ["fullName", "company", "email", "country", "message"]) {
+  it("requires name, company, e-mail, country, subject, message and the notice version shown", () => {
+    // DP-221: the subject is required (only the phone is optional), at least 2 characters.
+    expect(parse({ subject: " " }).success).toBe(false);
+    expect(parse({ subject: "x" }).success).toBe(false);
+    expect(
+      parse({ subject: "  Base   oil  " }).success &&
+        LeadContactMessageInputSchema.parse({ ...valid, subject: "  Base   oil  " }).subject,
+    ).toBe("Base oil");
+    for (const field of ["fullName", "company", "email", "country", "subject", "message"]) {
       expect(parse({ [field]: "" }).success, field).toBe(false);
     }
     expect(parse({ privacyNoticeVersion: undefined }).success).toBe(false);
+  });
+
+  it("refuses an e-mail the database refuses (no dot in the domain) as a field error (DP-221)", () => {
+    expect(parse({ email: "browser@test" }).success).toBe(false);
+    expect(parse({ email: "visitor@" }).success).toBe(false);
+    expect(parse({ email: "Visitor@Firm.Example" }).success).toBe(true);
+    expect(LeadEmailSchema.safeParse("a@b.c").success).toBe(true);
   });
 
   it("has no consent fields: no notice tick box and no marketing consent (owner decision)", () => {

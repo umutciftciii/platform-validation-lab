@@ -10,11 +10,14 @@ import type {
   LeadDetailResponse,
   LeadDocumentRequestResponse,
   LeadListResponse,
+  LeadNotificationSaveResponse,
+  LeadNotificationSettingsResponse,
   LeadWorkflowResponse,
 } from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { AdminLeadsService } from "./admin-leads.service.js";
 import { ContactMessagesService } from "./contact-messages.service.js";
+import { LeadNotificationSettingsService } from "./lead-notification-settings.service.js";
 import { LeadRequestsService } from "./lead-requests.service.js";
 
 function single(value: unknown): string | undefined {
@@ -57,6 +60,7 @@ export class AdminLeadsController {
     @Query("q") q: unknown,
     @Query("status") status: unknown,
     @Query("assignee") assignee: unknown,
+    @Query("source") source: unknown,
   ): Promise<LeadListResponse> {
     return this.leads.list(ctx, {
       siteId: single(siteId),
@@ -64,6 +68,7 @@ export class AdminLeadsController {
       q: single(q),
       status: single(status),
       assignee: single(assignee),
+      source: single(source),
     });
   }
 
@@ -92,5 +97,29 @@ export class AdminLeadsController {
     @Body() body: unknown,
   ): Promise<LeadActivityResponse> {
     return this.leads.addActivity(ctx, id, body);
+  }
+}
+
+/** DP-221 (ADR-026 D3): contact-form notification settings, per site (lead:manage). */
+@Controller("api/v1/admin/lead-notifications")
+export class AdminLeadNotificationsController {
+  constructor(
+    @Inject(LeadNotificationSettingsService)
+    private readonly settings: LeadNotificationSettingsService,
+  ) {}
+
+  @Get()
+  get(@Ctx() ctx: RequestContext): Promise<LeadNotificationSettingsResponse> {
+    return this.settings.get(ctx);
+  }
+
+  @Post("sites/:siteId")
+  @HttpCode(200)
+  save(
+    @Ctx() ctx: RequestContext,
+    @Param("siteId") siteId: string,
+    @Body() body: unknown,
+  ): Promise<LeadNotificationSaveResponse> {
+    return this.settings.save(ctx, siteId, body);
   }
 }

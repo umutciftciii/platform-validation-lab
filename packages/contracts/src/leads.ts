@@ -445,8 +445,22 @@ export const LEAD_FULL_NAME_MAX = 120;
 export const LEAD_COMPANY_MAX = 160;
 export const LEAD_EMAIL_MAX = 254;
 
+/**
+ * DP-221: the e-mail of a lead form. HTML5's rule accepts a domain without a dot ("a@b"), which
+ * the "Lead_email_normalised" CHECK (DP-042) refuses: such a form used to end in a database error
+ * (500, "Something went wrong") instead of a field error. Same rule as the CHECK, so the visitor
+ * gets 400 naming the e-mail field.
+ */
+export const LeadEmailSchema = EmailSchema.pipe(
+  z
+    .string()
+    .max(LEAD_EMAIL_MAX)
+    .regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/),
+);
+
 /** The short form as the site's server forwards it (strict: unknown keys are refused). */
 export const LEAD_PHONE_MAX = 40;
+export const LEAD_SUBJECT_MIN = 2;
 export const LEAD_SUBJECT_MAX = 160;
 export const LEAD_MESSAGE_MIN = 10;
 export const LEAD_MESSAGE_MAX = 4000;
@@ -492,6 +506,8 @@ function optionalText(max: number, pattern?: RegExp) {
  * DP-151: the contact form as the site's server forwards it. Name, company, e-mail, country and
  * the message are required (company and country because one person is one lead per site, and a
  * lead always has them); phone and subject are optional.
+ * DP-221 (ADR-026 D1): the subject is required too (owner brief 2026-11-19: only the phone is
+ * optional). Messages stored before keep their null subject.
  *
  * Owner decisions (2026-11-13): no marketing consent on this form, and no tick box for the
  * notice. Answering an enquiry rests on legitimate interest, not consent, so the notice is
@@ -501,10 +517,10 @@ function optionalText(max: number, pattern?: RegExp) {
 export const LeadContactMessageInputSchema = z.strictObject({
   fullName: formText(2, LEAD_FULL_NAME_MAX),
   company: formText(1, LEAD_COMPANY_MAX),
-  email: EmailSchema.pipe(z.string().max(LEAD_EMAIL_MAX)),
+  email: LeadEmailSchema,
   country: CountryCodeSchema,
   phone: optionalText(LEAD_PHONE_MAX, /^[+0-9 ()./-]*$/),
-  subject: optionalText(LEAD_SUBJECT_MAX),
+  subject: formText(LEAD_SUBJECT_MIN, LEAD_SUBJECT_MAX),
   message: messageText(LEAD_MESSAGE_MIN, LEAD_MESSAGE_MAX),
   /** The notice version shown next to the form (information, not consent). */
   privacyNoticeVersion: z.string().max(20),
@@ -521,7 +537,7 @@ export const LeadDocumentRequestInputSchema = z.strictObject({
   documentId: UuidSchema,
   fullName: formText(2, LEAD_FULL_NAME_MAX),
   company: formText(1, LEAD_COMPANY_MAX),
-  email: EmailSchema.pipe(z.string().max(LEAD_EMAIL_MAX)),
+  email: LeadEmailSchema,
   country: CountryCodeSchema,
   privacyNoticeVersion: z.string().max(20),
   privacyNoticeAccepted: z.literal(true),
@@ -673,6 +689,15 @@ export const LEAD_ACTIVITY_LIMIT = 200;
 /** List filter `assignee`: `me`, `none` (unassigned) or a staff user id. */
 export const LeadAssigneeFilterSchema = z.union([z.literal("me"), z.literal("none"), UuidSchema]);
 
+/**
+ * DP-221 (ADR-026 D2): the channel that created the lead, its first contact. Set once by the
+ * database row's creator and never changed (leads_lead_guard). A lead that later also uses the
+ * other channel keeps its source; its requests and messages show both.
+ */
+export const LEAD_SOURCES = ["DOCUMENT_REQUEST", "CONTACT_FORM"] as const;
+export const LeadSourceSchema = z.enum(LEAD_SOURCES);
+export type LeadSource = z.infer<typeof LeadSourceSchema>;
+
 export const LeadSummarySchema = z.strictObject({
   id: UuidSchema,
   siteId: UuidSchema,
@@ -682,6 +707,8 @@ export const LeadSummarySchema = z.strictObject({
   company: z.string(),
   country: z.string(),
   freeMailDomain: z.boolean(),
+  /** DP-221: the channel of the first contact. */
+  source: LeadSourceSchema,
   marketingConsentAt: IsoDate.nullable(),
   requestCount: z.number().int().min(0),
   firstRequestAt: IsoDate,
@@ -750,6 +777,15 @@ export const LeadRequestSchema = z.strictObject({
 });
 export type LeadRequest = z.infer<typeof LeadRequestSchema>;
 
+/**
+ * DP-221 (ADR-026 D4): delivery state of a staff notification. PENDING until the sender takes
+ * it; SENT; SKIPPED when nothing was to be sent (notifications off for the site, nobody eligible
+ * on the list, or e-mail delivery off in this environment); FAILED after the last retry.
+ */
+export const LEAD_NOTIFICATION_STATUSES = ["PENDING", "SENT", "SKIPPED", "FAILED"] as const;
+export const LeadNotificationStatusSchema = z.enum(LEAD_NOTIFICATION_STATUSES);
+export type LeadNotificationStatus = z.infer<typeof LeadNotificationStatusSchema>;
+
 /** DP-151: a contact-form message. Name, company, phone, subject and text are cleared on anonymisation. */
 export const LeadContactMessageSchema = z.strictObject({
   id: UuidSchema,
@@ -765,6 +801,17 @@ export const LeadContactMessageSchema = z.strictObject({
   privacyNoticeVersion: z.string(),
   privacyNoticeSha256: z.string(),
   redactedAt: IsoDate.nullable(),
+  /** DP-221: the staff e-mail notification of this message (null: stored before DP-221). */
+  notification: z
+    .strictObject({
+      status: LeadNotificationStatusSchema,
+      /** Why it was not sent (SKIPPED / FAILED); a code, never a mail server's text. */
+      reason: z.string().nullable(),
+      attempts: z.number().int().min(0),
+      sentAt: IsoDate.nullable(),
+      recipientCount: z.number().int().min(0),
+    })
+    .nullable(),
 });
 export type LeadContactMessage = z.infer<typeof LeadContactMessageSchema>;
 
@@ -787,3 +834,74 @@ export type LeadWorkflowResponse = z.infer<typeof LeadWorkflowResponseSchema>;
 export const LeadActivityResponseSchema = z.strictObject({ activity: LeadActivitySchema });
 export type LeadActivityResponse = z.infer<typeof LeadActivityResponseSchema>;
 export type LeadDetailResponse = z.infer<typeof LeadDetailResponseSchema>;
+
+// --- contact-form notifications (DP-221, ADR-026; lead:manage on the site) ------------------------
+
+export const LEAD_NOTIFICATIONS_API = "/api/v1/admin/lead-notifications";
+export const LEAD_NOTIFICATION_RECIPIENTS_MAX = 10;
+
+/**
+ * Where e-mail goes in this environment (ADR-026 D5): `off` sends nothing (every notification
+ * is SKIPPED), `capture` runs the whole path but hands the e-mail to an in-process sink that never
+ * leaves the machine (local and DEV), `smtp` sends through the configured mail server (staging and
+ * production only; the API refuses it locally).
+ */
+export const MAIL_TRANSPORTS = ["off", "capture", "smtp"] as const;
+export const MailTransportSchema = z.enum(MAIL_TRANSPORTS);
+export type MailTransport = z.infer<typeof MailTransportSchema>;
+
+/** A staff user on, or eligible for, the notification list (lead:read on the site). */
+export const LeadNotificationPersonSchema = z.strictObject({
+  id: UuidSchema,
+  displayName: z.string(),
+  email: z.string(),
+});
+export type LeadNotificationPerson = z.infer<typeof LeadNotificationPersonSchema>;
+
+export const LeadNotificationSiteSettingsSchema = z.strictObject({
+  site: z.strictObject({ id: UuidSchema, key: z.enum(["BV", "CORPORATE"]), name: z.string() }),
+  enabled: z.boolean(),
+  /** The list as stored; `eligible: false` when the person no longer reads the site's leads. */
+  recipients: z.array(LeadNotificationPersonSchema.extend({ eligible: z.boolean() })),
+  /** Everyone who may be on the list now: active staff with lead:read on the site. */
+  candidates: z.array(LeadNotificationPersonSchema),
+  /** Optimistic concurrency; 0 before the first save. */
+  version: z.number().int().min(0),
+  updatedAt: IsoDate.nullable(),
+  updatedBy: z.strictObject({ id: UuidSchema, displayName: z.string() }).nullable(),
+  /** Notifications of the last 30 days by status (no personal data). */
+  recent: z.record(LeadNotificationStatusSchema, z.number().int().min(0)),
+});
+export type LeadNotificationSiteSettings = z.infer<typeof LeadNotificationSiteSettingsSchema>;
+
+export const LeadNotificationSettingsResponseSchema = z.strictObject({
+  transport: MailTransportSchema,
+  /** Sites where the caller manages leads (lead:manage). */
+  sites: z.array(LeadNotificationSiteSettingsSchema),
+});
+export type LeadNotificationSettingsResponse = z.infer<
+  typeof LeadNotificationSettingsResponseSchema
+>;
+
+/** Save one site's settings. Recipients are staff user ids with lead:read on that site. */
+export const LeadNotificationSettingsInputSchema = z
+  .strictObject({
+    version: z.number().int().min(0),
+    enabled: z.boolean(),
+    recipientUserIds: z.array(UuidSchema).max(LEAD_NOTIFICATION_RECIPIENTS_MAX),
+  })
+  .refine(
+    (v) =>
+      new Set(v.recipientUserIds.map((id) => id.toLowerCase())).size === v.recipientUserIds.length,
+    { message: "duplicate recipient", path: ["recipientUserIds"] },
+  )
+  .refine((v) => !v.enabled || v.recipientUserIds.length > 0, {
+    message: "an enabled notification needs at least one recipient",
+    path: ["recipientUserIds"],
+  });
+export type LeadNotificationSettingsInput = z.input<typeof LeadNotificationSettingsInputSchema>;
+
+export const LeadNotificationSaveResponseSchema = z.strictObject({
+  site: LeadNotificationSiteSettingsSchema,
+});
+export type LeadNotificationSaveResponse = z.infer<typeof LeadNotificationSaveResponseSchema>;
