@@ -78,6 +78,15 @@ export class StaffAccess {
   }
 
   /**
+   * DP-227: why a permission is refused (`mfa_required` = held, but the session's MFA step-up is
+   * not fresh), so a caller can ask for the step-up instead of answering a plain 403.
+   */
+  refusal(permission: string, target: Target): string | null {
+    const d = decide(this.snapshot, permission, target, this.now);
+    return d.allowed ? null : d.reason;
+  }
+
+  /**
    * DP-172: every permission the user's active grants carry, platform-wide or on any site
    * (no step-up or module gate: what the user holds, not what a request may use right now).
    */
