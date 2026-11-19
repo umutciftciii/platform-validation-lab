@@ -30,7 +30,7 @@ import { PERMISSION_BY_KEY, ROLE_BY_KEY } from "../catalog.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import type { Db } from "../db.js";
 import { leadAssigneesBySite, staffNames, type LeadStaffUser } from "../lead-assignees.js";
-import { inStaffContext } from "../iam-context.js";
+import { inStaffContext, notificationCandidates } from "../iam-context.js";
 import { inLeadContext } from "../lead-data.js";
 import { ApiError } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
@@ -186,6 +186,34 @@ export class StaffAccess {
   /** DP-041: staff who may be assigned the leads of each site (lead:manage there). */
   leadAssignees(siteIds: readonly string[]): Promise<Map<string, LeadStaffUser[]>> {
     return inStaffContext(this.prisma, this.sessionToken, (tx) => leadAssigneesBySite(tx, siteIds));
+  }
+
+  /**
+   * DP-221: staff who may receive the contact-form notifications of each given site (lead:read
+   * there), only for sites where this session's user holds lead:manage. Sorted by name.
+   */
+  notificationCandidates(siteIds: readonly string[]): Promise<Map<string, LeadStaffUser[]>> {
+    return inStaffContext(this.prisma, this.sessionToken, async (tx) => {
+      const out = new Map<string, LeadStaffUser[]>(siteIds.map((id) => [id, []]));
+      if (siteIds.length === 0) return out;
+      const pairs = await notificationCandidates(tx, siteIds);
+      const users = await tx.user.findMany({
+        where: { id: { in: [...new Set(pairs.map((p) => p.user_id))] } },
+        select: { id: true, email: true, displayName: true },
+      });
+      const byId = new Map(users.map((u) => [u.id, u]));
+      for (const p of pairs) {
+        const u = byId.get(p.user_id);
+        const list = out.get(p.site_id);
+        if (u && list && !list.some((x) => x.id === u.id)) {
+          list.push({ id: u.id, displayName: u.displayName?.trim() || u.email, email: u.email });
+        }
+      }
+      for (const list of out.values()) {
+        list.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      }
+      return out;
+    });
   }
 
   /** DP-041: display names of staff users (lead history actors and assignees). */

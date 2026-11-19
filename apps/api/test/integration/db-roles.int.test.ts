@@ -514,6 +514,10 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "iam_rls_user_platform", owner: "dp_owner", lead: false },
       { f: "iam_rls_user_sites", owner: "dp_owner", lead: false },
       { f: "iam_system_owner_id", owner: "dp_owner", lead: false },
+      // DP-221: (site, user) ids of possible notification recipients (lead:manage sessions
+      // only); which of given user ids read a site's leads (ids in, ids out).
+      { f: "leads_notification_candidates", owner: "dp_owner", lead: false },
+      { f: "leads_notification_eligible", owner: "dp_owner", lead: false },
       // Counts only (DP-096 dry-run report); sites only (the staff context).
       { f: "leads_retention_plan", owner: "dp_owner", lead: true },
       // DP-125: (site, user) ids of possible lead assignees.
