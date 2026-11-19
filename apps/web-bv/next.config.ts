@@ -8,6 +8,16 @@ const nextConfig: NextConfig = {
     // DP-084: no persistent Turbopack dev cache, see apps/admin/next.config.ts (next dev 16.4
     // reload loop, vercel/next.js#100267). Dev only.
     turbopackFileSystemCacheForDev: false,
+    // DP-176: dev only, as in apps/admin (DP-181). With the default (true), `next dev` 16.4.5 keeps
+    // the React debug channel of every HTML response in a module-level map until a browser opens
+    // the HMR socket for that response (server/dev/debug-channel.js; upstream TODO: "clean up after
+    // a timeout ... when CURL'ing the page"). Requests without a browser (smoke, readiness, redirect
+    // and SEO checks, crawlers) never connect, so each one stayed in memory for good: measured
+    // ~0.2-0.5 MiB per page render, never returned when idle (600 × 404: +136 MiB external, +84 MiB
+    // after idle), which pushed DEV web-bv to its 2304m limit over repeated checks. With false the
+    // debug info is sent inline in the RSC payload; production builds never use the channel.
+    // Remove once a Next release cleans the map up (DP-115).
+    reactDebugChannel: false,
   },
   // CMS S2 (DP-134): the home page is "/" now, filled from the CMS. The former review routes of
   // the prototype rendered the same content from code; they point at the real page instead, so
