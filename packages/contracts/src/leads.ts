@@ -938,6 +938,18 @@ export const LEAD_EXPORT_COLUMNS = [
   "Products / documents",
 ] as const;
 
+/**
+ * DP-229: the cell separator of the file, query parameter `separator` of LEAD_EXPORT_PATH. Excel
+ * with a Turkish or Dutch locale splits on `;` (there the comma is the decimal sign), so `;` is the
+ * default; `,` is the RFC 4180 separator for other tools and English locales. Any other value,
+ * an empty one included, is a 400 (`separator` / `invalid`).
+ */
+export const LEAD_EXPORT_SEPARATORS = [";", ","] as const;
+export const LeadExportSeparatorSchema = z.enum(LEAD_EXPORT_SEPARATORS);
+export type LeadExportSeparator = z.infer<typeof LeadExportSeparatorSchema>;
+export const LEAD_EXPORT_DEFAULT_SEPARATOR: LeadExportSeparator = ";";
+export const LEAD_EXPORT_SEPARATOR_PARAM = "separator";
+
 /** A calendar day `YYYY-MM-DD` of the date filters (Europe/Amsterdam, inclusive). */
 export const LeadDayFilterSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 

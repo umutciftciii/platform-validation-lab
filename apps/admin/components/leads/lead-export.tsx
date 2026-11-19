@@ -5,9 +5,18 @@
  * (export summary, lead:read); the file comes from the API through the same-origin proxy
  * (lead:export with its MFA step-up). A refused or broken download shows the real reason (HTTP
  * status, error code, request id); an empty result is said plainly and nothing is downloaded.
+ *
+ * DP-229: the cell separator is chosen before the download, semicolon by default (Excel with Dutch
+ * or Turkish settings), comma as the alternative. It is not part of the filter form, so changing it
+ * never reloads the list; the count and the filters stay as they are.
  */
 import { useId, useState, type FormEvent } from "react";
-import { downloadLeadExport } from "../../lib/leads-client";
+import {
+  LEAD_EXPORT_DEFAULT_SEPARATOR,
+  LeadExportSeparatorSchema,
+  type LeadExportSeparator,
+} from "@dream/contracts";
+import { downloadLeadExport, EXPORT_SEPARATOR_OPTIONS } from "../../lib/leads-client";
 import { exportSummaryText, leadCount } from "../../lib/leads-view";
 import { stepUp } from "../../lib/staff-client";
 import { FIELD } from "../catalog/parts";
@@ -29,6 +38,11 @@ export function LeadExport({
   filtered: boolean;
 }) {
   const codeId = useId();
+  const separatorId = useId();
+  const separatorHintId = useId();
+  const [separator, setSeparator] = useState<LeadExportSeparator>(LEAD_EXPORT_DEFAULT_SEPARATOR);
+  const separatorOption =
+    EXPORT_SEPARATOR_OPTIONS.find((o) => o.value === separator) ?? EXPORT_SEPARATOR_OPTIONS[0];
   const [busy, setBusy] = useState(false);
   const [needCode, setNeedCode] = useState(false);
   const [code, setCode] = useState("");
@@ -40,7 +54,7 @@ export function LeadExport({
     setBusy(true);
     setError(null);
     setDone(null);
-    const res = await downloadLeadExport(query);
+    const res = await downloadLeadExport(query, separator);
     setBusy(false);
     if (!res.ok) {
       if (res.stepUp) {
@@ -87,21 +101,49 @@ export function LeadExport({
         <p className="min-w-0 text-sm text-ink-2" aria-live="polite">
           <span>{exportSummaryText(count, maxRows, filtered)}</span>
         </p>
-        <button
-          type="button"
-          className={cx(buttonStyles.secondary, "shrink-0 self-start sm:self-auto")}
-          disabled={!exportable || busy || needCode}
-          onClick={() => void run()}
-          title={
-            canExport
-              ? "Download the filtered leads as a CSV file"
-              : "Needs the lead export permission"
-          }
-        >
-          {busy ? <Spinner key="busy" /> : <Icon key="idle" name="download" size={16} />}
-          <span>{busy ? "Exporting…" : "Export CSV"}</span>
-        </button>
+        <div className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 sm:flex sm:w-auto sm:shrink-0">
+          <label htmlFor={separatorId} className="shrink-0 text-sm font-medium text-ink">
+            <span>Separator</span>
+          </label>
+          <select
+            id={separatorId}
+            className={cx(FIELD, "sm:w-44")}
+            value={separator}
+            disabled={busy}
+            aria-describedby={separatorHintId}
+            onChange={(e) => {
+              const next = LeadExportSeparatorSchema.safeParse(e.target.value);
+              if (next.success) setSeparator(next.data);
+            }}
+          >
+            {EXPORT_SEPARATOR_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={cx(
+              buttonStyles.secondary,
+              "col-span-2 justify-center sm:col-span-1 sm:shrink-0",
+            )}
+            disabled={!exportable || busy || needCode}
+            onClick={() => void run()}
+            title={
+              canExport
+                ? "Download the filtered leads as a CSV file"
+                : "Needs the lead export permission"
+            }
+          >
+            {busy ? <Spinner key="busy" /> : <Icon key="idle" name="download" size={16} />}
+            <span>{busy ? "Exporting…" : "Export CSV"}</span>
+          </button>
+        </div>
       </div>
+      <p id={separatorHintId} className="text-xs text-ink-3">
+        <span>{separatorOption?.hint}</span>
+      </p>
       {canExport ? null : (
         <p key="no-permission" className="text-xs text-ink-3">
           Exporting needs the lead export permission (customer-data officer or platform
