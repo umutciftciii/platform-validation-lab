@@ -144,6 +144,8 @@ model User {
   leadActivities              LeadActivity[]               @relation("LeadActivityActor")
   leadAssignmentsFrom         LeadActivity[]               @relation("LeadActivityFromAssignee")
   leadAssignmentsTo           LeadActivity[]               @relation("LeadActivityToAssignee")
+  /// DP-221: notification settings this staff user saved last.
+  leadNotificationSettings    LeadNotificationSetting[]    @relation("LeadNotificationSettingUpdatedBy")
   /// CMS S1 (DP-015, ADR-020): pages this user created and last saved.
   cmsPagesCreated             CmsPage[]                    @relation("CmsPageCreatedBy")
   cmsPagesUpdated             CmsPage[]                    @relation("CmsPageUpdatedBy")
@@ -194,6 +196,8 @@ model Site {
   leadDocumentRequests       LeadDocumentRequest[]
   // DP-151: contact-form messages to this site.
   leadContactMessages        LeadContactMessage[]
+  leadNotifications          LeadNotification[]
+  leadNotificationSetting    LeadNotificationSetting?
   documentGrants             DocumentDownloadGrant[]
   leadDocumentDownloads      LeadDocumentDownload[]
   // DP-041 (ADR-019): sales activity on this site's leads.
@@ -1326,6 +1330,9 @@ model Lead {
   country            String             @db.Char(2)
   /// The e-mail domain is a known free-mail provider (flag for sales; accepted, ADR-016 D1).
   freeMailDomain     Boolean            @default(false)
+  /// DP-221 (ADR-026 D2): the channel of the first contact. Set when the row is created, never
+  /// changed (leads_lead_guard). The document form relies on the default.
+  source             LeadSource         @default(DOCUMENT_REQUEST)
   /// When marketing consent was last given; a later unticked form never clears it (D2).
   marketingConsentAt DateTime?          @db.Timestamptz(3)
   requestCount       Int                @default(0)
@@ -1356,6 +1363,7 @@ model Lead {
   contactMessages LeadContactMessage[]
   assignedTo      User?                 @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
   activities      LeadActivity[]
+  notifications   LeadNotification[]
 
   @@unique([siteId, email])
   @@index([siteId, lastRequestAt])
@@ -1364,6 +1372,12 @@ model Lead {
 }
 
 /// DP-041 (ADR-019): where a lead is in the sales workflow.
+/// DP-221 (ADR-026 D2): how a lead first reached us.
+enum LeadSource {
+  DOCUMENT_REQUEST
+  CONTACT_FORM
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -1497,11 +1511,64 @@ model LeadContactMessage {
   createdAt            DateTime  @default(now()) @db.Timestamptz(3)
   redactedAt           DateTime? @db.Timestamptz(3)
 
-  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict)
-  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lead         Lead              @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  site         Site              @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  notification LeadNotification?
 
   @@index([siteId, createdAt])
   @@index([leadId, createdAt])
+}
+
+/// DP-221 (ADR-026 D4): the staff e-mail notification of one contact-form message (outbox).
+/// Written in the same transaction as the message, sent afterwards by the API's notification
+/// sender with a bounded number of retries, so a mail failure never loses or delays the CRM
+/// record. Holds ids and delivery state only: no address, no name, no message text, and never a
+/// mail server's reply (`reason` is a fixed code).
+model LeadNotification {
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  siteId           String                 @db.Uuid
+  leadId           String                 @db.Uuid
+  contactMessageId String                 @unique @db.Uuid
+  status           LeadNotificationStatus @default(PENDING)
+  attempts         Int                    @default(0)
+  nextAttemptAt    DateTime               @default(now()) @db.Timestamptz(3)
+  /// A sender holds the row until then (claim; another sender skips it).
+  lockedUntil      DateTime?              @db.Timestamptz(3)
+  reason           String?                @db.VarChar(40)
+  recipientCount   Int                    @default(0)
+  sentAt           DateTime?              @db.Timestamptz(3)
+  createdAt        DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime               @default(now()) @db.Timestamptz(3)
+
+  site           Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lead           Lead               @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  contactMessage LeadContactMessage @relation(fields: [contactMessageId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([siteId, createdAt])
+}
+
+enum LeadNotificationStatus {
+  PENDING
+  SENT
+  SKIPPED
+  FAILED
+}
+
+/// DP-221 (ADR-026 D3): who on a site's staff is told about new contact-form messages. Changed by
+/// staff with lead:manage on the site (row-level security); the recipients are staff users who
+/// read the site's leads, checked again when each e-mail is sent.
+model LeadNotificationSetting {
+  siteId           String    @id @db.Uuid
+  enabled          Boolean   @default(false)
+  recipientUserIds String[]  @db.Uuid
+  version          Int       @default(1)
+  updatedById      String?   @db.Uuid
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  site      Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  updatedBy User? @relation("LeadNotificationSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
 }
 
 /// Short-lived permission to download the file of one request (15 minutes, at most 3 times).

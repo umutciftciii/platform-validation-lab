@@ -14,6 +14,10 @@ import {
   CHANNEL_LABEL,
   countryName,
   DOC_TYPE_LABEL,
+  NOTIFICATION_LABEL,
+  NOTIFICATION_REASON,
+  NOTIFICATION_TONE,
+  SOURCE_LABEL,
   STATUS_LABEL,
   STATUS_TONE,
 } from "../../../../lib/leads-view";
@@ -195,6 +199,9 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           <span className="flex flex-wrap items-center gap-2">
             <StatusPill tone={STATUS_TONE[lead.status]}>{STATUS_LABEL[lead.status]}</StatusPill>
             <StatusPill tone="neutral">{SITE_SHORT[lead.siteKey]}</StatusPill>
+            <StatusPill tone={lead.source === "CONTACT_FORM" ? "petrol" : "neutral"}>
+              Source: {SOURCE_LABEL[lead.source]}
+            </StatusPill>
             {lead.anonymisedAt ? (
               <StatusPill tone="neutral">
                 Anonymised {DATE.format(new Date(lead.anonymisedAt))}
@@ -303,7 +310,12 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <p className="font-medium text-ink">
                     {m.redactedAt ? "Message cleared" : (m.subject ?? "No subject")}
                   </p>
-                  <p className="text-sm tabular-nums text-ink-3">
+                  <p className="flex flex-wrap items-center gap-2 text-sm tabular-nums text-ink-3">
+                    {m.notification ? (
+                      <StatusPill tone={NOTIFICATION_TONE[m.notification.status]}>
+                        {NOTIFICATION_LABEL[m.notification.status]}
+                      </StatusPill>
+                    ) : null}
                     {DATE.format(new Date(m.createdAt))}
                   </p>
                 </div>
@@ -332,6 +344,33 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                       ) : null}
                     </dd>
                   </div>
+                  {m.notification ? (
+                    <div className="sm:col-span-2">
+                      <dt className="text-ink-3">Staff e-mail</dt>
+                      <dd className="text-ink-2">
+                        {m.notification.status === "SENT" && m.notification.sentAt
+                          ? `Sent to ${m.notification.recipientCount} ${
+                              m.notification.recipientCount === 1 ? "person" : "people"
+                            } on ${DATE.format(new Date(m.notification.sentAt))}`
+                          : m.notification.status === "PENDING"
+                            ? m.notification.attempts > 0
+                              ? `Waiting to retry (attempt ${m.notification.attempts} failed: ${
+                                  NOTIFICATION_REASON[m.notification.reason ?? ""] ??
+                                  m.notification.reason
+                                })`
+                              : "Waiting to be sent"
+                            : `${NOTIFICATION_LABEL[m.notification.status]}: ${
+                                NOTIFICATION_REASON[m.notification.reason ?? ""] ??
+                                m.notification.reason ??
+                                "unknown reason"
+                              }${
+                                m.notification.status === "FAILED"
+                                  ? ` after ${m.notification.attempts} attempt${m.notification.attempts === 1 ? "" : "s"}`
+                                  : ""
+                              }. The message itself is stored here.`}
+                      </dd>
+                    </div>
+                  ) : null}
                   <div>
                     <dt className="text-ink-3">Privacy notice shown</dt>
                     <dd className="text-ink-2">

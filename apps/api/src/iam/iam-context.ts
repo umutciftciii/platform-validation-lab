@@ -167,6 +167,35 @@ export function assignableStaff(
     FROM leads_rls_assignable_staff(${[...siteIds]}::uuid[])`;
 }
 
+/**
+ * DP-221 (ADR-026 D3): staff who may be put on the contact-form notification list of the given
+ * sites (lead:read there), answered only for the sites where the session's user holds
+ * lead:manage. Run in the caller's staff context (`inStaffContext`). Ids only.
+ */
+export function notificationCandidates(
+  tx: Db,
+  siteIds: readonly string[],
+): Promise<{ site_id: string; user_id: string }[]> {
+  return tx.$queryRaw<{ site_id: string; user_id: string }[]>`
+    SELECT site_id::text AS site_id, user_id::text AS user_id
+    FROM leads_notification_candidates(${[...siteIds]}::uuid[])`;
+}
+
+/**
+ * DP-221: which of the given staff users read the leads of a site now (lead:read). Needs no
+ * session: the notification sender asks it before every e-mail. Ids in, ids out.
+ */
+export async function notificationEligible(
+  db: Db,
+  siteId: string,
+  userIds: readonly string[],
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const rows = await db.$queryRaw<{ ids: string[] | null }[]>`
+    SELECT leads_notification_eligible(${siteId}::uuid, ${[...userIds]}::uuid[])::text[] AS ids`;
+  return rows[0]?.ids ?? [];
+}
+
 /** DP-077 legacy sweep (K3), counts only. */
 export async function customerDataSweep(
   db: Db,

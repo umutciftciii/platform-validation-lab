@@ -202,6 +202,9 @@ services:
       DP_ALLOWED_ORIGINS_WEB_CORPORATE: http://localhost:3111,http://corporate.localhost:3111
       # DP-119: set DEV_DP_ADMIN_BASE_URL=https://admin.localhost:3114 once the DEV CA is trusted.
       DP_ADMIN_BASE_URL: ${DEV_DP_ADMIN_BASE_URL:-http://admin.localhost:3112}
+      # DP-221 (ADR-026 D5): contact-form notification e-mails stay inside the API (capture);
+      # a local stack can never send real e-mail (the API refuses smtp with DP_DEPLOY_ENV=local).
+      DP_MAIL_TRANSPORT: capture
       # PM-2: product images on the DEV media volume (filesystem adapter).
       DP_MEDIA_STORAGE: filesystem
       DP_MEDIA_DIR: /data/media

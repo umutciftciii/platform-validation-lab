@@ -12,6 +12,13 @@
  *
  * The message moves the lead's `lastRequestAt` (the retention clock starts at the last contact,
  * as the notice says); `requestCount` keeps counting document requests only.
+ *
+ * DP-221 (ADR-026): a lead this form creates has the source CONTACT_FORM (an existing lead keeps
+ * its own). The same transaction writes a PENDING staff notification (the outbox the
+ * notification sender delivers afterwards), so the visitor's 201 means the message is in the CRM
+ * whatever happens to the e-mail. The same message (subject and text) from the same e-mail within
+ * DUPLICATE_WINDOW_MS is a resend (double click, reload, retry after a lost answer): it answers
+ * 201 again without a second message or notification, audited as a duplicate.
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
@@ -29,6 +36,9 @@ import { PUBLIC_RATE_LIMITS, PublicRateLimitService, ipSubject } from "../iam/pu
 import { writeAudit } from "../iam/staff/audit-writer.js";
 import type { Db } from "../iam/db.js";
 import { CONTACT_NOTICE_SHA256, contactNoticeVersionProblem } from "./consent.js";
+
+/** A resend of the same message within this window is not stored twice (DP-221). */
+export const DUPLICATE_WINDOW_MS = 10 * 60_000;
 
 function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "P2002";
@@ -78,6 +88,34 @@ export class ContactMessagesService {
           where: { siteId: site.siteId, email: input.email, anonymisedAt: null },
           select: { id: true },
         });
+        // DP-221: the same message again shortly after (double submit, retry): already stored.
+        if (existing) {
+          const same = await tx.leadContactMessage.findFirst({
+            where: {
+              leadId: existing.id,
+              siteId: site.siteId,
+              subject: input.subject,
+              message: input.message,
+              createdAt: { gte: new Date(now.getTime() - DUPLICATE_WINDOW_MS) },
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true },
+          });
+          if (same) {
+            await writeAudit(tx as unknown as Db, {
+              actorType: "SYSTEM",
+              action: "leads.contact_message_duplicate",
+              resourceType: "lead_contact_message",
+              resourceId: same.id,
+              scopeType: "SITE",
+              siteId: site.siteId,
+              outcome: "SUCCESS",
+              metadata: { leadId: existing.id },
+              requestId: ctx.requestId,
+            });
+            return;
+          }
+        }
         const details = {
           fullName: input.fullName,
           company: input.company,
@@ -96,6 +134,7 @@ export class ContactMessagesService {
                 ...details,
                 siteId: site.siteId,
                 email: input.email,
+                source: "CONTACT_FORM",
                 requestCount: 0,
                 firstRequestAt: now,
               },
@@ -119,6 +158,11 @@ export class ContactMessagesService {
           },
           select: { id: true },
         });
+        // DP-221: the staff notification, delivered after commit by LeadNotificationSender.
+        const notification = await tx.leadNotification.create({
+          data: { siteId: site.siteId, leadId: lead.id, contactMessageId: message.id },
+          select: { id: true },
+        });
         await writeAudit(tx as unknown as Db, {
           actorType: "SYSTEM",
           action: "leads.contact_message_created",
@@ -132,7 +176,7 @@ export class ContactMessagesService {
             leadId: lead.id,
             newLead: !existing,
             hasPhone: input.phone !== null,
-            hasSubject: input.subject !== null,
+            notificationId: notification.id,
           },
           requestId: ctx.requestId,
         });

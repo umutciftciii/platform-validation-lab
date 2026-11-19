@@ -83,7 +83,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         href: "/leads",
         label: "Leads",
         icon: "inbox",
-        summary: "Document requests from the public sites (customer data, audited).",
+        summary:
+          "Contact-form messages and document requests from the public sites (customer data, audited).",
         ready: true,
       },
       {

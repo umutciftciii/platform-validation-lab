@@ -127,6 +127,9 @@ services:
       DP_ALLOWED_ORIGINS_WEB_BV: http://localhost:3110,http://bv.localhost:3110
       DP_ALLOWED_ORIGINS_WEB_CORPORATE: http://localhost:3111,http://corporate.localhost:3111
       DP_ADMIN_BASE_URL: http://admin.localhost:3112
+      # DP-221 (ADR-026 D5): contact-form notification e-mails stay inside the API (capture);
+      # a local stack can never send real e-mail (the API refuses smtp with DP_DEPLOY_ENV=local).
+      DP_MAIL_TRANSPORT: capture
       # PM-2: product images on a persistent named volume (local stack). Hosted environments
       # use DP_MEDIA_STORAGE=s3 with DP_S3_* (the API refuses filesystem storage there).
       DP_MEDIA_STORAGE: filesystem
