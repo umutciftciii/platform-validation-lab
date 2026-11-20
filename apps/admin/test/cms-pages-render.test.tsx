@@ -294,6 +294,121 @@ describe("/content/[id] renders on the server", () => {
     expect(html).not.toContain("redirects permanently");
   });
 
+  it("ML-2: shows the language tabs, the translation state and the create action of a missing language", async () => {
+    const locales = [
+      { locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+      { locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+    ];
+    const bv = { ...site("BV", BV), locales };
+    const NL = "0190f2a1-0000-7000-8000-000000000104";
+    const tr = (over: Record<string, unknown>) => ({
+      title: null,
+      path: null,
+      isSource: false,
+      outdated: false,
+      sourceRevisionNumber: null,
+      sourceLatestRevisionNumber: null,
+      ...over,
+    });
+    // English source without a Dutch page yet.
+    reads.set(`/api/v1/admin/cms/pages/${ABOUT}`, {
+      page: detail(aboutPage, {
+        sections: [{ id: "sec-0001aa", type: "hero", title: "Who we are" }],
+      }),
+      site: bv,
+      translations: [
+        tr({ locale: "en", pageId: ABOUT, isSource: true, state: "draft" }),
+        tr({ locale: "nl", pageId: null, state: "missing" }),
+      ],
+    });
+    let html = renderToStaticMarkup(
+      await ContentPageEditor({ params: Promise.resolve({ id: ABOUT }) } as never),
+    );
+    expect(html).toContain('aria-label="Page language"');
+    expect(html).toContain("English (en)");
+    expect(html).toContain("Dutch (nl)");
+    expect(html).toContain("Not translated");
+    expect(html).toContain("Create Dutch (nl) translation");
+    expect(html).toContain("Not public on the site yet: Dutch (nl)");
+    // A Dutch translation that is out of date, with a structure warning.
+    reads.set(`/api/v1/admin/cms/pages/${NL}`, {
+      page: {
+        ...detail(
+          { ...aboutPage, id: NL, locale: "nl", title: "Over ons (fixture)" },
+          {
+            sections: [],
+          },
+        ),
+        structureWarnings: ["sections"],
+      },
+      site: bv,
+      translations: [
+        tr({ locale: "en", pageId: ABOUT, isSource: true, state: "published" }),
+        tr({
+          locale: "nl",
+          pageId: NL,
+          state: "outdated",
+          outdated: true,
+          sourceRevisionNumber: 1,
+          sourceLatestRevisionNumber: 2,
+        }),
+      ],
+    });
+    reads.set(`/api/v1/admin/cms/pages/${NL}/history`, { revisions: [] });
+    html = renderToStaticMarkup(
+      await ContentPageEditor({ params: Promise.resolve({ id: NL }) } as never),
+    );
+    expect(html).toContain("Published, out of date");
+    expect(html).toContain("this translation was made from revision 1");
+    expect(html).toContain("Mark as up to date with revision 2");
+    expect(html).toContain("The structure differs from the source page (sections)");
+    expect(html).not.toContain("Create Dutch (nl) translation");
+  });
+
+  it("ML-2: the page list shows one language at a time and the Dutch state of each page", async () => {
+    const locales = [
+      { locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+      { locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+    ];
+    const bv = { ...site("BV", BV), locales };
+    reads.set("/api/v1/admin/cms/context", { sites: [bv, site("CORPORATE", COM)] });
+    reads.set(`/api/v1/admin/cms/sites/${BV}/pages`, {
+      site: bv,
+      items: [
+        {
+          ...aboutPage,
+          translations: [
+            {
+              locale: "nl",
+              pageId: null,
+              title: null,
+              path: null,
+              isSource: false,
+              state: "missing",
+              outdated: false,
+              sourceRevisionNumber: null,
+              sourceLatestRevisionNumber: null,
+            },
+          ],
+        },
+      ],
+    });
+    reads.set(`/api/v1/admin/cms/sites/${BV}/pages?locale=nl`, { site: bv, items: [] });
+    let html = renderToStaticMarkup(
+      await ContentPage({ searchParams: Promise.resolve({ site: "bv" }) } as never),
+    );
+    expect(html).toContain('aria-label="Content language"');
+    expect(html).toContain("Dutch (nl) · not public");
+    expect(html).toContain("NL: Not translated");
+    expect(html).toContain('id="site-routes"');
+    html = renderToStaticMarkup(
+      await ContentPage({ searchParams: Promise.resolve({ site: "bv", locale: "nl" }) } as never),
+    );
+    expect(html).toContain("No CMS pages on this site yet");
+    // The registry of pages in code belongs to the default language.
+    expect(html).not.toContain('id="site-routes"');
+  });
+
   it("answers 404 for a page the API does not return", async () => {
     await expect(
       ContentPageEditor({

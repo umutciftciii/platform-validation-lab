@@ -17,6 +17,7 @@ export * from "./admin/cms.js";
 export * from "./admin/cms-bv.js";
 export * from "./admin/cms-menu.js";
 export * from "./admin/cms-publication.js";
+export * from "./admin/cms-translation.js";
 export * from "./admin/seo-admin.js";
 export * from "./admin/seo-redirects.js";
 export * from "./leads.js";

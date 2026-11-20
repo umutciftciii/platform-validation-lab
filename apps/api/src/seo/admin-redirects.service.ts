@@ -30,6 +30,7 @@ import {
   SeoRedirectImportRequestSchema,
   SeoRedirectListQuerySchema,
   SeoRedirectUpdateRequestSchema,
+  cmsAddressLocale,
   parseCsvActive,
   parseCsvStatus,
   parseRedirectCsv,
@@ -51,6 +52,7 @@ import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
 import type { ScopedTx } from "../catalog/master.js";
 import { liveAddresses } from "./public-seo.service.js";
+import { siteLocalesOf } from "../cms/site-locales.js";
 import { lockSitePaths, redirectDbError } from "./redirects.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -221,6 +223,25 @@ export class AdminRedirectsService {
     return liveAddresses({ db: db as SiteScopedClient, siteId });
   }
 
+  /**
+   * ML-2: the language and stored path of a CMS address (`/nl/over-ons` → nl, `/over-ons`; an
+   * unprefixed address is the default language until ML-3), or null when no page can have it.
+   */
+  private static async pageKeys(
+    db: SiteScopedClient | ScopedTx,
+    siteId: string,
+    addresses: readonly string[],
+  ): Promise<{ address: string; locale: string; path: string }[]> {
+    const all = (await siteLocalesOf(db as SiteScopedClient, [siteId])).get(siteId) ?? [];
+    const def = all.find((l) => l.isDefault)?.locale;
+    if (!def) return [];
+    const tags = all.map((l) => l.locale);
+    return addresses.flatMap((address) => {
+      const hit = cmsAddressLocale(address, tags, def);
+      return hit ? [{ address, ...hit }] : [];
+    });
+  }
+
   /** Whether a page or product that is not live uses the address (it would take it back). */
   private static async draftAt(db: SiteScopedClient | ScopedTx, siteId: string, path: string) {
     const d = db as SiteScopedClient;
@@ -228,7 +249,9 @@ export class AdminRedirectsService {
       const slug = path.slice("/products/".length);
       return (await d.product.count({ where: { slug, status: { not: "ARCHIVED" } } })) > 0;
     }
-    return (await d.cmsPage.count({ where: { siteId, path } })) > 0;
+    const [key] = await AdminRedirectsService.pageKeys(db, siteId, [path]);
+    if (!key) return false;
+    return (await d.cmsPage.count({ where: { siteId, locale: key.locale, path: key.path } })) > 0;
   }
 
   /**
@@ -246,6 +269,8 @@ export class AdminRedirectsService {
       p.slice(prefix.length),
     );
     const pages = [...new Set(paths.filter((p) => !p.startsWith(prefix)))];
+    // ML-2: an address names a page of one language (prefix), so match (locale, path).
+    const keys = await AdminRedirectsService.pageKeys(db, siteId, pages);
     const [products, cms] = await Promise.all([
       slugs.length
         ? d.product.findMany({
@@ -253,13 +278,17 @@ export class AdminRedirectsService {
             select: { slug: true },
           })
         : [],
-      pages.length
-        ? d.cmsPage.findMany({ where: { siteId, path: { in: pages } }, select: { path: true } })
+      keys.length
+        ? d.cmsPage.findMany({
+            where: { siteId, path: { in: [...new Set(keys.map((k) => k.path))] } },
+            select: { path: true, locale: true },
+          })
         : [],
     ]);
+    const taken = new Set(cms.map((c) => `${c.locale}\u0000${c.path ?? ""}`));
     return new Set([
       ...products.map((p) => `${prefix}${p.slug}`),
-      ...cms.flatMap((c) => (c.path ? [c.path] : [])),
+      ...keys.filter((k) => taken.has(`${k.locale}\u0000${k.path}`)).map((k) => k.address),
     ]);
   }
 

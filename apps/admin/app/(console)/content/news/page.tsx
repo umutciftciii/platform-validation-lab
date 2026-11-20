@@ -7,6 +7,7 @@ import {
   type CmsPageSummary,
 } from "@dream/contracts";
 import { ContentTabs } from "../../../../components/cms/content-tabs";
+import { LanguageTabs } from "../../../../components/cms/language-tabs";
 import { pickCmsSite, publicationState } from "../../../../components/cms/parts";
 import { PageHeader, SiteSwitcher } from "../../../../components/catalog/parts";
 import { Icon } from "../../../../components/icons";
@@ -57,7 +58,14 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
   const { sites } = context.data;
   const site = pickCmsSite(sites, typeof params["site"] === "string" ? params["site"] : undefined);
   const sp = site.key.toLowerCase();
-  const list = await serverRead(`${CMS}/sites/${site.id}/pages`, CmsPageListResponseSchema);
+  // ML-2 (DP-074): the articles of one language (default: the site's default language).
+  const defaultLocale = site.locales.find((l) => l.isDefault)?.locale ?? site.locale;
+  const wanted = typeof params["locale"] === "string" ? params["locale"] : defaultLocale;
+  const locale = site.locales.some((l) => l.locale === wanted) ? wanted : defaultLocale;
+  const list = await serverRead(
+    `${CMS}/sites/${site.id}/pages${locale === defaultLocale ? "" : `?locale=${encodeURIComponent(locale)}`}`,
+    CmsPageListResponseSchema,
+  );
   const articles = list.ok
     ? list.data.items.filter(cmsIsArticle).sort((a, b) => sortKey(b).localeCompare(sortKey(a)))
     : [];
@@ -84,6 +92,12 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
       />
 
       <ContentTabs current="news" siteParam={sp} />
+
+      <LanguageTabs
+        site={site}
+        current={locale}
+        hrefFor={(l) => `/content/news?site=${sp}&locale=${l}`}
+      />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <SiteSwitcher

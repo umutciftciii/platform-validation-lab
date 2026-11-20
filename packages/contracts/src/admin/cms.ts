@@ -2,8 +2,8 @@
  * CMS page contracts (S1: DP-015 page and section model, ADR-020). The admin console and the API
  * share them.
  *
- * - A page belongs to one site and is stored in the site's default locale (one locale for now;
- *   DP-073 adds more).
+ * - A page belongs to one site and one of the site's languages (ML-2, ADR-028 D6): each language
+ *   is its own page, linked to the others by a translation group (cms-translation.ts).
  * - Three kinds share one table and one draft/SEO model:
  *     TEMPLATE  new pages built from the four ready-made section types below;
  *     DESIGN    the existing hand-designed pages: components and motion stay in code, the CMS
@@ -938,6 +938,37 @@ export const CmsPublicationSchema = z.object({
 });
 export type CmsPublication = z.infer<typeof CmsPublicationSchema>;
 
+// --- ML-2 (DP-074, ADR-028 D6): translation state (helpers in cms-translation.ts) --------------
+
+export const CMS_TRANSLATION_STATES = ["missing", "draft", "published", "outdated"] as const;
+export const CmsTranslationStateSchema = z.enum(CMS_TRANSLATION_STATES);
+export type CmsTranslationState = z.infer<typeof CmsTranslationStateSchema>;
+
+/** One language of a page's translation group. */
+export const CmsTranslationSchema = z.object({
+  locale: z.string(),
+  /** null: no page in this language yet ("missing"). */
+  pageId: UuidSchema.nullable(),
+  title: z.string().nullable(),
+  path: z.string().nullable(),
+  /** The group's source language (the site's default language). */
+  isSource: z.boolean(),
+  state: CmsTranslationStateSchema,
+  /**
+   * The source has a newer revision than the one this translation was made from (also for a
+   * draft; `state` is "outdated" only for a published translation).
+   */
+  outdated: z.boolean(),
+  /** Revision number of the source this translation was made from (null: unknown or source). */
+  sourceRevisionNumber: z.number().int().nullable(),
+  /** The source's newest revision number (null: the source was never published). */
+  sourceLatestRevisionNumber: z.number().int().nullable(),
+});
+export type CmsTranslation = z.infer<typeof CmsTranslationSchema>;
+
+export const CMS_STRUCTURE_WARNINGS = ["sections", "lists", "images", "links"] as const;
+export type CmsStructureWarning = (typeof CMS_STRUCTURE_WARNINGS)[number];
+
 export const CmsPageSummarySchema = z.object({
   id: UuidSchema,
   siteId: UuidSchema,
@@ -951,6 +982,13 @@ export const CmsPageSummarySchema = z.object({
   updatedAt: IsoDate,
   updatedBy: UserRefSchema,
   publication: CmsPublicationSchema.nullable(),
+  /** ML-2: the page's translation group (absent in responses of an older API). */
+  translationGroupId: UuidSchema.optional(),
+  /**
+   * ML-2: in a list of the source language, the state of the page in each other enabled language
+   * of the site (empty for pages of other languages and for an older API).
+   */
+  translations: z.array(CmsTranslationSchema).default([]),
 });
 export type CmsPageSummary = z.infer<typeof CmsPageSummarySchema>;
 
@@ -974,8 +1012,21 @@ export const CmsPageSchema = CmsPageSummarySchema.extend({
   content: z.record(z.string(), z.unknown()),
   createdAt: IsoDate,
   createdBy: UserRefSchema,
+  /**
+   * ML-2 (ADR-028 D6): the structure of a translation differs from its source page (sections,
+   * list sizes, images or link targets). A warning before publishing, never a refusal.
+   */
+  structureWarnings: z.array(z.enum(CMS_STRUCTURE_WARNINGS)).default([]),
 });
 export type CmsPage = z.infer<typeof CmsPageSchema>;
 
-export const CmsPageResponseSchema = z.object({ page: CmsPageSchema, site: CmsSiteSchema });
+export const CmsPageResponseSchema = z.object({
+  page: CmsPageSchema,
+  site: CmsSiteSchema,
+  /**
+   * ML-2 (DP-074): every enabled language of the site for this page's translation group, the
+   * source (default) language first. Empty in responses of an older API.
+   */
+  translations: z.array(CmsTranslationSchema).default([]),
+});
 export type CmsPageResponse = z.infer<typeof CmsPageResponseSchema>;

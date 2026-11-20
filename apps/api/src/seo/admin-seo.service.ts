@@ -21,7 +21,7 @@ import { StaffAccessService } from "../iam/staff/access.js";
 import { SEO_SELECT } from "../cms/cms-content.js";
 import { LISTING_SEO_SELECT } from "../catalog/listing-seo.js";
 import { ApiError } from "../iam/http/api-error.js";
-import { kindOf } from "./public-seo.service.js";
+import { kindOf, siteDefaultLocale } from "./public-seo.service.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_SITE = "00000000-0000-0000-0000-000000000000";
@@ -57,6 +57,8 @@ export class AdminSeoService {
     const site = a.sites.find((s) => s.id === siteId);
     if (!site) throw new ApiError("NOT_FOUND");
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    // ML-2: the overview shows the site's default language (per-language SEO: ML-5).
+    const locale = await siteDefaultLocale({ db, siteId });
     const items: SeoOverviewItem[] = [];
     let settings: SeoOverviewResponse["settings"] = null;
     let liveSettings: SeoOverviewResponse["liveSettings"] = null;
@@ -64,7 +66,7 @@ export class AdminSeoService {
     if (permissions.readPages) {
       const [pages, pubs] = await Promise.all([
         db.cmsPage.findMany({
-          where: { siteId },
+          where: { siteId, locale },
           select: {
             id: true,
             kind: true,
@@ -148,7 +150,7 @@ export class AdminSeoService {
       // The published defaults are public (the site serves them); a product editor sees them in
       // the previews without reading the CMS drafts.
       const page = await db.cmsPage.findFirst({
-        where: { siteId, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
+        where: { siteId, locale, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
         select: { id: true },
       });
       const pub = page

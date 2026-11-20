@@ -34,13 +34,21 @@ export function mapCmsDbError(error: unknown): never {
   if (redirect) throw redirect;
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "P2002" || /unique constraint/i.test(text)) {
-    const registry = text.includes("CmsPage_registry_siteId_templateKey_key");
+    // ML-2: the registry key is per site and language; a group holds one page per language.
+    const registry = text.includes("CmsPage_registry_siteId_locale_templateKey_key");
     if (registry) throw new ApiError("CONFLICT_STATE", [{ path: "key", rule: "already_imported" }]);
+    if (/CmsPage_translationGroupId_locale_key|translationGroupId.*locale/.test(text)) {
+      throw new ApiError("CONFLICT_STATE", [{ path: "locale", rule: "exists" }]);
+    }
     if (/CmsPageRevision_pageId_revisionNumber_key/.test(text)) {
       // Two publications of the same page at once: the second reloads.
       throw new ApiError("CONFLICT_STATE", [{ path: "version", rule: "stale" }]);
     }
     throw new ApiError("CONFLICT_STATE", [{ path: "slug", rule: "unique" }]);
+  }
+  // ML-2: the database rules of translation groups (normally prevented by the service).
+  if (/CmsPage_translation_(group|source)/.test(text)) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "translationGroupId", rule: "inconsistent" }]);
   }
   if (/CmsPage_(path_format|template_path)/.test(text)) {
     throw new ApiError("VALIDATION_FAILED", [{ path: "slug", rule: "reserved" }]);
