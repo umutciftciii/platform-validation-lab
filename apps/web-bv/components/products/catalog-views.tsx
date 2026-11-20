@@ -19,6 +19,9 @@ import {
 import { cardImage, categoryArt } from "@/components/products/catalog-visuals";
 import { CatalogNotice } from "@/components/products/catalog-shell";
 import { formatSpecValue } from "@/components/products/format";
+import { Rich } from "@/components/i18n/rich";
+import { dictionary, interpolate, plural } from "@/lib/i18n";
+import { DEFAULT_LOCALE, type RouteLocale } from "@/lib/locale-routing";
 import type { PublicCategory, PublicProduct, PublicProductSummary } from "@dream/contracts";
 
 /** Where the catalogue's links and images point (live site or preview). */
@@ -39,6 +42,7 @@ export function BrowseResults({
   result,
   links,
   badge,
+  locale = DEFAULT_LOCALE,
 }: {
   categories: PublicCategory[];
   params: BrowseParams;
@@ -46,33 +50,41 @@ export function BrowseResults({
   result: { items: PublicProductSummary[]; total: number; page: number; pages: number };
   links: CatalogLinks;
   badge?: (slug: string) => ReactNode;
+  /** ML-6: the language of the interface labels (the preview has none: English). */
+  locale?: RouteLocale;
 }) {
   const current = active.at(-1) ?? null;
+  const ui = dictionary(locale).catalogue;
   return (
     <div>
       {categories.length ? (
-        <CategoryStrip categories={categories} params={params} active={active} links={links} />
+        <CategoryStrip categories={categories} params={params} active={active} links={links} locale={locale} />
       ) : null}
-      <SearchBar params={params} links={links} />
+      <SearchBar params={params} links={links} locale={locale} />
       <p className="mt-4 text-sm text-steel" role="status">
-        {result.total === 1 ? "1 product" : `${result.total} products`}
-        {current ? ` in ${current.name}` : ""}
-        {params.q ? ` matching “${params.q}”` : ""}
+        {plural(locale, ui.count, result.total)}
+        {current ? interpolate(ui.inCategory, { category: current.name }) : ""}
+        {params.q ? interpolate(ui.matching, { q: params.q }) : ""}
       </p>
       {result.total === 0 ? (
         <div className="mt-6">
-          <CatalogNotice title="No products match">
-            Try another word or{" "}
-            <Link href={links.list({ category: params.category })} className="underline">
-              clear the search
-            </Link>
-            .
+          <CatalogNotice title={ui.noMatchTitle}>
+            <Rich
+              text={ui.noMatchText}
+              values={{
+                clear: (
+                  <Link href={links.list({ category: params.category })} className="underline">
+                    {ui.clearSearch}
+                  </Link>
+                ),
+              }}
+            />
           </CatalogNotice>
         </div>
       ) : (
         <>
-          <ProductGrid products={result.items} categories={categories} links={links} badge={badge} />
-          <Pager params={params} page={result.page} pages={result.pages} links={links} />
+          <ProductGrid products={result.items} categories={categories} links={links} badge={badge} locale={locale} />
+          <Pager params={params} page={result.page} pages={result.pages} links={links} locale={locale} />
         </>
       )}
     </div>
@@ -90,25 +102,28 @@ function CategoryStrip({
   params,
   active,
   links,
+  locale,
 }: {
   categories: PublicCategory[];
   params: BrowseParams;
   active: PublicCategory[];
   links: CatalogLinks;
+  locale: RouteLocale;
 }) {
   const activeSlugs = new Set(active.map((c) => c.slug));
   const rows = chipRows(categories, params.category);
-  const countLabel = (n: number) => (n === 1 ? "1 product" : `${n} products`);
+  const ui = dictionary(locale).catalogue;
+  const countLabel = (n: number) => plural(locale, ui.count, n);
   return (
-    <nav aria-label="Product categories" className="mb-8">
+    <nav aria-label={ui.categoriesNav} className="mb-8">
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">Categories</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">{ui.categoriesHeading}</h2>
         {params.category ? (
           <Link
             href={links.list({ q: params.q })}
             className="text-sm text-amber underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-amber"
           >
-            All products
+            {ui.allProducts}
           </Link>
         ) : null}
       </div>
@@ -121,7 +136,7 @@ function CategoryStrip({
               <Link
                 href={links.list({ category: c.slug, q: params.q })}
                 aria-current={params.category === c.slug ? "page" : undefined}
-                aria-label={`${c.name}, ${countLabel(c.count)}`}
+                aria-label={interpolate(ui.categoryCard, { name: c.name, count: countLabel(c.count) })}
                 title={c.name}
                 className={`flex h-full flex-col overflow-hidden rounded-xl border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber ${
                   on ? "border-amber/70 bg-amber/[0.06]" : "border-glass/10 bg-glass/[0.03] hover:border-amber/40"
@@ -159,10 +174,10 @@ function CategoryStrip({
         })}
       </ul>
       {rows.map((r) => (
-        <ul key={r.parent.slug} aria-label={`${r.parent.name} sub-categories`} className="mt-3 flex flex-wrap gap-2">
+        <ul key={r.parent.slug} aria-label={interpolate(ui.subcategories, { name: r.parent.name })} className="mt-3 flex flex-wrap gap-2">
           <li>
             <Chip href={links.list({ category: r.parent.slug, q: params.q })} on={params.category === r.parent.slug}>
-              All {r.parent.name}
+              {interpolate(ui.allInCategory, { name: r.parent.name })}
               <span className="font-mono text-xs text-steel">{r.parent.count}</span>
             </Chip>
           </li>
@@ -195,18 +210,19 @@ function Chip({ href, on, children }: { href: string; on: boolean; children: Rea
 }
 
 /** A plain GET form: works without JavaScript and keeps the chosen category. */
-function SearchBar({ params, links }: { params: BrowseParams; links: CatalogLinks }) {
+function SearchBar({ params, links, locale }: { params: BrowseParams; links: CatalogLinks; locale: RouteLocale }) {
+  const ui = dictionary(locale).catalogue;
   return (
     <form action={links.searchAction} method="get" role="search" className="flex gap-2">
       {params.category ? <input type="hidden" name="category" value={params.category} /> : null}
       <label className="min-w-0 flex-1">
-        <span className="sr-only">Search products</span>
+        <span className="sr-only">{ui.searchLabel}</span>
         <input
           type="search"
           name="q"
           defaultValue={params.q}
           maxLength={80}
-          placeholder="Search by name or code"
+          placeholder={ui.searchPlaceholder}
           className="h-11 w-full rounded-full border border-glass/15 bg-glass/[0.04] px-5 text-sm text-glass placeholder:text-steel/80 focus:border-amber focus:outline-none"
         />
       </label>
@@ -214,7 +230,7 @@ function SearchBar({ params, links }: { params: BrowseParams; links: CatalogLink
         type="submit"
         className="h-11 shrink-0 rounded-full bg-amber px-5 text-sm font-medium text-ink transition-colors hover:bg-amber/90"
       >
-        Search
+        {ui.searchButton}
       </button>
     </form>
   );
@@ -230,13 +246,16 @@ function ProductGrid({
   categories,
   links,
   badge,
+  locale,
 }: {
   products: PublicProductSummary[];
   categories: PublicCategory[];
   links: CatalogLinks;
   /** DP-173: an extra line on the card (the preview's review state); none on the live site. */
   badge?: (slug: string) => ReactNode;
+  locale: RouteLocale;
 }) {
+  const ui = dictionary(locale).catalogue;
   return (
     <ul className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-5 lg:grid-cols-2">
       {products.map((p) => {
@@ -298,14 +317,14 @@ function ProductGrid({
                   <p className="hidden text-sm leading-relaxed text-steel md:line-clamp-3">{p.summary}</p>
                 ) : null}
                 {p.hasTechnicalData || p.hasDocuments ? (
-                  <ul aria-label="Available content" className="mt-1 hidden flex-wrap gap-1.5 md:flex">
-                    {p.hasTechnicalData ? <Indicator>Technical data</Indicator> : null}
-                    {p.hasDocuments ? <Indicator>Documents</Indicator> : null}
+                  <ul aria-label={ui.availableContent} className="mt-1 hidden flex-wrap gap-1.5 md:flex">
+                    {p.hasTechnicalData ? <Indicator>{ui.technicalData}</Indicator> : null}
+                    {p.hasDocuments ? <Indicator>{ui.documents}</Indicator> : null}
                   </ul>
                 ) : null}
                 {badge ? badge(p.slug) : null}
                 <span aria-hidden="true" className="mt-auto hidden pt-2 text-sm font-medium text-amber md:block">
-                  View product →
+                  {ui.viewProduct} →
                 </span>
               </div>
             </Link>
@@ -325,21 +344,24 @@ function Pager({
   page,
   pages,
   links,
+  locale,
 }: {
   params: BrowseParams;
   page: number;
   pages: number;
   links: CatalogLinks;
+  locale: RouteLocale;
 }) {
   if (pages <= 1) return null;
+  const ui = dictionary(locale).catalogue;
   const href = (n: number) => links.list({ ...params, page: n });
   const btn = "inline-flex h-10 min-w-10 items-center justify-center rounded-full border px-3 text-sm transition-colors";
   return (
-    <nav aria-label="Pages" className="mt-10 flex flex-wrap items-center justify-center gap-2">
+    <nav aria-label={ui.pages} className="mt-10 flex flex-wrap items-center justify-center gap-2">
       {page > 1 ? (
         <Link href={href(page - 1)} className={`${btn} border-glass/15 text-glass hover:border-amber`} rel="prev">
           <span aria-hidden="true">←</span>
-          <span className="sr-only">Previous page</span>
+          <span className="sr-only">{ui.previousPage}</span>
         </Link>
       ) : null}
       {Array.from({ length: pages }, (_, i) => i + 1).map((n) => (
@@ -355,7 +377,7 @@ function Pager({
       {page < pages ? (
         <Link href={href(page + 1)} className={`${btn} border-glass/15 text-glass hover:border-amber`} rel="next">
           <span aria-hidden="true">→</span>
-          <span className="sr-only">Next page</span>
+          <span className="sr-only">{ui.nextPage}</span>
         </Link>
       ) : null}
     </nav>
@@ -374,6 +396,7 @@ export function ProductDetailView({
   enquiry = true,
   afterIntro,
   extras,
+  locale = DEFAULT_LOCALE,
 }: {
   p: PublicProduct;
   related: PublicProductSummary[];
@@ -381,7 +404,10 @@ export function ProductDetailView({
   enquiry?: boolean;
   afterIntro?: ReactNode;
   extras?: ReactNode;
+  /** ML-6: the language of the interface labels and number formats (the preview: English). */
+  locale?: RouteLocale;
 }) {
+  const ui = dictionary(locale).product;
   const [cover, ...gallery] = p.images;
   const spec = p.specs.filter((s) => s.basis !== "TYPICAL");
   const typical = p.specs.filter((s) => s.basis === "TYPICAL");
@@ -442,32 +468,26 @@ export function ProductDetailView({
                 href={links.contact}
                 className="inline-flex h-11 items-center rounded-full bg-amber px-6 text-sm font-medium text-ink transition-colors hover:bg-amber/90"
               >
-                Ask about this product
+                {ui.ask}
               </Link>
             </div>
           ) : null}
 
           <section aria-labelledby="specs" className="mt-12">
             <h2 id="specs" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
-              Technical data
+              {ui.technicalData}
             </h2>
             {spec.length || typical.length ? (
               <>
-                {spec.length ? <SpecTable title="Specification" note={null} specs={spec} /> : null}
+                {spec.length ? <SpecTable title={ui.specification} note={null} specs={spec} locale={locale} /> : null}
                 {typical.length ? (
-                  <SpecTable
-                    title="Typical values"
-                    note="Typical values are for information only; they are not specification limits."
-                    specs={typical}
-                  />
+                  <SpecTable title={ui.typicalValues} note={ui.typicalNote} specs={typical} locale={locale} />
                 ) : null}
               </>
             ) : (
               <div className="mt-3 rounded-2xl border border-glass/10 bg-glass/[0.03] px-5 py-6">
-                <p className="text-glass">Technical data for this product is available on request.</p>
-                <p className="mt-1 text-sm text-steel">
-                  Our team will share the current specification and documents for your application.
-                </p>
+                <p className="text-glass">{ui.onRequestTitle}</p>
+                <p className="mt-1 text-sm text-steel">{ui.onRequestText}</p>
               </div>
             )}
           </section>
@@ -476,7 +496,7 @@ export function ProductDetailView({
         </div>
       </article>
 
-      {related.length ? <Related items={related} category={p.category} links={links} /> : null}
+      {related.length ? <Related items={related} category={p.category} links={links} locale={locale} /> : null}
     </>
   );
 }
@@ -484,7 +504,18 @@ export function ProductDetailView({
 type Spec = PublicProduct["specs"][number];
 
 /** One table per kind of value (DP-156): specification limits, then typical values. */
-function SpecTable({ title, note, specs }: { title: string; note: string | null; specs: Spec[] }) {
+function SpecTable({
+  title,
+  note,
+  specs,
+  locale,
+}: {
+  title: string;
+  note: string | null;
+  specs: Spec[];
+  locale: RouteLocale;
+}) {
+  const ui = dictionary(locale).product;
   return (
     <div className="mt-5">
       <h3 className="text-sm font-medium text-glass">{title}</h3>
@@ -496,9 +527,9 @@ function SpecTable({ title, note, specs }: { title: string; note: string | null;
             className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-0.5 py-3"
           >
             <dt className="text-sm text-[#cdd8e2]">{s.name}</dt>
-            <dd className="text-right tabular-nums text-glass">{formatSpecValue(s)}</dd>
+            <dd className="text-right tabular-nums text-glass">{formatSpecValue(s, locale)}</dd>
             {s.testMethod ? (
-              <dd className="col-span-2 text-xs text-steel/80">Test method: {s.testMethod}</dd>
+              <dd className="col-span-2 text-xs text-steel/80">{interpolate(ui.testMethod, { method: s.testMethod })}</dd>
             ) : null}
           </div>
         ))}
@@ -511,19 +542,22 @@ function Related({
   items,
   category,
   links,
+  locale,
 }: {
   items: PublicProductSummary[];
   category: { slug: string; name: string };
   links: CatalogLinks;
+  locale: RouteLocale;
 }) {
+  const ui = dictionary(locale).product;
   return (
     <section aria-labelledby="related" className="mt-20 border-t border-glass/10 pt-10">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 id="related" className="tp-title">
-          More in {category.name}
+          {interpolate(ui.moreIn, { category: category.name })}
         </h2>
         <Link href={links.list({ category: category.slug })} className="text-sm text-amber hover:underline">
-          View all
+          {ui.viewAll}
         </Link>
       </div>
       <ul className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">

@@ -9,20 +9,16 @@
  * a 404 and needs no script. The Privacy Policy link is dropped where the policy is not published
  * (DP-095).
  */
+import { dictionary } from "@/lib/i18n";
 import { BRAND_LOGO, HOME_HREF } from "@/content/brand";
 
 export type FooterLink = { label: string; href: string | null; newTab?: boolean };
 export type FooterColumn = { title: string; links: FooterLink[] };
 
-export const SITE_FOOTER_UI = {
-  logo: BRAND_LOGO,
-  homeHref: HOME_HREF,
-  homeLabel: "back to top of page",
-  navLabel: "Footer",
-  legalLabel: "Legal",
-  socialLabel: "Social media",
-  newTab: "(opens in a new tab)",
-} as const;
+/** ML-6: the logo and the landmark labels in the page's language (lib/i18n `footer`). */
+export function siteFooterUi(locale: string) {
+  return { logo: BRAND_LOGO, homeHref: HOME_HREF, ...dictionary(locale).footer };
+}
 
 export type SiteFooterContent = {
   headline: string;

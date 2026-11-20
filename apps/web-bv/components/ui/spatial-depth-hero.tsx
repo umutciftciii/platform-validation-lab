@@ -595,7 +595,7 @@ function AnimatedHero({
   return (
     <>
       <a href={`#${AFTER_HERO_ID}`} className="skip-link">
-        Skip the ICCSYN animation
+        {COPY.skip}
       </a>
 
       <section

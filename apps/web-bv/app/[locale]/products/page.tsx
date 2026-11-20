@@ -15,6 +15,7 @@ import { BrowseResults } from "@/components/products/catalog-views";
 import { liveLinks } from "@/components/products/live-links";
 import { listCategories, listProducts } from "@/lib/catalog-api";
 import { catalogLocale } from "@/lib/catalog-locale";
+import { dictionary, interpolate } from "@/lib/i18n";
 import { localizeHref } from "@/lib/locale-routing";
 import { pageMetadata, siteSeo } from "@/lib/seo";
 
@@ -32,6 +33,7 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
   const p = parseBrowse(await searchParams);
   const [site, [list, cats]] = await Promise.all([siteSeo(locale), readCatalog()]);
   const canonical = canonicalBrowse(p, list.ok ? list.data : null, cats.ok ? cats.data : []);
+  const meta = dictionary(locale).meta;
   return pageMetadata(
     {
       path: "/products",
@@ -40,8 +42,8 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
         category: canonical.category ?? undefined,
         page: canonical.page > 1 ? String(canonical.page) : undefined,
       },
-      title: `Products | ${site.siteName}`,
-      description: `Published products of ${site.siteName}.`,
+      title: interpolate(meta.products, { site: site.siteName }),
+      description: interpolate(meta.productsDescription, { site: site.siteName }),
       noindex: Boolean(p.q),
     },
     site,
@@ -57,18 +59,16 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
  */
 export default async function ProductsPage({ searchParams }: PageProps<"/[locale]/products">) {
   const locale = await catalogLocale();
+  const ui = dictionary(locale);
   return (
     <CatalogShell
       locale={locale}
-      crumbs={[{ label: "Home", href: localizeHref(locale, "/") }, { label: "Products" }]}
+      crumbs={[{ label: ui.common.home, href: localizeHref(locale, "/") }, { label: ui.common.products }]}
     >
       <header className="pb-8 pt-8 sm:pb-12 sm:pt-12">
-        <p className="tp-eyebrow">Dream Petroleum BV</p>
-        <h1 className="tp-display">Products</h1>
-        <p className="tp-lead">
-          Base oils, white oils, solvents and specialty products, with technical data and documents
-          where available.
-        </p>
+        <p className="tp-eyebrow">{ui.catalogue.eyebrow}</p>
+        <h1 className="tp-display">{ui.catalogue.title}</h1>
+        <p className="tp-lead">{ui.catalogue.lead}</p>
       </header>
       <Suspense fallback={<ListSkeleton />}>
         <Browse searchParams={searchParams} />
@@ -82,19 +82,12 @@ async function Browse({ searchParams }: Pick<PageProps<"/[locale]/products">, "s
   const locale = await catalogLocale();
   const params = parseBrowse(await searchParams);
   const [list, cats] = await readCatalog();
+  const ui = dictionary(locale);
   if (!list.ok) {
-    return (
-      <CatalogNotice title="The product catalogue is not available right now">
-        Please try again in a moment.
-      </CatalogNotice>
-    );
+    return <CatalogNotice title={ui.catalogue.unavailableTitle}>{ui.common.tryAgain}</CatalogNotice>;
   }
   if (list.data.length === 0) {
-    return (
-      <CatalogNotice title="No products published yet">
-        Products appear here once they are approved and published for this site.
-      </CatalogNotice>
-    );
+    return <CatalogNotice title={ui.catalogue.emptyTitle}>{ui.catalogue.emptyText}</CatalogNotice>;
   }
   const categories = cats.ok ? cats.data : [];
   // an unknown category (a stale link) shows everything instead of an empty page
@@ -102,7 +95,16 @@ async function Browse({ searchParams }: Pick<PageProps<"/[locale]/products">, "s
   const p: BrowseParams = { ...params, category: known ? params.category : null };
   const result = paginate(filterProducts(list.data, categories, p), p.page);
   const path = trail(categories, p.category);
-  return <BrowseResults categories={categories} params={p} active={path} result={result} links={liveLinks(locale)} />;
+  return (
+    <BrowseResults
+      categories={categories}
+      params={p}
+      active={path}
+      result={result}
+      links={liveLinks(locale)}
+      locale={locale}
+    />
+  );
 }
 
 function ListSkeleton() {

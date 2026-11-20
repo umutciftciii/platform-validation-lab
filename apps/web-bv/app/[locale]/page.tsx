@@ -57,7 +57,7 @@ async function PublishedHome({ params }: { params: PageProps<"/[locale]">["param
   await connection();
   const locale = await localeOf(params);
   const res = await published(locale);
-  if (!res.ok) return <HomeUnavailable reason={res.reason} />;
+  if (!res.ok) return <HomeUnavailable reason={res.reason} locale={locale} />;
   return (
     <>
       <OrganizationJsonLd locale={locale} />

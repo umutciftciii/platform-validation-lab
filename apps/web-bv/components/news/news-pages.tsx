@@ -11,46 +11,34 @@ import SiteNav from "@/components/ui/site-nav";
 import type { SiteFooterContent } from "@/content/site-footer";
 import type { SiteNavContent } from "@/content/site-nav";
 import type { ArticleView, NewsView } from "@/lib/cms-home";
-import { localizeHref } from "@/lib/locale-routing";
-import { pageHref } from "@/lib/page-locale";
+import { dictionary, formatDate } from "@/lib/i18n";
+import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import { pageHref, pageLocale } from "@/lib/page-locale";
 
 /**
  * DP-020: the news list (/news) and article (/news/<slug>) pages of the BV site, in the language
  * of the CMS template pages (ink ground, glass type, amber accents, Archivo 108%). Server
  * components; every word of an article and of the list heading comes from the CMS (DP-153:
- * `bv.news-index`), the interface labels below are code.
+ * `bv.news-index`). ML-6: the interface labels are the `news` part of the site UI dictionary
+ * (lib/i18n), dates in the page's format (`en-GB` / `nl-NL`, Europe/Amsterdam).
  */
-export const NEWS_UI = {
-  eyebrow: "News",
-  readMore: "Read article",
-  back: "All news",
-  removed: {
-    title: "This article is no longer available",
-    text: "It has been taken off the site. You can find our current articles on the news page.",
-  },
-} as const;
-
-const DATE = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-  timeZone: "Europe/Amsterdam",
-});
 
 function Shell({
   nav,
   footer,
+  locale,
   preview = false,
   children,
 }: {
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  locale: RouteLocale;
   preview?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <>
-      {preview ? <PreviewBanner /> : null}
+      {preview ? <PreviewBanner locale={locale} /> : null}
       {nav ? <SiteNav content={nav} /> : null}
       <main id="top" className="tp news">
         {children}
@@ -94,8 +82,9 @@ function Cover({
  */
 export function NewsList({ view }: { view: NewsView }) {
   const copy = view.heading.copy;
+  const ui = dictionary(view.locale).news;
   return (
-    <Shell nav={view.nav} footer={view.footer} preview={view.preview}>
+    <Shell nav={view.nav} footer={view.footer} locale={view.locale} preview={view.preview}>
       <header className="tp-hero news-head">
         <div className="tp-inner">
           <p className="tp-eyebrow">{copy.eyebrow}</p>
@@ -103,7 +92,7 @@ export function NewsList({ view }: { view: NewsView }) {
           <p className="tp-lead">{copy.intro}</p>
         </div>
       </header>
-      <section className="news-list" aria-label="Articles">
+      <section className="news-list" aria-label={ui.articlesLabel}>
         <div className="tp-inner">
           {view.articles.length === 0 ? (
             <div className="news-empty" role="status">
@@ -113,7 +102,7 @@ export function NewsList({ view }: { view: NewsView }) {
           ) : (
             <ol className="news-grid">
               {view.articles.map((a, i) => (
-                <ArticleCard key={a.path} article={a} lead={i === 0} />
+                <ArticleCard key={a.path} article={a} lead={i === 0} locale={view.locale} />
               ))}
             </ol>
           )}
@@ -123,7 +112,15 @@ export function NewsList({ view }: { view: NewsView }) {
   );
 }
 
-function ArticleCard({ article, lead }: { article: CmsPublicArticle; lead: boolean }) {
+function ArticleCard({
+  article,
+  lead,
+  locale,
+}: {
+  article: CmsPublicArticle;
+  lead: boolean;
+  locale: RouteLocale;
+}) {
   const titleId = `news-${article.slug}`;
   return (
     <li className={lead ? "news-card news-card-lead" : "news-card"}>
@@ -141,7 +138,7 @@ function ArticleCard({ article, lead }: { article: CmsPublicArticle; lead: boole
         ) : null}
         <div className="news-card-text">
           <time dateTime={article.firstPublishedAt} className="news-date">
-            {DATE.format(new Date(article.firstPublishedAt))}
+            {formatDate(locale, article.firstPublishedAt)}
           </time>
           <h2 id={titleId} className="news-card-title">
             <Link href={article.path} className="news-card-link">
@@ -150,7 +147,7 @@ function ArticleCard({ article, lead }: { article: CmsPublicArticle; lead: boole
           </h2>
           <p className="news-card-excerpt">{article.excerpt}</p>
           <span className="news-card-more" aria-hidden="true">
-            {NEWS_UI.readMore} →
+            {dictionary(locale).news.readMore} →
           </span>
         </div>
       </article>
@@ -162,23 +159,22 @@ function ArticleCard({ article, lead }: { article: CmsPublicArticle; lead: boole
 export function ArticlePage({ view }: { view: ArticleView }) {
   // DP-250: the article's own language (also in a preview, whose address has none).
   const newsHref = localizeHref(view.locale, "/news");
+  const ui = dictionary(view.locale).news;
   return (
-    <Shell nav={view.nav} footer={view.footer} preview={view.preview}>
+    <Shell nav={view.nav} footer={view.footer} locale={view.locale} preview={view.preview}>
       <article className="news-article">
         <header className="news-article-head">
           <div className="tp-inner">
             <div className="tp-measure">
               <Link href={newsHref} className="news-back">
-                <span aria-hidden="true">←</span> {NEWS_UI.back}
+                <span aria-hidden="true">←</span> {ui.back}
               </Link>
               {view.firstPublishedAt ? (
                 <p className="news-date">
-                  <time dateTime={view.firstPublishedAt}>
-                    {DATE.format(new Date(view.firstPublishedAt))}
-                  </time>
+                  <time dateTime={view.firstPublishedAt}>{formatDate(view.locale, view.firstPublishedAt)}</time>
                 </p>
               ) : (
-                <p className="news-date">Not published yet</p>
+                <p className="news-date">{ui.notPublishedYet}</p>
               )}
               <h1 className="tp-display news-article-title">{view.title}</h1>
               <p className="tp-lead">{view.excerpt}</p>
@@ -217,15 +213,17 @@ export async function ArticleRemoved({
   footer: SiteFooterContent | null;
 }) {
   const newsHref = await pageHref("/news");
+  const locale = await pageLocale();
+  const ui = dictionary(locale).news;
   return (
-    <Shell nav={nav} footer={footer}>
+    <Shell nav={nav} footer={footer} locale={locale}>
       <div className="tp-hero news-removed" role="status">
         <div className="tp-inner">
-          <p className="tp-eyebrow">{NEWS_UI.eyebrow}</p>
-          <h1 className="tp-display">{NEWS_UI.removed.title}</h1>
-          <p className="tp-lead">{NEWS_UI.removed.text}</p>
+          <p className="tp-eyebrow">{ui.eyebrow}</p>
+          <h1 className="tp-display">{ui.removedTitle}</h1>
+          <p className="tp-lead">{ui.removedText}</p>
           <Link href={newsHref} className="tp-button news-removed-link">
-            {NEWS_UI.back}
+            {ui.back}
           </Link>
         </div>
       </div>

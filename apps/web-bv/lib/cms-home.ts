@@ -36,18 +36,18 @@ import {
 } from "@dream/contracts";
 
 import type { ApplicationScene, ApplicationsCopy } from "@/content/applications-showcase";
-import { APPLICATIONS_UI } from "@/content/applications-showcase";
+import { applicationsUi } from "@/content/applications-showcase";
 import type { CtlCopy, CtlStage } from "@/content/ctl-technology";
-import { CTL_UI } from "@/content/ctl-technology";
+import { ctlUi } from "@/content/ctl-technology";
 import type { IccsynHeroContent } from "@/content/iccsyn-hero";
 import type { ProductGroup, ProductGroupsCopy } from "@/content/product-groups";
-import { PRODUCT_GROUPS_UI } from "@/content/product-groups";
+import { productGroupsUi } from "@/content/product-groups";
 import type { ServiceItem, ServicesCopy } from "@/content/services-showcase";
-import { SERVICES_UI } from "@/content/services-showcase";
+import { servicesUi } from "@/content/services-showcase";
 import type { FooterLink, SiteFooterContent } from "@/content/site-footer";
-import { SITE_FOOTER_UI } from "@/content/site-footer";
+import { siteFooterUi } from "@/content/site-footer";
 import type { SiteNavContent, SiteNavItem } from "@/content/site-nav";
-import { SITE_NAV_UI } from "@/content/site-nav";
+import { siteNavUi } from "@/content/site-nav";
 import { catalogConfig, type Read } from "@/lib/catalog-api";
 import {
   DEFAULT_LOCALE,
@@ -59,6 +59,7 @@ import {
   storedAddress,
   type RouteLocale,
 } from "@/lib/locale-routing";
+import { dictionary } from "@/lib/i18n";
 import { visibleLocales } from "@/lib/public-locales";
 
 const TIMEOUT_MS = 5_000;
@@ -167,6 +168,8 @@ export interface NewsView {
   footer: SiteFooterContent | null;
   /** ML-5: published counterparts in the other public languages (hreflang); absent in a preview. */
   alternates?: readonly CmsPublicAlternate[];
+  /** ML-6: the list's language (interface labels and date format). */
+  locale: RouteLocale;
   preview: boolean;
 }
 
@@ -220,7 +223,8 @@ function size(src: string): { width: number; height: number } {
   return { width: asset.width, height: asset.height };
 }
 
-export function toHomeProps(c: BvHomeContent): HomeProps {
+/** ML-6: `locale` gives the interface labels of the sections (the content is the CMS's). */
+export function toHomeProps(c: BvHomeContent, locale: RouteLocale = DEFAULT_LOCALE): HomeProps {
   return {
     hero: {
       copy: {
@@ -233,6 +237,7 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
         supply: c.hero.supply,
         legal: c.hero.legal,
         mediaAlt: c.hero.mediaAlt,
+        skip: dictionary(locale).home.hero.skip,
       },
       applications: c.hero.applications.map((a) => ({
         title: a.title,
@@ -241,7 +246,7 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
       })),
     },
     productGroups: {
-      copy: { ...PRODUCT_GROUPS_UI, label: c.productGroups.label, disclosure: c.productGroups.disclosure },
+      copy: { ...productGroupsUi(locale), label: c.productGroups.label, disclosure: c.productGroups.disclosure },
       groups: c.productGroups.groups.map((g) => ({
         id: g.anchor,
         name: { word: g.nameWord, numeral: g.nameNumeral },
@@ -256,7 +261,7 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
     },
     services: {
       copy: {
-        ...SERVICES_UI,
+        ...servicesUi(locale),
         eyebrow: c.services.eyebrow,
         title: c.services.title,
         intro: c.services.intro,
@@ -276,7 +281,7 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
       })),
     },
     ctl: {
-      copy: { ...CTL_UI, eyebrow: c.ctl.eyebrow, title: c.ctl.title, document: c.ctl.document },
+      copy: { ...ctlUi(locale), eyebrow: c.ctl.eyebrow, title: c.ctl.title, document: c.ctl.document },
       stages: c.ctl.stages.map((s) => ({
         id: s.anchor,
         title: s.title,
@@ -293,7 +298,7 @@ export function toHomeProps(c: BvHomeContent): HomeProps {
     },
     applications: {
       copy: {
-        ...APPLICATIONS_UI,
+        ...applicationsUi(locale),
         eyebrow: c.applications.eyebrow,
         title: c.applications.title,
         status: c.applications.status,
@@ -328,7 +333,12 @@ export function isCurrentPath(href: string | null, currentPath: string): boolean
   return currentPath === path || currentPath.startsWith(`${path}/`);
 }
 
-export function toNavProps(c: BvNavPublic, currentPath: string): SiteNavContent {
+export function toNavProps(
+  c: BvNavPublic,
+  currentPath: string,
+  locale: RouteLocale = DEFAULT_LOCALE,
+): SiteNavContent {
+  const ui = siteNavUi(locale);
   const home = currentPath === "/";
   // The navigation's in-page links ("#top", "#services") belong to the home page: on any other
   // page they lead there ("/#services"), and the logo goes home.
@@ -344,8 +354,8 @@ export function toNavProps(c: BvNavPublic, currentPath: string): SiteNavContent 
     current: current(l.href),
   });
   return {
-    ...SITE_NAV_UI,
-    homeHref: home ? SITE_NAV_UI.homeHref : "/",
+    ...ui,
+    homeHref: home ? ui.homeHref : "/",
     items: c.items.map((i) => {
       const children = i.children.map(item);
       const own = item(i);
@@ -367,14 +377,14 @@ export function toNavProps(c: BvNavPublic, currentPath: string): SiteNavContent 
   };
 }
 
-export function toFooterProps(c: BvFooterPublic): SiteFooterContent {
+export function toFooterProps(c: BvFooterPublic, locale: RouteLocale = DEFAULT_LOCALE): SiteFooterContent {
   const link = (l: MenuPublicLink): FooterLink => ({
     label: l.label,
     href: l.href,
     ...(l.newTab ? { newTab: true } : {}),
   });
   return {
-    ...SITE_FOOTER_UI,
+    ...siteFooterUi(locale),
     headline: c.headline,
     cta: link(c.cta),
     intro: c.intro,
@@ -416,9 +426,11 @@ function mapPage(json: unknown, locale: RouteLocale): AnyPageView | null {
   // is the one whose stored address is this page's.
   const navPath = path === "/" ? "/" : storedAddress(locale, path);
   const nav = fragment<BvNavPublic>(fragments["bv.site-nav"], NAV, (c) =>
-    toNavProps(c, navPath),
+    toNavProps(c, navPath, locale),
   ) as SiteNavContent | null;
-  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, (c) =>
+    toFooterProps(c, locale),
+  ) as
     | SiteFooterContent
     | null;
   if (page.kind === "DESIGN" && page.templateKey === "bv.home") {
@@ -428,7 +440,7 @@ function mapPage(json: unknown, locale: RouteLocale): AnyPageView | null {
       kind: "home",
       title: page.title,
       seo: page.seo,
-      home: toHomeProps(home.data as unknown as BvHomeContent),
+      home: toHomeProps(home.data as unknown as BvHomeContent, locale),
       nav,
       footer,
       locale,
@@ -648,9 +660,11 @@ async function readNews(
     console.error("public cms: the news heading does not match the contract; not rendered");
   }
   const nav = fragment<BvNavPublic>(fragments["bv.site-nav"], NAV, (c) =>
-    toNavProps(c, currentPath),
+    toNavProps(c, currentPath, locale),
   ) as SiteNavContent | null;
-  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
+  const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, (c) =>
+    toFooterProps(c, locale),
+  ) as
     | SiteFooterContent
     | null;
   // ML-3: links in the language of the list; an article's `path` is its link here. The switcher
@@ -685,7 +699,7 @@ export async function getNews(locale: RouteLocale = DEFAULT_LOCALE): Promise<Rea
   if (!res.ok) return res;
   const { heading, articles, nav, footer, alternates } = res.data;
   if (!heading) return { ok: false, reason: "unavailable" };
-  return { ok: true, data: { heading, articles, nav, footer, alternates, preview: false } };
+  return { ok: true, data: { heading, articles, nav, footer, alternates, locale, preview: false } };
 }
 
 /** The published navigation and footer around a news page (also without a published heading). */
@@ -727,6 +741,7 @@ export async function newsPreview(view: NewsIndexView): Promise<Read<NewsView>> 
       articles: res.data.articles,
       nav: view.nav,
       footer: view.footer,
+      locale: view.locale,
       preview: true,
     },
   };

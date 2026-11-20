@@ -7,6 +7,7 @@ import SiteFooter from "@/components/ui/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import { BRAND_LOGO } from "@/content/brand";
 import { getSiteChrome } from "@/lib/cms-home";
+import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { privacyHref, privacyPolicyHref } from "@/lib/privacy";
 
@@ -39,7 +40,7 @@ export function CatalogShell({
       </Suspense>
       <main id="top" className="tp catalog">
         <div className="tp-inner pb-24">
-          <Breadcrumb crumbs={crumbs} />
+          <Breadcrumb crumbs={crumbs} label={dictionary(locale).shell.breadcrumb} />
           {children}
         </div>
       </main>
@@ -62,9 +63,9 @@ async function CatalogFooter({ path, locale }: { path: string; locale: RouteLoca
   return footer ? <SiteFooter content={footer} /> : <MinimalFooter locale={locale} />;
 }
 
-function Breadcrumb({ crumbs }: { crumbs: { label: string; href?: string }[] }) {
+function Breadcrumb({ crumbs, label }: { crumbs: { label: string; href?: string }[]; label: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="pt-8 text-sm text-steel sm:pt-10">
+    <nav aria-label={label} className="pt-8 text-sm text-steel sm:pt-10">
       <ol className="flex flex-wrap items-center gap-2">
         {crumbs.map((c, i) => (
           <li key={c.label} className="flex min-w-0 items-center gap-2">
@@ -90,7 +91,7 @@ function MinimalHeader({ locale }: { locale: RouteLocale }) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 bg-ink/80 backdrop-blur">
       <div className="mx-auto flex h-[72px] max-w-6xl items-center px-4 sm:px-8">
-        <Link href={localizeHref(locale, "/")} aria-label="Dream Petroleum BV home" className="shrink-0">
+        <Link href={localizeHref(locale, "/")} aria-label={dictionary(locale).shell.homeLink} className="shrink-0">
           <Image
             src={BRAND_LOGO.src}
             alt={BRAND_LOGO.alt}
@@ -108,12 +109,13 @@ function MinimalHeader({ locale }: { locale: RouteLocale }) {
 /** DP-095 D-T5: the legal line under every catalogue page; the policy link only where published. */
 function MinimalFooter({ locale }: { locale: RouteLocale }) {
   const href = privacyHref() ? privacyPolicyHref(locale) : null;
+  const ui = dictionary(locale).shell;
   return (
     <footer className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 border-t border-glass/10 px-4 py-6 text-xs text-steel sm:px-8">
-      <p>© 2026 Dream Petroleum BV</p>
+      <p>{ui.copyright}</p>
       {href ? (
         <a href={href} className="hover:text-glass">
-          Privacy Policy
+          {ui.privacyPolicy}
         </a>
       ) : null}
     </footer>

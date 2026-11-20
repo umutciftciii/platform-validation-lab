@@ -4,8 +4,9 @@ import { connection } from "next/server";
 import { cache, Suspense } from "react";
 
 import { HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
-import { ArticlePage, ArticleRemoved, NEWS_UI } from "@/components/news/news-pages";
+import { ArticlePage, ArticleRemoved } from "@/components/news/news-pages";
 import { getNewsChrome, getPublishedArticle } from "@/lib/cms-home";
+import { dictionary, interpolate } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale } from "@/lib/locale-routing";
 import { cmsPageSeo, noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 
@@ -30,7 +31,9 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/news/[sl
   if (!res.ok) {
     if (res.reason === "not_found") notFound();
     return noindexMetadata(
-      res.reason === "unpublished" ? `${NEWS_UI.removed.title} · Dream Petroleum BV` : "Dream Petroleum BV",
+      res.reason === "unpublished"
+        ? interpolate(dictionary(locale).meta.articleRemoved, { title: dictionary(locale).news.removedTitle })
+        : "Dream Petroleum BV",
     );
   }
   const { path, title, seo, excerpt, coverImage, coverAlt, firstPublishedAt, alternates } = res.data;
@@ -70,5 +73,5 @@ async function Article({ params }: { params: Params }) {
     const { nav, footer } = await getNewsChrome(locale);
     return <ArticleRemoved nav={nav} footer={footer} />;
   }
-  return <HomeUnavailable reason="unavailable" />;
+  return <HomeUnavailable reason="unavailable" locale={locale} />;
 }

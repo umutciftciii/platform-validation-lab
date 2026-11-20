@@ -1,3 +1,5 @@
+import { dictionary } from "@/lib/i18n";
+
 /**
  * Shapes and UI strings of the CTL Technology section. The content comes from the CMS page
  * `bv.home` (CMS S2, ADR-020); sources and rules are in docs/cms/bv-content-sources.md. The
@@ -22,13 +24,12 @@ export type CtlStage = {
   image: CtlImage;
 };
 
-export const CTL_UI = {
-  stagesLabel: "Process stages",
-  stageNavLabel: "Go to a process stage",
-  skip: "Skip the CTL animation",
-} as const;
+/** ML-6: the stage labels and skip link in the page's language (lib/i18n). */
+export function ctlUi(locale: string) {
+  return { ...dictionary(locale).home.ctl };
+}
 
-export type CtlCopy = typeof CTL_UI & {
+export type CtlCopy = ReturnType<typeof ctlUi> & {
   eyebrow: string;
   title: string;
   document: { label: string; href: string };
