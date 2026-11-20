@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { type ServiceItem, type ServicesCopy } from "@/content/services-showcase";
+import { interpolate } from "@/lib/i18n/format";
 
 /** Mouse travel before a press counts as a drag rather than a click on a card. */
 const DRAG_START_PX = 6;
@@ -32,7 +33,16 @@ function restingPoints(track: HTMLElement) {
   );
 }
 
-function ServiceCard({ service, isNear }: { service: ServiceItem; isNear: boolean }) {
+function ServiceCard({
+  service,
+  isNear,
+  ctaAbout,
+}: {
+  service: ServiceItem;
+  isNear: boolean;
+  /** ML-6: "{label} about {title}", the accessible name of the card link. */
+  ctaAbout: string;
+}) {
   const { image } = service;
   const positions = {
     "--sv-position-desktop": image.desktop.position,
@@ -67,7 +77,7 @@ function ServiceCard({ service, isNear }: { service: ServiceItem; isNear: boolea
         <a
           href={service.cta.href}
           className="sv-card-link"
-          aria-label={`${service.cta.label} about ${service.title}`}
+          aria-label={interpolate(ctaAbout, { label: service.cta.label, title: service.title })}
           draggable={false}
         >
           {service.cta.label}
@@ -308,7 +318,7 @@ export default function ServicesShowcase({
         onKeyDown={onKeyDown}
       >
         {SERVICES.map((service) => (
-          <ServiceCard key={service.id} service={service} isNear={isNear} />
+          <ServiceCard key={service.id} service={service} isNear={isNear} ctaAbout={COPY.ctaAbout} />
         ))}
       </ul>
 

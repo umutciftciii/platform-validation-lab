@@ -3,6 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import {
+  createContext,
+  useContext,
   useEffect,
   useId,
   useRef,
@@ -13,7 +15,11 @@ import {
   type MouseEvent,
 } from "react";
 
-import { SITE_NAV_UI, type SiteNavContent, type SiteNavItem } from "@/content/site-nav";
+import type { SiteNavContent, SiteNavItem } from "@/content/site-nav";
+import { interpolate } from "@/lib/i18n/format";
+
+/** ML-6: the control labels of the navigation in the page's language (from the server's content). */
+const NavUi = createContext<Pick<SiteNavContent, "newTab" | "openSubmenu">>({ newTab: "", openSubmenu: "" });
 
 const SCROLLED_AFTER_PX = 8;
 const NOTICE_MS = 2600;
@@ -54,13 +60,14 @@ function NavLink({
   onPending: () => void;
   pendingNote: string;
 }) {
+  const ui = useContext(NavUi);
   const current = "current" in item && item.current ? "page" : undefined;
   // DP-219: a link the CMS opens in a new tab says so to screen readers.
   const newTab = item.newTab
     ? ({ target: "_blank", rel: "noopener noreferrer" } as const)
     : undefined;
   const newTabNote = item.newTab ? (
-    <span className="sr-only"> {SITE_NAV_UI.newTab}</span>
+    <span className="sr-only"> {ui.newTab}</span>
   ) : null;
 
   if (item.href === null) {
@@ -136,6 +143,7 @@ function DesktopItem({
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
+  const ui = useContext(NavUi);
   const children = item.children ?? [];
   if (children.length === 0) {
     return (
@@ -182,7 +190,7 @@ function DesktopItem({
           <button
             type="button"
             className="site-nav-sub-toggle"
-            aria-label={`${SITE_NAV_UI.openSubmenu} ${item.label}`}
+            aria-label={interpolate(ui.openSubmenu, { label: item.label })}
             aria-expanded={open}
             aria-controls={id}
             onClick={() => setOpen(!open)}
@@ -253,14 +261,22 @@ function MenuItem({
   );
 }
 
-function Logo({ href, onNavigate }: { href: string; onNavigate?: () => void }) {
+function Logo({
+  href,
+  logo,
+  onNavigate,
+}: {
+  href: string;
+  logo: SiteNavContent["logo"];
+  onNavigate?: () => void;
+}) {
   return (
     <a href={href} className="site-nav-logo" onClick={onNavigate}>
       <Image
-        src={SITE_NAV_UI.logo.src}
-        alt={SITE_NAV_UI.logo.alt}
-        width={SITE_NAV_UI.logo.width}
-        height={SITE_NAV_UI.logo.height}
+        src={logo.src}
+        alt={logo.alt}
+        width={logo.width}
+        height={logo.height}
         loading="eager"
         draggable={false}
       />
@@ -324,6 +340,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
   };
 
   return (
+    <NavUi.Provider value={{ newTab: NAV.newTab, openSubmenu: NAV.openSubmenu }}>
     <header className="site-nav" data-scrolled={scrolled}>
       <noscript>
         {/* The menu button needs JavaScript. Plain links replace it below. */}
@@ -331,7 +348,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
       </noscript>
 
       <div className="site-nav-inner">
-        <Logo href={NAV.homeHref} />
+        <Logo href={NAV.homeHref} logo={NAV.logo} />
 
         <nav aria-label={NAV.mainLabel} className="site-nav-links">
           <ul>
@@ -399,7 +416,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
         onKeyDown={onMenuKeyDown}
       >
         <div className="site-menu-bar">
-          <Logo href={NAV.homeHref} onNavigate={closeMenu} />
+          <Logo href={NAV.homeHref} logo={NAV.logo} onNavigate={closeMenu} />
           <button
             type="button"
             autoFocus
@@ -442,6 +459,7 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
         </div>
       </dialog>
     </header>
+    </NavUi.Provider>
   );
 }
 

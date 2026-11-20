@@ -11,6 +11,7 @@ import SiteFooter from "@/components/ui/site-footer";
 import type { SiteFooterContent } from "@/content/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
+import { contactFormUi, countryOptions, dictionary } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 
@@ -22,7 +23,7 @@ import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 export function TemplatePage({ view }: { view: TemplatePageView }) {
   return (
     <>
-      {view.preview ? <PreviewBanner /> : null}
+      {view.preview ? <PreviewBanner locale={view.locale} /> : null}
       {view.nav ? <SiteNav content={view.nav} /> : null}
       <main
         id="top"
@@ -205,22 +206,14 @@ export function Section({
 
 /**
  * The form's fields as on the live contact page. Interface text, not content: the form and its
- * fields are defined by DP-151, which also connects it.
+ * fields are defined by DP-151, which also connects it. ML-6: labels from the site UI dictionary.
  */
 const CONTACT_FIELDS = [
-  { key: "name", label: "Your name", type: "text", required: true, autoComplete: "name" },
-  { key: "email", label: "Your e-mail", type: "email", required: true, autoComplete: "email" },
-  { key: "phone", label: "Phone number", type: "tel", required: false, autoComplete: "tel" },
-  { key: "subject", label: "Subject", type: "text", required: false, autoComplete: "off" },
+  { key: "name", label: "name", type: "text", required: true, autoComplete: "name" },
+  { key: "email", label: "email", type: "email", required: true, autoComplete: "email" },
+  { key: "phone", label: "phone", type: "tel", required: false, autoComplete: "tel" },
+  { key: "subject", label: "subject", type: "text", required: false, autoComplete: "off" },
 ] as const;
-
-/** Country names in English, sorted, for the contact form. */
-function contactCountries(): { code: string; name: string }[] {
-  const names = new Intl.DisplayNames(["en"], { type: "region" });
-  return COUNTRY_CODES.map((code) => ({ code, name: names.of(code) ?? code })).sort((a, b) =>
-    a.name.localeCompare(b.name, "en"),
-  );
-}
 
 /**
  * Contact details (DP-150) next to the contact form. The details are the published footer's
@@ -242,6 +235,7 @@ function ContactSection({
   // production while they are drafts) the disabled form and the CMS note, never a form that
   // looks like it works.
   const live = sitePrivacy().publish;
+  const ui = dictionary(locale);
   return (
     <section id={section.id} className="tp-contact">
       <div className="tp-inner tp-contact-grid">
@@ -251,7 +245,7 @@ function ContactSection({
           {contact ? (
             <dl className="tp-spec-rows tp-contact-rows">
               <div className="tp-spec-row tp-contact-row">
-                <dt className="tp-contact-label">Phone</dt>
+                <dt className="tp-contact-label">{ui.contactSection.phone}</dt>
                 <dd className="tp-contact-value">
                   <a href={contact.phone.href} className="tp-contact-link">
                     {contact.phone.label}
@@ -260,7 +254,7 @@ function ContactSection({
                 </dd>
               </div>
               <div className="tp-spec-row tp-contact-row">
-                <dt className="tp-contact-label">E-mail</dt>
+                <dt className="tp-contact-label">{ui.contactSection.email}</dt>
                 <dd className="tp-contact-value">
                   <a href={contact.email.href} className="tp-contact-link">
                     {contact.email.label}
@@ -269,7 +263,7 @@ function ContactSection({
                 </dd>
               </div>
               <div className="tp-spec-row tp-contact-row">
-                <dt className="tp-contact-label">Office</dt>
+                <dt className="tp-contact-label">{ui.contactSection.office}</dt>
                 <dd className="tp-contact-value">
                   <address className="tp-contact-address">
                     {contact.company}
@@ -289,9 +283,11 @@ function ContactSection({
           <ContactForm
             idPrefix={section.id}
             title={section.formTitle}
-            countries={contactCountries()}
+            countries={countryOptions(locale, COUNTRY_CODES)}
             notice={{ version: LEAD_CONTACT_NOTICE.version, text: LEAD_CONTACT_NOTICE.text }}
             privacyHref={privacyPolicyHref(locale)}
+            locale={locale}
+            ui={contactFormUi(locale)}
           />
         ) : (
           <div className="tp-contact-form">
@@ -306,7 +302,7 @@ function ContactSection({
                 {CONTACT_FIELDS.map((f) => (
                   <label key={f.key} className="tp-contact-field">
                     <span className="tp-contact-field-label">
-                      {f.label}
+                      {ui.contactForm[f.label]}
                       {f.required ? <span aria-hidden="true"> *</span> : null}
                     </span>
                     <input
@@ -319,12 +315,12 @@ function ContactSection({
                 ))}
                 <label className="tp-contact-field tp-contact-field-wide">
                   <span className="tp-contact-field-label">
-                    Your message<span aria-hidden="true"> *</span>
+                    {ui.contactForm.message}<span aria-hidden="true"> *</span>
                   </span>
                   <textarea name="message" rows={5} className="tp-contact-input" />
                 </label>
                 <button type="button" className="tp-button tp-contact-submit" disabled>
-                  Not available yet
+                  {ui.contactSection.notAvailableYet}
                 </button>
               </fieldset>
             </form>

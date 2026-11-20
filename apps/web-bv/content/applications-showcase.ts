@@ -1,3 +1,5 @@
+import { dictionary } from "@/lib/i18n";
+
 /**
  * Shapes and UI strings of the Applications section. The content comes from the CMS page
  * `bv.home` (CMS S2, ADR-020); the claim rules (AI concepts only, status and disclosures always
@@ -26,13 +28,12 @@ export type ApplicationScene = {
   image: ApplicationImage;
 };
 
-export const APPLICATIONS_UI = {
-  skip: "Skip the application concepts animation",
-  scenesLabel: "Application concepts",
-  sceneNavLabel: "Go to an application concept",
-} as const;
+/** ML-6: the scene labels and skip link in the page's language (lib/i18n). */
+export function applicationsUi(locale: string) {
+  return { ...dictionary(locale).home.applications };
+}
 
-export type ApplicationsCopy = typeof APPLICATIONS_UI & {
+export type ApplicationsCopy = ReturnType<typeof applicationsUi> & {
   eyebrow: string;
   title: string;
   status: string;

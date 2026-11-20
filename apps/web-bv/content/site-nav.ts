@@ -8,6 +8,7 @@
  * `href: null` marks a page that does not exist yet. The link stays visible and reachable by
  * keyboard but never navigates, so a visitor cannot land on a 404.
  */
+import { dictionary } from "@/lib/i18n";
 import { BRAND_LOGO, HOME_HREF } from "@/content/brand";
 import type { LanguageOption } from "@/lib/locale-routing";
 
@@ -22,21 +23,16 @@ export type SiteNavItem = {
   children?: SiteNavItem[];
 };
 
-export const SITE_NAV_UI = {
-  logo: BRAND_LOGO,
-  homeHref: HOME_HREF,
-  openMenu: "Open menu",
-  closeMenu: "Close menu",
-  mainLabel: "Main",
-  menuLabel: "Site menu",
-  /** DP-219: the button that opens a submenu ("Show submenu of Products"). */
-  openSubmenu: "Show submenu of",
-  newTab: "(opens in a new tab)",
-  /** ML-3: the label of the language switcher. */
-  languageLabel: "Language",
-} as const;
+/**
+ * ML-6: the logo and the control labels in the page's language (lib/i18n `nav`): open/close menu,
+ * landmarks, the submenu button ("Show submenu of {label}"), the new-tab note and the label of
+ * the language switcher (ML-3).
+ */
+export function siteNavUi(locale: string) {
+  return { logo: BRAND_LOGO, homeHref: HOME_HREF, ...dictionary(locale).nav };
+}
 
-export type SiteNavContent = Omit<typeof SITE_NAV_UI, "homeHref"> & {
+export type SiteNavContent = Omit<ReturnType<typeof siteNavUi>, "homeHref"> & {
   /** "#top" on the home page; "/" on every other page. */
   homeHref: string;
   items: SiteNavItem[];

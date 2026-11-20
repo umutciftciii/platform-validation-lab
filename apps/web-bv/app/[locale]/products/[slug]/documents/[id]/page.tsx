@@ -4,18 +4,23 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+import { Rich } from "@/components/i18n/rich";
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { LeadRequestForm } from "@/components/products/lead-request-form";
 import { getProduct, getProductDocuments } from "@/lib/catalog-api";
 import { catalogLocale } from "@/lib/catalog-locale";
+import { countryOptions, dictionary, leadFormUi } from "@/lib/i18n";
 import { localizeHref } from "@/lib/locale-routing";
 import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 import { COUNTRY_CODES, currentLeadFormTexts } from "@dream/contracts";
 
-export const metadata: Metadata = {
-  title: "Request a document | Dream Petroleum BV",
-  robots: { index: false, follow: false },
-};
+/** ML-6: the title in the page's language. */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: dictionary(await catalogLocale()).meta.documentRequest,
+    robots: { index: false, follow: false },
+  };
+}
 
 /**
  * DP-042 (ADR-016): the short request form of a lead-gated document. Only documents the product
@@ -26,12 +31,13 @@ export default async function DocumentRequestPage({
   params,
 }: PageProps<"/[locale]/products/[slug]/documents/[id]">) {
   const locale = await catalogLocale();
+  const ui = dictionary(locale).common;
   return (
     <CatalogShell
       locale={locale}
       crumbs={[
-        { label: "Home", href: localizeHref(locale, "/") },
-        { label: "Products", href: localizeHref(locale, "/products") },
+        { label: ui.home, href: localizeHref(locale, "/") },
+        { label: ui.products, href: localizeHref(locale, "/products") },
       ]}
     >
       <Suspense fallback={<div className="h-96 animate-pulse rounded-2xl bg-glass/[0.03]" />}>
@@ -41,13 +47,6 @@ export default async function DocumentRequestPage({
   );
 }
 
-const TYPE_LABEL = {
-  TDS: "Technical data sheet",
-  SDS: "Safety data sheet",
-  COA: "Certificate of analysis",
-  OTHER: "Document",
-} as const;
-
 async function RequestDetail({
   params,
 }: {
@@ -56,51 +55,54 @@ async function RequestDetail({
   await connection();
   const locale = await catalogLocale();
   const { slug, id } = await params;
+  const ui = dictionary(locale);
+  const t = ui.documentRequest;
   const [product, docs] = await Promise.all([getProduct(slug), getProductDocuments(slug)]);
   if ((!product.ok && product.reason === "not_found") || (!docs.ok && docs.reason === "not_found")) {
     notFound();
   }
   if (!product.ok || !docs.ok) {
     return (
-      <CatalogNotice title="This document is not available right now">
-        Please try again in a moment.
-      </CatalogNotice>
+      <CatalogNotice title={t.unavailableTitle}>{ui.common.tryAgain}</CatalogNotice>
     );
   }
   const doc = docs.data.find((d) => d.id === id);
   if (!doc || !doc.requestable) notFound();
   if (!sitePrivacy().publish) {
     return (
-      <CatalogNotice title="Document requests are not open yet">
-        This document will be available on request soon.
-      </CatalogNotice>
+      <CatalogNotice title={t.closedTitle}>{t.closedText}</CatalogNotice>
     );
   }
   const texts = currentLeadFormTexts();
-  const names = new Intl.DisplayNames(["en"], { type: "region" });
-  const countries = COUNTRY_CODES.map((code) => ({ code, name: names.of(code) ?? code })).sort((a, b) =>
-    a.name.localeCompare(b.name, "en"),
-  );
+  const countries = countryOptions(locale, COUNTRY_CODES);
   return (
     <div className="grid grid-cols-1 gap-10 pt-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-14 lg:pt-10">
       <div>
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber">Document request</p>
+        <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber">{t.eyebrow}</p>
         <h1 className="mt-3 text-[clamp(1.75rem,4vw,2.75rem)] font-medium leading-[1.08] [font-stretch:115%]">
           {doc.title}
         </h1>
         <p className="mt-3 text-steel">
-          {TYPE_LABEL[doc.type]} · revision {doc.revisionNumber} · for{" "}
-          <Link href={localizeHref(locale, `/products/${slug}`)} className="text-glass underline decoration-glass/30 underline-offset-4 hover:decoration-amber">
-            {product.data.name}
-          </Link>
+          <Rich
+            text={t.about}
+            values={{
+              type: ui.documents.type[doc.type],
+              revision: doc.revisionNumber,
+              product: (
+                <Link
+                  href={localizeHref(locale, `/products/${slug}`)}
+                  className="text-glass underline decoration-glass/30 underline-offset-4 hover:decoration-amber"
+                >
+                  {product.data.name}
+                </Link>
+              ),
+            }}
+          />
         </p>
-        <p className="mt-6 max-w-[52ch] leading-relaxed text-glass/90">
-          Tell us who you are and the PDF downloads right away. The copy you receive is marked with your name,
-          your company and a request reference.
-        </p>
+        <p className="mt-6 max-w-[52ch] leading-relaxed text-glass/90">{t.intro}</p>
         <ul className="mt-6 space-y-2 text-sm text-steel">
-          <li>· The download link stays valid for 15 minutes, for up to 3 downloads.</li>
-          <li>· Product news by e-mail only if you tick the separate box.</li>
+          <li>· {t.validity}</li>
+          <li>· {t.newsOptIn}</li>
         </ul>
       </div>
       <LeadRequestForm
@@ -109,6 +111,8 @@ async function RequestDetail({
         countries={countries}
         texts={texts}
         privacyHref={privacyPolicyHref(locale)}
+        locale={locale}
+        ui={leadFormUi(locale)}
       />
     </div>
   );

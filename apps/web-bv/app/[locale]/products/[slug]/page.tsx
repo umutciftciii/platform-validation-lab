@@ -9,7 +9,9 @@ import { ProductDetailView } from "@/components/products/catalog-views";
 import { trail } from "@/components/products/browse";
 import { liveLinks } from "@/components/products/live-links";
 import { ProductJsonLd } from "@/components/seo/json-ld";
+import { Rich } from "@/components/i18n/rich";
 import { catalogLocale } from "@/lib/catalog-locale";
+import { dictionary, formatDate, formatNumber, interpolate, plural } from "@/lib/i18n";
 import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 import {
@@ -21,12 +23,7 @@ import {
   listCategories,
   listProducts,
 } from "@/lib/catalog-api";
-import {
-  XREF_PUBLIC_LABELS,
-  xrefPublicNotice,
-  type PublicCrossReference,
-  type PublicDocument,
-} from "@dream/contracts";
+import type { PublicCrossReference, PublicDocument } from "@dream/contracts";
 
 const product = cache(getProduct);
 
@@ -40,7 +37,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/products
   const locale = await catalogLocale();
   const { slug } = await params;
   const res = await product(slug);
-  if (!res.ok) return noindexMetadata("Product | Dream Petroleum BV");
+  if (!res.ok) return noindexMetadata(dictionary(locale).meta.productFallback);
   const p = res.data;
   const site = await siteSeo(locale);
   const image = (i: (typeof p.images)[number]) => ({
@@ -92,9 +89,10 @@ export default async function ProductPage({ params }: PageProps<"/[locale]/produ
 }
 
 function baseCrumbs(locale: RouteLocale) {
+  const ui = dictionary(locale).common;
   return [
-    { label: "Home", href: localizeHref(locale, "/") },
-    { label: "Products", href: localizeHref(locale, "/products") },
+    { label: ui.home, href: localizeHref(locale, "/") },
+    { label: ui.products, href: localizeHref(locale, "/products") },
   ];
 }
 
@@ -113,15 +111,21 @@ async function ProductDetail({ params }: { params: PageProps<"/[locale]/products
   if (!result.ok && result.reason === "not_found") notFound();
   const [home, products] = baseCrumbs(locale) as [{ label: string; href: string }, { label: string; href: string }];
   if (!result.ok) {
+    const ui = dictionary(locale).product;
     return (
       <CatalogShell locale={locale} crumbs={[home, products]}>
         <div className="pt-8">
-          <CatalogNotice title="This product is not available right now">
-            Please try again in a moment, or go back to{" "}
-            <Link href={products.href} className="underline">
-              all products
-            </Link>
-            .
+          <CatalogNotice title={ui.unavailableTitle}>
+            <Rich
+              text={ui.unavailableText}
+              values={{
+                all: (
+                  <Link href={products.href} className="underline">
+                    {ui.allProducts}
+                  </Link>
+                ),
+              }}
+            />
           </CatalogNotice>
         </div>
       </CatalogShell>
@@ -143,11 +147,12 @@ async function ProductDetail({ params }: { params: PageProps<"/[locale]/products
         p={p}
         related={related}
         links={links}
+        locale={locale}
         extras={
           <>
             {docs.ok && docs.data.length ? <Documents slug={slug} locale={locale} items={docs.data} /> : null}
 
-            {xrefs.ok && xrefs.data.length ? <CrossReferences items={xrefs.data} /> : null}
+            {xrefs.ok && xrefs.data.length ? <CrossReferences items={xrefs.data} locale={locale} /> : null}
           </>
         }
       />
@@ -155,15 +160,11 @@ async function ProductDetail({ params }: { params: PageProps<"/[locale]/products
   );
 }
 
-const TYPE_LABEL: Record<PublicDocument["type"], string> = {
-  TDS: "Technical data sheet",
-  SDS: "Safety data sheet",
-  COA: "Certificate of analysis",
-  OTHER: "Document",
-};
-
-function sizeLabel(bytes: number): string {
-  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+/** "1.4 MB" · "1,4 MB" (ML-6: the locale's decimal separator; units stay as they are). */
+function sizeLabel(bytes: number, locale: RouteLocale): string {
+  return bytes >= 1024 * 1024
+    ? `${formatNumber(locale, bytes / 1024 / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })} MB`
+    : `${formatNumber(locale, Math.max(1, Math.round(bytes / 1024)), { useGrouping: false })} KB`;
 }
 
 /**
@@ -179,10 +180,11 @@ function Documents({
   locale: RouteLocale;
   items: PublicDocument[];
 }) {
+  const ui = dictionary(locale).documents;
   return (
     <section aria-labelledby="documents" className="mt-12">
       <h2 id="documents" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
-        Documents
+        {ui.heading}
       </h2>
       <ul className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
         {items.map((d) => (
@@ -193,9 +195,9 @@ function Documents({
                 {d.title}
               </p>
               <p className="text-xs text-steel">
-                {TYPE_LABEL[d.type]} · PDF · {sizeLabel(d.byteSize)}
-                {d.pageCount ? ` · ${d.pageCount} page${d.pageCount === 1 ? "" : "s"}` : ""} · revision{" "}
-                {d.revisionNumber}
+                {ui.type[d.type]} · PDF · {sizeLabel(d.byteSize, locale)}
+                {d.pageCount ? ` · ${plural(locale, ui.pages, d.pageCount)}` : ""} ·{" "}
+                {interpolate(ui.revision, { number: d.revisionNumber })}
               </p>
             </div>
             {d.downloadable ? (
@@ -204,20 +206,20 @@ function Documents({
                 download
                 className="inline-flex items-center gap-2 rounded-full border border-glass/20 px-4 py-1.5 text-sm text-glass transition-colors hover:border-amber hover:text-amber"
               >
-                Download
-                <span className="sr-only"> {d.title} (PDF)</span>
+                {ui.download}
+                <span className="sr-only"> {interpolate(ui.fileForScreenReaders, { title: d.title })}</span>
               </a>
             ) : d.requestable ? (
               <Link
                 href={localizeHref(locale, `/products/${slug}/documents/${d.id}`)}
                 className="inline-flex items-center gap-2 rounded-full border border-amber/40 px-4 py-1.5 text-sm text-amber transition-colors hover:border-amber hover:bg-amber/10"
               >
-                Request download
-                <span className="sr-only"> {d.title} (PDF)</span>
+                {ui.requestDownload}
+                <span className="sr-only"> {interpolate(ui.fileForScreenReaders, { title: d.title })}</span>
               </Link>
             ) : (
               <span className="text-xs text-steel">
-                {d.access === "MEMBERS_ONLY" ? "Available to members soon" : "Not available"}
+                {d.access === "MEMBERS_ONLY" ? ui.membersSoon : ui.notAvailable}
               </span>
             )}
           </li>
@@ -227,24 +229,19 @@ function Documents({
   );
 }
 
-const VERIFIED_DATE = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-  timeZone: "Europe/Amsterdam",
-});
-
 /**
  * PM-6: cross-references of this product (ADR-015; DP-091 publication rules). The labels and the
  * explanation are fixed, shared texts (@dream/contracts): a similar product is "comparable", never
  * an equivalent; a verified relation names the date of the documented check; third-party names
  * only identify and compare, with no affiliation, endorsement or performance claim.
  */
-function CrossReferences({ items }: { items: PublicCrossReference[] }) {
+function CrossReferences({ items, locale }: { items: PublicCrossReference[]; locale: RouteLocale }) {
+  // ML-6: English is the approved text of @dream/contracts (lib/i18n/en.ts refers to it).
+  const ui = dictionary(locale).crossReferences;
   return (
     <section aria-labelledby="cross-references" className="mt-12">
       <h2 id="cross-references" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
-        Cross-references
+        {ui.heading}
       </h2>
       <ul className="mt-3 divide-y divide-glass/10 border-y border-glass/10">
         {items.map((x) => (
@@ -259,21 +256,23 @@ function CrossReferences({ items }: { items: PublicCrossReference[] }) {
             <p className="text-xs text-steel">
               {x.relation === "VERIFIED" ? (
                 <>
-                  <span className="mr-1 font-mono text-amber">VERIFIED</span>
-                  {XREF_PUBLIC_LABELS.VERIFIED}
-                  {x.verifiedAt ? ` on ${VERIFIED_DATE.format(new Date(x.verifiedAt))}` : ""}
+                  <span className="mr-1 font-mono text-amber">{ui.verifiedBadge}</span>
+                  {ui.verified}
+                  {x.verifiedAt ? interpolate(ui.verifiedOn, { date: formatDate(locale, x.verifiedAt) }) : ""}
                 </>
               ) : (
                 <>
-                  <span className="mr-1 font-mono text-glass/70">SIMILAR</span>
-                  {XREF_PUBLIC_LABELS.SIMILAR}
+                  <span className="mr-1 font-mono text-glass/70">{ui.similarBadge}</span>
+                  {ui.similar}
                 </>
               )}
             </p>
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-xs leading-relaxed text-steel">{xrefPublicNotice("Dream Petroleum BV")}</p>
+      <p className="mt-3 text-xs leading-relaxed text-steel">
+        {interpolate(ui.notice, { company: "Dream Petroleum BV" })}
+      </p>
     </section>
   );
 }
