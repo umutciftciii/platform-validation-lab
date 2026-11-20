@@ -528,6 +528,8 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "leads_rls_staff_site_ids", owner: "dp_owner", lead: false },
       { f: "leads_rls_staff_user_id", owner: "dp_owner", lead: false },
       { f: "leads_rls_user_lead_sites", owner: "dp_owner", lead: false },
+      // ML-1 (DP-073): trigger only — a new site's default language row (no EXECUTE for anyone).
+      { f: "site_locale_default_row", owner: "dp_owner", lead: false },
     ]);
     // Every one pins its search_path (no shadowing through a schema the caller controls).
     const unpinned = await su.$queryRawUnsafe<{ f: string }[]>(

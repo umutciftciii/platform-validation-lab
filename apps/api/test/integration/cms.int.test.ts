@@ -11,6 +11,7 @@
 // the section schema, optimistic versions, audit metadata without values); DESIGN pages are not
 // editable before the S2 import.
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +32,7 @@ import {
   ErrorBodySchema,
   PublicSeoResolveResponseSchema,
   PublicSiteSeoResponseSchema,
+  PublicSiteLocalesResponseSchema,
   PublicSitemapResponseSchema,
   SeoOverviewResponseSchema,
   SeoRedirectHistoryResponseSchema,
@@ -3981,5 +3983,405 @@ describe("20. header and footer menus (DP-219)", () => {
       "/products?category=dp219-oils",
       "/products",
     ]);
+  });
+});
+
+describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
+  const MIGRATION = "20261210090000_ml_1_site_locales";
+  const rowsOf = async () =>
+    (
+      await owner.siteLocale.findMany({
+        orderBy: [{ siteId: "asc" }, { sortOrder: "asc" }],
+        select: {
+          siteId: true,
+          locale: true,
+          enabled: true,
+          public: true,
+          isDefault: true,
+          sortOrder: true,
+        },
+      })
+    ).map((r) => ({ ...r, site: r.siteId === BV ? "BV" : r.siteId === COM ? "COM" : r.siteId }));
+  const EXPECTED = [
+    { site: "BV", locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+    { site: "BV", locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+    { site: "COM", locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+  ];
+  const shape = (rows: Awaited<ReturnType<typeof rowsOf>>) =>
+    rows
+      .map(({ siteId: _s, ...r }) => {
+        void _s;
+        return r;
+      })
+      .sort((a, b) => a.site.localeCompare(b.site) || a.sortOrder - b.sortOrder);
+
+  /** Runs `fn` in a transaction that is always rolled back. */
+  async function rolledBack(fn: (tx: PrismaClient) => Promise<void>): Promise<void> {
+    await expect(
+      owner.$transaction(
+        async (tx) => {
+          await fn(tx as unknown as PrismaClient);
+          throw new Error("rolled back by the test");
+        },
+        { timeout: 60_000 },
+      ),
+    ).rejects.toThrow("rolled back by the test");
+  }
+
+  /** Statements of a migration file: comments dropped, `;` inside $$ bodies kept. */
+  function statements(sql: string): string[] {
+    const out: string[] = [];
+    let cur = "";
+    let inBody = false;
+    for (const line of sql.split("\n")) {
+      if (!inBody && /^\s*--/.test(line)) continue;
+      cur += `${line}\n`;
+      if ((line.match(/\$\$/g) ?? []).length % 2 === 1) inBody = !inBody;
+      if (!inBody && /;\s*$/.test(line)) {
+        if (cur.trim()) out.push(cur.trim());
+        cur = "";
+      }
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+
+  it("seeds BV with English (default, public) and Dutch (enabled, not public); Corporate keeps English only", async () => {
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+    const sites = await owner.site.findMany({ select: { key: true, defaultLocale: true } });
+    expect(sites.map((s) => [s.key, s.defaultLocale]).sort()).toEqual([
+      ["BV", "en"],
+      ["CORPORATE", "en"],
+    ]);
+  });
+
+  it("refuses a bad tag, public without enabled, a hidden default and a second default", async () => {
+    await rejectsDb(
+      owner.siteLocale.create({ data: { siteId: COM, locale: "EN" } }),
+      /SiteLocale_locale_format/,
+    );
+    await rejectsDb(
+      owner.siteLocale.create({ data: { siteId: COM, locale: "de", public: true } }),
+      /SiteLocale_public_enabled/,
+    );
+    await rejectsDb(
+      owner.siteLocale.create({
+        data: { siteId: COM, locale: "fr", enabled: true, isDefault: true },
+      }),
+      /SiteLocale_default_public/,
+    );
+    await rejectsDb(
+      owner.siteLocale.create({
+        data: { siteId: COM, locale: "fr", enabled: true, public: true, isDefault: true },
+      }),
+      /SiteLocale_default_siteId_key|Unique constraint|P2002/,
+    );
+    await rejectsDb(
+      owner.siteLocale.update({
+        where: { siteId_locale: { siteId: BV, locale: "nl" } },
+        data: { sortOrder: 5000 },
+      }),
+      /SiteLocale_sort_order/,
+    );
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("keeps exactly one default per site, equal to Site.defaultLocale (checked at commit)", async () => {
+    // No default left.
+    await rejectsDb(
+      owner.siteLocale.update({
+        where: { siteId_locale: { siteId: BV, locale: "en" } },
+        data: { isDefault: false },
+      }),
+      /SiteLocale_one_default/,
+    );
+    await rejectsDb(
+      owner.siteLocale.delete({ where: { siteId_locale: { siteId: COM, locale: "en" } } }),
+      /SiteLocale_one_default/,
+    );
+    // Dutch as default while the site still says English.
+    await rejectsDb(
+      owner.$transaction(async (tx) => {
+        await tx.siteLocale.update({
+          where: { siteId_locale: { siteId: BV, locale: "en" } },
+          data: { isDefault: false },
+        });
+        await tx.siteLocale.update({
+          where: { siteId_locale: { siteId: BV, locale: "nl" } },
+          data: { isDefault: true, public: true },
+        });
+      }),
+      /SiteLocale_matches_site/,
+    );
+    // The site's column alone cannot move away from its default row either.
+    await rejectsDb(
+      owner.site.update({ where: { id: BV }, data: { defaultLocale: "nl" } }),
+      /SiteLocale_matches_site/,
+    );
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+    expect((await owner.site.findUniqueOrThrow({ where: { id: BV } })).defaultLocale).toBe("en");
+  });
+
+  it("lets dp_app read the languages and nothing else", async () => {
+    expect(await asApp.siteLocale.count()).toBe(3);
+    await rejectsDb(
+      asApp.siteLocale.update({
+        where: { siteId_locale: { siteId: BV, locale: "nl" } },
+        data: { public: true },
+      }),
+      /permission denied/i,
+    );
+    await rejectsDb(
+      asApp.siteLocale.create({ data: { siteId: COM, locale: "nl", enabled: true } }),
+      /permission denied/i,
+    );
+    await rejectsDb(asApp.siteLocale.deleteMany({ where: { locale: "nl" } }), /permission denied/i);
+    const rights = await owner.$queryRaw<{ p: string }[]>`
+      SELECT privilege_type AS p FROM information_schema.role_table_grants
+      WHERE grantee = 'dp_app' AND table_name = 'SiteLocale' ORDER BY 1`;
+    expect(rights.map((r) => r.p)).toEqual(["SELECT"]);
+    // The trigger functions are callable by no application role.
+    const exec = await owner.$queryRaw<{ f: string; n: bigint }[]>`
+      SELECT p.proname::text AS f, count(r.oid) FILTER (
+               WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE'))::bigint AS n
+      FROM pg_proc p CROSS JOIN pg_roles r
+      WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'site_locale_%'
+        AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_lead_retention')
+      GROUP BY p.proname ORDER BY 1`;
+    expect(exec.map((r) => [r.f, Number(r.n)])).toEqual([
+      ["site_locale_check_site", 0],
+      ["site_locale_consistent", 0],
+      ["site_locale_default_row", 0],
+    ]);
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("the catalogue sync only adds a missing language and never changes one", async () => {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { sortOrder: 20 },
+    });
+    try {
+      const sync = cli(["sync", "--confirm-database", DB_NAME], {
+        MIGRATE_DATABASE_URL: urls.migrate,
+      });
+      expect(sync.status, sync.err).toBe(0);
+      expect(JSON.parse(sync.out).siteLocalesAdded).toBe(0);
+      const nl = await owner.siteLocale.findUniqueOrThrow({
+        where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      });
+      expect([nl.sortOrder, nl.public, nl.enabled]).toEqual([20, false, true]);
+    } finally {
+      await owner.siteLocale.update({
+        where: { siteId_locale: { siteId: BV, locale: "nl" } },
+        data: { sortOrder: 10 },
+      });
+    }
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("rehearses the rollback and a re-run of the migration on existing sites (rolled back)", async () => {
+    const sql = readFileSync(
+      path.join(API_DIR, "prisma/migrations", MIGRATION, "migration.sql"),
+      "utf8",
+    );
+    const rollback = /-- Rollback[^\n]*\n((?:--[^\n]*\n)+)/
+      .exec(sql)?.[1]
+      ?.split("\n")
+      .map((l) => l.replace(/^--\s?/, "").trim())
+      .filter(Boolean);
+    expect(rollback?.length).toBe(4);
+    const sitesBefore = await owner.site.findMany({ orderBy: { key: "asc" } });
+    const pagesBefore = await owner.cmsPage.count();
+    await rolledBack(async (tx) => {
+      for (const stmt of rollback ?? []) await tx.$executeRawUnsafe(stmt);
+      const left = await tx.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*)::bigint AS n FROM pg_class WHERE relname = 'SiteLocale'`;
+      expect(Number(left[0]?.n)).toBe(0);
+      const fns = await tx.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*)::bigint AS n FROM pg_proc WHERE proname LIKE 'site_locale_%'`;
+      expect(Number(fns[0]?.n)).toBe(0);
+      // Sites and content are untouched by the rollback.
+      expect(await tx.site.findMany({ orderBy: { key: "asc" } })).toEqual(sitesBefore);
+      expect(await tx.cmsPage.count()).toBe(pagesBefore);
+      // Forward again, now over existing sites (the DEV case): the seed rows come from Part 3.
+      for (const stmt of statements(sql)) await tx.$executeRawUnsafe(stmt);
+      await tx.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+      const again = await tx.siteLocale.findMany({ select: { siteId: true, locale: true } });
+      expect(again.map((r) => `${r.siteId === BV ? "BV" : "COM"}:${r.locale}`).sort()).toEqual([
+        "BV:en",
+        "BV:nl",
+        "COM:en",
+      ]);
+      expect(await tx.site.findMany({ orderBy: { key: "asc" } })).toEqual(sitesBefore);
+    });
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("shows each readable site's languages in the CMS context, read only and site-scoped", async () => {
+    const bv = CmsContextResponseSchema.parse((await bvReader.get("/context")).body);
+    expect(bv.sites.map((s) => s.key)).toEqual(["BV"]);
+    expect(bv.sites[0]?.locales).toEqual([
+      { locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+      { locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+    ]);
+    const com = CmsContextResponseSchema.parse((await comEditor.get("/context")).body);
+    expect(com.sites.map((s) => [s.key, s.locales.map((l) => l.locale)])).toEqual([
+      ["CORPORATE", ["en"]],
+    ]);
+    const all = CmsContextResponseSchema.parse((await root.get("/context")).body);
+    expect(all.sites.map((s) => [s.key, s.locales.length])).toEqual([
+      ["BV", 2],
+      ["CORPORATE", 1],
+    ]);
+    expect(CmsContextResponseSchema.parse((await nobody.get("/context")).body).sites).toEqual([]);
+    // The page response carries the same read-only list (no route changes a language).
+    const list = await bvEditor.get(`/sites/${BV}/pages`);
+    expect(list.status).toBe(200);
+    expect(list.body.site.locales.map((l: { locale: string }) => l.locale)).toEqual(["en", "nl"]);
+    for (const p of [`/sites/${BV}/locales`, `/sites/${BV}/locales/nl`]) {
+      expect((await root.post(p, { public: true })).status).toBe(404);
+    }
+  });
+
+  it("lists only public languages on the public sites; Dutch never appears", async () => {
+    const bv = PublicSiteLocalesResponseSchema.parse((await pub("/locales")).body);
+    expect(bv).toEqual({ defaultLocale: "en", locales: [{ locale: "en", isDefault: true }] });
+    const com = PublicSiteLocalesResponseSchema.parse(
+      (await pub("/locales", TEST_KEYS.webCorporate)).body,
+    );
+    expect(com).toEqual({ defaultLocale: "en", locales: [{ locale: "en", isDefault: true }] });
+    expect(JSON.stringify((await pub("/locales")).body)).not.toContain('"nl"');
+    // Without a site key there is no answer.
+    const bare = await fetch(`${base}/api/v1/public/cms/locales`);
+    expect(bare.status).not.toBe(200);
+  });
+
+  const seoGet = (p: string) =>
+    fetch(`${base}/api/v1/public/seo${p}`, {
+      headers: { "x-dp-proxy-key": TEST_KEYS.webBv, "x-dp-client-ip": "10.20.30.43" },
+    }).then(parse);
+  const sitemapPaths = async () =>
+    PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body).entries.map((e) => e.path);
+  const nlPage = (title: string) =>
+    row({ locale: "nl", title, content: { sections: [{ ...HERO, title }] } });
+
+  it("Dutch (enabled, not public): draft, preview, publish, history, restore and unpublish work for staff; visitors get 404", async () => {
+    const p = await nlPage("Over ons (ML-1 probe)");
+    // Draft.
+    const draft = await bvEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title: "Over ons (ML-1 probe, v2)",
+      slug: p.path!.slice(1),
+      seo: SEO,
+      content: { sections: [{ ...HERO, title: "Wie wij zijn" }] },
+    });
+    expect(draft.status, JSON.stringify(draft.body)).toBe(200);
+    const v2 = CmsPageResponseSchema.parse(draft.body).page;
+    expect(v2.locale).toBe("nl");
+    // Authorised preview of the draft (signed link) shows it; the site key alone does not.
+    const pre = await bvReader.post(`/pages/${p.id}/preview`, {});
+    expect(pre.status, JSON.stringify(pre.body)).toBe(200);
+    const token = CmsPreviewResponseSchema.parse(pre.body).url.split("/preview/")[1]!;
+    const view = await pub(`/preview/${token}`);
+    expect(view.status, JSON.stringify(view.body)).toBe(200);
+    expect(CmsPublicBundleSchema.parse(view.body).page.title).toBe("Over ons (ML-1 probe, v2)");
+    // Publish: allowed, recorded as a normal publication.
+    const published = await bvPublisher.post(`/pages/${p.id}/publish`, { version: v2.version });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    const live = CmsPageResponseSchema.parse(published.body).page;
+    expect(live.publication).toMatchObject({ status: "PUBLISHED", revisionNumber: 1 });
+    expect(await owner.cmsPageRevision.count({ where: { pageId: p.id } })).toBe(1);
+    // The admin sees it as live; visitors do not: page, resolve, sitemap, news.
+    const listed = CmsPageListResponseSchema.parse((await bvReader.get(`/sites/${BV}/pages`)).body);
+    expect(listed.items.find((i) => i.id === p.id)?.publication?.status).toBe("PUBLISHED");
+    const page = await pub(`/page?path=${p.path}`);
+    expectError(page, 404, "NOT_FOUND");
+    expect(page.body.error.details).toEqual([]);
+    expectError(await seoGet(`/resolve?path=${encodeURIComponent(p.path!)}`), 404, "NOT_FOUND");
+    expect(await sitemapPaths()).not.toContain(p.path);
+    expect(JSON.stringify((await pub("/news")).body)).not.toContain(p.path!);
+    // History and restore work.
+    const history = CmsHistoryResponseSchema.parse(
+      (await bvReader.get(`/pages/${p.id}/history`)).body,
+    );
+    expect(history.revisions.map((r) => r.revisionNumber)).toEqual([1]);
+    const restored = await bvEditor.post(`/pages/${p.id}/restore`, {
+      version: live.version,
+      revisionNumber: 1,
+    });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    // Take back: allowed; the address stays a plain 404 (no `unpublished` hint for a hidden language).
+    const after = CmsPageResponseSchema.parse(restored.body).page;
+    const off = await bvPublisher.post(`/pages/${p.id}/unpublish`, {
+      publicationVersion: after.publication!.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect(CmsPageResponseSchema.parse(off.body).page.publication?.status).toBe("UNPUBLISHED");
+    const gone = await pub(`/page?path=${p.path}`);
+    expectError(gone, 404, "NOT_FOUND");
+    expect(gone.body.error.details).toEqual([]);
+    const goneSeo = await seoGet(`/resolve?path=${encodeURIComponent(p.path!)}`);
+    expectError(goneSeo, 404, "NOT_FOUND");
+    expect(goneSeo.body.error.details).toEqual([]);
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("a language that is not enabled is closed to editing, preview and publication", async () => {
+    const de = await row({ locale: "de", title: "Probe de", content: { sections: [HERO] } });
+    const rule = { path: "locale", rule: "not_enabled" };
+    const draftBody = {
+      version: de.version,
+      title: "x",
+      slug: de.path!.slice(1),
+      seo: SEO,
+      content: { sections: [HERO] },
+    };
+    expectError(
+      await bvEditor.post(`/pages/${de.id}/draft`, draftBody),
+      409,
+      "CONFLICT_STATE",
+      rule,
+    );
+    expectError(await bvReader.post(`/pages/${de.id}/preview`, {}), 409, "CONFLICT_STATE", rule);
+    expectError(
+      await bvPublisher.post(`/pages/${de.id}/publish`, { version: de.version }),
+      409,
+      "CONFLICT_STATE",
+      rule,
+    );
+    // Dutch switched off for a moment (as dp_owner; no API route can do it): closed too.
+    const nl = await nlPage("Probe nl closed");
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { enabled: false },
+    });
+    try {
+      expectError(
+        await bvPublisher.post(`/pages/${nl.id}/publish`, { version: nl.version }),
+        409,
+        "CONFLICT_STATE",
+        rule,
+      );
+      expectError(await bvReader.post(`/pages/${nl.id}/preview`, {}), 409, "CONFLICT_STATE", rule);
+    } finally {
+      await owner.siteLocale.update({
+        where: { siteId_locale: { siteId: BV, locale: "nl" } },
+        data: { enabled: true },
+      });
+    }
+    for (const id of [de.id, nl.id]) {
+      expect(await owner.cmsPagePublication.count({ where: { pageId: id } })).toBe(0);
+    }
+    expect(shape(await rowsOf())).toEqual(EXPECTED);
+  });
+
+  it("English is unchanged: published English stays visible on the site, resolve and sitemap", async () => {
+    const en = await row({ locale: "en", title: "Locale probe en", content: { sections: [HERO] } });
+    const ok = await bvPublisher.post(`/pages/${en.id}/publish`, { version: en.version });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect((await pub(`/page?path=${en.path}`)).status).toBe(200);
+    expect((await seoGet(`/resolve?path=${encodeURIComponent(en.path!)}`)).status).toBe(200);
+    expect(await sitemapPaths()).toContain(en.path);
   });
 });

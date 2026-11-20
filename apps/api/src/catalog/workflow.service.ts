@@ -58,6 +58,7 @@ import {
   redirectsTo,
 } from "../seo/redirects.js";
 import { requireMasterRead, toRule, uuidOr404, valueData } from "./specs.service.js";
+import { assertLocaleEnabled } from "../cms/site-locales.js";
 
 const MASTER = "product_master:edit";
 const READ = "product:read";
@@ -630,6 +631,9 @@ export class WorkflowService {
       await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id });
     }
     const db = a.db({ siteIds: [siteId], includePlatform: true });
+    // ML-1 (ADR-028 D2): the snapshot's language must be enabled on the site (visibility of a
+    // language is separate; the catalogue publishes English only until ML-8).
+    await assertLocaleEnabled(db, siteId, CATALOG_CONTENT_LOCALE);
     try {
       await db.$transaction(async (tx) => {
         // DP-193 / DP-198: every publication locks the master first (a no-op UPDATE that keeps

@@ -174,6 +174,40 @@ describe("/content renders on the server", () => {
     expect(html).not.toContain("Market update (fixture)");
     expect(html).toContain("/content/news?site=bv");
   });
+
+  it("ML-1: shows the site's languages read only (Dutch not public)", async () => {
+    reads.set("/api/v1/admin/cms/context", {
+      sites: [
+        {
+          ...site("BV", BV),
+          locales: [
+            { locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+            { locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+          ],
+        },
+        site("CORPORATE", COM),
+      ],
+    });
+    const html = renderToStaticMarkup(
+      await ContentPage({ searchParams: Promise.resolve({ site: "bv" }) } as never),
+    );
+    const panel = html.slice(html.indexOf('id="site-languages"'), html.indexOf('id="site-routes"'));
+    expect(panel).toContain("Site languages");
+    expect(panel).toContain("English (en)");
+    expect(panel).toContain("Dutch (nl)");
+    expect(panel).toContain("Default");
+    expect(panel).toContain("Public on the site");
+    expect(panel).toContain("Not public");
+    // Read only: no control that could change a language.
+    expect(panel).not.toMatch(/<(button|form|input|select|a)\b/);
+  });
+
+  it("ML-1: an API without languages shows an empty, read-only languages panel", async () => {
+    const html = renderToStaticMarkup(
+      await ContentPage({ searchParams: Promise.resolve({ site: "bv" }) } as never),
+    );
+    expect(html).toContain("No languages recorded for this site");
+  });
 });
 
 describe("/content/news renders on the server (DP-020)", () => {

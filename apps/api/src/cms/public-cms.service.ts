@@ -27,6 +27,7 @@ import {
   type CmsPublicBundle,
   type CmsPublicNews,
   type CmsPublicPage,
+  type PublicSiteLocalesResponse,
 } from "@dream/contracts";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError } from "../iam/http/api-error.js";
@@ -42,6 +43,7 @@ import {
   type LiveRow,
 } from "./cms-content.js";
 import { resolvePublicMenus } from "./menu-links.js";
+import { publicLocaleSet, publicSiteLocales } from "./site-locales.js";
 
 /** "/", "/<slug>" or a news article "/news/<slug>" (DP-020). */
 const PATH = /^\/(news\/[a-z0-9]+(-[a-z0-9]+)*|([a-z0-9]+(-[a-z0-9]+)*)?)$/;
@@ -78,6 +80,19 @@ export class PublicCmsService {
     );
   }
 
+  /**
+   * ML-1 (ADR-028 D2/D14): the published rows visitors may see — only pages in a public language
+   * of the site. Content of a language that is enabled but not public is published for staff
+   * (admin, signed preview) and answers 404 here; menus never link to it.
+   */
+  private static async visibleLive(site: PublicSite): Promise<LiveRow[]> {
+    const [live, visible] = await Promise.all([
+      liveRows(site.db, site.siteId),
+      publicLocaleSet(site.db, site.siteId),
+    ]);
+    return live.filter((r) => visible.has(r.page.locale));
+  }
+
   /** The published fragments in their public shape (DP-219: menus resolved). */
   private async fragments(
     site: PublicSite,
@@ -97,11 +112,17 @@ export class PublicCmsService {
     return out;
   }
 
+  /** ML-1 (DP-073): the public languages of the key's site; others never appear. */
+  async locales(ctx: RequestContext): Promise<PublicSiteLocalesResponse> {
+    const site = await this.sites.begin(ctx);
+    return publicSiteLocales(site.db, site.siteId);
+  }
+
   async page(ctx: RequestContext, rawPath: unknown): Promise<CmsPublicBundle> {
     const path = typeof rawPath === "string" ? rawPath : "";
     if (!PATH.test(path)) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
-    const live = await liveRows(site.db, site.siteId);
+    const live = await PublicCmsService.visibleLive(site);
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === path);
     const page = row ? this.served(row) : null;
     if (!page) {
@@ -117,10 +138,22 @@ export class PublicCmsService {
 
   /** Whether the page last published at `path` is UNPUBLISHED now. */
   private async wasUnpublished(site: PublicSite, path: string): Promise<boolean> {
-    const revisions = await site.db.cmsPageRevision.findMany({
-      where: { siteId: site.siteId, path },
-      select: { id: true },
+    // ML-1: only pages in a public language count, so a page of a language that is not public
+    // (published or taken back) is never revealed by the `unpublished` detail.
+    const [found, visible] = await Promise.all([
+      site.db.cmsPageRevision.findMany({
+        where: { siteId: site.siteId, path },
+        select: { id: true, pageId: true },
+      }),
+      publicLocaleSet(site.db, site.siteId),
+    ]);
+    if (found.length === 0) return false;
+    const pages = await site.db.cmsPage.findMany({
+      where: { id: { in: [...new Set(found.map((r) => r.pageId))] } },
+      select: { id: true, locale: true },
     });
+    const shown = new Set(pages.filter((p) => visible.has(p.locale)).map((p) => p.id));
+    const revisions = found.filter((r) => shown.has(r.pageId));
     if (revisions.length === 0) return false;
     const pub = await site.db.cmsPagePublication.findFirst({
       where: {
@@ -140,7 +173,7 @@ export class PublicCmsService {
    */
   async news(ctx: RequestContext): Promise<CmsPublicNews> {
     const site = await this.sites.begin(ctx);
-    const live = await liveRows(site.db, site.siteId);
+    const live = await PublicCmsService.visibleLive(site);
     const articles: CmsPublicArticle[] = [];
     for (const row of live) {
       if (!cmsIsArticle(row.page) || !row.revision.path) continue;
