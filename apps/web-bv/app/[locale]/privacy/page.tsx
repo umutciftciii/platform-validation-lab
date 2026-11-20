@@ -4,6 +4,8 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { CatalogShell } from "@/components/products/catalog-shell";
+import { privacyLocale } from "@/lib/catalog-locale";
+import { localizeHref } from "@/lib/locale-routing";
 import { sitePrivacy } from "@/lib/privacy";
 import {
   LEAD_MARKETING_CONSENT,
@@ -19,10 +21,17 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-/** DP-095 D-T5: the privacy policy of this site. Rendered per request: the gate reads the env. */
-export default function PrivacyPage() {
+/**
+ * DP-095 D-T5: the privacy policy of this site. Rendered per request: the gate reads the env.
+ * ML-3: English only (`/en/privacy`); the Dutch policy needs its own approval (ADR-028 D12).
+ */
+export default async function PrivacyPage() {
+  const locale = await privacyLocale();
   return (
-    <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Privacy Policy" }]}>
+    <CatalogShell
+      locale={locale}
+      crumbs={[{ label: "Home", href: localizeHref(locale, "/") }, { label: "Privacy Policy" }]}
+    >
       <Suspense fallback={<div className="h-96 animate-pulse rounded-2xl bg-glass/[0.03]" />}>
         <PrivacyPolicy />
       </Suspense>

@@ -15,15 +15,19 @@ import { PublicSeoService } from "./public-seo.service.js";
 export class PublicSeoController {
   constructor(@Inject(PublicSeoService) private readonly seo: PublicSeoService) {}
 
-  /** Whether an address has live content (200) or not (404, `unpublished` when taken off). */
+  /**
+   * Whether an address has live content (200) or not (404, `unpublished` when taken off).
+   * ML-3: `locale` names a language other than the default one (the path is then inside it).
+   */
   @Get("resolve")
   @Header("Cache-Control", "no-store")
   resolve(
     @Ctx() ctx: RequestContext,
     @Query("path") path: unknown,
     @Query("query") query: unknown,
+    @Query("locale") locale: unknown,
   ): Promise<PublicSeoResolveResponse> {
-    return this.seo.resolve(ctx, path, query ?? "");
+    return this.seo.resolve(ctx, path, query ?? "", locale);
   }
 
   /** DP-209: the published SEO defaults of the site (null until published). */

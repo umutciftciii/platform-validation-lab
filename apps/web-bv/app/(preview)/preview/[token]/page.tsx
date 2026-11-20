@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { cache, Suspense } from "react";
+import { Suspense } from "react";
 
 import { HomePage, HomeSkeleton, HomeUnavailable } from "@/components/home/home-page";
 import { ArticlePage, NewsList } from "@/components/news/news-pages";
 import { TemplatePage } from "@/components/template/template-page";
-import { getPreview, newsPreview } from "@/lib/cms-home";
-
-const preview = cache(getPreview);
+import { newsPreview } from "@/lib/cms-home";
+import { previewRead as preview } from "@/lib/preview-read";
 
 /**
  * CMS S2/S3 preview (ADR-020 D6): the current draft of the page a signed link names (the home

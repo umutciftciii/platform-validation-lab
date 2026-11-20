@@ -102,11 +102,30 @@ export const CmsPublicPageSchema = z.object({
 });
 export type CmsPublicPage = z.infer<typeof CmsPublicPageSchema>;
 
+/**
+ * ML-3 (DP-236, ADR-028 D3/D7): a published counterpart of the page in another PUBLIC language
+ * of the site (same translation group), at its stored path inside that language ("/over-ons" for
+ * the public address "/nl/over-ons"). The language switcher goes there; without one it goes to
+ * that language's home. Never a draft, never a language that is not public.
+ */
+export const CmsPublicAlternateSchema = z.strictObject({
+  locale: z.string().min(2).max(35),
+  path: z.string().startsWith("/"),
+});
+export type CmsPublicAlternate = z.infer<typeof CmsPublicAlternateSchema>;
+
 /** A page with the site-wide fragments around it; a missing fragment is not shown. */
 export const CmsPublicBundleSchema = z.object({
   page: CmsPublicPageSchema,
   fragments: z.record(z.string(), CmsPublicPageSchema.nullable()),
   preview: z.boolean(),
+  /** ML-3: published counterparts in the other public languages (absent in a preview). */
+  alternates: z.array(CmsPublicAlternateSchema).max(20).optional(),
+  /**
+   * DP-250: the language of the previewed draft (a preview link carries no language in its
+   * address); absent in the public page read, whose language the request names.
+   */
+  locale: z.string().min(2).max(35).optional(),
 });
 export type CmsPublicBundle = z.infer<typeof CmsPublicBundleSchema>;
 

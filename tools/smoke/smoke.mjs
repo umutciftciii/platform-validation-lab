@@ -117,8 +117,10 @@ for (const [name, url, init, status, code] of boundary) {
 }
 
 const pages = {};
-// 2. BV routes (CMS S2, DP-134): "/" renders the CMS home page (or its unavailable state when
-// nothing is published; never content from code); the former demo routes redirect to "/".
+// 2. BV routes (CMS S2, DP-134): the CMS home page (or its unavailable state when nothing is
+// published; never content from code); the former demo routes redirect to the home page.
+// ML-3 (DP-236, ADR-028 D3): every page address carries its language: "/" answers one 301 to
+// "/en", an unprefixed page address one 301 to "/en/...", a language that is not public is 404.
 for (const route of [
   "/demo/iccsyn-hero",
   "/demo/iccsyn-hero-compact",
@@ -130,27 +132,63 @@ for (const route of [
     const loc = new URL(res.headers.get("location") ?? "x:", base("web-bv")).pathname;
     record(
       "bv-route",
-      `${route} -> /`,
-      [307, 308].includes(res.status) && loc === "/",
+      `${route} -> /en`,
+      [307, 308].includes(res.status) && loc === "/en",
       `HTTP ${res.status} ${loc}`,
     );
   } catch (e) {
     record("bv-route", route, false, String(e));
   }
 }
+// ML-3: one 301 per address, never Accept-Language, the query kept.
+for (const [from, to] of [
+  ["/", "/en"],
+  ["/?utm_source=smoke", "/en?utm_source=smoke"],
+  ["/news", "/en/news"],
+  ["/products", "/en/products"],
+  ["/cms-smoke-no-such-page", "/en/cms-smoke-no-such-page"],
+]) {
+  try {
+    const res = await get(base("web-bv") + from, { headers: { "accept-language": "nl-NL,nl" } });
+    const loc = new URL(res.headers.get("location") ?? "x:", base("web-bv"));
+    record(
+      "bv-route",
+      `${from} -> 301 ${to}`,
+      res.status === 301 && `${loc.pathname}${loc.search}` === to,
+      `HTTP ${res.status} ${loc.pathname}${loc.search}`,
+    );
+  } catch (e) {
+    record("bv-route", `${from} -> 301 ${to}`, false, String(e));
+  }
+}
 try {
-  const res = await get(base("web-bv") + "/");
+  const res = await get(base("web-bv") + "/en");
   const html = await res.text();
-  pages["/"] = html;
+  pages["/en"] = html;
   const known = /ICCSYN|This page is not available|cannot be shown right now/.test(html);
   record(
     "bv-route",
-    "/ (CMS home)",
-    res.status === 200 && known,
+    "/en (CMS home, lang=en)",
+    res.status === 200 && known && /<html[^>]* lang="en"/.test(html),
     `HTTP ${res.status} ${html.length} B`,
   );
 } catch (e) {
-  record("bv-route", "/ (CMS home)", false, String(e));
+  record("bv-route", "/en (CMS home)", false, String(e));
+}
+// ML-3: Dutch is enabled but not public (ADR-028 D14): every /nl address is a 404 (noindex).
+for (const p of ["/nl", "/nl/news", "/nl/cms-smoke-no-such-page"]) {
+  try {
+    const res = await get(base("web-bv") + p);
+    const html = await res.text();
+    record(
+      "bv-route",
+      `${p} 404 while nl is not public`,
+      res.status === 404 && /<meta name="robots" content="noindex/.test(html),
+      `HTTP ${res.status}`,
+    );
+  } catch (e) {
+    record("bv-route", `${p} 404`, false, String(e));
+  }
 }
 // Preview links: never cached or indexed; an invalid token shows nothing.
 try {
@@ -170,7 +208,7 @@ try {
 // CMS S3: an unknown or unpublished /<slug> renders the not-found page with noindex, never a draft.
 // DP-207: with a real HTTP 404 (proxy.ts checks the address before the page streams).
 try {
-  const res = await get(base("web-bv") + "/cms-smoke-no-such-page");
+  const res = await get(base("web-bv") + "/en/cms-smoke-no-such-page");
   const html = await res.text();
   record(
     "bv-route",
@@ -187,7 +225,7 @@ try {
 // where the site cannot reach the public CMS API (as "/" above); an unknown article is the
 // not-found page with noindex and (DP-207) HTTP 404.
 try {
-  const res = await get(base("web-bv") + "/news");
+  const res = await get(base("web-bv") + "/en/news");
   const html = await res.text();
   record(
     "bv-route",
@@ -199,7 +237,7 @@ try {
   record("bv-route", "/news", false, String(e));
 }
 try {
-  const res = await get(base("web-bv") + "/news/cms-smoke-no-such-article");
+  const res = await get(base("web-bv") + "/en/news/cms-smoke-no-such-article");
   const html = await res.text();
   record(
     "bv-route",
@@ -281,18 +319,22 @@ try {
 
 // 5b. Privacy policy (DP-095 D-T5) on both sites, and the current lead form texts (D-T7). Local
 // stacks run as DP_DEPLOY_ENV=local, where the draft is shown with its banner.
-for (const service of ["web-bv", "web-corporate"]) {
+// ML-3: the BV policy lives at /en/privacy (English only, ADR-028 D12).
+for (const [service, policyPath] of [
+  ["web-bv", "/en/privacy"],
+  ["web-corporate", "/privacy"],
+]) {
   try {
-    const res = await get(base(service) + "/privacy");
+    const res = await get(base(service) + policyPath);
     const html = await res.text();
     record(
       "privacy",
-      `${service} /privacy`,
+      `${service} ${policyPath}`,
       res.status === 200 && html.includes("Privacy Policy") && html.includes("Who is responsible"),
       `HTTP ${res.status}`,
     );
   } catch (e) {
-    record("privacy", `${service} /privacy`, false, String(e));
+    record("privacy", `${service} ${policyPath}`, false, String(e));
   }
 }
 try {
@@ -350,16 +392,16 @@ try {
   record("catalog-public", "api public route without key -> 404", false, String(e));
 }
 try {
-  const res = await get(base("web-bv") + "/products");
+  const res = await get(base("web-bv") + "/en/products");
   const html = await res.text();
   record(
     "catalog-public",
-    "web-bv /products",
+    "web-bv /en/products",
     res.status === 200 && /Products/.test(html) && !/not available right now/.test(html),
     `HTTP ${res.status} ${html.length} B`,
   );
 } catch (e) {
-  record("catalog-public", "web-bv /products", false, String(e));
+  record("catalog-public", "web-bv /en/products", false, String(e));
 }
 for (const [p, ok] of [
   ["/product-images/not-an-id/display", [404]],

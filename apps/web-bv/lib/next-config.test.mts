@@ -14,3 +14,14 @@ describe("next.config (dev memory, DP-084 / DP-176)", () => {
     assert.equal(nextConfig.experimental?.turbopackFileSystemCacheForDev, false);
   });
 });
+
+describe("next.config (ML-3 routing)", () => {
+  it("has a global 404 for addresses outside the language and preview layouts", () => {
+    assert.equal(nextConfig.experimental?.globalNotFound, true);
+  });
+
+  it("sends the old prototype review routes to the English home in one hop", async () => {
+    const rules = await nextConfig.redirects?.();
+    assert.deepEqual(rules, [{ source: "/demo/:path*", destination: "/en", permanent: false }]);
+  });
+});

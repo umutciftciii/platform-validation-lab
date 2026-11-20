@@ -6,9 +6,11 @@ import { cache, Suspense } from "react";
 
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { ProductDetailView } from "@/components/products/catalog-views";
-import { browseHref, trail } from "@/components/products/browse";
-import { LIVE_LINKS } from "@/components/products/live-links";
+import { trail } from "@/components/products/browse";
+import { liveLinks } from "@/components/products/live-links";
 import { ProductJsonLd } from "@/components/seo/json-ld";
+import { catalogLocale } from "@/lib/catalog-locale";
+import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 import {
   documentHref,
@@ -33,8 +35,9 @@ const product = cache(getProduct);
  * snapshot. An unknown product never reaches this (proxy.ts answers 404); while the API cannot
  * answer, the page is not indexed.
  */
-export async function generateMetadata({ params }: PageProps<"/products/[slug]">): Promise<Metadata> {
+export async function generateMetadata({ params }: PageProps<"/[locale]/products/[slug]">): Promise<Metadata> {
   await connection();
+  const locale = await catalogLocale();
   const { slug } = await params;
   const res = await product(slug);
   if (!res.ok) return noindexMetadata("Product | Dream Petroleum BV");
@@ -51,6 +54,7 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
   return pageMetadata(
     {
       path: `/products/${p.slug}`,
+      locale,
       title: p.seo.title ?? `${p.name} | ${site.siteName}`,
       description: p.seo.description ?? p.summary,
       noindex: p.seo.noindex,
@@ -68,11 +72,12 @@ export async function generateMetadata({ params }: PageProps<"/products/[slug]">
  * One published BV product (PM-3): the approved snapshot from the platform API. Unknown,
  * unpublished or hidden products are a 404; nothing of a draft is ever rendered.
  */
-export default function ProductPage({ params }: PageProps<"/products/[slug]">) {
+export default async function ProductPage({ params }: PageProps<"/[locale]/products/[slug]">) {
+  const locale = await catalogLocale();
   return (
     <Suspense
       fallback={
-        <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products", href: "/products" }]}>
+        <CatalogShell locale={locale} crumbs={baseCrumbs(locale)}>
           <DetailSkeleton />
         </CatalogShell>
       }
@@ -82,8 +87,17 @@ export default function ProductPage({ params }: PageProps<"/products/[slug]">) {
   );
 }
 
-async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">["params"] }) {
+function baseCrumbs(locale: RouteLocale) {
+  return [
+    { label: "Home", href: localizeHref(locale, "/") },
+    { label: "Products", href: localizeHref(locale, "/products") },
+  ];
+}
+
+async function ProductDetail({ params }: { params: PageProps<"/[locale]/products/[slug]">["params"] }) {
   await connection();
+  const locale = await catalogLocale();
+  const links = liveLinks(locale);
   const { slug } = await params;
   const [result, docs, xrefs, cats, list] = await Promise.all([
     product(slug),
@@ -93,15 +107,14 @@ async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">
     listProducts(),
   ]);
   if (!result.ok && result.reason === "not_found") notFound();
-  const home = { label: "Home", href: "/" };
-  const products = { label: "Products", href: "/products" };
+  const [home, products] = baseCrumbs(locale) as [{ label: string; href: string }, { label: string; href: string }];
   if (!result.ok) {
     return (
-      <CatalogShell crumbs={[home, products]}>
+      <CatalogShell locale={locale} crumbs={[home, products]}>
         <div className="pt-8">
           <CatalogNotice title="This product is not available right now">
             Please try again in a moment, or go back to{" "}
-            <Link href="/products" className="underline">
+            <Link href={products.href} className="underline">
               all products
             </Link>
             .
@@ -114,21 +127,21 @@ async function ProductDetail({ params }: { params: PageProps<"/products/[slug]">
   // DP-162: Home / Products / <category chain> / <product>, each category a filtered list
   const chain = trail(cats.ok ? cats.data : [], p.category.slug);
   const categoryCrumbs = (chain.length ? chain : [{ slug: p.category.slug, name: p.category.name }]).map(
-    (c) => ({ label: c.name, href: browseHref({ category: c.slug }) }),
+    (c) => ({ label: c.name, href: links.list({ category: c.slug }) }),
   );
   const related = list.ok
     ? list.data.filter((x) => x.category.slug === p.category.slug && x.slug !== p.slug).slice(0, 4)
     : [];
   return (
-    <CatalogShell crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}>
-      <ProductJsonLd product={p} />
+    <CatalogShell locale={locale} crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}>
+      <ProductJsonLd product={p} locale={locale} />
       <ProductDetailView
         p={p}
         related={related}
-        links={LIVE_LINKS}
+        links={links}
         extras={
           <>
-            {docs.ok && docs.data.length ? <Documents slug={slug} items={docs.data} /> : null}
+            {docs.ok && docs.data.length ? <Documents slug={slug} locale={locale} items={docs.data} /> : null}
 
             {xrefs.ok && xrefs.data.length ? <CrossReferences items={xrefs.data} /> : null}
           </>
@@ -153,7 +166,15 @@ function sizeLabel(bytes: number): string {
  * PM-5: documents of this product. PUBLIC ones link to a download; lead-gated ones (DP-042) to the
  * short request form; members-only ones say why they are closed.
  */
-function Documents({ slug, items }: { slug: string; items: PublicDocument[] }) {
+function Documents({
+  slug,
+  locale,
+  items,
+}: {
+  slug: string;
+  locale: RouteLocale;
+  items: PublicDocument[];
+}) {
   return (
     <section aria-labelledby="documents" className="mt-12">
       <h2 id="documents" className="text-xs font-semibold uppercase tracking-[0.12em] text-steel">
@@ -184,7 +205,7 @@ function Documents({ slug, items }: { slug: string; items: PublicDocument[] }) {
               </a>
             ) : d.requestable ? (
               <Link
-                href={`/products/${slug}/documents/${d.id}`}
+                href={localizeHref(locale, `/products/${slug}/documents/${d.id}`)}
                 className="inline-flex items-center gap-2 rounded-full border border-amber/40 px-4 py-1.5 text-sm text-amber transition-colors hover:border-amber hover:bg-amber/10"
               >
                 Request download

@@ -6,6 +6,7 @@ import {
 } from "@dream/contracts";
 
 import { imageSrc } from "@/lib/catalog-api";
+import { DEFAULT_LOCALE, localePath, type RouteLocale } from "@/lib/locale-routing";
 import { LOGO_PATH, ORGANIZATION_NAME, sitePolicy } from "@/lib/seo";
 
 /**
@@ -30,14 +31,21 @@ export function OrganizationJsonLd() {
 }
 
 /** A published product, from its approved snapshot only (no price, rating or review). */
-export function ProductJsonLd({ product: p }: { product: PublicProduct }) {
+export function ProductJsonLd({
+  product: p,
+  locale = DEFAULT_LOCALE,
+}: {
+  product: PublicProduct;
+  locale?: RouteLocale;
+}) {
   const { origin } = sitePolicy();
   if (!origin) return null;
   return (
     <JsonLd
       data={productJsonLd({
         origin,
-        path: `/products/${p.slug}`,
+        // ML-3: the product's address in its language (the canonical URL).
+        path: localePath(locale, `/products/${p.slug}`),
         name: p.name,
         code: p.code,
         description: p.summary ?? p.description,

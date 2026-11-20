@@ -27,6 +27,8 @@ export interface CatalogLinks {
   product(slug: string): string;
   searchAction: string;
   image(id: string, variant: "thumb" | "display"): string;
+  /** ML-3: the contact page in the page's language ("/en/contact"). */
+  contact: string;
 }
 
 /** The list under the page header: categories, search, count, cards and pages. */
@@ -437,7 +439,7 @@ export function ProductDetailView({
           {enquiry ? (
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
-                href="/contact"
+                href={links.contact}
                 className="inline-flex h-11 items-center rounded-full bg-amber px-6 text-sm font-medium text-ink transition-colors hover:bg-amber/90"
               >
                 Ask about this product

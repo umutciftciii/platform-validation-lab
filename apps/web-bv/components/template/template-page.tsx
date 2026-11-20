@@ -11,7 +11,8 @@ import SiteFooter from "@/components/ui/site-footer";
 import type { SiteFooterContent } from "@/content/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
-import { PRIVACY_PATH, sitePrivacy } from "@/lib/privacy";
+import type { RouteLocale } from "@/lib/locale-routing";
+import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 
 /**
  * A CMS template page of the BV site (CMS S3, DP-017): the four ready-made section types in the
@@ -28,7 +29,13 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
         className={view.sections.some((s) => s.type === "contact") ? "tp tp-contact-page" : "tp"}
       >
         {view.sections.map((s, i) => (
-          <Section key={s.id} section={s} first={i === 0} contact={view.footer?.contact ?? null} />
+          <Section
+            key={s.id}
+            section={s}
+            first={i === 0}
+            contact={view.footer?.contact ?? null}
+            locale={view.locale}
+          />
         ))}
       </main>
       {view.footer ? <SiteFooter content={view.footer} /> : null}
@@ -44,10 +51,13 @@ export function Section({
   section,
   first,
   contact,
+  locale,
 }: {
   section: TemplateSection;
   first: boolean;
   contact: ContactDetails | null;
+  /** ML-3/DP-250: the page's language, for fixed links (the policy link of the contact form). */
+  locale: RouteLocale;
 }) {
   switch (section.type) {
     case "hero":
@@ -189,7 +199,7 @@ export function Section({
         </section>
       );
     case "contact":
-      return <ContactSection section={section} contact={contact} />;
+      return <ContactSection section={section} contact={contact} locale={locale} />;
   }
 }
 
@@ -221,7 +231,9 @@ function contactCountries(): { code: string; name: string }[] {
 function ContactSection({
   section,
   contact,
+  locale,
 }: {
+  locale: RouteLocale;
   section: Extract<TemplateSection, { type: "contact" }>;
   contact: ContactDetails | null;
 }) {
@@ -279,7 +291,7 @@ function ContactSection({
             title={section.formTitle}
             countries={contactCountries()}
             notice={{ version: LEAD_CONTACT_NOTICE.version, text: LEAD_CONTACT_NOTICE.text }}
-            privacyHref={PRIVACY_PATH}
+            privacyHref={privacyPolicyHref(locale)}
           />
         ) : (
           <div className="tp-contact-form">
