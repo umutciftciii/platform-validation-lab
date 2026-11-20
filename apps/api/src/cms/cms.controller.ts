@@ -25,6 +25,7 @@ import type {
   CmsPreviewResponse,
   CmsPublicBundle,
   CmsPublicNews,
+  PublicSiteLocalesResponse,
 } from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { CmsService } from "./cms.service.js";
@@ -141,6 +142,13 @@ export class CmsController {
 @Controller("api/v1/public/cms")
 export class PublicCmsController {
   constructor(@Inject(PublicCmsService) private readonly cms: PublicCmsService) {}
+
+  /** ML-1 (DP-073): the public languages of the site (default first). */
+  @Get("locales")
+  @Header("Cache-Control", "no-store")
+  locales(@Ctx() ctx: RequestContext): Promise<PublicSiteLocalesResponse> {
+    return this.cms.locales(ctx);
+  }
 
   @Get("page")
   @Header("Cache-Control", "no-store")

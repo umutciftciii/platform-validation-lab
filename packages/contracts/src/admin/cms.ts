@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
 import { SEO_TEXT_LIMITS, SeoCanonicalPathSchema } from "../seo.js";
+import { SiteLocaleSchema } from "../site-locales.js";
 
 export const CMS_API = "/api/v1/admin/cms";
 
@@ -904,6 +905,11 @@ export const CmsSiteSchema = z.object({
   locale: z.string(),
   canEdit: z.boolean(),
   canPublish: z.boolean(),
+  /**
+   * ML-1 (DP-073): every language of the site (default first), read only. Absent in responses
+   * of an older API, hence the empty default.
+   */
+  locales: z.array(SiteLocaleSchema).default([]),
 });
 export type CmsSite = z.infer<typeof CmsSiteSchema>;
 

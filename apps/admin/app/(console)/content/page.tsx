@@ -10,6 +10,7 @@ import {
 } from "@dream/contracts";
 import { ContentTabs } from "../../../components/cms/content-tabs";
 import { ImportButton } from "../../../components/cms/import-button";
+import { SiteLanguagesPanel } from "../../../components/cms/site-languages";
 import {
   CmsKindPill,
   pickCmsSite,
@@ -172,6 +173,8 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
           </ul>
         )}
       </Panel>
+
+      <SiteLanguagesPanel site={site} />
 
       <Panel
         id="site-routes"

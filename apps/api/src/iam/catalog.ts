@@ -32,6 +32,12 @@ export interface SiteDef {
   name: string;
   primaryDomain: string;
   defaultLocale: string;
+  /**
+   * ML-1 (DP-073, ADR-028 D2): further languages of the site besides `defaultLocale`. The sync
+   * only adds a missing one (enabled for editing, never public) and never changes an existing
+   * row: making a language public is a separate, audited decision (ADR-028 D14).
+   */
+  extraLocales: readonly { locale: string; sortOrder: number }[];
 }
 
 export interface ModuleDef {
@@ -95,12 +101,14 @@ export const SITES: readonly SiteDef[] = [
     name: "Dream Petroleum BV",
     primaryDomain: "dreampetroleumbv.com",
     defaultLocale: "en",
+    extraLocales: [{ locale: "nl", sortOrder: 10 }],
   },
   {
     key: "CORPORATE",
     name: "Dream Petroleum",
     primaryDomain: "dreampetroleum.com",
     defaultLocale: "en",
+    extraLocales: [],
   },
 ];
 

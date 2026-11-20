@@ -214,6 +214,8 @@ model Site {
   // DP-210 (ADR-024 D7/D8): the site's redirects and the lock that serialises address changes.
   redirects                    SiteRedirect[]
   pathLock                     SitePathLock?
+  // ML-1 (DP-073, ADR-028 D2): the site's languages.
+  locales                      SiteLocale[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1869,4 +1871,27 @@ model SitePathLock {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+}
+
+/// ML-1 (DP-073, ADR-028 D2): one language of a site. `enabled` opens it for editing in the
+/// admin, `public` makes it visible on the site, `isDefault` marks the site's default (one per
+/// site, equal to Site.defaultLocale, enabled and public: CHECK and deferred triggers in the
+/// migration). The API only reads this table; languages come from migrations and the catalogue
+/// sync (insert only).
+model SiteLocale {
+  siteId    String   @db.Uuid
+  /// BCP 47 language tag (CHECK), e.g. "en", "nl".
+  locale    String   @db.VarChar(35)
+  enabled   Boolean  @default(false)
+  public    Boolean  @default(false)
+  isDefault Boolean  @default(false)
+  /// Order in language lists (0…1000).
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@id([siteId, locale])
+  @@unique([siteId], map: "SiteLocale_default_siteId_key", where: raw("\"isDefault\""))
 }
