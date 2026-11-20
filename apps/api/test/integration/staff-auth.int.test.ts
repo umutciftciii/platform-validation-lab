@@ -2140,26 +2140,59 @@ describe("deactivation and the last administrator", () => {
 // ------------------------------------------------------------------------------------------
 
 describe("no timing or secret leaks", () => {
-  it("NT-E2: known vs unknown e-mail, p95 difference < 50 ms (100 + 100 samples)", async () => {
-    const measure = async (target: string) => {
-      const out: number[] = [];
-      for (let i = 0; i < 100; i++) {
-        await db.authThrottle.deleteMany({});
-        const b = new Browser(TEST_KEYS.admin, `198.19.${i}.1`);
-        const t0 = performance.now();
-        const r = await b.post("/auth/staff/login", {
-          email: target,
-          password: PW.wrong_password_123,
-        });
-        out.push(performance.now() - t0);
-        expect(r.status).toBe(401);
-      }
-      out.sort((a, b) => a - b);
-      return out[94] as number;
+  // DP-102: the two e-mails are measured as interleaved pairs (order alternates per pair), after
+  // an untimed warm-up, never as two consecutive blocks. Timing noise on a shared CI runner comes
+  // in bursts of seconds (CPU steal, disk flushes); with blocks a burst lands on one side only and
+  // shows up as a p95 "difference" even when both sides take the same code path (measured: the
+  // same e-mail against itself failed the old block test). Interleaved pairs share every burst.
+  // The p95 bound is unchanged; the median paired difference is an added, stricter check: a
+  // skipped dummy Argon2 verification moves it by the full hash cost (about 20 ms) while the
+  // bursts cancel out (|median| <= 0.3 ms measured without a leak).
+  it("NT-E2: known vs unknown e-mail, interleaved pairs: p95 difference < 50 ms and median paired difference < 5 ms (10 warm-up + 100 pairs)", async () => {
+    const WARM_UP = 10;
+    const PAIRS = 100;
+    const unknownEmail = "nobody.at.all@staff.dp.test";
+    const once = async (email: string, n: number) => {
+      await db.authThrottle.deleteMany({});
+      const b = new Browser(TEST_KEYS.admin, `198.19.${n}.1`);
+      const t0 = performance.now();
+      const r = await b.post("/auth/staff/login", { email, password: PW.wrong_password_123 });
+      const ms = performance.now() - t0;
+      expect(r.status).toBe(401);
+      return ms;
     };
-    const known = await measure(admin.email);
-    const unknown = await measure("nobody.at.all@staff.dp.test");
-    expect(Math.abs(known - unknown)).toBeLessThan(50);
+    const known: number[] = [];
+    const unknown: number[] = [];
+    for (let i = 0; i < WARM_UP + PAIRS; i++) {
+      let k: number;
+      let u: number;
+      if (i % 2 === 0) {
+        k = await once(admin.email, i);
+        u = await once(unknownEmail, i + 128);
+      } else {
+        u = await once(unknownEmail, i + 128);
+        k = await once(admin.email, i);
+      }
+      if (i >= WARM_UP) {
+        known.push(k);
+        unknown.push(u);
+      }
+    }
+    const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
+    const p95 = (xs: number[]) => sorted(xs)[94] as number;
+    const median = (xs: number[]) => {
+      const s = sorted(xs);
+      return ((s[49] as number) + (s[50] as number)) / 2;
+    };
+    const pairedMedian = median(known.map((k, i) => k - (unknown[i] as number)));
+    const p95Difference = p95(known) - p95(unknown);
+    console.info(
+      `NT-E2 p95 known ${p95(known).toFixed(1)} ms, unknown ${p95(unknown).toFixed(1)} ms; ` +
+        `median known ${median(known).toFixed(1)} ms, unknown ${median(unknown).toFixed(1)} ms; ` +
+        `median paired difference ${pairedMedian.toFixed(2)} ms`,
+    );
+    expect(Math.abs(p95Difference)).toBeLessThan(50);
+    expect(Math.abs(pairedMedian)).toBeLessThan(5);
     await db.authThrottle.deleteMany({});
   }, 300_000);
 
