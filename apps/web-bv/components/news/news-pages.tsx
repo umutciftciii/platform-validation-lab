@@ -11,6 +11,8 @@ import SiteNav from "@/components/ui/site-nav";
 import type { SiteFooterContent } from "@/content/site-footer";
 import type { SiteNavContent } from "@/content/site-nav";
 import type { ArticleView, NewsView } from "@/lib/cms-home";
+import { localizeHref } from "@/lib/locale-routing";
+import { pageHref } from "@/lib/page-locale";
 
 /**
  * DP-020: the news list (/news) and article (/news/<slug>) pages of the BV site, in the language
@@ -156,15 +158,17 @@ function ArticleCard({ article, lead }: { article: CmsPublicArticle; lead: boole
   );
 }
 
-/** /news/<slug>: the article's header, cover and body sections. */
+/** /news/<slug>: the article's header, cover and body sections (ML-3: links in its language). */
 export function ArticlePage({ view }: { view: ArticleView }) {
+  // DP-250: the article's own language (also in a preview, whose address has none).
+  const newsHref = localizeHref(view.locale, "/news");
   return (
     <Shell nav={view.nav} footer={view.footer} preview={view.preview}>
       <article className="news-article">
         <header className="news-article-head">
           <div className="tp-inner">
             <div className="tp-measure">
-              <Link href="/news" className="news-back">
+              <Link href={newsHref} className="news-back">
                 <span aria-hidden="true">←</span> {NEWS_UI.back}
               </Link>
               {view.firstPublishedAt ? (
@@ -196,7 +200,7 @@ export function ArticlePage({ view }: { view: ArticleView }) {
         ) : null}
         <div className="news-article-body">
           {view.sections.map((s) => (
-            <Section key={s.id} section={s} first={false} contact={null} />
+            <Section key={s.id} section={s} first={false} contact={null} locale={view.locale} />
           ))}
         </div>
       </article>
@@ -205,13 +209,14 @@ export function ArticlePage({ view }: { view: ArticleView }) {
 }
 
 /** An article that was published here and has been taken off the site. */
-export function ArticleRemoved({
+export async function ArticleRemoved({
   nav,
   footer,
 }: {
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
 }) {
+  const newsHref = await pageHref("/news");
   return (
     <Shell nav={nav} footer={footer}>
       <div className="tp-hero news-removed" role="status">
@@ -219,7 +224,7 @@ export function ArticleRemoved({
           <p className="tp-eyebrow">{NEWS_UI.eyebrow}</p>
           <h1 className="tp-display">{NEWS_UI.removed.title}</h1>
           <p className="tp-lead">{NEWS_UI.removed.text}</p>
-          <Link href="/news" className="tp-button news-removed-link">
+          <Link href={newsHref} className="tp-button news-removed-link">
             {NEWS_UI.back}
           </Link>
         </div>

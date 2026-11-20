@@ -352,6 +352,8 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
           />
         ) : null}
 
+        <Languages content={NAV} className="site-nav-languages" />
+
         <button
           type="button"
           className="site-nav-toggle"
@@ -436,8 +438,48 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
               onPending={showNotice}
             />
           ) : null}
+          <Languages content={NAV} className="site-menu-languages" onNavigate={closeMenu} />
         </div>
       </dialog>
     </header>
+  );
+}
+
+/**
+ * ML-3 (ADR-028 D3/D7): the language switcher. Only public languages are listed (the server
+ * builds the list); each goes to the page's counterpart or that language's home. Plain links:
+ * the choice is never stored and never used for an automatic redirect.
+ */
+function Languages({
+  content,
+  className,
+  onNavigate,
+}: {
+  content: SiteNavContent;
+  className: string;
+  onNavigate?: () => void;
+}) {
+  const languages = content.languages ?? [];
+  if (languages.length < 2) return null;
+  return (
+    <nav aria-label={content.languageLabel} className={className}>
+      <ul>
+        {languages.map((l) => (
+          <li key={l.locale}>
+            <a
+              href={l.href}
+              hrefLang={l.locale}
+              lang={l.locale}
+              aria-current={l.current ? "true" : undefined}
+              className="site-nav-language"
+              onClick={onNavigate}
+            >
+              <span aria-hidden="true">{l.locale.toUpperCase()}</span>
+              <span className="sr-only">{l.label}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }

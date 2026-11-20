@@ -27,78 +27,67 @@
  *  - DP-220: `/products/<slug>/documents/<id>` (the lead form of a lead-gated document) is one of
  *    the site's own addresses, not an old one: it renders where the product lists that document as
  *    requestable and is a 404 otherwise. The address forms are told apart in `lib/proxy-routes.ts`.
+ *  - ML-3 (DP-236, ADR-028 D3/D5): every page address carries its language (`/en/…`, `/nl/…`).
+ *    `/` answers one 301 to `/en`; an address of the site without a prefix (`/about-us`) one 301
+ *    to `/en/about-us` (query kept; never Accept-Language). A language that is not public is a
+ *    404 under its whole prefix. Redirect targets stored by the API (`/about-us`) are answered at
+ *    their public address in one hop; chains are collapsed and cycles refused (404 + log), see
+ *    `decide` in lib/proxy-routes.ts. Technical endpoints are outside the matcher.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { seoRedirectLocation } from "@dream/contracts";
-
 import { getProductDocuments } from "@/lib/catalog-api";
+import type { RouteLocale } from "@/lib/locale-routing";
+import { NOT_FOUND_LOCALE_HEADER, NOT_FOUND_TARGET } from "@/lib/not-found";
 import { sitePrivacy } from "@/lib/privacy";
-import { classifyPath, documentRequestStatus } from "@/lib/proxy-routes";
+import { decide, type ProxyDeps } from "@/lib/proxy-routes";
+import { publicLocales } from "@/lib/public-locales";
 import { resolvePath, sitePolicy } from "@/lib/seo";
 
-/** No route serves this address, so Next answers with the not-found page and status 404. */
-const NOT_FOUND_TARGET = "/__dp/not-found";
+/**
+ * No route serves NOT_FOUND_TARGET, so Next answers with `app/global-not-found.tsx` and status
+ * 404; the browser keeps the requested URL. The request header names the 404's language.
+ */
+function notFound(request: NextRequest, locale: RouteLocale): NextResponse {
+  const headers = new Headers(request.headers);
+  headers.set(NOT_FOUND_LOCALE_HEADER, locale);
+  return NextResponse.rewrite(new URL(NOT_FOUND_TARGET, request.url), { request: { headers } });
+}
 
 export const config = {
   // DP-212: every address except the framework, the API, previews, forms, documents, images and
   // static media; the proxy itself decides which ones need an API call (most need none).
+  // ML-3: "/" too (one 301 to /en).
   matcher: [
+    "/",
     "/((?!_next/|__dp/|api/|media/|preview/|lead-form/|product-documents/|product-images/).+)",
   ],
 };
 
-function notFound(request: NextRequest): NextResponse {
-  return NextResponse.rewrite(new URL(NOT_FOUND_TARGET, request.url));
+function deps(): ProxyDeps {
+  return {
+    resolve: (path, search, locale) => resolvePath(path, undefined, search, locale),
+    publicLocales,
+    documents: getProductDocuments,
+    privacyPublished: sitePrivacy().publish,
+    onLoop: (trail) =>
+      console.error(`proxy: redirect cycle or chain refused (404): ${trail.join(" -> ")}`),
+  };
 }
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   if (request.method !== "GET" && request.method !== "HEAD") return NextResponse.next();
-  const pathname = request.nextUrl.pathname;
-  const route = classifyPath(pathname);
-  switch (route.kind) {
+  const { pathname, search } = request.nextUrl;
+  const decision = await decide(pathname, search, deps());
+  switch (decision.action) {
     case "next":
       return NextResponse.next();
-    case "privacy":
-      return sitePrivacy().publish ? NextResponse.next() : notFound(request);
-    case "content":
-      return answer(request, pathname, pathname.split("/").slice(1));
-    case "document-request": {
-      // DP-220: the lead form of a requestable document (metadata read only, no file access).
-      const docs = await getProductDocuments(route.slug);
-      return documentRequestStatus(docs, route.id) === "page"
-        ? NextResponse.next()
-        : notFound(request);
-    }
-    case "legacy":
-      return answer(request, pathname, pathname.split("/").slice(1), true);
     case "not-found":
-      return notFound(request);
+      return notFound(request, decision.locale);
+    case "redirect": {
+      // The public origin (as in canonical URLs) when configured, otherwise the request's own.
+      const base = sitePolicy().origin ?? request.url;
+      return NextResponse.redirect(new URL(decision.location, base), decision.status);
+    }
   }
-}
-
-/** Asks the API about the address and answers the redirect, the 404 or the page. */
-async function answer(
-  request: NextRequest,
-  pathname: string,
-  parts: string[],
-  legacy = false,
-): Promise<NextResponse> {
-  const res = await resolvePath(pathname, undefined, request.nextUrl.search);
-  if (res.status === "redirect") {
-    // The public origin (as in canonical URLs) when configured, otherwise the request's own.
-    const base = sitePolicy().origin ?? request.url;
-    const location = new URL(
-      seoRedirectLocation(res.target, request.nextUrl.search, res.keepQuery ?? true),
-      base,
-    );
-    return NextResponse.redirect(location, res.statusCode);
-  }
-  if (res.status === "not_found") return notFound(request);
-  // An old-site address never renders a page of its own: without a redirect (or while the API
-  // cannot answer) it is the site's 404, as before DP-212.
-  if (legacy) return notFound(request);
-  // Only an article has a "no longer available" page; a page or product taken off is a 404.
-  if (res.status === "unpublished" && parts[0] !== "news") return notFound(request);
-  return NextResponse.next();
 }

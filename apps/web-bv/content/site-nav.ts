@@ -9,6 +9,7 @@
  * keyboard but never navigates, so a visitor cannot land on a 404.
  */
 import { BRAND_LOGO, HOME_HREF } from "@/content/brand";
+import type { LanguageOption } from "@/lib/locale-routing";
 
 export type SiteNavItem = {
   label: string;
@@ -31,6 +32,8 @@ export const SITE_NAV_UI = {
   /** DP-219: the button that opens a submenu ("Show submenu of Products"). */
   openSubmenu: "Show submenu of",
   newTab: "(opens in a new tab)",
+  /** ML-3: the label of the language switcher. */
+  languageLabel: "Language",
 } as const;
 
 export type SiteNavContent = Omit<typeof SITE_NAV_UI, "homeHref"> & {
@@ -42,4 +45,9 @@ export type SiteNavContent = Omit<typeof SITE_NAV_UI, "homeHref"> & {
   /** Shown on phones and tablets only when JavaScript is off: real destinations only. */
   noScriptLinks: (SiteNavItem & { href: string })[];
   pendingNote: string;
+  /**
+   * ML-3 (ADR-028 D3/D7): the language switcher, public languages only; empty or missing while
+   * fewer than two languages are public (the switcher is then not rendered).
+   */
+  languages?: LanguageOption[];
 };

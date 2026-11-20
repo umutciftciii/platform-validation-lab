@@ -23,6 +23,7 @@ import {
   cmsIsArticle,
   cmsSlugOfPath,
   type CmsArticleContent,
+  type CmsPublicAlternate,
   type CmsPublicArticle,
   type CmsPublicBundle,
   type CmsPublicNews,
@@ -148,9 +149,8 @@ export class PublicCmsService {
     if (!PATH.test(path)) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
     const locale = await PublicCmsService.localeOf(site, rawLocale);
-    const live = (await PublicCmsService.visibleLive(site)).filter(
-      (r) => r.page.locale === locale.locale,
-    );
+    const visible = await PublicCmsService.visibleLive(site);
+    const live = visible.filter((r) => r.page.locale === locale.locale);
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === path);
     const page = row ? this.served(row) : null;
     if (!page) {
@@ -161,7 +161,29 @@ export class PublicCmsService {
       }
       throw new ApiError("NOT_FOUND");
     }
-    return { page, fragments: await this.fragments(site, live, locale), preview: false };
+    return {
+      page,
+      fragments: await this.fragments(site, live, locale),
+      preview: false,
+      alternates: row ? PublicCmsService.alternatesOf(visible, row) : [],
+    };
+  }
+
+  /**
+   * ML-3 (DP-236): the published pages of the same translation group in the other public
+   * languages (`visible` holds public languages only), sorted by language.
+   */
+  private static alternatesOf(visible: LiveRow[], row: LiveRow): CmsPublicAlternate[] {
+    return visible
+      .filter(
+        (r) =>
+          r.page.translationGroupId === row.page.translationGroupId &&
+          r.page.locale !== row.page.locale &&
+          r.page.kind !== "FRAGMENT" &&
+          r.revision.path !== null,
+      )
+      .map((r) => ({ locale: r.page.locale, path: r.revision.path as string }))
+      .sort((a, b) => a.locale.localeCompare(b.locale, "en"));
   }
 
   /** Whether the page of `locale` last published at `path` is UNPUBLISHED now. */
@@ -297,10 +319,11 @@ export class PublicCmsService {
       const home = await this.homeForFragmentPreview(site, live, draftLocale);
       if (!home) throw new ApiError("NOT_FOUND");
       await resolvePublicMenus(site, live, fragments, locale);
-      return { page: home, fragments, preview: true };
+      return { page: home, fragments, preview: true, locale: draftLocale };
     }
     await resolvePublicMenus(site, live, fragments, locale);
-    return { page: target, fragments, preview: true };
+    // DP-250: the draft's language, so the site renders the preview in it.
+    return { page: target, fragments, preview: true, locale: draftLocale };
   }
 
   private async homeForFragmentPreview(
