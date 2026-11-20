@@ -372,6 +372,7 @@ export function PageEditor({
           <PageSeoPanel
             pageId={page.id}
             path={page.path ?? "/"}
+            locale={page.locale}
             fallbackTitle={page.path === "/" ? siteSeo.defaultTitle : title}
             fallbackDescription={
               article
@@ -394,7 +395,7 @@ export function PageEditor({
             onOgImage={change(setOgImage)}
           />
         ) : page.templateKey === BV_SITE_SEO_KEY ? (
-          <SiteSeoPreview values={design} origin={origin} />
+          <SiteSeoPreview values={design} origin={origin} locale={page.locale} />
         ) : null}
       </div>
 
@@ -641,6 +642,7 @@ const OG_IMAGE_FIELD: CmsField = {
 function PageSeoPanel({
   pageId,
   path,
+  locale,
   fallbackTitle,
   fallbackDescription,
   pageImage,
@@ -656,6 +658,8 @@ function PageSeoPanel({
 }: {
   pageId: string;
   path: string;
+  /** ML-5: the page's language (the preview's address prefix on BV). */
+  locale: string;
   fallbackTitle: string;
   fallbackDescription: string | null;
   pageImage: string | null;
@@ -674,6 +678,8 @@ function PageSeoPanel({
     {
       ...values,
       path,
+      // ML-5: the public address in the page's language (BV); Corporate has no prefixes.
+      locale: siteKey === "BV" ? locale : null,
       fallbackTitle,
       fallbackDescription,
       ogImageUrl: chosen,
@@ -725,7 +731,16 @@ function PageSeoPanel({
 }
 
 /** DP-209: the site defaults as a page without values of its own would show them. */
-function SiteSeoPreview({ values, origin }: { values: ItemValue; origin: string | null }) {
+function SiteSeoPreview({
+  values,
+  origin,
+  locale,
+}: {
+  values: ItemValue;
+  origin: string | null;
+  /** ML-5: the language of this `bv.site-seo` fragment (its home: `/en`, `/nl`). */
+  locale: string;
+}) {
   const text = (k: string) => ((values[k] as string | undefined) ?? "").trim();
   const site: SiteSeoDefaults = {
     siteName: text("siteName") || "Site name",
@@ -736,6 +751,7 @@ function SiteSeoPreview({ values, origin }: { values: ItemValue; origin: string 
   const view = seoView(
     {
       path: "/",
+      locale,
       fallbackTitle: site.defaultTitle,
       title: "",
       description: "",

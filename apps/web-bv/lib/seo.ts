@@ -32,8 +32,10 @@ import {
 } from "@dream/contracts";
 
 import { catalogConfig } from "@/lib/catalog-api";
+import { hreflangMap, type HreflangAlternate } from "@/lib/hreflang";
 import {
   DEFAULT_LOCALE,
+  isRouteLocale,
   localePath,
   localizeHref,
   ogLocale,
@@ -103,6 +105,12 @@ export interface PageSeo {
   ogDescription?: string | null;
   /** DP-209: the Open Graph image chosen for the page; before `images`, then the site default. */
   ogImage?: { url: string; alt?: string | null; width?: number; height?: number } | null;
+  /**
+   * ML-5 (DP-019): the page's published counterparts in the other public languages (`alternates`
+   * of the CMS read). hreflang is rendered only for an indexable page that is its own canonical
+   * address, without a query, and only towards indexable counterparts (lib/hreflang.ts).
+   */
+  alternates?: readonly HreflangAlternate[];
 }
 
 function withQuery(url: string, query: PageSeo["query"]): string {
@@ -140,14 +148,35 @@ export function pageMetadata(
       ? canonicalUrl(policy.origin, localizeHref(locale, override))
       : withQuery(canonicalUrl(policy.origin, localePath(locale, page.path)), page.query)
     : undefined;
+  // ML-5: hreflang only between self-canonical, indexable pages (a page that names another
+  // canonical, a noindex page or a filtered view has none; Google ignores mixed signals).
+  const query = Object.values(page.query ?? {}).some(Boolean);
+  const selfCanonical = !override || override === page.path;
+  const languages =
+    policy.origin && selfCanonical && !page.noindex && !query
+      ? hreflangMap(locale, page.path, page.alternates ?? [])
+      : null;
+  const origin = policy.origin;
+  const hreflang =
+    languages && origin
+      ? Object.fromEntries(
+          Object.entries(languages).map(([l, href]) => [l, canonicalUrl(origin, href)]),
+        )
+      : null;
+  const alternateLocale = languages
+    ? Object.keys(languages)
+        .filter((l): l is RouteLocale => isRouteLocale(l) && l !== locale)
+        .map(ogLocale)
+    : [];
   return {
     title: page.title,
     ...(description ? { description } : {}),
-    ...(url ? { alternates: { canonical: url } } : {}),
+    ...(url ? { alternates: { canonical: url, ...(hreflang ? { languages: hreflang } : {}) } } : {}),
     openGraph: {
       type: page.type ?? "website",
       siteName: site.siteName,
       locale: ogLocale(locale),
+      ...(alternateLocale.length ? { alternateLocale } : {}),
       title: ogTitle,
       ...(ogDescription ? { description: ogDescription } : {}),
       ...(url ? { url } : {}),
@@ -251,12 +280,15 @@ export async function resolvePath(
 /**
  * DP-209: the published SEO defaults of the site (`bv.site-seo`), once per request; the code
  * defaults while it is not published or the API cannot answer (never blocks a page).
+ * ML-5: per language — the fragment of the page's language.
  */
-export const siteSeo = cache(async (): Promise<SiteSeo> => {
+export const siteSeo = cache(async (locale: RouteLocale = DEFAULT_LOCALE): Promise<SiteSeo> => {
   const config = catalogConfig();
   if (!config) return CODE_SITE_SEO;
+  // ML-5: `bv.site-seo` per language (no fallback to the English fragment: the code defaults).
+  const q = locale === DEFAULT_LOCALE ? "" : `?locale=${encodeURIComponent(locale)}`;
   try {
-    const res = await fetch(`${config.apiUrl}${PUBLIC_SEO_API}/settings`, {
+    const res = await fetch(`${config.apiUrl}${PUBLIC_SEO_API}/settings${q}`, {
       headers: { "X-DP-Proxy-Key": config.proxyKey, Accept: "application/json" },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),

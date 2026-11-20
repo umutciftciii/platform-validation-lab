@@ -4905,12 +4905,16 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
       expect(enBundle.page.title).toBe("Same path (ML-2)");
       // No fallback: a Dutch address without Dutch content is a 404, never English.
       expectError(await pub(`/page?path=/ml2-about-missing&locale=nl`), 404, "NOT_FOUND");
-      // Unprefixed SEO addresses are still the default language only (ML-3 brings /nl routing).
+      // ML-5: once NL is public the sitemap lists the path once per language, each naming the
+      // other as its counterpart.
       expect(
-        PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body).entries.filter(
-          (e) => e.path === "/ml2-same",
-        ),
-      ).toHaveLength(1);
+        PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body)
+          .entries.filter((e) => e.path === "/ml2-same")
+          .map((e) => [e.locale, e.alternates]),
+      ).toEqual([
+        ["en", [{ locale: "nl", path: "/ml2-same" }]],
+        ["nl", [{ locale: "en", path: "/ml2-same" }]],
+      ]);
     } finally {
       await setNlPublic(false);
     }
@@ -5228,11 +5232,11 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
     await setNlPublic(true);
     try {
       const en = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body);
-      expect(en.alternates).toEqual([{ locale: "nl", path: "/over-ons-nieuw" }]);
+      expect(en.alternates).toEqual([{ locale: "nl", path: "/over-ons-nieuw", indexable: true }]);
       const nl = CmsPublicBundleSchema.parse(
         (await pub(`/page?path=/over-ons-nieuw&locale=nl`)).body,
       );
-      expect(nl.alternates).toEqual([{ locale: "en", path: "/ml2-about" }]);
+      expect(nl.alternates).toEqual([{ locale: "en", path: "/ml2-about", indexable: true }]);
       // A page whose group has no other published language has none.
       const third = await owner.cmsPage.findFirstOrThrow({
         where: { siteId: BV, locale: "en", path: "/ml2-third" },
@@ -5241,6 +5245,116 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
       await publish(third.id);
       const alone = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-third`)).body);
       expect(alone.alternates).toEqual([]);
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+  // --- ML-5 (DP-019, ADR-028 D3): canonical, hreflang and sitemap per language ----------------
+
+  it("ML-5 sitemap while NL is not public: English only, no Dutch path, no alternates", async () => {
+    const sitemap = PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body);
+    expect(sitemap.entries.length).toBeGreaterThan(0);
+    expect(new Set(sitemap.entries.map((e) => e.locale))).toEqual(new Set(["en"]));
+    expect(sitemap.entries.every((e) => e.alternates.length === 0)).toBe(true);
+    for (const p of ["/over-ons-nieuw", "/over-ons-ml2"]) {
+      expect(sitemap.entries.map((e) => e.path)).not.toContain(p);
+    }
+    // The CMS reads name no counterpart either (news list included).
+    expect(
+      CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body).alternates,
+    ).toEqual([]);
+    expect(CmsPublicNewsSchema.parse((await pub(`/news`)).body).alternates ?? []).toEqual([]);
+  });
+
+  it("ML-5 sitemap once NL is public (rolled back here): reciprocal pairs by translation group, catalogue English only", async () => {
+    await setNlPublic(true);
+    try {
+      const { entries } = PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body);
+      const key = (l: string, p: string) => `${l} ${p}`;
+      const keys = new Set(entries.map((e) => key(e.locale, e.path)));
+      expect(keys.size).toBe(entries.length);
+      const of = (l: string, p: string) => entries.find((e) => e.locale === l && e.path === p);
+      expect(of("en", "/ml2-about")?.alternates).toEqual([
+        { locale: "nl", path: "/over-ons-nieuw" },
+      ]);
+      expect(of("nl", "/over-ons-nieuw")).toMatchObject({
+        kind: "page",
+        alternates: [{ locale: "en", path: "/ml2-about" }],
+        lastModified: expect.any(String),
+      });
+      // Reciprocal: every alternate is itself listed and names the entry back.
+      for (const e of entries) {
+        for (const a of e.alternates) {
+          const back = of(a.locale, a.path);
+          expect(back, `${e.locale} ${e.path} -> ${a.locale} ${a.path}`).toBeDefined();
+          expect(back!.alternates).toContainEqual({ locale: e.locale, path: e.path });
+        }
+      }
+      // An English page without a published Dutch counterpart names none (no fake NL address).
+      expect(of("en", "/ml2-third")).toMatchObject({ alternates: [] });
+      // The catalogue exists in English only (ML-8c): no Dutch product list or product.
+      expect(
+        entries.filter((e) => e.locale === "nl" && (e.kind === "product" || e.kind === "products")),
+      ).toEqual([]);
+      expect(entries.some((e) => e.locale === "en" && e.kind === "products")).toBe(true);
+      // Redirect sources (the Dutch slug change) are never listed.
+      expect(of("nl", "/over-ons-ml2")).toBeUndefined();
+      // lastModified of a CMS entry is its publication.
+      const nlRow = await owner.cmsPagePublication.findUniqueOrThrow({
+        where: { pageId: nlId },
+        select: { publishedAt: true },
+      });
+      expect(of("nl", "/over-ons-nieuw")?.lastModified).toBe(nlRow.publishedAt.toISOString());
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("ML-5 a noindex counterpart is never named: not in the sitemap, not indexable in the CMS read", async () => {
+    const nl = (await pageOf(nlId)).page;
+    expect(nl.path).toBe("/over-ons-nieuw");
+    const saveSeo = async (noindex: boolean) => {
+      const current = (await pageOf(nlId)).page;
+      const saved = await bvEditor.post(`/pages/${nlId}/draft`, {
+        version: current.version,
+        title: current.title,
+        slug: current.slug,
+        seo: { ...current.seo, noindex },
+        content: current.content,
+      });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      await publish(nlId);
+    };
+    await saveSeo(true);
+    await setNlPublic(true);
+    try {
+      const { entries } = PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body);
+      expect(entries.find((e) => e.locale === "nl" && e.path === nl.path)).toBeUndefined();
+      expect(entries.find((e) => e.locale === "en" && e.path === "/ml2-about")?.alternates).toEqual(
+        [],
+      );
+      // The language switcher still goes there; hreflang does not (indexable false).
+      expect(
+        CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body).alternates,
+      ).toEqual([{ locale: "nl", path: "/over-ons-nieuw", indexable: false }]);
+    } finally {
+      await setNlPublic(false);
+      await saveSeo(false);
+    }
+    expect(
+      CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body).alternates,
+    ).toEqual([]);
+  });
+
+  it("ML-5 site SEO defaults per language: the NL fragment only while NL is public", async () => {
+    expectError(await seoGet(`/settings?locale=nl`), 404, "NOT_FOUND");
+    await setNlPublic(true);
+    try {
+      const nl = await seoGet(`/settings?locale=nl`);
+      expect(nl.status).toBe(200);
+      // No published Dutch bv.site-seo here: the site falls back to its code defaults, never to
+      // the English fragment.
+      expect(nl.body.settings).toBeNull();
     } finally {
       await setNlPublic(false);
     }

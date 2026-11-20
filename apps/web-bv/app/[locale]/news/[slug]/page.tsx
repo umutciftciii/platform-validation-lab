@@ -33,7 +33,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/news/[sl
       res.reason === "unpublished" ? `${NEWS_UI.removed.title} · Dream Petroleum BV` : "Dream Petroleum BV",
     );
   }
-  const { path, title, seo, excerpt, coverImage, coverAlt, firstPublishedAt } = res.data;
+  const { path, title, seo, excerpt, coverImage, coverAlt, firstPublishedAt, alternates } = res.data;
   // DP-207: canonical URL and og:image from the site's public origin (lib/seo.ts).
   return pageMetadata(
     {
@@ -45,9 +45,10 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/news/[sl
       noindex: seo.noindex,
       images: coverImage ? [{ url: coverImage, alt: coverAlt }] : [],
       publishedTime: firstPublishedAt,
+      alternates,
       ...cmsPageSeo(seo),
     },
-    await siteSeo(),
+    await siteSeo(locale),
   );
 }
 

@@ -8,6 +8,7 @@ import {
   parseSeoFilter,
   seoEditHref,
   seoNotes,
+  seoPublicPath,
 } from "../lib/seo-overview";
 import {
   CODE_SITE_SEO,
@@ -43,9 +44,10 @@ describe("DP-209 SEO preview values", () => {
       ogImageUrl: CODE_SITE_SEO.defaultOgImage,
       sources: { title: "fallback", description: "site" },
     });
+    // ML-5: the public address in its language, as the site renders it (`/en/...`).
     expect(v.canonical).toEqual({
-      url: "https://dreampetroleumbv.com/about-us",
-      path: "/about-us",
+      url: "https://dreampetroleumbv.com/en/about-us",
+      path: "/en/about-us",
       override: false,
       invalid: false,
     });
@@ -70,16 +72,38 @@ describe("DP-209 SEO preview values", () => {
   it("uses a valid canonical override and ignores an invalid one (flagged)", () => {
     expect(seoView(draft({ canonicalPath: "/our-team" }), CODE_SITE_SEO, ORIGIN).canonical).toEqual(
       {
-        url: "https://dreampetroleumbv.com/our-team",
-        path: "/our-team",
+        url: "https://dreampetroleumbv.com/en/our-team",
+        path: "/en/our-team",
         override: true,
         invalid: false,
       },
     );
     expect(
       seoView(draft({ canonicalPath: "https://evil.example" }), CODE_SITE_SEO, ORIGIN).canonical,
-    ).toMatchObject({ path: "/about-us", override: false, invalid: true });
+    ).toMatchObject({ path: "/en/about-us", override: false, invalid: true });
     expect(seoView(draft(), CODE_SITE_SEO, null).canonical.url).toBeNull();
+  });
+
+  it("ML-5: shows the address in the page's language; Corporate keeps unprefixed paths", () => {
+    expect(seoView(draft({ path: "/" }), CODE_SITE_SEO, ORIGIN).canonical.url).toBe(
+      "https://dreampetroleumbv.com/en",
+    );
+    expect(
+      seoView(draft({ path: "/over-ons", locale: "nl" }), CODE_SITE_SEO, ORIGIN).canonical,
+    ).toEqual({
+      url: "https://dreampetroleumbv.com/nl/over-ons",
+      path: "/nl/over-ons",
+      override: false,
+      invalid: false,
+    });
+    // A canonical override stays in the page's language.
+    expect(
+      seoView(draft({ locale: "nl", canonicalPath: "/ons-team" }), CODE_SITE_SEO, ORIGIN).canonical
+        .url,
+    ).toBe("https://dreampetroleumbv.com/nl/ons-team");
+    expect(seoView(draft({ locale: null }), CODE_SITE_SEO, ORIGIN).canonical.url).toBe(
+      "https://dreampetroleumbv.com/about-us",
+    );
   });
 
   it("lists length warnings without refusing anything", () => {
@@ -140,7 +164,9 @@ describe("DP-209 SEO overview", () => {
     expect(seoNotes(item({}))).toEqual([]);
     expect(seoNotes(item({ description: null }))).toEqual(["No meta description (fallback used)"]);
     expect(seoNotes(item({ title: "x".repeat(61) }))).toEqual(["Title may be cut off"]);
-    expect(seoNotes(item({ canonicalPath: "/other" }))).toEqual(["Canonical → /other"]);
+    expect(seoNotes(item({ canonicalPath: "/other" }))).toEqual(["Canonical → /en/other"]);
+    expect(seoPublicPath("/")).toBe("/en");
+    expect(seoPublicPath("/products/x")).toBe("/en/products/x");
     expect(needsAttention(item({ canonicalPath: "/other" }))).toBe(false);
     expect(needsAttention(item({ description: null }))).toBe(true);
   });

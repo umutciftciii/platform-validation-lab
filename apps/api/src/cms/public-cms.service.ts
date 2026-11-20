@@ -22,6 +22,7 @@ import {
   BV_FRAGMENT_KEYS,
   cmsIsArticle,
   cmsSlugOfPath,
+  seoIsSelfCanonical,
   type CmsArticleContent,
   type CmsPublicAlternate,
   type CmsPublicArticle,
@@ -172,6 +173,8 @@ export class PublicCmsService {
   /**
    * ML-3 (DP-236): the published pages of the same translation group in the other public
    * languages (`visible` holds public languages only), sorted by language.
+   * ML-5 (DP-019): `indexable` says whether hreflang may name the counterpart (no noindex, its
+   * own canonical address: exactly the pages the sitemap lists).
    */
   private static alternatesOf(visible: LiveRow[], row: LiveRow): CmsPublicAlternate[] {
     return visible
@@ -182,7 +185,11 @@ export class PublicCmsService {
           r.page.kind !== "FRAGMENT" &&
           r.revision.path !== null,
       )
-      .map((r) => ({ locale: r.page.locale, path: r.revision.path as string }))
+      .map((r) => {
+        const path = r.revision.path as string;
+        const indexable = !r.revision.noindex && seoIsSelfCanonical(path, r.revision.canonicalPath);
+        return { locale: r.page.locale, path, indexable };
+      })
       .sort((a, b) => a.locale.localeCompare(b.locale, "en"));
   }
 
@@ -226,9 +233,8 @@ export class PublicCmsService {
   async news(ctx: RequestContext, rawLocale?: unknown): Promise<CmsPublicNews> {
     const site = await this.sites.begin(ctx);
     const locale = await PublicCmsService.localeOf(site, rawLocale);
-    const live = (await PublicCmsService.visibleLive(site)).filter(
-      (r) => r.page.locale === locale.locale,
-    );
+    const visible = await PublicCmsService.visibleLive(site);
+    const live = visible.filter((r) => r.page.locale === locale.locale);
     const articles: CmsPublicArticle[] = [];
     for (const row of live) {
       if (!cmsIsArticle(row.page) || !row.revision.path) continue;
@@ -257,6 +263,8 @@ export class PublicCmsService {
       page: index ? this.served(index) : null,
       articles,
       fragments: await this.fragments(site, live, locale),
+      // ML-5: the list's counterparts (its heading page's translation group).
+      alternates: index ? PublicCmsService.alternatesOf(visible, index) : [],
     };
   }
 

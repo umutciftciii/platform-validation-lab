@@ -26,7 +26,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/news">):
   const res = await news(locale);
   if (!res.ok) return noindexMetadata("Dream Petroleum BV");
   const { title, seo, copy } = res.data.heading;
-  const site = await siteSeo();
+  const site = await siteSeo(locale);
   return pageMetadata(
     {
       path: "/news",
@@ -34,6 +34,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/news">):
       title: seo.title ?? `${copy.title || title} · ${site.siteName}`,
       description: seo.description ?? copy.intro,
       noindex: seo.noindex,
+      alternates: res.data.alternates,
       ...cmsPageSeo(seo),
     },
     site,

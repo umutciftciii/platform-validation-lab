@@ -28,6 +28,7 @@ import {
   SEO_KIND_LABEL,
   seoEditHref,
   seoNotes,
+  seoPublicPath,
 } from "../../../lib/seo-overview";
 import { bvPublicOrigin } from "../../../lib/seo-server";
 import { CODE_SITE_SEO, previewImageSrc, seoView } from "../../../lib/seo-view";
@@ -253,7 +254,7 @@ function SeoRow({ item }: { item: SeoOverviewItem }) {
               {SEO_KIND_LABEL[item.kind]}
             </span>
           </p>
-          <p className="break-all font-mono text-xs text-ink-3">{item.path}</p>
+          <p className="break-all font-mono text-xs text-ink-3">{seoPublicPath(item.path)}</p>
           <p className="break-words text-sm text-ink-2">
             {item.title ?? "No SEO title (the page name is used)"}
           </p>

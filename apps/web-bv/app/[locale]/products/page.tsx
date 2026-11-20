@@ -30,7 +30,7 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
   await connection();
   const locale = await catalogLocale();
   const p = parseBrowse(await searchParams);
-  const [site, [list, cats]] = await Promise.all([siteSeo(), readCatalog()]);
+  const [site, [list, cats]] = await Promise.all([siteSeo(locale), readCatalog()]);
   const canonical = canonicalBrowse(p, list.ok ? list.data : null, cats.ok ? cats.data : []);
   return pageMetadata(
     {

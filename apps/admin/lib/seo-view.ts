@@ -7,8 +7,12 @@ import {
   canonicalUrl,
   seoCanonicalPathIsValid,
   seoLengthWarning,
+  seoLocalePath,
   type SeoTextField,
 } from "@dream/contracts";
+
+/** ML-5: the BV site's default language; its addresses carry the `/en` prefix (ADR-028 D3). */
+export const BV_DEFAULT_LOCALE = "en";
 
 /** The site defaults while `bv.site-seo` is not published (the site's code defaults). */
 export const CODE_SITE_SEO = {
@@ -26,8 +30,14 @@ export function previewImageSrc(url: string, origin: string | null): string | nu
 }
 
 export interface SeoDraft {
-  /** The page's own address on the site. */
+  /** The page's own address on the site, inside its language ("/about-us"). */
   path: string;
+  /**
+   * ML-5: the page's language on the BV site; the preview shows the public address with its
+   * prefix (`/en/about-us`, `/nl/over-ons`) as the site renders it. Default: English. null: a
+   * site without language prefixes (Corporate).
+   */
+  locale?: string | null;
   /** The page's name: the title when no SEO title is set (CMS pages) or the product name. */
   fallbackTitle: string;
   /** The description when no meta description is set (article summary, product summary). */
@@ -63,7 +73,9 @@ export function seoView(d: SeoDraft, site: SiteSeoDefaults, origin: string | nul
     ownDescription || d.fallbackDescription?.trim() || site.defaultDescription?.trim() || null;
   const override = d.canonicalPath.trim();
   const valid = override === "" || seoCanonicalPathIsValid(override);
-  const path = override && valid ? override : d.path;
+  const inLocale = override && valid ? override : d.path;
+  const locale = d.locale === undefined ? BV_DEFAULT_LOCALE : d.locale;
+  const path = locale ? seoLocalePath(locale, inLocale) : inLocale;
   const warnings: SeoView["warnings"] = [];
   const add = (field: SeoTextField, value: string) => {
     const text = seoLengthWarning(field, value);
