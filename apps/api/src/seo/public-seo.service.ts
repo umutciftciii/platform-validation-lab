@@ -18,6 +18,11 @@
  *    request's query; redirect sources never have live content, so they never reach the sitemap.
  *  - DP-212: an old-site address (`/en/…`, upper case, `.html`, deeper paths) is answered with its
  *    redirect only (lower-case lookup, `seoLegacyPath`); without one it is a 404.
+ *  - ML-2 (ADR-028 D3/D6): pages exist per language. Until the `/en` routing (ML-3/ML-4) the
+ *    unprefixed addresses resolve, list and redirect the site's default language only, exactly as
+ *    before. An address under the prefix of a language that is not public (`/nl/...` on BV) is a
+ *    404 without detail, even when a Dutch slug-change redirect exists for it (nothing of a hidden
+ *    language is revealed). `settings(locale)` reads `bv.site-seo` of that language.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -28,6 +33,7 @@ import {
   SEO_RESOLVABLE_PATH,
   cmsFieldsSchema,
   cmsIsArticle,
+  cmsLocaleAddress,
   normalizeRedirectQuery,
   seoIsSelfCanonical,
   seoLegacyPath,
@@ -41,10 +47,13 @@ import { ApiError } from "../iam/http/api-error.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import { PublicSiteService, type PublicSite } from "../iam/public-site.js";
 import { liveRows as liveProducts } from "../catalog/live.js";
-import { publicLocaleSet } from "../cms/site-locales.js";
+import { publicLocaleSet, publicSiteLocales, siteLocalesOf } from "../cms/site-locales.js";
 
 interface LivePath {
+  /** The stored path (without a language prefix). */
   path: string;
+  /** ML-2: the page's language (products: the site's default language). */
+  locale: string | null;
   kind: SeoPathKind;
   noindex: boolean;
   /** DP-209: the published canonical override (null: the address itself). */
@@ -75,11 +84,24 @@ export type SiteReader = Pick<PublicSite, "db" | "siteId">;
  * live products). The admin redirect checks use it: a redirect never starts at a live address.
  */
 export async function liveAddresses(site: SiteReader): Promise<Set<string>> {
-  const [pages, products] = await Promise.all([
+  const [pages, products, defaultLocale] = await Promise.all([
     PublicSeoService.livePages(site),
     PublicSeoService.liveProductPaths(site),
+    siteDefaultLocale(site),
   ]);
-  return new Set([...pages, ...products].map((p) => p.path));
+  // ML-2: a page's address carries its language prefix (none for the default language today).
+  return new Set([
+    ...pages.map((p) => cmsLocaleAddress(p.path, p.locale ?? defaultLocale, defaultLocale)),
+    ...products.map((p) => p.path),
+  ]);
+}
+
+/** ML-2: the site's default language (exactly one per site in the database). */
+export async function siteDefaultLocale(site: SiteReader): Promise<string> {
+  const all = (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [];
+  const def = all.find((l) => l.isDefault);
+  if (!def) throw new ApiError("INTERNAL_ERROR");
+  return def.locale;
 }
 
 @Injectable()
@@ -95,7 +117,7 @@ export class PublicSeoService {
    */
   static async livePages(
     site: SiteReader,
-    { publicOnly = false }: { publicOnly?: boolean } = {},
+    { publicOnly = false, locale }: { publicOnly?: boolean; locale?: string } = {},
   ): Promise<LivePath[]> {
     const pubs = await site.db.cmsPagePublication.findMany({
       where: { siteId: site.siteId, status: "PUBLISHED" },
@@ -119,8 +141,10 @@ export class PublicSeoService {
       const page = pages.find((x) => x.id === p.pageId);
       if (!r?.path || !page || page.kind === "FRAGMENT") continue;
       if (visible && !visible.has(page.locale)) continue;
+      if (locale !== undefined && page.locale !== locale) continue;
       out.push({
         path: r.path,
+        locale: page.locale,
         kind: kindOf(r.path, page),
         noindex: r.noindex,
         canonicalPath: r.canonicalPath,
@@ -142,6 +166,7 @@ export class PublicSeoService {
       if (!s.success) continue;
       out.push({
         path: `${PRODUCTS_PREFIX}${s.data.slug}`,
+        locale: null,
         kind: "product",
         noindex: s.data.seo?.noindex ?? false,
         canonicalPath: s.data.seo?.canonicalPath ?? null,
@@ -151,8 +176,12 @@ export class PublicSeoService {
     return out;
   }
 
-  /** Whether the CMS page last published at `path` is UNPUBLISHED now (DP-020 rule). */
-  private static async wasUnpublished(site: PublicSite, path: string): Promise<boolean> {
+  /** Whether the CMS page of `locale` last published at `path` is UNPUBLISHED now (DP-020). */
+  private static async wasUnpublished(
+    site: PublicSite,
+    path: string,
+    locale: string,
+  ): Promise<boolean> {
     // ML-1: only pages in a public language count, so a page of a language that is not public
     // (published or taken back) is never revealed by the `unpublished` detail.
     const [found, visible] = await Promise.all([
@@ -167,7 +196,9 @@ export class PublicSeoService {
       where: { id: { in: [...new Set(found.map((r) => r.pageId))] } },
       select: { id: true, locale: true },
     });
-    const shown = new Set(pages.filter((p) => visible.has(p.locale)).map((p) => p.id));
+    const shown = new Set(
+      pages.filter((p) => visible.has(p.locale) && p.locale === locale).map((p) => p.id),
+    );
     const revisions = found.filter((r) => shown.has(r.pageId));
     if (revisions.length === 0) return false;
     const pub = await site.db.cmsPagePublication.findFirst({
@@ -238,6 +269,14 @@ export class PublicSeoService {
         : null;
     const query = parsedQuery?.ok ? parsedQuery.value : "";
     const site = await this.sites.begin(ctx);
+    // ML-2: nothing under the prefix of a language that is not public (or not enabled).
+    const locales = (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [];
+    const first = path.split("/")[1]?.toLowerCase() ?? "";
+    if (locales.some((l) => l.locale.toLowerCase() === first && !(l.enabled && l.public))) {
+      throw new ApiError("NOT_FOUND");
+    }
+    const defaultLocale = locales.find((l) => l.isDefault)?.locale;
+    if (!defaultLocale) throw new ApiError("INTERNAL_ERROR");
     if (legacy) {
       const moved = await PublicSeoService.redirectOf(site, legacy, query);
       if (moved) return { ...moved, path };
@@ -253,13 +292,13 @@ export class PublicSeoService {
       if (moved) return moved;
       throw new ApiError("NOT_FOUND");
     }
-    const hit = (await PublicSeoService.livePages(site, { publicOnly: true })).find(
-      (p) => p.path === path,
-    );
+    const hit = (
+      await PublicSeoService.livePages(site, { publicOnly: true, locale: defaultLocale })
+    ).find((p) => p.path === path);
     if (hit) return { path, kind: hit.kind };
     const moved = await PublicSeoService.redirectOf(site, path, query);
     if (moved) return moved;
-    if (await PublicSeoService.wasUnpublished(site, path)) {
+    if (await PublicSeoService.wasUnpublished(site, path, defaultLocale)) {
       throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
     }
     throw new ApiError("NOT_FOUND");
@@ -270,12 +309,19 @@ export class PublicSeoService {
    * against its fields (a revision that no longer matches is not served). null while it is not
    * published (or for a site without SEO defaults): the site then uses its code defaults.
    */
-  async settings(ctx: RequestContext): Promise<PublicSiteSeoResponse> {
+  async settings(ctx: RequestContext, rawLocale?: unknown): Promise<PublicSiteSeoResponse> {
     const site = await this.sites.begin(ctx);
     const none = { settings: null, publishedAt: null };
+    // ML-2: per language (default: the site's default language); a language that is not public
+    // is 404, as on the public CMS reads.
+    const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
+    const locale = rawLocale === undefined || rawLocale === "" ? defaultLocale : rawLocale;
+    if (typeof locale !== "string" || !locales.some((l) => l.locale === locale)) {
+      throw new ApiError("NOT_FOUND");
+    }
     if (site.siteKey !== "BV") return none;
     const page = await site.db.cmsPage.findFirst({
-      where: { siteId: site.siteId, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
+      where: { siteId: site.siteId, locale, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
       select: { id: true },
     });
     if (!page) return none;
@@ -299,8 +345,10 @@ export class PublicSeoService {
 
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
+    // ML-2: the default language at its unprefixed addresses (per-language sitemap: ML-5).
+    const defaultLocale = await siteDefaultLocale(site);
     const [pages, products] = await Promise.all([
-      PublicSeoService.livePages(site, { publicOnly: true }),
+      PublicSeoService.livePages(site, { publicOnly: true, locale: defaultLocale }),
       PublicSeoService.liveProductPaths(site),
     ]);
     const entry = (p: LivePath): PublicSitemapEntry => ({

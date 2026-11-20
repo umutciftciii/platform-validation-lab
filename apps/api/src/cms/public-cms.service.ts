@@ -93,20 +93,45 @@ export class PublicCmsService {
     return live.filter((r) => visible.has(r.page.locale));
   }
 
+  /**
+   * ML-2 (ADR-028 D3/D7): the language of a public read. Without `locale` the site's default
+   * language (the behaviour before ML-2); a language that is not public on the site (or unknown,
+   * or malformed) is 404 without detail, so a hidden language is never revealed.
+   */
+  private static async localeOf(
+    site: PublicSite,
+    raw: unknown,
+  ): Promise<{ locale: string; defaultLocale: string }> {
+    const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
+    if (raw === undefined || raw === "") return { locale: defaultLocale, defaultLocale };
+    if (typeof raw !== "string" || !locales.some((l) => l.locale === raw)) {
+      throw new ApiError("NOT_FOUND");
+    }
+    return { locale: raw, defaultLocale };
+  }
+
   /** The published fragments in their public shape (DP-219: menus resolved). */
   private async fragments(
     site: PublicSite,
     live: LiveRow[],
+    locale: { locale: string; defaultLocale: string },
   ): Promise<Record<string, CmsPublicPage | null>> {
-    const out = this.liveFragments(site, live);
-    await resolvePublicMenus(site, live, out);
+    const out = this.liveFragments(site, live, locale.locale);
+    await resolvePublicMenus(site, live, out, locale);
     return out;
   }
 
-  private liveFragments(site: PublicSite, live: LiveRow[]): Record<string, CmsPublicPage | null> {
+  /** ML-2: the fragments of one language (no fallback to another language, ADR-028 D7). */
+  private liveFragments(
+    site: PublicSite,
+    live: LiveRow[],
+    locale: string,
+  ): Record<string, CmsPublicPage | null> {
     const out: Record<string, CmsPublicPage | null> = {};
     for (const key of FRAGMENTS[site.siteKey]) {
-      const row = live.find((r) => r.page.kind === "FRAGMENT" && r.page.templateKey === key);
+      const row = live.find(
+        (r) => r.page.kind === "FRAGMENT" && r.page.templateKey === key && r.page.locale === locale,
+      );
       out[key] = row ? this.served(row) : null;
     }
     return out;
@@ -118,26 +143,29 @@ export class PublicCmsService {
     return publicSiteLocales(site.db, site.siteId);
   }
 
-  async page(ctx: RequestContext, rawPath: unknown): Promise<CmsPublicBundle> {
+  async page(ctx: RequestContext, rawPath: unknown, rawLocale?: unknown): Promise<CmsPublicBundle> {
     const path = typeof rawPath === "string" ? rawPath : "";
     if (!PATH.test(path)) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
-    const live = await PublicCmsService.visibleLive(site);
+    const locale = await PublicCmsService.localeOf(site, rawLocale);
+    const live = (await PublicCmsService.visibleLive(site)).filter(
+      (r) => r.page.locale === locale.locale,
+    );
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === path);
     const page = row ? this.served(row) : null;
     if (!page) {
       // DP-020: a page that was live at this address and has been taken off the site answers
       // 404 with the detail `unpublished`, so the site can say so instead of "not found".
-      if (!row && (await this.wasUnpublished(site, path))) {
+      if (!row && (await this.wasUnpublished(site, path, locale.locale))) {
         throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
       }
       throw new ApiError("NOT_FOUND");
     }
-    return { page, fragments: await this.fragments(site, live), preview: false };
+    return { page, fragments: await this.fragments(site, live, locale), preview: false };
   }
 
-  /** Whether the page last published at `path` is UNPUBLISHED now. */
-  private async wasUnpublished(site: PublicSite, path: string): Promise<boolean> {
+  /** Whether the page of `locale` last published at `path` is UNPUBLISHED now. */
+  private async wasUnpublished(site: PublicSite, path: string, locale: string): Promise<boolean> {
     // ML-1: only pages in a public language count, so a page of a language that is not public
     // (published or taken back) is never revealed by the `unpublished` detail.
     const [found, visible] = await Promise.all([
@@ -152,7 +180,9 @@ export class PublicCmsService {
       where: { id: { in: [...new Set(found.map((r) => r.pageId))] } },
       select: { id: true, locale: true },
     });
-    const shown = new Set(pages.filter((p) => visible.has(p.locale)).map((p) => p.id));
+    const shown = new Set(
+      pages.filter((p) => visible.has(p.locale) && p.locale === locale).map((p) => p.id),
+    );
     const revisions = found.filter((r) => shown.has(r.pageId));
     if (revisions.length === 0) return false;
     const pub = await site.db.cmsPagePublication.findFirst({
@@ -171,9 +201,12 @@ export class PublicCmsService {
    * as the tie-break), with the site-wide fragments. Only valid revisions are listed. DP-153: with
    * the published heading page of the list (`bv.news-index`), or null while it is not published.
    */
-  async news(ctx: RequestContext): Promise<CmsPublicNews> {
+  async news(ctx: RequestContext, rawLocale?: unknown): Promise<CmsPublicNews> {
     const site = await this.sites.begin(ctx);
-    const live = await PublicCmsService.visibleLive(site);
+    const locale = await PublicCmsService.localeOf(site, rawLocale);
+    const live = (await PublicCmsService.visibleLive(site)).filter(
+      (r) => r.page.locale === locale.locale,
+    );
     const articles: CmsPublicArticle[] = [];
     for (const row of live) {
       if (!cmsIsArticle(row.page) || !row.revision.path) continue;
@@ -201,7 +234,7 @@ export class PublicCmsService {
     return {
       page: index ? this.served(index) : null,
       articles,
-      fragments: await this.fragments(site, live),
+      fragments: await this.fragments(site, live, locale),
     };
   }
 
@@ -221,6 +254,7 @@ export class PublicCmsService {
         templateKey: true,
         path: true,
         title: true,
+        locale: true,
         ...SEO_SELECT,
         content: true,
       },
@@ -228,13 +262,20 @@ export class PublicCmsService {
     if (!draft || !contentIsValid(draft.kind, draft.templateKey, draft.content)) {
       throw new ApiError("NOT_FOUND");
     }
-    const target = publicPage(draft, null);
-    const live = await liveRows(site.db, site.siteId);
-    const fragments = this.liveFragments(site, live);
+    const { locale: draftLocale, ...draftPage } = draft;
+    const target = publicPage(draftPage, null);
+    // ML-2: the preview shows the page with the fragments of its own language (published ones,
+    // else their drafts); staff preview a language that is not public as well.
+    const { defaultLocale } = await publicSiteLocales(site.db, site.siteId);
+    const locale = { locale: draftLocale, defaultLocale };
+    const live = (await liveRows(site.db, site.siteId)).filter(
+      (r) => r.page.locale === draftLocale,
+    );
+    const fragments = this.liveFragments(site, live, draftLocale);
     const missing = Object.keys(fragments).filter((k) => !fragments[k]);
     if (missing.length) {
       const drafts = await site.db.cmsPage.findMany({
-        where: { siteId: site.siteId, templateKey: { in: missing } },
+        where: { siteId: site.siteId, locale: draftLocale, templateKey: { in: missing } },
         select: {
           kind: true,
           templateKey: true,
@@ -253,23 +294,24 @@ export class PublicCmsService {
       // Previewing a fragment shows it on the home page: the fragment's draft around the home page
       // (published, or its draft before the first publication).
       fragments[target.templateKey] = target;
-      const home = await this.homeForFragmentPreview(site, live);
+      const home = await this.homeForFragmentPreview(site, live, draftLocale);
       if (!home) throw new ApiError("NOT_FOUND");
-      await resolvePublicMenus(site, live, fragments);
+      await resolvePublicMenus(site, live, fragments, locale);
       return { page: home, fragments, preview: true };
     }
-    await resolvePublicMenus(site, live, fragments);
+    await resolvePublicMenus(site, live, fragments, locale);
     return { page: target, fragments, preview: true };
   }
 
   private async homeForFragmentPreview(
     site: PublicSite,
     live: LiveRow[],
+    locale: string,
   ): Promise<CmsPublicPage | null> {
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === "/");
     if (row) return this.served(row);
     const draft = await site.db.cmsPage.findFirst({
-      where: { siteId: site.siteId, path: "/" },
+      where: { siteId: site.siteId, locale, path: "/" },
       select: {
         kind: true,
         templateKey: true,

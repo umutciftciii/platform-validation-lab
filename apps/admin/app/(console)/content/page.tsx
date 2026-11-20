@@ -10,7 +10,9 @@ import {
 } from "@dream/contracts";
 import { ContentTabs } from "../../../components/cms/content-tabs";
 import { ImportButton } from "../../../components/cms/import-button";
+import { LanguageTabs } from "../../../components/cms/language-tabs";
 import { SiteLanguagesPanel } from "../../../components/cms/site-languages";
+import { translationStateLabel } from "../../../components/cms/translation-tabs";
 import {
   CmsKindPill,
   pickCmsSite,
@@ -60,7 +62,16 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
   const { sites } = context.data;
   const site = pickCmsSite(sites, typeof params["site"] === "string" ? params["site"] : undefined);
   const sp = site.key.toLowerCase();
-  const list = await serverRead(`${CMS}/sites/${site.id}/pages`, CmsPageListResponseSchema);
+  // ML-2 (DP-074): one language at a time; the default language lists every page with the state
+  // of its translations.
+  const defaultLocale = site.locales.find((l) => l.isDefault)?.locale ?? site.locale;
+  const wanted = typeof params["locale"] === "string" ? params["locale"] : defaultLocale;
+  const locale = site.locales.some((l) => l.locale === wanted) ? wanted : defaultLocale;
+  const isDefault = locale === defaultLocale;
+  const list = await serverRead(
+    `${CMS}/sites/${site.id}/pages${isDefault ? "" : `?locale=${encodeURIComponent(locale)}`}`,
+    CmsPageListResponseSchema,
+  );
   // A registry entry leaves the list once its page exists in the CMS: designed pages and
   // fragments by their key, content pages by their path.
   // News articles (DP-020) have their own list under /content/news.
@@ -68,10 +79,14 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
   const imported = new Set(pages.filter((p) => p.kind !== "TEMPLATE").map((p) => p.templateKey));
   // Every path, articles included: an imported article (DP-206) leaves the registry list too.
   const paths = new Set((list.ok ? list.data.items : []).map((p) => p.path));
-  const routes = CMS_SITE_REGISTRY.filter(
-    (e) =>
-      e.site === site.key && !imported.has(e.key) && !(e.kind === "TEMPLATE" && paths.has(e.path)),
-  );
+  const routes = isDefault
+    ? CMS_SITE_REGISTRY.filter(
+        (e) =>
+          e.site === site.key &&
+          !imported.has(e.key) &&
+          !(e.kind === "TEMPLATE" && paths.has(e.path)),
+      )
+    : [];
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -90,6 +105,12 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
       />
 
       <ContentTabs current="pages" siteParam={sp} />
+
+      <LanguageTabs
+        site={site}
+        current={locale}
+        hrefFor={(l) => `/content?site=${sp}&locale=${l}`}
+      />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <SiteSwitcher
@@ -157,6 +178,12 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
                     <span className="text-xs text-ink-3">
                       {p.sectionCount} {p.sectionCount === 1 ? "section" : "sections"}
                     </span>
+                    {p.translations.map((t) => (
+                      <StatusPill
+                        key={`tr-${t.locale}`}
+                        tone={translationStateLabel(t).tone}
+                      >{`${t.locale.toUpperCase()}: ${translationStateLabel(t).label}`}</StatusPill>
+                    ))}
                   </div>
                   <div>
                     <StatusPill tone={publicationState(p).tone}>
@@ -176,25 +203,27 @@ export default async function ContentPage({ searchParams }: PageProps<"/content"
 
       <SiteLanguagesPanel site={site} />
 
-      <Panel
-        id="site-routes"
-        title="Existing site pages"
-        description="Pages that are not managed in the CMS yet, or never will be. Their content is unchanged."
-        bodyClassName="px-0! pb-2! pt-3!"
-      >
-        {routes.length === 0 ? (
-          <EmptyState icon="check" title="Every page of this site is in the CMS" />
-        ) : (
-          <ul
-            className="divide-y divide-line border-t border-line"
-            aria-label={`Existing pages of ${site.name}`}
-          >
-            {routes.map((e) => (
-              <RouteRow key={e.key} entry={e} site={site} />
-            ))}
-          </ul>
-        )}
-      </Panel>
+      {isDefault ? (
+        <Panel
+          id="site-routes"
+          title="Existing site pages"
+          description="Pages that are not managed in the CMS yet, or never will be. Their content is unchanged."
+          bodyClassName="px-0! pb-2! pt-3!"
+        >
+          {routes.length === 0 ? (
+            <EmptyState icon="check" title="Every page of this site is in the CMS" />
+          ) : (
+            <ul
+              className="divide-y divide-line border-t border-line"
+              aria-label={`Existing pages of ${site.name}`}
+            >
+              {routes.map((e) => (
+                <RouteRow key={e.key} entry={e} site={site} />
+              ))}
+            </ul>
+          )}
+        </Panel>
+      ) : null}
     </div>
   );
 }

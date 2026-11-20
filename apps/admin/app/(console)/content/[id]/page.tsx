@@ -13,6 +13,8 @@ import { NoticeProvider } from "../../../../components/catalog/notices";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { PageEditor } from "../../../../components/cms/page-editor";
 import { CmsKindPill, publicationState } from "../../../../components/cms/parts";
+import { languageLabel } from "../../../../components/cms/site-languages";
+import { TranslationTabs } from "../../../../components/cms/translation-tabs";
 import { EmptyState, ErrorState, StatusPill } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
@@ -45,7 +47,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
       </div>
     );
   }
-  const { page, site } = res.data;
+  const { page, site, translations } = res.data;
   const sp = site.key.toLowerCase();
   const article = cmsIsArticle(page);
   const back = article
@@ -78,6 +80,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
                 <CmsKindPill kind={page.kind} />
               )}
               <StatusPill tone={state.tone}>{state.label}</StatusPill>
+              <StatusPill tone="neutral">{languageLabel(page.locale)}</StatusPill>
               <span className="font-mono text-ink-3">{page.path ?? "Site-wide part"}</span>
               <span className="text-ink-3">
                 · last saved {DATE.format(new Date(page.updatedAt))} by {page.updatedBy.name}
@@ -85,6 +88,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
             </div>
           }
         />
+        <TranslationTabs page={page} site={site} translations={translations} />
         {editable ? (
           // Remounted per draft version: a restore or a save from elsewhere shows the new draft.
           <PageEditor
