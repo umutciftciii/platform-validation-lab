@@ -12,14 +12,15 @@
  * a new map is checked offline against the live addresses before any DEV import (dry-run).
  * Pure: no Next.js, no fetch.
  */
-import {
-  SEO_RESOLVABLE_PATH,
-  normalizeRedirectQuery,
-  seoLegacyPath,
-} from "@dream/contracts";
+import { SEO_RESOLVABLE_PATH, normalizeRedirectQuery, seoLegacyPath } from "@dream/contracts";
 
 import { DEFAULT_LOCALE, localePath, type RouteLocale } from "./locale-routing.ts";
-import { decide, type ProxyDecision, type ProxyDeps, type ResolveAnswer } from "./proxy-routes.ts";
+import {
+  decideRequest,
+  type ProxyDeps,
+  type RequestDecision,
+  type ResolveAnswer,
+} from "./proxy-routes.ts";
 
 export interface RedirectRow {
   /** Stored source path (lower case) and query (normalised, "" for none). */
@@ -66,7 +67,8 @@ export function simulatedResolve(site: SiteState) {
   return async (path: string, search: string, locale?: RouteLocale): Promise<ResolveAnswer> => {
     const loc = locale ?? DEFAULT_LOCALE;
     if (!site.publicLocales.includes(loc)) return { status: "not_found" };
-    const legacy = SEO_RESOLVABLE_PATH.test(path) || path.endsWith("/") ? null : seoLegacyPath(path);
+    const legacy =
+      SEO_RESOLVABLE_PATH.test(path) || path.endsWith("/") ? null : seoLegacyPath(path);
     if (!SEO_RESOLVABLE_PATH.test(path) && !legacy) return { status: "not_found" };
     const first = path.split("/")[1]?.toLowerCase() ?? "";
     if (["nl", "en"].includes(first) && !site.publicLocales.includes(first)) {
@@ -81,7 +83,12 @@ export function simulatedResolve(site: SiteState) {
       ? site.rows.find((r) => r.sourcePath === address && r.sourceQuery === query)
       : undefined;
     if (bound) {
-      return { status: "redirect", target: bound.target, statusCode: bound.statusCode, keepQuery: false };
+      return {
+        status: "redirect",
+        target: bound.target,
+        statusCode: bound.statusCode,
+        keepQuery: false,
+      };
     }
     const plain = site.rows.find((r) => r.sourcePath === address && r.sourceQuery === "");
     if (plain) return { status: "redirect", target: plain.target, statusCode: plain.statusCode };
@@ -101,9 +108,11 @@ export function simulatedDeps(site: SiteState, loops: string[][] = []): ProxyDep
 
 export interface AuditEntry {
   request: string;
-  decision: ProxyDecision;
+  decision: RequestDecision;
   /** What the visitor's browser sees after following the answer (at most `limit` requests). */
   hops: string[];
+  /** The status of each hop (301/302, or 308 for the trailing-slash normalisation). */
+  statuses: number[];
   /**
    * `refused`: the proxy found a cycle (or an over-long chain) and answered its 404 instead;
    * `loop`: the browser would go round in circles — must never happen.
@@ -113,36 +122,40 @@ export interface AuditEntry {
 
 /**
  * Follows a request like a browser would (redirect after redirect, up to `limit`) through the
- * real proxy decision. A correct site answers every request with at most ONE redirect.
+ * real proxy answer (`decideRequest`, trailing slash included). A correct site answers every
+ * request with at most ONE redirect.
  */
 export async function follow(site: SiteState, request: string, limit = 6): Promise<AuditEntry> {
   const loops: string[][] = [];
   const deps = simulatedDeps(site, loops);
   const hops: string[] = [];
+  const statuses: number[] = [];
   let url = request;
-  let first: ProxyDecision | null = null;
+  let first: RequestDecision | null = null;
   for (let i = 0; i < limit; i++) {
     const q = url.indexOf("?");
     const pathname = q === -1 ? url : url.slice(0, q);
     const search = q === -1 ? "" : url.slice(q);
-    const d = await decide(pathname, search, deps);
+    const d = await decideRequest(pathname, search, "GET", deps);
     first ??= d;
-    if (d.action === "next") return { request, decision: first, hops, final: "page" };
+    if (d.action === "next") return { request, decision: first, hops, statuses, final: "page" };
     if (d.action === "not-found") {
-      return { request, decision: first, hops, final: loops.length ? "refused" : "not-found" };
+      const final = loops.length ? "refused" : "not-found";
+      return { request, decision: first, hops, statuses, final };
     }
+    statuses.push(d.status);
     if (!d.location.startsWith("/")) {
       hops.push(d.location);
-      return { request, decision: first, hops, final: "external" };
+      return { request, decision: first, hops, statuses, final: "external" };
     }
     if (hops.includes(d.location) || d.location === request) {
       hops.push(d.location);
-      return { request, decision: first, hops, final: "loop" };
+      return { request, decision: first, hops, statuses, final: "loop" };
     }
     hops.push(d.location);
     url = d.location;
   }
-  return { request, decision: first as ProxyDecision, hops, final: "loop" };
+  return { request, decision: first as RequestDecision, hops, statuses, final: "loop" };
 }
 
 /** Every redirect source of the map (with its query) as a request. */
@@ -150,17 +163,19 @@ export function sourcesOf(rows: readonly RedirectRow[]): string[] {
   return rows.map((r) => (r.sourceQuery ? `${r.sourcePath}?${r.sourceQuery}` : r.sourcePath));
 }
 
-/** Requests the audit sends: every source, and every live address unprefixed and under `/en`. */
+/**
+ * Requests the audit sends: every source, and every live address unprefixed and under `/en`, each
+ * also with a trailing slash (ML-4: one hop with the slash as well).
+ */
 export function auditRequests(site: SiteState): string[] {
   const live = [...site.live].filter((a) => !a.startsWith("/nl"));
-  return [
-    ...new Set([
-      "/",
-      ...sourcesOf(site.rows),
-      ...live,
-      ...live.map((a) => localePath(DEFAULT_LOCALE, a)),
-    ]),
+  const addresses = [
+    ...sourcesOf(site.rows),
+    ...live,
+    ...live.map((a) => localePath(DEFAULT_LOCALE, a)),
   ];
+  const slashed = addresses.filter((a) => a !== "/").map((a) => a.replace(/(\?|$)/, "/$1"));
+  return [...new Set(["/", ...addresses, ...slashed])];
 }
 
 export async function auditRedirects(site: SiteState): Promise<AuditEntry[]> {

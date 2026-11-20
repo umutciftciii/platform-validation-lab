@@ -161,6 +161,31 @@ for (const [from, to] of [
     record("bv-route", `${from} -> 301 ${to}`, false, String(e));
   }
 }
+// ML-4 (DP-237): the trailing slash is answered by the proxy (next.config skipTrailingSlashRedirect):
+// an address whose slash-less form redirects gets that ONE 301 (no 308 first); every other address
+// keeps the 308 to the slash-less form, query kept, technical endpoints included.
+for (const [from, status, to] of [
+  ["/news/", 301, "/en/news"],
+  ["/products/?utm_source=smoke", 301, "/en/products?utm_source=smoke"],
+  ["/en/", 308, "/en"],
+  ["/en/news/", 308, "/en/news"],
+  ["/en/products/?page=2", 308, "/en/products?page=2"],
+  ["/nl/", 308, "/nl"],
+  ["/api/health/", 308, "/api/health"],
+]) {
+  try {
+    const res = await get(base("web-bv") + from);
+    const loc = new URL(res.headers.get("location") ?? "x:", base("web-bv"));
+    record(
+      "bv-route",
+      `${from} -> ${status} ${to}`,
+      res.status === status && `${loc.pathname}${loc.search}` === to,
+      `HTTP ${res.status} ${loc.pathname}${loc.search}`,
+    );
+  } catch (e) {
+    record("bv-route", `${from} -> ${status} ${to}`, false, String(e));
+  }
+}
 try {
   const res = await get(base("web-bv") + "/en");
   const html = await res.text();

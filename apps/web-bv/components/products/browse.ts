@@ -102,6 +102,26 @@ export function paginate<T>(items: readonly T[], page: number) {
   };
 }
 
+/**
+ * DP-207 + ML-4 (DP-237): the canonical state of a list view. A category without live products
+ * (an old or stale link renders the whole list) and a page beyond the last (the list shows the
+ * last page) are not addresses of their own: the canonical names the view actually rendered, so
+ * old indexed addresses such as `/en/products?page=4` (12 per page on the old site, 24 here) are
+ * consolidated instead of becoming self-canonical duplicates. While the catalogue cannot be read
+ * the parameters are kept as they are (as before).
+ */
+export function canonicalBrowse(
+  params: BrowseParams,
+  products: readonly PublicProductSummary[] | null,
+  categories: readonly PublicCategory[],
+): { category: string | null; page: number } {
+  if (products === null) return { category: params.category, page: params.page };
+  const category =
+    params.category && categories.some((c) => c.slug === params.category) ? params.category : null;
+  const shown = filterProducts(products, categories, { category, q: "", page: params.page });
+  return { category, page: paginate(shown, params.page).page };
+}
+
 /** A link to the list with these parameters (defaults are left out of the URL). */
 export function browseHref(p: Partial<BrowseParams>): string {
   const sp = new URLSearchParams();

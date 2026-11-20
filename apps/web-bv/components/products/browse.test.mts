@@ -8,6 +8,7 @@ import type { PublicCategory, PublicProductSummary } from "@dream/contracts";
 import {
   browseHref,
   buildTree,
+  canonicalBrowse,
   categoryLabel,
   chipRows,
   filterProducts,
@@ -149,5 +150,29 @@ describe("DP-169 pack size", () => {
     assert.equal(packSize("Group I Base Oil SN 150"), null);
     assert.equal(packSize("ICCSYN 6 (CTL Technology) Group III+"), null);
     assert.equal(packSize("Cosmetic Grade Petroleum Jelly"), null);
+  });
+});
+
+describe("ML-4 canonical of a list view", () => {
+  const params = (category: string | null, page: number) => ({ category, q: "", page });
+
+  it("keeps a live category and a page that exists", () => {
+    const many = Array.from({ length: PAGE_SIZE + 1 }, (_, i) => product(`C${i}`, `P ${i}`, "base-oil"));
+    assert.deepEqual(canonicalBrowse(params("base-oil", 1), PRODUCTS, CATS), { category: "base-oil", page: 1 });
+    assert.deepEqual(canonicalBrowse(params(null, 2), many, CATS), { category: null, page: 2 });
+  });
+
+  it("names the view shown for a page beyond the last (old 12-per-page links)", () => {
+    assert.deepEqual(canonicalBrowse(params(null, 4), PRODUCTS, CATS), { category: null, page: 1 });
+    assert.deepEqual(canonicalBrowse(params("base-oil", 3), PRODUCTS, CATS), { category: "base-oil", page: 1 });
+  });
+
+  it("drops a category without live products (the whole list is shown)", () => {
+    assert.deepEqual(canonicalBrowse(params("transformer-oil", 1), PRODUCTS, CATS), { category: null, page: 1 });
+    assert.deepEqual(canonicalBrowse(params("grease", 2), PRODUCTS, CATS), { category: null, page: 1 });
+  });
+
+  it("keeps the parameters while the catalogue cannot be read", () => {
+    assert.deepEqual(canonicalBrowse(params("grease", 4), null, []), { category: "grease", page: 4 });
   });
 });

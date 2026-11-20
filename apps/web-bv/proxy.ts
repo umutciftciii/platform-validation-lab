@@ -33,6 +33,11 @@
  *    404 under its whole prefix. Redirect targets stored by the API (`/about-us`) are answered at
  *    their public address in one hop; chains are collapsed and cycles refused (404 + log), see
  *    `decide` in lib/proxy-routes.ts. Technical endpoints are outside the matcher.
+ *  - ML-4 (DP-237): the trailing slash. Next's own 308 (`/tr/` → `/tr`) ran before the proxy, so an
+ *    old address with a slash needed two hops (308 + 301). `skipTrailingSlashRedirect` hands it to
+ *    the proxy (`decideRequest`): the same 308 for every address with a slash (the technical ones
+ *    match only for it), except that an address whose slash-less form redirects answers that one
+ *    redirect directly (`/tr/` → 301 `/en`).
  */
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -40,7 +45,7 @@ import { getProductDocuments } from "@/lib/catalog-api";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { NOT_FOUND_LOCALE_HEADER, NOT_FOUND_TARGET } from "@/lib/not-found";
 import { sitePrivacy } from "@/lib/privacy";
-import { decide, type ProxyDeps } from "@/lib/proxy-routes";
+import { decideRequest, type ProxyDeps } from "@/lib/proxy-routes";
 import { publicLocales } from "@/lib/public-locales";
 import { resolvePath, sitePolicy } from "@/lib/seo";
 
@@ -58,9 +63,12 @@ export const config = {
   // DP-212: every address except the framework, the API, previews, forms, documents, images and
   // static media; the proxy itself decides which ones need an API call (most need none).
   // ML-3: "/" too (one 301 to /en).
+  // ML-4: every address ending in a slash too (the trailing-slash 308, see decideRequest); the
+  // technical prefixes are TECHNICAL_PREFIXES in lib/proxy-routes.ts (tested to match).
   matcher: [
     "/",
     "/((?!_next/|__dp/|api/|media/|preview/|lead-form/|product-documents/|product-images/).+)",
+    "/:path+/",
   ],
 };
 
@@ -76,17 +84,17 @@ function deps(): ProxyDeps {
 }
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
-  if (request.method !== "GET" && request.method !== "HEAD") return NextResponse.next();
   const { pathname, search } = request.nextUrl;
-  const decision = await decide(pathname, search, deps());
+  const decision = await decideRequest(pathname, search, request.method, deps());
   switch (decision.action) {
     case "next":
       return NextResponse.next();
     case "not-found":
       return notFound(request, decision.locale);
     case "redirect": {
-      // The public origin (as in canonical URLs) when configured, otherwise the request's own.
-      const base = sitePolicy().origin ?? request.url;
+      // The public origin (as in canonical URLs) when configured, otherwise the request's own; the
+      // trailing-slash 308 stays on the request's own origin, as Next answered it.
+      const base = decision.status === 308 ? request.url : (sitePolicy().origin ?? request.url);
       return NextResponse.redirect(new URL(decision.location, base), decision.status);
     }
   }

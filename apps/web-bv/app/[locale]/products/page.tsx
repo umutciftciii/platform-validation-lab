@@ -1,8 +1,15 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 
-import { filterProducts, paginate, parseBrowse, trail, type BrowseParams } from "@/components/products/browse";
+import {
+  canonicalBrowse,
+  filterProducts,
+  paginate,
+  parseBrowse,
+  trail,
+  type BrowseParams,
+} from "@/components/products/browse";
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { BrowseResults } from "@/components/products/catalog-views";
 import { liveLinks } from "@/components/products/live-links";
@@ -11,20 +18,28 @@ import { catalogLocale } from "@/lib/catalog-locale";
 import { localizeHref } from "@/lib/locale-routing";
 import { pageMetadata, siteSeo } from "@/lib/seo";
 
+/** The catalogue reads of one request, shared by the metadata and the list (one API read each). */
+const readCatalog = cache(() => Promise.all([listProducts(), listCategories()]));
+
 /**
  * DP-207: the list and each category view are their own canonical address (`?category=`, and
- * `?page=` beyond the first); a search result (`?q=`) is never indexed.
+ * `?page=` beyond the first); a search result (`?q=`) is never indexed. ML-4: a category without
+ * live products and a page beyond the last name the view actually shown (`canonicalBrowse`).
  */
 export async function generateMetadata({ searchParams }: PageProps<"/[locale]/products">): Promise<Metadata> {
   await connection();
   const locale = await catalogLocale();
   const p = parseBrowse(await searchParams);
-  const site = await siteSeo();
+  const [site, [list, cats]] = await Promise.all([siteSeo(), readCatalog()]);
+  const canonical = canonicalBrowse(p, list.ok ? list.data : null, cats.ok ? cats.data : []);
   return pageMetadata(
     {
       path: "/products",
       locale,
-      query: { category: p.category ?? undefined, page: p.page > 1 ? String(p.page) : undefined },
+      query: {
+        category: canonical.category ?? undefined,
+        page: canonical.page > 1 ? String(canonical.page) : undefined,
+      },
       title: `Products | ${site.siteName}`,
       description: `Published products of ${site.siteName}.`,
       noindex: Boolean(p.q),
@@ -66,7 +81,7 @@ async function Browse({ searchParams }: Pick<PageProps<"/[locale]/products">, "s
   await connection();
   const locale = await catalogLocale();
   const params = parseBrowse(await searchParams);
-  const [list, cats] = await Promise.all([listProducts(), listCategories()]);
+  const [list, cats] = await readCatalog();
   if (!list.ok) {
     return (
       <CatalogNotice title="The product catalogue is not available right now">

@@ -1,7 +1,8 @@
 /**
  * ML-3 (DP-236): the DP-212 legacy redirect import that is live in DEV (83 rows), as test data.
  * Generated from docs/cms/legacy-url-map/legacy-redirects.import.csv (source, target, status,
- * active); `redirect-safety.test.mts` checks it against that file wherever the docs are present.
+ * active; since ML-4 kept as snapshots/dp-212-legacy-redirects.import.csv, the DEV rollback
+ * state); `redirect-safety.test.mts` checks it against that file wherever the docs are present.
  * Public old-site addresses only. Do not edit by hand.
  */
 export const DP_212_IMPORT_ROWS: readonly (readonly [source: string, target: string, status: string, active: string])[] = [

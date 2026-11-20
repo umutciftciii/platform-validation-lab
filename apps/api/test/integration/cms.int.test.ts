@@ -46,6 +46,7 @@ import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
+import { DP_212_PAIRS, ML_4_PAIRS } from "../fixtures/legacy-url-map.js";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CLI = path.join(API_DIR, "dist/iam/iam-cli.js");
@@ -3468,6 +3469,114 @@ describe("19. old-site addresses and the legacy URL map (DP-212)", () => {
     }
     // The Corporate site applies no redirects: its own resolve never answers old-site rows.
     expectError(await resolve("/en/dp212-about", "", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+  });
+
+  it("ML-4 (DP-237): the DEV transition with the real maps (DP-212 off, ML-4 on, rollback)", async () => {
+    // The rows of docs/cms/legacy-url-map (generated fixture): the same imports the DEV step runs.
+    const header = "source,target,status,active,note";
+    const split = (pair: string) => pair.split(" ") as [string, string];
+    const csv = (pairs: readonly string[], active: boolean, note: string) =>
+      [header, ...pairs.map((p) => `${split(p).join(",")},301,${active},${note}`)].join("\n");
+    const resolveSource = (source: string) => {
+      const q = source.indexOf("?");
+      return q === -1 ? resolve(source) : resolve(source.slice(0, q), source.slice(q + 1));
+    };
+    const run = async (text: string, rows: number) => {
+      const dry = SeoRedirectImportResponseSchema.parse((await imp(text, true)).body);
+      expect(dry.summary.rows).toBe(rows);
+      expect(dry.summary.error, JSON.stringify(dry.rows.filter((r) => r.action === "error"))).toBe(
+        0,
+      );
+      const done = await imp(text, false, dry.planHash);
+      expect(done.status, JSON.stringify(done.body).slice(0, 500)).toBe(200);
+      return dry.summary;
+    };
+    const activeOf = async (pairs: readonly string[]) => {
+      let n = 0;
+      for (const p of pairs) {
+        const [source] = split(p);
+        const q = source.indexOf("?");
+        const row = await owner.siteRedirect.findUnique({
+          where: {
+            siteId_sourcePath_sourceQuery: {
+              siteId: BV,
+              sourcePath: q === -1 ? source : source.slice(0, q),
+              sourceQuery: q === -1 ? "" : source.slice(q + 1),
+            },
+          },
+        });
+        if (row?.active) n++;
+      }
+      return n;
+    };
+    const ml4Sources = new Set(ML_4_PAIRS.map((p) => split(p)[0]));
+    const dp212Only = DP_212_PAIRS.filter((p) => !ml4Sources.has(split(p)[0]));
+    expect(DP_212_PAIRS).toHaveLength(83);
+    expect(ML_4_PAIRS.length).toBeGreaterThan(0);
+
+    // Today's DEV state: the 83 DP-212 rows.
+    await run(csv(DP_212_PAIRS, true, "DP-212 legacy"), 83);
+    expect(await activeOf(DP_212_PAIRS)).toBe(83);
+
+    // Step 3: switch them off (same sources, active=false): nothing answers them any more.
+    const off = await run(csv(DP_212_PAIRS, false, "DP-212 legacy"), 83);
+    expect(off).toMatchObject({ update: 83, create: 0 });
+    expect(await activeOf(DP_212_PAIRS)).toBe(0);
+    for (const p of DP_212_PAIRS) expectError(await resolveSource(split(p)[0]), 404, "NOT_FOUND");
+
+    // Step 5: import the ML-4 map; a second dry-run has nothing to write.
+    const on = await run(csv(ML_4_PAIRS, true, "ML-4 legacy"), ML_4_PAIRS.length);
+    expect(on.create + on.update + on.unchanged).toBe(ML_4_PAIRS.length);
+    const again = SeoRedirectImportResponseSchema.parse(
+      (await imp(csv(ML_4_PAIRS, true, "ML-4 legacy"), true)).body,
+    );
+    expect(again.summary).toMatchObject({ unchanged: ML_4_PAIRS.length, create: 0, update: 0 });
+    for (const p of ML_4_PAIRS) {
+      const [source, target] = split(p);
+      const answer = await resolveSource(source);
+      expect(answer.status, `${source} ${JSON.stringify(answer.body)}`).toBe(200);
+      expect((answer.body.redirect as { target: string }).target, source).toBe(target);
+    }
+    // The old /en rows that ML-4 keeps as the site's own addresses stay off (no /en/x -> /x).
+    // A query of a list whose plain row is on (`/tr/products?category=white-oil`) is answered by
+    // that plain row (query kept), never by its own old target.
+    expect(dp212Only.length).toBeGreaterThan(0);
+    const ml4Plain = new Map(ML_4_PAIRS.map(split).filter(([s]) => !s.includes("?")));
+    for (const p of dp212Only) {
+      const [source] = split(p);
+      const plainTarget = ml4Plain.get(source.split("?")[0]!);
+      if (source.includes("?") && plainTarget !== undefined) {
+        const answer = await resolveSource(source);
+        expect(answer.status, source).toBe(200);
+        expect((answer.body.redirect as { target: string }).target, source).toBe(plainTarget);
+      } else {
+        expectError(await resolveSource(source), 404, "NOT_FOUND");
+      }
+    }
+    expect(await activeOf(ML_4_PAIRS)).toBe(ML_4_PAIRS.length);
+    expect(await activeOf(dp212Only)).toBe(0);
+    // No active row points at the source of another active row (site_redirect_no_chain).
+    const active = await owner.siteRedirect.findMany({ where: { siteId: BV, active: true } });
+    const plain = new Set(active.filter((r) => r.sourceQuery === "").map((r) => r.sourcePath));
+    for (const r of active) expect(plain.has(r.target.split("?")[0]!), r.sourcePath).toBe(false);
+
+    // Rollback: ML-4 off, DP-212 on again; the rows ML-4 added are off.
+    await run(csv(ML_4_PAIRS, false, "ML-4 legacy"), ML_4_PAIRS.length);
+    await run(csv(DP_212_PAIRS, true, "DP-212 legacy"), 83);
+    expect(await activeOf(DP_212_PAIRS)).toBe(83);
+    for (const p of DP_212_PAIRS) {
+      const [source, target] = split(p);
+      expect((await resolveSource(source)).body.redirect, source).toMatchObject({ target });
+    }
+    const dp212Sources = new Set(DP_212_PAIRS.map((p) => split(p)[0]));
+    for (const p of ML_4_PAIRS.filter((x) => !dp212Sources.has(split(x)[0]))) {
+      expectError(await resolveSource(split(p)[0]), 404, "NOT_FOUND");
+    }
+
+    // Leave both maps switched off for the sections that follow.
+    await run(csv(DP_212_PAIRS, false, "DP-212 legacy"), 83);
+    expect(await activeOf(DP_212_PAIRS)).toBe(0);
+    expect(await activeOf(ML_4_PAIRS)).toBe(0);
   });
 });
 
