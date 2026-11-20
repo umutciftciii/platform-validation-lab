@@ -34,6 +34,14 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
   "content:invalid":
     "This content no longer matches the current fields. Save the draft again and check the highlighted fields.",
   "revisionNumber:unknown": "This revision does not exist. Reload the page.",
+  // ML-2 (DP-074): languages and translations.
+  "locale:exists": "This page already exists in that language. Open it from the language tabs.",
+  "locale:not_enabled": "This language is not enabled for editing on this site.",
+  "locale:is_source":
+    "This page is the source language of its group; it has nothing to catch up with.",
+  "locale:unknown": "This language is not a language of the site.",
+  "slug:fixed_address": "Designed pages and site-wide parts keep their address in every language.",
+  "slug:format": "Use lower-case letters, digits and single hyphens, for example over-ons.",
   // DP-209: page SEO.
   "seo.canonicalPath:custom":
     "Use a path of this site, such as /about-us (lower-case words and hyphens, no domain).",

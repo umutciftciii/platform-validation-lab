@@ -16,6 +16,7 @@ import {
   type CmsSeoValue,
   type CmsPublication,
   type CmsPublicPage,
+  type CmsStructureWarning,
 } from "@dream/contracts";
 import { ApiError } from "../iam/http/api-error.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
@@ -141,8 +142,11 @@ export interface LiveRow {
   publishedAt: Date;
   /** DP-020: when revision 1 was published (the date an article shows). */
   firstPublishedAt: Date;
-  /** ML-1: `locale` lets the public reads drop languages that are not public. */
-  page: { kind: CmsPage["kind"]; templateKey: string; locale: string };
+  /**
+   * ML-1: `locale` lets the public reads drop languages that are not public. ML-2: the group
+   * links a page to its other languages (menus resolve a page reference per language).
+   */
+  page: { kind: CmsPage["kind"]; templateKey: string; locale: string; translationGroupId: string };
   revision: {
     revisionNumber: number;
     title: string;
@@ -179,7 +183,7 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
     }),
     db.cmsPage.findMany({
       where: { id: { in: pubs.map((p) => p.pageId) } },
-      select: { id: true, kind: true, templateKey: true, locale: true },
+      select: { id: true, kind: true, templateKey: true, locale: true, translationGroupId: true },
     }),
     db.cmsPageRevision.findMany({
       where: { pageId: { in: pubs.map((p) => p.pageId) }, revisionNumber: 1 },
@@ -215,6 +219,8 @@ export const PAGE_SELECT = {
   templateKey: true,
   path: true,
   locale: true,
+  translationGroupId: true,
+  translationSourceRevisionId: true,
   title: true,
   ...SEO_SELECT,
   content: true,
@@ -249,6 +255,9 @@ export interface PageRow {
   templateKey: string;
   path: string | null;
   locale: string;
+  /** ML-2 (ADR-028 D6). */
+  translationGroupId: string;
+  translationSourceRevisionId: string | null;
   title: string;
   seoTitle: string | null;
   seoDescription: string | null;
@@ -269,7 +278,7 @@ export interface PageRow {
 
 export const userRef = (u: UserRow) => ({ id: u.id, name: u.displayName ?? "Staff user" });
 
-function asObject(content: unknown): Record<string, unknown> {
+export function asObject(content: unknown): Record<string, unknown> {
   return content && typeof content === "object" && !Array.isArray(content)
     ? (content as Record<string, unknown>)
     : {};
@@ -311,6 +320,8 @@ export function toSummary(row: PageRow): CmsPageSummary {
     updatedAt: row.updatedAt.toISOString(),
     updatedBy: userRef(row.updatedBy),
     publication: toPublication(row.publication),
+    translationGroupId: row.translationGroupId,
+    translations: [],
   };
 }
 
@@ -318,6 +329,8 @@ export function toSummary(row: PageRow): CmsPageSummary {
 export interface PageAddresses {
   redirectsHere: string[];
   keepsOldAddress: boolean;
+  /** ML-2: structure differences from the group's source page (translations only). */
+  structureWarnings?: CmsStructureWarning[];
 }
 
 export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
@@ -330,6 +343,7 @@ export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
     content: asObject(row.content),
     createdAt: row.createdAt.toISOString(),
     createdBy: userRef(row.createdBy),
+    structureWarnings: addresses.structureWarnings ?? [],
   };
 }
 

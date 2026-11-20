@@ -12,7 +12,7 @@
 // editable before the S2 import.
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -307,10 +307,16 @@ afterAll(async () => {
 const SEO = { title: null, description: null, noindex: false };
 const HERO = { id: "sec-hero-001", type: "hero", title: "About Dream Petroleum" };
 
-/** A row inserted directly as dp_owner (for the CHECK probes). */
+/**
+ * A row inserted directly as dp_owner (for the CHECK probes). ML-2: an original page is the first
+ * page of its own translation group (translationGroupId = id) unless the probe names a group.
+ */
 function row(data: Record<string, unknown>) {
+  const id = (data["id"] as string | undefined) ?? randomUUID();
   return owner.cmsPage.create({
     data: {
+      id,
+      translationGroupId: id,
       siteId: BV,
       kind: "TEMPLATE",
       templateKey: "standard",
@@ -356,7 +362,7 @@ describe("1. schema", () => {
     const home = await row({ kind: "DESIGN", templateKey: "bv.home", path: "/" });
     await rejectsDb(
       row({ kind: "DESIGN", templateKey: "bv.home", path: "/home-2" }),
-      /CmsPage_registry_siteId_templateKey_key|Unique constraint/,
+      /CmsPage_registry_siteId_locale_templateKey_key|Unique constraint/,
     );
     const products = await row({
       kind: "DESIGN",
@@ -3986,6 +3992,30 @@ describe("20. header and footer menus (DP-219)", () => {
   });
 });
 
+/**
+ * ML-2: the rollback statements of migration 38 from its header comment. Migration 38 adds a
+ * foreign key from CmsPage to SiteLocale, so ML-1's rollback runs after it (38, then 37).
+ */
+function ml2RollbackStatements(): string[] {
+  const sql = readFileSync(
+    path.join(
+      API_DIR,
+      "prisma/migrations/20261211090000_ml_2_cms_translation_groups/migration.sql",
+    ),
+    "utf8",
+  );
+  const block = sql.split("-- Rollback")[1]!.split("-- ===")[0]!;
+  return block
+    .split("\n")
+    .filter((l) => l.startsWith("--   "))
+    .map((l) => l.slice(5))
+    .filter((l) => !l.startsWith("("))
+    .join("\n")
+    .split(/;\s*\n/)
+    .map((st) => st.trim().replace(/;$/, ""))
+    .filter(Boolean);
+}
+
 describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
   const MIGRATION = "20261210090000_ml_1_site_locales";
   const rowsOf = async () =>
@@ -4194,6 +4224,8 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     const sitesBefore = await owner.site.findMany({ orderBy: { key: "asc" } });
     const pagesBefore = await owner.cmsPage.count();
     await rolledBack(async (tx) => {
+      // ML-2 first: its foreign key CmsPage -> SiteLocale depends on the table.
+      for (const stmt of ml2RollbackStatements()) await tx.$executeRawUnsafe(stmt);
       for (const stmt of rollback ?? []) await tx.$executeRawUnsafe(stmt);
       const left = await tx.$queryRaw<{ n: bigint }[]>`
         SELECT count(*)::bigint AS n FROM pg_class WHERE relname = 'SiteLocale'`;
@@ -4293,7 +4325,10 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     expect(live.publication).toMatchObject({ status: "PUBLISHED", revisionNumber: 1 });
     expect(await owner.cmsPageRevision.count({ where: { pageId: p.id } })).toBe(1);
     // The admin sees it as live; visitors do not: page, resolve, sitemap, news.
-    const listed = CmsPageListResponseSchema.parse((await bvReader.get(`/sites/${BV}/pages`)).body);
+    // ML-2: the admin lists one language at a time (`?locale=nl`).
+    const listed = CmsPageListResponseSchema.parse(
+      (await bvReader.get(`/sites/${BV}/pages?locale=nl`)).body,
+    );
     expect(listed.items.find((i) => i.id === p.id)?.publication?.status).toBe("PUBLISHED");
     const page = await pub(`/page?path=${p.path}`);
     expectError(page, 404, "NOT_FOUND");
@@ -4328,6 +4363,11 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
   });
 
   it("a language that is not enabled is closed to editing, preview and publication", async () => {
+    // ML-2: a page's language must be a language of its site (foreign key), so the probe adds a
+    // closed German row for the duration of the test (as dp_owner).
+    await owner.siteLocale.create({
+      data: { siteId: BV, locale: "de", enabled: false, public: false, sortOrder: 20 },
+    });
     const de = await row({ locale: "de", title: "Probe de", content: { sections: [HERO] } });
     const rule = { path: "locale", rule: "not_enabled" };
     const draftBody = {
@@ -4373,6 +4413,8 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     for (const id of [de.id, nl.id]) {
       expect(await owner.cmsPagePublication.count({ where: { pageId: id } })).toBe(0);
     }
+    await owner.cmsPage.delete({ where: { id: de.id } });
+    await owner.siteLocale.delete({ where: { siteId_locale: { siteId: BV, locale: "de" } } });
     expect(shape(await rowsOf())).toEqual(EXPECTED);
   });
 
@@ -4383,5 +4425,630 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     expect((await pub(`/page?path=${en.path}`)).status).toBe(200);
     expect((await seoGet(`/resolve?path=${encodeURIComponent(en.path!)}`)).status).toBe(200);
     expect(await sitemapPaths()).toContain(en.path);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// ML-2 (DP-074, ADR-028 D6/D7): CMS pages per language and translation groups
+// ---------------------------------------------------------------------------------------------
+
+describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D6)", () => {
+  const MIGRATION = "20261211090000_ml_2_cms_translation_groups";
+  const seoGet = (p: string) =>
+    fetch(`${base}/api/v1/public/seo${p}`, {
+      headers: { "x-dp-proxy-key": TEST_KEYS.webBv, "x-dp-client-ip": "10.20.30.44" },
+    }).then(parse);
+  const pageOf = async (id: string) => CmsPageResponseSchema.parse((await page(id)).body);
+
+  /** Every column of the English CMS rows (pages, revisions, publications), hashed. */
+  async function englishHash(): Promise<string> {
+    const pages = await owner.cmsPage.findMany({ where: { locale: "en" }, orderBy: { id: "asc" } });
+    const ids = pages.map((p) => p.id);
+    const [revisions, pubs] = await Promise.all([
+      owner.cmsPageRevision.findMany({ where: { pageId: { in: ids } }, orderBy: { id: "asc" } }),
+      owner.cmsPagePublication.findMany({ where: { pageId: { in: ids } }, orderBy: { id: "asc" } }),
+    ]);
+    return createHash("sha256").update(JSON.stringify({ pages, revisions, pubs })).digest("hex");
+  }
+
+  /** Runs `fn` in a transaction that is always rolled back. */
+  async function rolledBack(fn: (tx: PrismaClient) => Promise<void>): Promise<void> {
+    await expect(
+      owner.$transaction(
+        async (tx) => {
+          await fn(tx as unknown as PrismaClient);
+          throw new Error("rolled back by the test");
+        },
+        { timeout: 60_000 },
+      ),
+    ).rejects.toThrow("rolled back by the test");
+  }
+
+  async function createPage(slug: string, title: string, sections: unknown[]) {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, { title, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const saved = await bvEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title,
+      slug,
+      seo: { ...SEO, title: `${title} SEO` },
+      content: { sections },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    return CmsPageResponseSchema.parse(saved.body).page;
+  }
+  async function publish(id: string) {
+    const p = (await pageOf(id)).page;
+    const res = await bvPublisher.post(`/pages/${id}/publish`, { version: p.version });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return CmsPageResponseSchema.parse(res.body);
+  }
+  async function setNlPublic(value: boolean) {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { public: value },
+    });
+  }
+
+  const SECTIONS = [
+    { id: "ml2-hero-0001", type: "hero", title: "About us", intro: "Who we are." },
+    {
+      id: "ml2-text-0002",
+      type: "text",
+      title: "Our story",
+      body: "Founded in Rotterdam.",
+    },
+  ];
+  let en: Awaited<ReturnType<typeof createPage>>;
+  let nlId: string;
+
+  it("migration: every page is the first page of its own group; rollback restores the old keys (rehearsed, rolled back)", async () => {
+    const applied = await owner.$queryRaw<{ n: bigint }[]>`
+      SELECT count(*)::bigint AS n FROM "_prisma_migrations"
+      WHERE migration_name = ${MIGRATION} AND finished_at IS NOT NULL`;
+    expect(Number(applied[0]?.n)).toBe(1);
+    // Every page so far is an original (no translation exists yet in this database).
+    const nested = await owner.$queryRaw<{ n: bigint }[]>`
+      SELECT count(*)::bigint AS n FROM "CmsPage" WHERE "translationGroupId" <> "id"`;
+    expect(Number(nested[0]?.n)).toBe(0);
+    const indexes = async (tx: PrismaClient) =>
+      (
+        await tx.$queryRaw<{ indexname: string }[]>`
+          SELECT indexname FROM pg_indexes WHERE tablename = 'CmsPage' ORDER BY indexname`
+      ).map((r) => r.indexname);
+    expect(await indexes(owner)).toEqual(
+      expect.arrayContaining([
+        "CmsPage_siteId_locale_path_key",
+        "CmsPage_registry_siteId_locale_templateKey_key",
+        "CmsPage_translationGroupId_locale_key",
+      ]),
+    );
+    // The rollback of the migration header, statement by statement, then undone.
+    const statements = ml2RollbackStatements();
+    expect(statements.length).toBeGreaterThanOrEqual(10);
+    const before = await englishHash();
+    await rolledBack(async (tx) => {
+      for (const st of statements) await tx.$executeRawUnsafe(st);
+      const after = await indexes(tx);
+      expect(after).toContain("CmsPage_siteId_path_key");
+      expect(after).toContain("CmsPage_registry_siteId_templateKey_key");
+      expect(after).not.toContain("CmsPage_translationGroupId_locale_key");
+      const cols = await tx.$queryRaw<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'CmsPage' AND column_name LIKE 'translation%'`;
+      expect(cols).toEqual([]);
+    });
+    expect(await englishHash()).toBe(before);
+  });
+
+  it("database rules: one page per language and group; a group shares site, kind and template; sources stay in the group", async () => {
+    const a = await row({ title: "ML-2 rule probe" });
+    // A language the site does not have (foreign key to SiteLocale).
+    await rejectsDb(row({ locale: "fr" }), /CmsPage_siteId_locale_fkey|Foreign key/i);
+    // A translation must keep the group's site, kind and template.
+    await rejectsDb(
+      row({
+        id: randomUUID(),
+        locale: "nl",
+        translationGroupId: a.id,
+        templateKey: "article",
+        path: "/news/ml2-x",
+      }),
+      /CmsPage_translation_group_consistent/,
+    );
+    await rejectsDb(
+      row({ locale: "nl", siteId: COM, translationGroupId: a.id }),
+      /CmsPage_translation_group|CmsPage_siteId_locale_fkey/,
+    );
+    const nl = await row({
+      id: randomUUID(),
+      locale: "nl",
+      translationGroupId: a.id,
+      path: a.path,
+    });
+    // Never twice per language (unique), and a translation cannot be the root of another group.
+    await rejectsDb(
+      row({ id: randomUUID(), locale: "nl", translationGroupId: a.id }),
+      /CmsPage_translationGroupId_locale_key|Unique constraint/,
+    );
+    await rejectsDb(
+      owner.cmsPage.update({ where: { id: a.id }, data: { translationGroupId: nl.id } }),
+      /CmsPage_translation_group_root/,
+    );
+    // Same path in two languages is allowed (above); twice in one language is not.
+    await rejectsDb(
+      row({ locale: "nl", path: a.path }),
+      /CmsPage_siteId_locale_path_key|Unique constraint/,
+    );
+    // A source revision must be a revision of another page of the same group.
+    const other = await row({ title: "ML-2 other group" });
+    await bvPublisher.post(`/pages/${other.id}/publish`, { version: other.version });
+    const rev = await owner.cmsPageRevision.findFirstOrThrow({ where: { pageId: other.id } });
+    await rejectsDb(
+      owner.cmsPage.update({ where: { id: nl.id }, data: { translationSourceRevisionId: rev.id } }),
+      /CmsPage_translation_source/,
+    );
+    // dp_app still cannot delete pages; clean up as dp_owner.
+    await rejectsDb(asApp.cmsPage.delete({ where: { id: nl.id } }), /permission denied/);
+    await owner.cmsPage.delete({ where: { id: nl.id } });
+    await owner.cmsPage.delete({ where: { id: a.id } });
+  });
+
+  it("create translation: copies the structure with empty texts, as an NL draft in the same group; never twice", async () => {
+    en = await createPage("ml2-about", "About us (ML-2)", SECTIONS);
+    await publish(en.id);
+    const enHash = await englishHash();
+    // Readers cannot create; a language that is not enabled or the page's own language is refused.
+    expectError(
+      await bvReader.post(`/pages/${en.id}/translations`, { locale: "nl", title: "Over ons" }),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(
+      await bvEditor.post(`/pages/${en.id}/translations`, { locale: "de", title: "Über uns" }),
+      409,
+      "CONFLICT_STATE",
+      { path: "locale", rule: "not_enabled" },
+    );
+    expectError(
+      await bvEditor.post(`/pages/${en.id}/translations`, { locale: "en", title: "Again" }),
+      409,
+      "CONFLICT_STATE",
+      { path: "locale", rule: "exists" },
+    );
+    const res = await bvEditor.post(`/pages/${en.id}/translations`, {
+      locale: "nl",
+      title: "Over ons (ML-2)",
+      slug: "over-ons-ml2",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const created = CmsPageResponseSchema.parse(res.body);
+    nlId = created.page.id;
+    expect(created.page).toMatchObject({
+      locale: "nl",
+      path: "/over-ons-ml2",
+      kind: "TEMPLATE",
+      templateKey: "standard",
+      translationGroupId: en.id,
+      publication: null,
+      title: "Over ons (ML-2)",
+    });
+    expect(created.page.seo).toMatchObject({ title: null, description: null, noindex: false });
+    const sections = created.page.content["sections"] as Record<string, unknown>[];
+    expect(sections.map((s) => [s["id"], s["type"]])).toEqual(SECTIONS.map((s) => [s.id, s.type]));
+    expect(sections[0]).toMatchObject({ title: "", intro: "" });
+    expect(sections[1]).toMatchObject({ title: "", body: "" });
+    expect(created.page.structureWarnings).toEqual([]);
+    expect(created.translations.map((t) => [t.locale, t.state, t.isSource])).toEqual([
+      ["en", "published", true],
+      ["nl", "draft", false],
+    ]);
+    expect(created.translations[1]).toMatchObject({
+      outdated: false,
+      sourceRevisionNumber: 1,
+      sourceLatestRevisionNumber: 1,
+    });
+    const audit = await lastAudit("cms.translation_created");
+    expect(audit?.metadata).toMatchObject({
+      locale: "nl",
+      fromPageId: en.id,
+      sourceRevisionNumber: 1,
+    });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("Over ons");
+    // Never twice (from either page of the group).
+    for (const id of [en.id, nlId]) {
+      expectError(
+        await bvEditor.post(`/pages/${id}/translations`, { locale: "nl", title: "Nog eens" }),
+        409,
+        "CONFLICT_STATE",
+        { path: "locale", rule: "exists" },
+      );
+    }
+    expect(await owner.cmsPage.count({ where: { translationGroupId: en.id } })).toBe(2);
+    // The English page, its revision and publication are untouched.
+    expect(await englishHash()).toBe(enHash);
+  });
+
+  it("lists one language at a time; the default list carries the NL state; old calls stay English", async () => {
+    const plain = CmsPageListResponseSchema.parse((await bvReader.get(`/sites/${BV}/pages`)).body);
+    expect(plain.items.every((i) => i.locale === "en")).toBe(true);
+    const item = plain.items.find((i) => i.id === en.id)!;
+    expect(item.translations.map((t) => [t.locale, t.state])).toEqual([["nl", "draft"]]);
+    const nl = CmsPageListResponseSchema.parse(
+      (await bvReader.get(`/sites/${BV}/pages?locale=nl`)).body,
+    );
+    expect(nl.items.some((i) => i.id === nlId)).toBe(true);
+    expect(nl.items.every((i) => i.locale === "nl")).toBe(true);
+    expectError(await bvReader.get(`/sites/${BV}/pages?locale=xx`), 400, "VALIDATION_FAILED", {
+      path: "locale",
+      rule: "unknown",
+    });
+    // Menu targets offer the default language's pages only.
+    const targets = CmsMenuTargetsResponseSchema.parse(
+      (await bvReader.get(`/sites/${BV}/menu-targets`)).body,
+    );
+    expect(targets.pages.some((p) => p.id === en.id)).toBe(true);
+    expect(targets.pages.some((p) => p.id === nlId)).toBe(false);
+  });
+
+  it("NL draft, preview, publish, unpublish and restore are independent of English; visitors never see NL while it is not public", async () => {
+    const enHash = await englishHash();
+    const nl = (await pageOf(nlId)).page;
+    const saved = await bvEditor.post(`/pages/${nlId}/draft`, {
+      version: nl.version,
+      title: nl.title,
+      slug: "over-ons-ml2",
+      seo: { ...SEO, title: "Over ons SEO" },
+      content: {
+        sections: [
+          { ...SECTIONS[0], title: "Over ons", intro: "Wie wij zijn." },
+          { ...SECTIONS[1], title: "Ons verhaal", body: "Opgericht in Rotterdam." },
+        ],
+      },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const pre = await bvReader.post(`/pages/${nlId}/preview`, {});
+    expect(pre.status, JSON.stringify(pre.body)).toBe(200);
+    const token = CmsPreviewResponseSchema.parse(pre.body).url.split("/preview/")[1]!;
+    const view = CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body);
+    expect(view.page.title).toBe("Over ons (ML-2)");
+    // The preview never borrows English fragments for a Dutch page (no NL fragment yet).
+    expect(view.fragments["bv.site-nav"] ?? null).toBeNull();
+    const live = await publish(nlId);
+    expect(live.page.publication).toMatchObject({ status: "PUBLISHED", revisionNumber: 1 });
+    expect(live.translations.map((t) => [t.locale, t.state])).toEqual([
+      ["en", "published"],
+      ["nl", "published"],
+    ]);
+    expect(await englishHash()).toBe(enHash);
+    // English stays the default answer; NL is 404 everywhere while not public.
+    const enPage = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body);
+    expect(enPage.page.title).toBe("About us (ML-2)");
+    expectError(await pub(`/page?path=/over-ons-ml2`), 404, "NOT_FOUND");
+    const hidden = await pub(`/page?path=/over-ons-ml2&locale=nl`);
+    expectError(hidden, 404, "NOT_FOUND");
+    expect(hidden.body.error.details).toEqual([]);
+    expectError(await pub(`/news?locale=nl`), 404, "NOT_FOUND");
+    expectError(
+      await seoGet(`/resolve?path=${encodeURIComponent("/nl/over-ons-ml2")}`),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(await seoGet(`/settings?locale=nl`), 404, "NOT_FOUND");
+    const sitemap = PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body);
+    expect(sitemap.entries.map((e) => e.path)).not.toContain("/over-ons-ml2");
+    expect(sitemap.entries.map((e) => e.path)).toContain("/ml2-about");
+    // Unpublish NL: English stays live, unchanged.
+    const off = await bvPublisher.post(`/pages/${nlId}/unpublish`, {
+      publicationVersion: live.page.publication!.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await pub(`/page?path=/ml2-about`)).status).toBe(200);
+    expect(await englishHash()).toBe(enHash);
+    // Restore NL revision 1 into the draft, publish again.
+    const back = await bvEditor.post(`/pages/${nlId}/restore`, {
+      version: CmsPageResponseSchema.parse(off.body).page.version,
+      revisionNumber: 1,
+    });
+    expect(back.status, JSON.stringify(back.body)).toBe(200);
+    const again = await publish(nlId);
+    expect(again.page.publication).toMatchObject({ status: "PUBLISHED", revisionNumber: 2 });
+    expect(await englishHash()).toBe(enHash);
+  });
+
+  it("visible once NL is public (owner switch, rolled back here): NL page by locale, the same path in two languages", async () => {
+    // The same path in both languages, both live.
+    const twin = await bvEditor.post(`/pages/${en.id}/translations`, {
+      locale: "nl",
+      title: "x",
+    });
+    expectError(twin, 409, "CONFLICT_STATE", { path: "locale", rule: "exists" });
+    const other = await createPage("ml2-same", "Same path (ML-2)", [SECTIONS[0]]);
+    await publish(other.id);
+    const otherNl = await bvEditor.post(`/pages/${other.id}/translations`, {
+      locale: "nl",
+      title: "Zelfde pad (ML-2)",
+    });
+    expect(otherNl.status, JSON.stringify(otherNl.body)).toBe(201);
+    const otherNlPage = CmsPageResponseSchema.parse(otherNl.body).page;
+    expect(otherNlPage.path).toBe("/ml2-same");
+    const nlv = (await pageOf(otherNlPage.id)).page;
+    await bvEditor.post(`/pages/${otherNlPage.id}/draft`, {
+      version: nlv.version,
+      title: nlv.title,
+      slug: "ml2-same",
+      seo: SEO,
+      content: { sections: [{ ...SECTIONS[0], title: "Zelfde", intro: "Tekst." }] },
+    });
+    await publish(otherNlPage.id);
+    await setNlPublic(true);
+    try {
+      const nlBundle = CmsPublicBundleSchema.parse(
+        (await pub(`/page?path=/ml2-same&locale=nl`)).body,
+      );
+      expect(nlBundle.page.title).toBe("Zelfde pad (ML-2)");
+      const enBundle = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-same`)).body);
+      expect(enBundle.page.title).toBe("Same path (ML-2)");
+      // No fallback: a Dutch address without Dutch content is a 404, never English.
+      expectError(await pub(`/page?path=/ml2-about-missing&locale=nl`), 404, "NOT_FOUND");
+      // Unprefixed SEO addresses are still the default language only (ML-3 brings /nl routing).
+      expect(
+        PublicSitemapResponseSchema.parse((await seoGet("/sitemap")).body).entries.filter(
+          (e) => e.path === "/ml2-same",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("slug collision in one language is refused; a Dutch slug change writes /nl/old -> /nl/new, hidden from visitors", async () => {
+    const third = await createPage("ml2-third", "Third (ML-2)", [SECTIONS[0]]);
+    // The NL slug of another NL page in the same language: refused.
+    expectError(
+      await bvEditor.post(`/pages/${third.id}/translations`, {
+        locale: "nl",
+        title: "Derde",
+        slug: "over-ons-ml2",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "slug", rule: "unique" },
+    );
+    // The NL page moves: the old NL address answers 301 to the new one, under /nl.
+    const nl = (await pageOf(nlId)).page;
+    const moved = await bvEditor.post(`/pages/${nlId}/draft`, {
+      version: nl.version,
+      title: nl.title,
+      slug: "over-ons-nieuw",
+      seo: nl.seo,
+      content: nl.content,
+    });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+    const enRedirects = await owner.siteRedirect.count({
+      where: { siteId: BV, sourcePath: "/ml2-about" },
+    });
+    await publish(nlId);
+    const redirect = await owner.siteRedirect.findFirstOrThrow({
+      where: { siteId: BV, contentType: "CMS_PAGE", contentId: nlId },
+    });
+    expect(redirect).toMatchObject({
+      sourcePath: "/nl/over-ons-ml2",
+      target: "/nl/over-ons-nieuw",
+      origin: "SLUG_CHANGE",
+      active: true,
+    });
+    expect(
+      await owner.siteRedirect.count({ where: { siteId: BV, sourcePath: "/ml2-about" } }),
+    ).toBe(enRedirects);
+    // Hidden language: no 301 revealed to visitors.
+    const r = await seoGet(`/resolve?path=${encodeURIComponent("/nl/over-ons-ml2")}`);
+    expectError(r, 404, "NOT_FOUND");
+    expect(r.body.error.details).toEqual([]);
+    // The page response names its old Dutch address.
+    expect((await pageOf(nlId)).page.redirectsHere).toEqual(["/nl/over-ons-ml2"]);
+    // English addresses keep their unprefixed form (no /en routing before ML-3).
+    expect((await seoGet(`/resolve?path=/ml2-about`)).status).toBe(200);
+  });
+
+  it("translation state: English republished -> NL outdated; marking it up to date clears it; the source cannot be marked", async () => {
+    const e1 = (await pageOf(en.id)).page;
+    const edited = await bvEditor.post(`/pages/${en.id}/draft`, {
+      version: e1.version,
+      title: e1.title,
+      slug: "ml2-about",
+      seo: e1.seo,
+      content: {
+        sections: [...SECTIONS, { id: "ml2-text-0003", type: "text", body: "Contact us." }],
+      },
+    });
+    expect(edited.status, JSON.stringify(edited.body)).toBe(200);
+    const enLive = await publish(en.id);
+    expect(enLive.page.publication?.revisionNumber).toBe(2);
+    const state = (await pageOf(nlId)).translations.find((t) => t.locale === "nl")!;
+    expect(state).toMatchObject({
+      state: "outdated",
+      outdated: true,
+      sourceRevisionNumber: 1,
+      sourceLatestRevisionNumber: 2,
+    });
+    const list = CmsPageListResponseSchema.parse((await bvReader.get(`/sites/${BV}/pages`)).body);
+    expect(list.items.find((i) => i.id === en.id)?.translations[0]?.state).toBe("outdated");
+    // Structure differs now (EN has a third section): a warning, not a refusal.
+    const nlNow = (await pageOf(nlId)).page;
+    expect(nlNow.structureWarnings).toEqual(expect.arrayContaining(["sections"]));
+    // Mark up to date.
+    expectError(
+      await bvEditor.post(`/pages/${nlId}/translation-source`, {
+        version: nlNow.version,
+        revisionNumber: 9,
+      }),
+      404,
+      "NOT_FOUND",
+      { path: "revisionNumber", rule: "unknown" },
+    );
+    const marked = await bvEditor.post(`/pages/${nlId}/translation-source`, {
+      version: nlNow.version,
+      revisionNumber: 2,
+    });
+    expect(marked.status, JSON.stringify(marked.body)).toBe(200);
+    const after = CmsPageResponseSchema.parse(marked.body);
+    expect(after.translations.find((t) => t.locale === "nl")).toMatchObject({
+      state: "published",
+      outdated: false,
+      sourceRevisionNumber: 2,
+    });
+    expect((await lastAudit("cms.translation_source_set"))?.metadata).toMatchObject({
+      locale: "nl",
+      sourceRevisionNumber: 2,
+    });
+    const enNow = (await pageOf(en.id)).page;
+    expectError(
+      await bvEditor.post(`/pages/${en.id}/translation-source`, {
+        version: enNow.version,
+        revisionNumber: 2,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "locale", rule: "is_source" },
+    );
+    expectError(
+      await bvReader.post(`/pages/${nlId}/translation-source`, {
+        version: after.page.version,
+        revisionNumber: 2,
+      }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("fragments per language: NL navigation, footer, SEO, home and news heading leave English untouched", async () => {
+    const enBefore = await englishHash();
+    const navBefore = JSON.stringify((await pub("/news")).body.fragments);
+    const seoBefore = JSON.stringify((await seoGet("/settings")).body);
+    const keys = ["bv.site-nav", "bv.site-footer", "bv.site-seo", "bv.home", "bv.news-index"];
+    const nlIds: Record<string, string> = {};
+    for (const key of keys) {
+      const enRow = await owner.cmsPage.findFirst({
+        where: { siteId: BV, locale: "en", templateKey: key },
+        select: { id: true, path: true, content: true },
+      });
+      if (!enRow) continue; // imported by an earlier section when present
+      const res = await bvEditor.post(`/pages/${enRow.id}/translations`, {
+        locale: "nl",
+        title: `NL ${key}`,
+      });
+      expect(res.status, `${key}: ${JSON.stringify(res.body)}`).toBe(201);
+      const created = CmsPageResponseSchema.parse(res.body).page;
+      expect(created.path).toBe(enRow.path);
+      nlIds[key] = created.id;
+      // Designed pages and fragments keep their address in every language.
+      expectError(
+        await bvEditor.post(`/pages/${enRow.id}/translations`, {
+          locale: "nl",
+          title: "x",
+          slug: "x",
+        }),
+        400,
+        "VALIDATION_FAILED",
+        { path: "slug", rule: "fixed_address" },
+      );
+    }
+    expect(Object.keys(nlIds)).toEqual(expect.arrayContaining(["bv.site-nav", "bv.home"]));
+    // The NL navigation keeps every target and empties every label.
+    const nav = (await pageOf(nlIds["bv.site-nav"]!)).page;
+    const navText = JSON.stringify(nav.content);
+    expect(navText).not.toMatch(/"label":"[^"]/);
+    const enNav = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: BV, locale: "en", templateKey: "bv.site-nav" },
+    });
+    const targets = (c: unknown) => JSON.stringify(c).match(/"target":\{[^}]*\}/g) ?? [];
+    expect(targets(nav.content)).toEqual(targets(enNav.content));
+    // A second NL registry page is refused (registry key per language).
+    const twinId = randomUUID();
+    const twice = await owner.cmsPage
+      .create({
+        data: {
+          id: twinId,
+          translationGroupId: twinId,
+          siteId: BV,
+          kind: "DESIGN",
+          templateKey: "bv.home",
+          path: "/",
+          locale: "nl",
+          title: "x",
+          content: {},
+          createdById: root.userId,
+          updatedById: root.userId,
+        },
+      })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(JSON.stringify(twice, Object.getOwnPropertyNames(twice ?? {})) + String(twice)).toMatch(
+      /CmsPage_registry_siteId_locale_templateKey_key|Unique constraint/,
+    );
+    // English answers are byte-identical.
+    expect(JSON.stringify((await pub("/news")).body.fragments)).toBe(navBefore);
+    expect(JSON.stringify((await seoGet("/settings")).body)).toBe(seoBefore);
+    expect(await englishHash()).toBe(enBefore);
+  });
+
+  it("menus resolve page references per language: the NL counterpart under /nl, never the English page", async () => {
+    const navId = (
+      await owner.cmsPage.findFirstOrThrow({
+        where: { siteId: BV, locale: "nl", templateKey: "bv.site-nav" },
+      })
+    ).id;
+    const nav = (await pageOf(navId)).page;
+    // Fill the emptied texts of the copied navigation (labels, pending note) with Dutch.
+    const filled = JSON.parse(
+      JSON.stringify(nav.content)
+        .replace(/"label":""/g, '"label":"NL"')
+        .replace(/"pendingNote":""/g, '"pendingNote":"Binnenkort"'),
+    ) as Record<string, unknown>;
+    const content = {
+      ...filled,
+      items: [
+        {
+          label: "Over ons",
+          target: { type: "page", pageId: en.id },
+          newTab: false,
+          visible: true,
+        },
+        {
+          label: "Derde",
+          target: { type: "path", path: "/products" },
+          newTab: false,
+          visible: true,
+        },
+      ],
+    };
+    const saved = await bvEditor.post(`/pages/${navId}/draft`, {
+      version: nav.version,
+      title: nav.title,
+      seo: nav.seo,
+      content,
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    await publish(navId);
+    await setNlPublic(true);
+    try {
+      const bundle = CmsPublicBundleSchema.parse(
+        (await pub(`/page?path=/ml2-same&locale=nl`)).body,
+      );
+      const navPublic = BvNavPublicSchema.parse(bundle.fragments["bv.site-nav"]?.content);
+      expect(navPublic.items.map((i) => [i.label, i.href])).toEqual([
+        ["Over ons", "/nl/over-ons-nieuw"],
+        ["Derde", "/products"],
+      ]);
+      // The English navigation is unchanged and still English.
+      const enBundle = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-same`)).body);
+      expect(JSON.stringify(enBundle.fragments["bv.site-nav"])).not.toContain("Over ons");
+    } finally {
+      await setNlPublic(false);
+    }
   });
 });

@@ -26,13 +26,20 @@ import {
   CmsPublishRequestSchema,
   CmsRestoreRequestSchema,
   CmsSeoSchema,
+  CmsTranslationCreateRequestSchema,
+  CmsTranslationSourceRequestSchema,
   CmsUnpublishRequestSchema,
+  LocaleTagSchema,
   cmsArticlePath,
   CMS_MENU_SCHEMA_VERSION,
   cmsDesignTemplate,
   cmsIsArticle,
   cmsIsMenu,
   cmsPathForSlug,
+  cmsSlugOfPath,
+  cmsStructureWarnings,
+  cmsTranslationDraft,
+  cmsTranslationSlugSchema,
   type CmsContextResponse,
   type CmsHistoryResponse,
   type CmsImportResponse,
@@ -51,6 +58,7 @@ import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import {
   PAGE_SELECT,
   SEO_SELECT,
+  asObject,
   attachPublications,
   issuePreviewToken,
   liveRows,
@@ -78,6 +86,13 @@ import { CMS_SEEDS } from "./seed/bv.js";
 import { assertMenuReferences, menuTargets } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 import { assertLocaleEnabled, siteLocalesOf } from "./site-locales.js";
+import {
+  defaultLocaleOf,
+  groupSource,
+  newPageId,
+  pageAddress,
+  translationsOf,
+} from "./translations.js";
 
 const READ = "content:read";
 const EDIT = "content:edit";
@@ -199,10 +214,37 @@ export class CmsService {
   ): Promise<CmsPageResponse> {
     const keeps = row.path !== null && keepsOldAddress(a.sites, row.siteId);
     const redirectsHere = keeps ? await redirectsTo(db, row.siteId, "CMS_PAGE", row.id) : [];
+    const site = await CmsService.site(a, row.siteId);
+    const translations = (await translationsOf(db, site, [row.translationGroupId])).get(
+      row.translationGroupId,
+    );
+    // ML-2 (ADR-028 D6): a translation's structure is compared with its source page's draft.
+    let structureWarnings: ReturnType<typeof cmsStructureWarnings> = [];
+    const sourceId = translations?.find((t) => t.isSource)?.pageId;
+    if (sourceId && sourceId !== row.id) {
+      const source = await db.cmsPage.findUnique({
+        where: { id: sourceId },
+        select: { content: true },
+      });
+      if (source) {
+        structureWarnings = cmsStructureWarnings(asObject(source.content), asObject(row.content));
+      }
+    }
     return {
-      page: toPage(row, { redirectsHere, keepsOldAddress: keeps }),
-      site: await CmsService.site(a, row.siteId),
+      page: toPage(row, { redirectsHere, keepsOldAddress: keeps, structureWarnings }),
+      site,
+      translations: translations ?? [],
     };
+  }
+
+  /** ML-2: a language of the site from a query parameter (the default language when absent). */
+  private static listLocale(site: CmsSite, raw: unknown): string {
+    if (raw === undefined || raw === "") return defaultLocaleOf(site);
+    const parsed = LocaleTagSchema.safeParse(raw);
+    if (!parsed.success || !site.locales.some((l) => l.locale === parsed.data)) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "locale", rule: "unknown" }]);
+    }
+    return parsed.data;
   }
 
   // --- reads ---------------------------------------------------------------------------------
@@ -212,19 +254,43 @@ export class CmsService {
     return { sites: await CmsService.sites(a) };
   }
 
-  async listPages(ctx: RequestContext, rawSiteId: unknown): Promise<CmsPageListResponse> {
+  /**
+   * The pages of one language of the site (ML-2: `?locale=`, default the site's default
+   * language, so a caller without the parameter sees exactly what it saw before). In the default
+   * language every page carries the state of its other languages.
+   */
+  async listPages(
+    ctx: RequestContext,
+    rawSiteId: unknown,
+    rawLocale?: unknown,
+  ): Promise<CmsPageListResponse> {
     const a = await this.access.begin(ctx);
     const siteId = await CmsService.requireSite(a, READ, rawSiteId);
+    const site = await CmsService.site(a, siteId);
+    const locale = CmsService.listLocale(site, rawLocale);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     const rows = await attachPublications(
       db,
       (await db.cmsPage.findMany({
-        where: { siteId },
+        where: { siteId, locale },
         select: PAGE_SELECT,
         orderBy: [{ kind: "asc" }, { path: "asc" }, { title: "asc" }],
       })) as PageBase[],
     );
-    return { site: await CmsService.site(a, siteId), items: rows.map(toSummary) };
+    const items = rows.map(toSummary);
+    if (locale === defaultLocaleOf(site)) {
+      const groups = await translationsOf(
+        db,
+        site,
+        rows.map((r) => r.translationGroupId),
+      );
+      for (const item of items) {
+        item.translations = (groups.get(item.translationGroupId ?? "") ?? []).filter(
+          (t) => !t.isSource,
+        );
+      }
+    }
+    return { site, items };
   }
 
   async getPage(ctx: RequestContext, rawId: string): Promise<CmsPageResponse> {
@@ -271,16 +337,27 @@ export class CmsService {
     try {
       const id = await db.$transaction(async (tx) => {
         // DP-210: an old address of another page stays its 301 (409 old_address).
+        const locale = defaultLocaleOf(site);
         if (keepsOldAddress(a.sites, siteId)) {
-          await assertAddressFree(tx, siteId, plan.path, "CMS_PAGE", null);
+          await assertAddressFree(
+            tx,
+            siteId,
+            pageAddress(site, locale, plan.path),
+            "CMS_PAGE",
+            null,
+          );
         }
+        // ML-2: a new page is the first page of its own translation group.
+        const id = newPageId(this.clock.now().getTime());
         const created = await tx.cmsPage.create({
           data: {
+            id,
+            translationGroupId: id,
             siteId,
             kind: "TEMPLATE",
             templateKey: plan.templateKey,
             path: plan.path,
-            locale: site.locale,
+            locale,
             title: plan.title,
             content: plan.content,
             createdById: a.userId,
@@ -353,8 +430,15 @@ export class CmsService {
     }
     try {
       await db.$transaction(async (tx) => {
-        if (data.path !== before.path && keepsOldAddress(a.sites, before.siteId)) {
-          await assertAddressFree(tx, before.siteId, data.path, "CMS_PAGE", before.id);
+        if (data.path !== before.path && data.path && keepsOldAddress(a.sites, before.siteId)) {
+          const site = await CmsService.site(a, before.siteId);
+          await assertAddressFree(
+            tx,
+            before.siteId,
+            pageAddress(site, before.locale, data.path),
+            "CMS_PAGE",
+            before.id,
+          );
         }
         // DP-219: a menu may reference only pages, products and categories of its own site.
         await assertMenuReferences(tx, before.siteId, before.templateKey, data.content);
@@ -407,25 +491,30 @@ export class CmsService {
       items: Array.isArray(value) ? value.length : null,
     }));
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    // ML-2: imports write the site's default language (the content in code is English).
+    const locale = defaultLocaleOf(site);
     // Never overwrite (ADR-020 D7): a designed page by its registry key, a content page by its path.
     const existing = await db.cmsPage.findFirst({
       where:
         plan.kind === "TEMPLATE"
-          ? { siteId, path: plan.path }
-          : { siteId, templateKey: plan.templateKey },
+          ? { siteId, locale, path: plan.path }
+          : { siteId, locale, templateKey: plan.templateKey },
       select: { id: true },
     });
     if (existing) throw new ApiError("CONFLICT_STATE", [{ path: "key", rule: "already_imported" }]);
     if (input.dryRun) return { key: input.key, dryRun: true, summary, pageId: null };
     try {
       const id = await db.$transaction(async (tx) => {
+        const pageId = newPageId(this.clock.now().getTime());
         const created = await tx.cmsPage.create({
           data: {
+            id: pageId,
+            translationGroupId: pageId,
             siteId,
             kind: plan.kind,
             templateKey: plan.templateKey,
             path: plan.path,
-            locale: site.locale,
+            locale,
             title: plan.title,
             ...seoColumns(CmsSeoSchema.parse(plan.seo)),
             content: content as never,
@@ -569,8 +658,14 @@ export class CmsService {
           if ((current?.version ?? null) !== (row.publication?.version ?? null)) {
             throw staleVersion();
           }
+          // ML-2: an address is taken per language (the same path may be live in two languages).
           const live = await liveRows(tx, row.siteId);
-          if (live.some((l) => l.pageId !== row.id && l.revision.path === row.path)) {
+          if (
+            live.some(
+              (l) =>
+                l.pageId !== row.id && l.page.locale === row.locale && l.revision.path === row.path,
+            )
+          ) {
             throw new ApiError("CONFLICT_STATE", [{ path: "slug", rule: "live_elsewhere" }]);
           }
           previousPath =
@@ -633,13 +728,16 @@ export class CmsService {
           },
         });
         // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
+        // ML-2: both addresses carry the page's language prefix (none for the default language
+        // until ML-3/ML-4), so a Dutch slug change writes `/nl/old` -> `/nl/new`.
         if (row.path && keepsOldAddress(a.sites, row.siteId)) {
+          const site = await CmsService.site(a, row.siteId);
           await applyAddressChange(tx, a, {
             siteId: row.siteId,
             contentType: "CMS_PAGE",
             contentId: row.id,
-            from: previousPath,
-            to: row.path,
+            from: previousPath === null ? null : pageAddress(site, row.locale, previousPath),
+            to: pageAddress(site, row.locale, row.path),
             permission: PUBLISH,
           });
         }
@@ -698,7 +796,13 @@ export class CmsService {
     const a = await this.access.begin(ctx);
     const siteId = await CmsService.requireSite(a, READ, rawSiteId);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
-    return menuTargets(db, siteId, a.sitesWith("product:read").includes(siteId));
+    const site = await CmsService.site(a, siteId);
+    return menuTargets(
+      db,
+      siteId,
+      a.sitesWith("product:read").includes(siteId),
+      defaultLocaleOf(site),
+    );
   }
 
   /**
@@ -739,8 +843,15 @@ export class CmsService {
     };
     try {
       await db.$transaction(async (tx) => {
-        if (data.path !== row.path && keepsOldAddress(a.sites, row.siteId)) {
-          await assertAddressFree(tx, row.siteId, data.path, "CMS_PAGE", row.id);
+        if (data.path !== row.path && data.path && keepsOldAddress(a.sites, row.siteId)) {
+          const site = await CmsService.site(a, row.siteId);
+          await assertAddressFree(
+            tx,
+            row.siteId,
+            pageAddress(site, row.locale, data.path),
+            "CMS_PAGE",
+            row.id,
+          );
         }
         const res = await tx.cmsPage.updateMany({
           where: { id: row.id, version: input.version },
@@ -802,6 +913,193 @@ export class CmsService {
           siteId: row.siteId,
           permission: PUBLISH,
           metadata: { revisionNumber: row.publication?.revision.revisionNumber ?? null },
+        });
+      });
+      return this.response(a, db, row.id);
+    } catch (e) {
+      return mapCmsDbError(e);
+    }
+  }
+
+  // --- translations (ML-2, DP-074, ADR-028 D6) ----------------------------------------------
+
+  /**
+   * Creates the page in another enabled language of its site: the source's structure (section
+   * ids and types, links, images, menu targets) with every text empty, as a draft of the same
+   * translation group. `content:edit`. Never twice: a group holds one page per language (409
+   * `locale` `exists`). The new page records the source's newest revision ("outdated" later).
+   */
+  async createTranslation(
+    ctx: RequestContext,
+    rawId: string,
+    body: unknown,
+  ): Promise<CmsPageResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, EDIT, rawId);
+    const input = parseBody(CmsTranslationCreateRequestSchema, body);
+    if (input.locale === row.locale) {
+      throw new ApiError("CONFLICT_STATE", [{ path: "locale", rule: "exists" }]);
+    }
+    // Only a language that is enabled on the site (public or not).
+    await assertLocaleEnabled(db, row.siteId, input.locale);
+    const site = await CmsService.site(a, row.siteId);
+    const article = cmsIsArticle(row);
+    let path = row.path;
+    if (row.kind === "TEMPLATE" && row.path) {
+      const parsed = cmsTranslationSlugSchema(article).safeParse(
+        input.slug ?? cmsSlugOfPath(row.path),
+      );
+      if (!parsed.success) {
+        throw new ApiError("VALIDATION_FAILED", [
+          { path: "slug", rule: parsed.error.issues[0]?.message ?? "format" },
+        ]);
+      }
+      const slug = parsed.data;
+      path = article ? cmsArticlePath(slug) : cmsPathForSlug(slug);
+    } else if (input.slug !== undefined) {
+      // Designed pages and fragments keep the address of their registry entry.
+      throw new ApiError("VALIDATION_FAILED", [{ path: "slug", rule: "fixed_address" }]);
+    }
+    const members = await db.cmsPage.findMany({
+      where: { siteId: row.siteId, translationGroupId: row.translationGroupId },
+      select: {
+        id: true,
+        locale: true,
+        title: true,
+        path: true,
+        translationGroupId: true,
+        translationSourceRevisionId: true,
+      },
+    });
+    if (members.some((m) => m.locale === input.locale)) {
+      throw new ApiError("CONFLICT_STATE", [{ path: "locale", rule: "exists" }]);
+    }
+    const source = groupSource(members, defaultLocaleOf(site)) ?? row;
+    const sourceRevision = await db.cmsPageRevision.findFirst({
+      where: { pageId: source.id },
+      orderBy: { revisionNumber: "desc" },
+      select: { id: true, revisionNumber: true },
+    });
+    const content = cmsTranslationDraft(row, asObject(row.content));
+    try {
+      const id = await db.$transaction(async (tx) => {
+        if (path && keepsOldAddress(a.sites, row.siteId)) {
+          await assertAddressFree(
+            tx,
+            row.siteId,
+            pageAddress(site, input.locale, path),
+            "CMS_PAGE",
+            null,
+          );
+        }
+        const pageId = newPageId(this.clock.now().getTime());
+        await tx.cmsPage.create({
+          data: {
+            id: pageId,
+            translationGroupId: row.translationGroupId,
+            translationSourceRevisionId: sourceRevision?.id ?? null,
+            siteId: row.siteId,
+            kind: row.kind,
+            templateKey: row.templateKey,
+            path,
+            locale: input.locale,
+            title: input.title,
+            // Texts are translated; the switch and the image stay (the canonical is per address).
+            seoTitle: null,
+            seoDescription: null,
+            noindex: row.noindex,
+            canonicalPath: null,
+            ogTitle: null,
+            ogDescription: null,
+            ogImage: row.ogImage,
+            content: content as never,
+            schemaVersion: schemaVersionOf(row.templateKey),
+            createdById: a.userId,
+            updatedById: a.userId,
+          },
+          select: { id: true },
+        });
+        await a.audit(tx, {
+          action: "cms.translation_created",
+          resourceType: RESOURCE,
+          resourceId: pageId,
+          siteId: row.siteId,
+          permission: EDIT,
+          metadata: {
+            locale: input.locale,
+            fromPageId: row.id,
+            fromLocale: row.locale,
+            templateKey: row.templateKey,
+            path,
+            sourceRevisionNumber: sourceRevision?.revisionNumber ?? null,
+          },
+        });
+        return pageId;
+      });
+      return this.response(a, db, id);
+    } catch (e) {
+      return mapCmsDbError(e);
+    }
+  }
+
+  /**
+   * Records that a translation now matches revision `revisionNumber` of its group's source page
+   * (clears "outdated"). A draft change: `content:edit`, names the draft version, audited.
+   */
+  async setTranslationSource(
+    ctx: RequestContext,
+    rawId: string,
+    body: unknown,
+  ): Promise<CmsPageResponse> {
+    const a = await this.access.begin(ctx);
+    const { row, db } = await CmsService.pageIn(a, EDIT, rawId);
+    await assertLocaleEnabled(db, row.siteId, row.locale);
+    const input = parseBody(CmsTranslationSourceRequestSchema, body);
+    if (input.version !== row.version) throw staleVersion();
+    const site = await CmsService.site(a, row.siteId);
+    const members = await db.cmsPage.findMany({
+      where: { siteId: row.siteId, translationGroupId: row.translationGroupId },
+      select: {
+        id: true,
+        locale: true,
+        title: true,
+        path: true,
+        translationGroupId: true,
+        translationSourceRevisionId: true,
+      },
+    });
+    const source = groupSource(members, defaultLocaleOf(site));
+    if (!source || source.id === row.id) {
+      throw new ApiError("CONFLICT_STATE", [{ path: "locale", rule: "is_source" }]);
+    }
+    const revision = await db.cmsPageRevision.findFirst({
+      where: { pageId: source.id, revisionNumber: input.revisionNumber },
+      select: { id: true },
+    });
+    if (!revision) throw new ApiError("NOT_FOUND", [{ path: "revisionNumber", rule: "unknown" }]);
+    try {
+      await db.$transaction(async (tx) => {
+        const res = await tx.cmsPage.updateMany({
+          where: { id: row.id, version: input.version },
+          data: {
+            translationSourceRevisionId: revision.id,
+            updatedById: a.userId,
+            version: { increment: 1 },
+          },
+        });
+        if (res.count !== 1) throw staleVersion();
+        await a.audit(tx, {
+          action: "cms.translation_source_set",
+          resourceType: RESOURCE,
+          resourceId: row.id,
+          siteId: row.siteId,
+          permission: EDIT,
+          metadata: {
+            locale: row.locale,
+            sourcePageId: source.id,
+            sourceRevisionNumber: input.revisionNumber,
+            version: input.version + 1,
+          },
         });
       });
       return this.response(a, db, row.id);

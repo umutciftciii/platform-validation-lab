@@ -44,8 +44,9 @@ export class CmsController {
   listPages(
     @Ctx() ctx: RequestContext,
     @Param("siteId") siteId: string,
+    @Query("locale") locale: unknown,
   ): Promise<CmsPageListResponse> {
-    return this.cms.listPages(ctx, siteId);
+    return this.cms.listPages(ctx, siteId, locale);
   }
 
   /** DP-219: the pages, products and categories a menu of the site may link to. */
@@ -108,6 +109,28 @@ export class CmsController {
     return this.cms.publish(ctx, id, body);
   }
 
+  /** ML-2 (DP-074): creates the page in another language of its site (empty texts, a draft). */
+  @Post("pages/:id/translations")
+  @HttpCode(201)
+  createTranslation(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ): Promise<CmsPageResponse> {
+    return this.cms.createTranslation(ctx, id, body);
+  }
+
+  /** ML-2 (DP-074): the source revision a translation matches now (clears "outdated"). */
+  @Post("pages/:id/translation-source")
+  @HttpCode(200)
+  setTranslationSource(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ): Promise<CmsPageResponse> {
+    return this.cms.setTranslationSource(ctx, id, body);
+  }
+
   @Get("pages/:id/history")
   history(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<CmsHistoryResponse> {
     return this.cms.history(ctx, id);
@@ -150,17 +173,22 @@ export class PublicCmsController {
     return this.cms.locales(ctx);
   }
 
+  /** ML-2: `locale` (default: the site's default language); a language that is not public is 404. */
   @Get("page")
   @Header("Cache-Control", "no-store")
-  page(@Ctx() ctx: RequestContext, @Query("path") path: unknown): Promise<CmsPublicBundle> {
-    return this.cms.page(ctx, path);
+  page(
+    @Ctx() ctx: RequestContext,
+    @Query("path") path: unknown,
+    @Query("locale") locale: unknown,
+  ): Promise<CmsPublicBundle> {
+    return this.cms.page(ctx, path, locale);
   }
 
-  /** DP-020: the published news articles, newest first. */
+  /** DP-020: the published news articles, newest first (ML-2: per `locale`). */
   @Get("news")
   @Header("Cache-Control", "no-store")
-  news(@Ctx() ctx: RequestContext): Promise<CmsPublicNews> {
-    return this.cms.news(ctx);
+  news(@Ctx() ctx: RequestContext, @Query("locale") locale: unknown): Promise<CmsPublicNews> {
+    return this.cms.news(ctx, locale);
   }
 
   @Get("preview/:token")

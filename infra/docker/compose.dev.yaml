@@ -354,6 +354,10 @@ services:
     # left one zombie and the kernel memory grew towards the 64m limit. docker-init as PID 1
     # reaps them; the healthcheck itself (HTTPS through the proxy to admin) stays the same.
     init: true
+    # DP-182 (ML-1 DEV finding, 2026-11-20): after the Docker VM restarted at 08:17Z the proxy
+    # stayed exited (255) because it had no restart policy, while the other services came back.
+    # Like them it restarts unless an operator stopped it.
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3114:443"
     volumes:
