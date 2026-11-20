@@ -23,6 +23,8 @@
  *    before. An address under the prefix of a language that is not public (`/nl/...` on BV) is a
  *    404 without detail, even when a Dutch slug-change redirect exists for it (nothing of a hidden
  *    language is revealed). `settings(locale)` reads `bv.site-seo` of that language.
+ *  - ML-5 (DP-019): `sitemap()` lists every public language with its translation counterparts
+ *    (hreflang); see the method.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
@@ -59,6 +61,8 @@ interface LivePath {
   /** DP-209: the published canonical override (null: the address itself). */
   canonicalPath: string | null;
   publishedAt: Date;
+  /** ML-5: the CMS translation group (products: null, they exist in the default language only). */
+  translationGroupId: string | null;
 }
 
 /** DP-209: in the sitemap only when indexable and its own canonical address. */
@@ -131,7 +135,7 @@ export class PublicSeoService {
       }),
       site.db.cmsPage.findMany({
         where: { id: { in: pubs.map((p) => p.pageId) } },
-        select: { id: true, kind: true, templateKey: true, locale: true },
+        select: { id: true, kind: true, templateKey: true, locale: true, translationGroupId: true },
       }),
     ]);
     const visible = publicOnly ? await publicLocaleSet(site.db, site.siteId) : null;
@@ -149,6 +153,7 @@ export class PublicSeoService {
         noindex: r.noindex,
         canonicalPath: r.canonicalPath,
         publishedAt: p.publishedAt,
+        translationGroupId: page.translationGroupId,
       });
     }
     return out;
@@ -171,6 +176,7 @@ export class PublicSeoService {
         noindex: s.data.seo?.noindex ?? false,
         canonicalPath: s.data.seo?.canonicalPath ?? null,
         publishedAt: row.publishedAt,
+        translationGroupId: null,
       });
     }
     return out;
@@ -388,40 +394,89 @@ export class PublicSeoService {
     return { settings: settings.data, publishedAt: pub.publishedAt.toISOString() };
   }
 
+  /**
+   * ML-5 (DP-019, ADR-028 D3): the sitemap of every PUBLIC language. Each language lists its own
+   * live, indexable pages at their paths inside the language (the site adds the prefix); a
+   * language that is not public lists nothing. The catalogue (product list and products) exists in
+   * the default language only until ML-8c. Each entry names its counterparts in the other public
+   * languages — same translation group, itself listed (indexable, its own canonical) — so hreflang
+   * is reciprocal and never points at a draft, a noindex page or a hidden language. Redirect
+   * sources never have live content, so they are never listed.
+   */
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
-    // ML-2: the default language at its unprefixed addresses (per-language sitemap: ML-5).
-    const defaultLocale = await siteDefaultLocale(site);
+    const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
     const [pages, products] = await Promise.all([
-      PublicSeoService.livePages(site, { publicOnly: true, locale: defaultLocale }),
+      PublicSeoService.livePages(site, { publicOnly: true }),
       PublicSeoService.liveProductPaths(site),
     ]);
-    const entry = (p: LivePath): PublicSitemapEntry => ({
-      path: p.path,
-      kind: p.kind,
-      lastModified: p.publishedAt.toISOString(),
-    });
-    const of = (kind: SeoPathKind) => pages.filter((p) => p.kind === kind).sort(byPath);
     const latest = (rows: LivePath[]): string | null =>
       rows.length
         ? new Date(Math.max(...rows.map((r) => r.publishedAt.getTime()))).toISOString()
         : null;
-    // The product list is an app page; its designed heading page may switch it to noindex.
-    const productsIndex = pages.find((p) => p.kind === "products");
-    const entries: PublicSitemapEntry[] = [
-      ...of("home").filter(listed).map(entry),
-      ...(productsIndex?.noindex
-        ? []
-        : [{ path: "/products", kind: "products" as const, lastModified: latest(products) }]),
-      ...[...products].filter(listed).sort(byPath).map(entry),
-      ...of("page").filter(listed).map(entry),
-      // The news list exists only while its heading page is published (DP-153).
-      ...of("news")
-        .filter(listed)
-        .map((p) => ({ ...entry(p), lastModified: latest([p, ...of("article")]) })),
-      ...of("article").filter(listed).map(entry),
-    ];
+    type Draft = Omit<PublicSitemapEntry, "alternates"> & { group: string | null };
+    const drafts: Draft[] = [];
+    const entry = (p: LivePath, locale: string): Draft => ({
+      path: p.path,
+      locale,
+      kind: p.kind,
+      lastModified: p.publishedAt.toISOString(),
+      group: p.translationGroupId,
+    });
+    for (const { locale } of locales) {
+      const own = pages.filter((p) => p.locale === locale);
+      const of = (kind: SeoPathKind) => own.filter((p) => p.kind === kind).sort(byPath);
+      const catalogue = locale === defaultLocale;
+      // The product list is an app page; its designed heading page may switch it to noindex.
+      const productsIndex = own.find((p) => p.kind === "products");
+      drafts.push(
+        ...of("home")
+          .filter(listed)
+          .map((p) => entry(p, locale)),
+        ...(catalogue && !productsIndex?.noindex
+          ? [
+              {
+                path: "/products",
+                locale,
+                kind: "products" as const,
+                lastModified: latest(products),
+                group: null,
+              },
+            ]
+          : []),
+        ...(catalogue ? [...products].filter(listed).sort(byPath) : []).map((p) =>
+          entry(p, locale),
+        ),
+        ...of("page")
+          .filter(listed)
+          .map((p) => entry(p, locale)),
+        // The news list exists only while its heading page is published (DP-153).
+        ...of("news")
+          .filter(listed)
+          .map((p) => ({ ...entry(p, locale), lastModified: latest([p, ...of("article")]) })),
+        ...of("article")
+          .filter(listed)
+          .map((p) => entry(p, locale)),
+      );
+    }
     const seen = new Set<string>();
-    return { entries: entries.filter((e) => !seen.has(e.path) && Boolean(seen.add(e.path))) };
+    const unique = drafts.filter((e) => {
+      const key = `${e.locale} ${e.path}`;
+      return !seen.has(key) && Boolean(seen.add(key));
+    });
+    const entries = unique.map(({ group, ...e }): PublicSitemapEntry => {
+      const alternates = group
+        ? unique
+            .filter((o) => o.group === group && o.locale !== e.locale)
+            .map((o) => ({ locale: o.locale, path: o.path }))
+            .sort((a, b) => a.locale.localeCompare(b.locale, "en"))
+        : [];
+      // One counterpart per language (a group holds at most one page per language).
+      const perLocale = alternates.filter(
+        (a, i) => alternates.findIndex((x) => x.locale === a.locale) === i,
+      );
+      return { ...e, alternates: perLocale };
+    });
+    return { entries };
   }
 }

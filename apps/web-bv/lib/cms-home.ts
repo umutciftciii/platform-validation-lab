@@ -17,6 +17,7 @@ import {
   BvNavPublicSchema,
   CmsArticleContentSchema,
   CmsPublicAlternateSchema,
+  type CmsPublicAlternate,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
   CmsTemplateContentSchema,
@@ -124,6 +125,8 @@ export interface TemplatePageView {
   sections: TemplateSection[];
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-5: published counterparts in the other public languages (hreflang); absent in a preview. */
+  alternates?: readonly CmsPublicAlternate[];
   /** ML-3/DP-250: the page's language (a preview names its draft's language). */
   locale: RouteLocale;
   preview: boolean;
@@ -142,6 +145,8 @@ export interface ArticleView {
   firstPublishedAt: string | null;
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-5: published counterparts in the other public languages (hreflang); absent in a preview. */
+  alternates?: readonly CmsPublicAlternate[];
   /** ML-3/DP-250: the page's language (a preview names its draft's language). */
   locale: RouteLocale;
   preview: boolean;
@@ -160,6 +165,8 @@ export interface NewsView {
   articles: CmsPublicArticle[];
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-5: published counterparts in the other public languages (hreflang); absent in a preview. */
+  alternates?: readonly CmsPublicAlternate[];
   preview: boolean;
 }
 
@@ -185,6 +192,8 @@ export interface CmsPageView {
   home: HomeProps;
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-5: published counterparts in the other public languages (hreflang); absent in a preview. */
+  alternates?: readonly CmsPublicAlternate[];
   /** ML-3/DP-250: the page's language (a preview names its draft's language). */
   locale: RouteLocale;
   preview: boolean;
@@ -509,12 +518,15 @@ async function withLanguages(
   locale: RouteLocale,
   json: unknown,
 ): Promise<AnyPageView> {
-  if (!view.nav) return view;
   const raw = (json as { alternates?: unknown } | null)?.alternates;
   const parsed = CmsPublicAlternateSchema.array().max(20).safeParse(raw ?? []);
+  const alternates = parsed.success ? parsed.data : [];
+  // ML-5: the counterparts travel with the view for the page's hreflang (lib/seo.ts).
+  const withAlternates = view.kind === "newsIndex" ? view : { ...view, alternates };
+  if (!view.nav) return withAlternates;
   const path = "path" in view ? view.path : view.kind === "newsIndex" ? "/news" : "/";
-  const languages = await languagesFor(locale, path, parsed.success ? parsed.data : []);
-  return { ...view, nav: { ...view.nav, languages } };
+  const languages = await languagesFor(locale, path, alternates);
+  return { ...withAlternates, nav: { ...view.nav, languages } };
 }
 
 /** `&locale=` for a language other than the default (the default read is unchanged by ML-3). */
@@ -603,6 +615,8 @@ interface NewsRead {
   articles: CmsPublicArticle[];
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-5: the list heading page's counterparts in the other public languages. */
+  alternates: readonly CmsPublicAlternate[];
 }
 
 async function readNews(
@@ -628,7 +642,7 @@ async function readNews(
     console.error("public cms: the news response does not match the contract; not rendered");
     return { ok: false, reason: "unavailable" };
   }
-  const { page, articles, fragments } = parsed.data;
+  const { page, articles, fragments, alternates = [] } = parsed.data;
   const heading = newsHeading(page);
   if (page && !heading) {
     console.error("public cms: the news heading does not match the contract; not rendered");
@@ -653,9 +667,12 @@ async function readNews(
   if (localized.nav) {
     // The not-found frame ("/404") has no address of its own: its language links go home.
     const here = currentPath === "/404" ? "/" : currentPath;
-    localized.nav = { ...localized.nav, languages: await languagesFor(locale, here) };
+    localized.nav = {
+      ...localized.nav,
+      languages: await languagesFor(locale, here, here === "/news" ? alternates : []),
+    };
   }
-  return { ok: true, data: localized };
+  return { ok: true, data: { ...localized, alternates } };
 }
 
 /**
@@ -666,9 +683,9 @@ async function readNews(
 export async function getNews(locale: RouteLocale = DEFAULT_LOCALE): Promise<Read<NewsView>> {
   const res = await readNews("/news", locale);
   if (!res.ok) return res;
-  const { heading, articles, nav, footer } = res.data;
+  const { heading, articles, nav, footer, alternates } = res.data;
   if (!heading) return { ok: false, reason: "unavailable" };
-  return { ok: true, data: { heading, articles, nav, footer, preview: false } };
+  return { ok: true, data: { heading, articles, nav, footer, alternates, preview: false } };
 }
 
 /** The published navigation and footer around a news page (also without a published heading). */

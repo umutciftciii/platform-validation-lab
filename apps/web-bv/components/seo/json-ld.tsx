@@ -23,11 +23,23 @@ function JsonLd({ data }: { data: unknown }) {
   );
 }
 
-/** The company (home page): legal name, site URL and logo only; no invented contact data. */
-export function OrganizationJsonLd() {
+/**
+ * The company (home page): legal name, site URL and logo only; no invented contact data.
+ * ML-5: the URL is the home of the page's language (`/en`, `/nl`), never the bare `/` (a 301).
+ */
+export function OrganizationJsonLd({ locale = DEFAULT_LOCALE }: { locale?: RouteLocale }) {
   const { origin } = sitePolicy();
   if (!origin) return null;
-  return <JsonLd data={organizationJsonLd({ name: ORGANIZATION_NAME, origin, logoPath: LOGO_PATH })} />;
+  return (
+    <JsonLd
+      data={organizationJsonLd({
+        name: ORGANIZATION_NAME,
+        origin,
+        homePath: localePath(locale, "/"),
+        logoPath: LOGO_PATH,
+      })}
+    />
+  );
 }
 
 /** A published product, from its approved snapshot only (no price, rating or review). */

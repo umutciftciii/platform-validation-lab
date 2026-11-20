@@ -42,7 +42,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/products
   const res = await product(slug);
   if (!res.ok) return noindexMetadata("Product | Dream Petroleum BV");
   const p = res.data;
-  const site = await siteSeo();
+  const site = await siteSeo(locale);
   const image = (i: (typeof p.images)[number]) => ({
     url: imageSrc(i.id, "display"),
     alt: i.altText,
@@ -63,6 +63,10 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/products
       ogDescription: p.seo.ogDescription,
       ogImage: og ? image(og) : null,
       images: p.images.slice(0, 1).map(image),
+      // ML-5: a product has a counterpart only where it is published in that language's catalogue
+      // (its own snapshot). The catalogue exists in English only until ML-8c (CATALOGUE_LOCALES),
+      // so no hreflang is rendered, never a guessed /nl/products/... address.
+      alternates: [],
     },
     site,
   );

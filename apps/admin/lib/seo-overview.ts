@@ -1,7 +1,20 @@
 /**
  * DP-209: filters and notes of the admin SEO overview. Pure functions, unit-tested.
  */
-import { SEO_TEXT_LIMITS, seoCanonicalPathIsValid, type SeoOverviewItem } from "@dream/contracts";
+import {
+  SEO_TEXT_LIMITS,
+  seoCanonicalPathIsValid,
+  seoLocalePath,
+  type SeoOverviewItem,
+} from "@dream/contracts";
+
+/**
+ * ML-5: the overview lists the BV site's default language (English); its rows show the public
+ * address the site renders (`/en/about-us`), stored paths stay unprefixed.
+ */
+export function seoPublicPath(path: string): string {
+  return seoLocalePath("en", path);
+}
 
 export const SEO_FILTERS = [
   { id: "all", label: "All" },
@@ -29,7 +42,7 @@ export function seoNotes(item: SeoOverviewItem): string[] {
   if (item.canonicalPath && !seoCanonicalPathIsValid(item.canonicalPath))
     notes.push("Canonical path not valid");
   else if (item.canonicalPath && item.canonicalPath !== item.path)
-    notes.push(`Canonical → ${item.canonicalPath}`);
+    notes.push(`Canonical → ${seoPublicPath(item.canonicalPath)}`);
   return notes;
 }
 
