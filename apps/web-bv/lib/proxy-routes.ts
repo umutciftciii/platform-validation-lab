@@ -215,13 +215,21 @@ function redirectStep(
 }
 
 /** One address, one answer: the rules of the site without following redirects. */
-export async function step(pathname: string, search: string, deps: ProxyDeps): Promise<ProxyDecision> {
+export async function step(
+  pathname: string,
+  search: string,
+  deps: ProxyDeps,
+): Promise<ProxyDecision> {
   const route = classifyPath(pathname);
   switch (route.kind) {
     case "next":
       return { action: "next" };
     case "root":
-      return { action: "redirect", location: `${localePath(DEFAULT_LOCALE, "/")}${search}`, status: 301 };
+      return {
+        action: "redirect",
+        location: `${localePath(DEFAULT_LOCALE, "/")}${search}`,
+        status: 301,
+      };
     case "unprefixed":
       return {
         action: "redirect",
@@ -242,10 +250,24 @@ export async function step(pathname: string, search: string, deps: ProxyDeps): P
   switch (route.kind) {
     case "home":
       return { action: "next" };
-    case "list":
-      return route.section === "products" && !CATALOGUE_LOCALES.includes(locale)
-        ? { action: "not-found", locale }
-        : { action: "next" };
+    case "list": {
+      if (route.section === "products" && !CATALOGUE_LOCALES.includes(locale)) {
+        return { action: "not-found", locale };
+      }
+      // ML-4 (DP-237): a list view with a query may be an old address of the same form with a
+      // row bound to that exact query (`/en/products?category=grease`, DP-037 K5). Only such a
+      // bound row counts (never a plain row of the list address, never the request itself), and
+      // the list renders whenever the API has nothing or cannot answer.
+      if (locale === DEFAULT_LOCALE && search !== "" && search !== "?") {
+        const res = await deps.resolve(pathname, search);
+        if (res.status === "redirect" && res.keepQuery === false) {
+          const moved = redirectStep(res, search);
+          if (moved.action === "redirect" && moved.location !== `${pathname}${search}`)
+            return moved;
+        }
+      }
+      return { action: "next" };
+    }
     case "privacy":
       return deps.privacyPublished && PRIVACY_LOCALES.includes(locale)
         ? { action: "next" }
@@ -276,7 +298,8 @@ export async function step(pathname: string, search: string, deps: ProxyDeps): P
       // Fail open while the API cannot answer: the page renders and does its own checks (DP-207).
       if (res.status === "found" || res.status === "unknown") return { action: "next" };
       // Only an article has a "no longer available" page; a page or product taken off is a 404.
-      if (res.status === "unpublished" && route.rest.startsWith("/news/")) return { action: "next" };
+      if (res.status === "unpublished" && route.rest.startsWith("/news/"))
+        return { action: "next" };
       if (locale === DEFAULT_LOCALE) {
         // DP-212/ML-4: an indexed address of the old site in this form (`/en/contact-us`) may
         // still have a row of its own; asked only when the address has nothing live.
@@ -347,4 +370,51 @@ export async function decide(
     permanent = permanent && answer.status === 301;
   }
   return { action: "redirect", location, status: permanent ? 301 : 302 };
+}
+
+/**
+ * Next's own trailing-slash rule (`/:path+/` → `/:path+`, 308, query kept; every address, the
+ * technical ones too), which `skipTrailingSlashRedirect` (next.config.ts) hands to the proxy.
+ */
+const TRAILING_SLASH = /^((?:\/[^/]+)+)\/$/;
+
+/** Addresses the proxy never decides (kept equal to the matcher in proxy.ts, tested there). */
+export const TECHNICAL_PREFIXES: readonly string[] = [
+  "/_next/",
+  "/__dp/",
+  "/api/",
+  "/media/",
+  "/preview/",
+  "/lead-form/",
+  "/product-documents/",
+  "/product-images/",
+];
+
+export type RequestDecision =
+  | ProxyDecision
+  /** The trailing-slash normalisation (Next's 308), answered relative to the request. */
+  | { action: "redirect"; location: string; status: 308 };
+
+/**
+ * ML-4 (DP-237): the whole answer to a request, trailing slash included. Without a trailing slash
+ * it is `decide` (GET/HEAD; other methods pass). With one (`/tr/`) the address is normalised as
+ * Next did (308 to `/tr`), except when the address without the slash answers a redirect itself:
+ * then the visitor gets that redirect at once (`/tr/` → one 301 `/en`, not 308 + 301). Technical
+ * addresses and other methods always get the plain 308.
+ */
+export async function decideRequest(
+  pathname: string,
+  search: string,
+  method: string,
+  deps: ProxyDeps,
+): Promise<RequestDecision> {
+  const read = method === "GET" || method === "HEAD";
+  const slash = TRAILING_SLASH.exec(pathname);
+  if (!slash) return read ? decide(pathname, search, deps) : { action: "next" };
+  const bare = slash[1] as string;
+  const normalise = { action: "redirect", location: `${bare}${search}`, status: 308 } as const;
+  if (!read || TECHNICAL_PREFIXES.some((p) => `${bare}/`.startsWith(p))) return normalise;
+  const answer = await decide(bare, search, deps);
+  if (answer.action === "redirect" && answer.location !== `${pathname}${search}`) return answer;
+  return normalise;
 }

@@ -3,11 +3,14 @@
 // document the product lists as requestable. Every page address carries its language; `/` and
 // unprefixed addresses answer one 301 to `/en`; a language that is not public is a 404.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  TECHNICAL_PREFIXES,
   classifyPath,
   decide,
+  decideRequest,
   documentRequestStatus,
   type DocumentsRead,
   type ProxyDeps,
@@ -171,7 +174,11 @@ function fakeDeps(
 describe("decide", () => {
   it("answers / with one 301 to /en, keeping the query, without an API call", async () => {
     const deps = fakeDeps({});
-    assert.deepEqual(await decide("/", "", deps), { action: "redirect", location: "/en", status: 301 });
+    assert.deepEqual(await decide("/", "", deps), {
+      action: "redirect",
+      location: "/en",
+      status: 301,
+    });
     assert.deepEqual(await decide("/", "?utm=a", deps), {
       action: "redirect",
       location: "/en?utm=a",
@@ -295,7 +302,14 @@ describe("decide", () => {
 
   it("is a 404 under a language that is not public, without asking about content", async () => {
     const deps = fakeDeps({ "nl /over-ons": { status: "found" } }, { publicLocales: ["en"] });
-    for (const p of ["/nl", "/nl/over-ons", "/nl/news", "/nl/news/x", "/nl/products", "/nl/privacy"]) {
+    for (const p of [
+      "/nl",
+      "/nl/over-ons",
+      "/nl/news",
+      "/nl/news/x",
+      "/nl/products",
+      "/nl/privacy",
+    ]) {
       assert.deepEqual(await decide(p, "", deps), { action: "not-found", locale: "nl" }, p);
     }
     assert.equal(deps.calls.length, 0);
@@ -307,10 +321,7 @@ describe("decide", () => {
   });
 
   it("serves Dutch content once NL is public, asking with the language", async () => {
-    const deps = fakeDeps(
-      { "nl /over-ons": { status: "found" } },
-      { publicLocales: ["en", "nl"] },
-    );
+    const deps = fakeDeps({ "nl /over-ons": { status: "found" } }, { publicLocales: ["en", "nl"] });
     assert.deepEqual(await decide("/nl/over-ons", "", deps), { action: "next" });
     assert.deepEqual(deps.calls[0], { path: "/over-ons", search: "", locale: "nl" });
     assert.deepEqual(await decide("/nl", "", deps), { action: "next" });
@@ -318,7 +329,12 @@ describe("decide", () => {
     // No English content under /nl: an unknown Dutch address is a 404 (no old-site lookup).
     assert.deepEqual(await decide("/nl/about-us", "", deps), { action: "not-found", locale: "nl" });
     // No Dutch catalogue or policy yet (ML-8c, ADR-028 D12).
-    for (const p of ["/nl/products", "/nl/products/x", `/nl/products/x/documents/${DOC}`, "/nl/privacy"]) {
+    for (const p of [
+      "/nl/products",
+      "/nl/products/x",
+      `/nl/products/x/documents/${DOC}`,
+      "/nl/privacy",
+    ]) {
       assert.deepEqual(await decide(p, "", deps), { action: "not-found", locale: "nl" }, p);
     }
   });
@@ -376,5 +392,166 @@ describe("decide", () => {
       assert.deepEqual(await decide(p, "", deps), { action: "next" }, p);
     }
     assert.equal(deps.calls.length, 0);
+  });
+});
+
+describe("ML-4: list views and rows bound to their exact query", () => {
+  it("serves a list without a query without an API call", async () => {
+    const deps = fakeDeps({});
+    assert.deepEqual(await decide("/en/products", "", deps), { action: "next" });
+    assert.deepEqual(await decide("/en/news", "", deps), { action: "next" });
+    assert.equal(deps.calls.length, 0);
+  });
+
+  it("answers a row bound to the exact query of an /en list view in one hop", async () => {
+    const deps = fakeDeps({
+      "en /en/products": {
+        status: "redirect",
+        target: "/products?category=solvent-oil",
+        statusCode: 301,
+        keepQuery: false,
+      },
+    });
+    assert.deepEqual(await decide("/en/products", "?category=grease", deps), {
+      action: "redirect",
+      location: "/en/products?category=solvent-oil",
+      status: 301,
+    });
+  });
+
+  it("never follows a plain row of the list address (the list itself is live)", async () => {
+    // A DP-212 row /en/products → /products (plain: keeps the query) must not turn the list
+    // into a redirect to itself.
+    const deps = fakeDeps({
+      "en /en/products": { status: "redirect", target: "/products", statusCode: 301 },
+    });
+    for (const q of ["?category=base-oil", "?page=2", "?q=iccsyn"]) {
+      assert.deepEqual(await decide("/en/products", q, deps), { action: "next" }, q);
+    }
+    assert.equal(deps.loops.length, 0);
+  });
+
+  it("never answers a bound row that points at the request itself", async () => {
+    const deps = fakeDeps({
+      "en /en/products": {
+        status: "redirect",
+        target: "/products?category=base-oil",
+        statusCode: 301,
+        keepQuery: false,
+      },
+    });
+    assert.deepEqual(await decide("/en/products", "?category=base-oil", deps), { action: "next" });
+    assert.equal(deps.loops.length, 0);
+  });
+
+  it("renders the list while the API cannot answer or has no row", async () => {
+    assert.deepEqual(
+      await decide(
+        "/en/products",
+        "?page=4",
+        fakeDeps({ "en /en/products": { status: "unknown" } }),
+      ),
+      { action: "next" },
+    );
+    assert.deepEqual(await decide("/en/products", "?category=white-oil", fakeDeps({})), {
+      action: "next",
+    });
+  });
+
+  it("does not ask for rows under another language", async () => {
+    const deps = fakeDeps({}, { publicLocales: ["en", "nl"] });
+    assert.deepEqual(await decide("/nl/news", "?page=2", deps), { action: "next" });
+    assert.equal(deps.calls.length, 0);
+  });
+});
+
+describe("ML-4: trailing slash (decideRequest)", () => {
+  const calls: string[] = [];
+  const deps: ProxyDeps = {
+    resolve: async (path) => {
+      calls.push(path);
+      if (path === "/tr") return { status: "redirect", target: "/", statusCode: 301 };
+      if (path === "/tr/old") return { status: "redirect", target: "/about-us", statusCode: 302 };
+      if (path === "/about-us" || path === "/") return { status: "found" };
+      return { status: "not_found" };
+    },
+    publicLocales: async () => ["en"],
+    documents: async () => ({ ok: false, reason: "not_found" }),
+    privacyPublished: true,
+  };
+
+  it("answers the redirect of the slash-less address at once (one hop)", async () => {
+    assert.deepEqual(await decideRequest("/tr/", "", "GET", deps), {
+      action: "redirect",
+      location: "/en",
+      status: 301,
+    });
+    assert.deepEqual(await decideRequest("/tr/", "?a=1", "HEAD", deps), {
+      action: "redirect",
+      location: "/en?a=1",
+      status: 301,
+    });
+    // Unprefixed site address: the ML-3 301 directly.
+    assert.deepEqual(await decideRequest("/about-us/", "", "GET", deps), {
+      action: "redirect",
+      location: "/en/about-us",
+      status: 301,
+    });
+    // A temporary redirect stays temporary.
+    assert.equal(
+      ((await decideRequest("/tr/old/", "", "GET", deps)) as { status: number }).status,
+      302,
+    );
+  });
+
+  it("otherwise normalises with Next's 308 (query kept), without changing the answer", async () => {
+    for (const [path, search, location] of [
+      ["/en/", "", "/en"],
+      ["/en/about-us/", "?x=1", "/en/about-us?x=1"],
+      ["/en/no-such-page/", "", "/en/no-such-page"],
+      ["/nl/", "", "/nl"],
+    ] as const) {
+      assert.deepEqual(await decideRequest(path, search, "GET", deps), {
+        action: "redirect",
+        location,
+        status: 308,
+      });
+    }
+  });
+
+  it("never asks the API for technical addresses or other methods; no slash: decide as before", async () => {
+    calls.length = 0;
+    for (const p of [
+      "/_next/static/x/",
+      "/api/health/",
+      "/media/a/",
+      "/preview/t/",
+      "/lead-form/c/",
+    ]) {
+      const d = await decideRequest(p, "", "GET", deps);
+      assert.deepEqual(d, { action: "redirect", location: p.slice(0, -1), status: 308 }, p);
+    }
+    assert.deepEqual(await decideRequest("/tr/", "", "POST", deps), {
+      action: "redirect",
+      location: "/tr",
+      status: 308,
+    });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(await decideRequest("/tr", "", "POST", deps), { action: "next" });
+    assert.deepEqual(await decideRequest("/en", "", "GET", deps), { action: "next" });
+    assert.deepEqual(await decideRequest("/tr", "", "GET", deps), await decide("/tr", "", deps));
+    // Only a slash after a segment: `/` itself and `//` are not normalised here.
+    assert.deepEqual(await decideRequest("/", "", "GET", deps), await decide("/", "", deps));
+  });
+
+  it("TECHNICAL_PREFIXES are exactly the prefixes the proxy.ts matcher leaves out", () => {
+    const src = readFileSync(new URL("../proxy.ts", import.meta.url), "utf8");
+    const m = /\(\?!([^)]+)\)/.exec(src);
+    assert.ok(m, "matcher exclusion not found");
+    const fromMatcher = (m[1] as string).split("|").map((p) => `/${p}`);
+    assert.deepEqual([...fromMatcher].sort(), [...TECHNICAL_PREFIXES].sort());
+    assert.ok(src.includes('"/:path+/"'), "matcher for addresses with a trailing slash");
+    const config = readFileSync(new URL("../next.config.ts", import.meta.url), "utf8");
+    assert.match(config, /skipTrailingSlashRedirect: true/);
   });
 });

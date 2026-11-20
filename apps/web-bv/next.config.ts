@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
+  // ML-4 (DP-237): Next's trailing-slash 308 ran before proxy.ts, so `/tr/` needed 308 + 301. The
+  // proxy answers the same 308 itself (`decideRequest` in lib/proxy-routes.ts, every address with a
+  // slash) and collapses it with the redirect of the slash-less address into one hop.
+  skipTrailingSlashRedirect: true,
   partialPrefetching: true,
   experimental: {
     // DP-084: no persistent Turbopack dev cache, see apps/admin/next.config.ts (next dev 16.4

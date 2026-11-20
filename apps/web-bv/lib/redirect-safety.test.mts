@@ -19,7 +19,11 @@ import {
   type SiteState,
 } from "./redirect-audit.ts";
 
-const DOCS_COPY = new URL("../../../docs/cms/legacy-url-map/legacy-redirects.import.csv", import.meta.url);
+// ML-4 moved the DP-212 file to the snapshots folder (it is the rollback state of DEV).
+const DOCS_COPY = new URL(
+  "../../../docs/cms/legacy-url-map/snapshots/dp-212-legacy-redirects.import.csv",
+  import.meta.url,
+);
 const rows = DP_212_IMPORT_ROWS.filter(([, , , active]) => active === "true").map(
   ([source, target, status]) => rowFromCsv(source, target, status),
 );
@@ -97,11 +101,16 @@ describe("ML-3 routing with the 83 DEV rows", () => {
 
   it("serves the old /en/products list addresses as the list page itself (no row, no hop)", async () => {
     const s = site([]);
-    for (const p of ["/en/products", "/en/products?category=base-oil", "/en/products?page=2"]) {
+    for (const p of ["/en/products", "/en/products?category=base-oil", "/en/products?q=iccsyn"]) {
       const e = await follow(s, p);
       assert.equal(e.final, "page", p);
       assert.deepEqual(e.hops, [], p);
     }
+    // ML-4: a list view asks for a row bound to its exact query (never a plain row, never one
+    // pointing at the request itself). The DP-212 rows, switched off before the ML-3/ML-4 code
+    // reaches DEV, would send their bound `?page=N` to the list in one hop.
+    assert.deepEqual((await follow(s, "/en/products?page=2")).hops, ["/en/products"]);
+    assert.equal((await follow(s, "/en/products?page=2")).final, "page");
     // `/en` is the home page, not the old row `/en → /`.
     assert.equal((await follow(s, "/en")).final, "page");
   });
