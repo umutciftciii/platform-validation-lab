@@ -6,7 +6,19 @@
  */
 import { privacyDeployEnv, privacyPublication, type PrivacyPublication } from "@dream/contracts";
 
+import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "./locale-routing.ts";
+import { PRIVACY_LOCALES } from "./proxy-routes.ts";
+
 export const PRIVACY_PATH = "/privacy";
+
+/**
+ * ML-3: the policy's address for a page in `locale`. The policy exists only in the languages of
+ * `PRIVACY_LOCALES` (English until the Dutch text is approved, ADR-028 D12), so a Dutch page links
+ * the English policy instead of a 404.
+ */
+export function privacyPolicyHref(locale: RouteLocale): string {
+  return localizeHref(PRIVACY_LOCALES.includes(locale) ? locale : DEFAULT_LOCALE, PRIVACY_PATH);
+}
 
 export function sitePrivacy(env: Record<string, string | undefined> = process.env): PrivacyPublication {
   return privacyPublication(privacyDeployEnv(env["DP_DEPLOY_ENV"]));

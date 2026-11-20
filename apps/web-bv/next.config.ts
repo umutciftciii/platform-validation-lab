@@ -18,12 +18,16 @@ const nextConfig: NextConfig = {
     // debug info is sent inline in the RSC payload; production builds never use the channel.
     // Remove once a Next release cleans the map up (DP-115).
     reactDebugChannel: false,
+    // ML-3 (DP-236): the root layouts are per language (`app/[locale]`) and for previews
+    // (`app/(preview)`); an address no route matches gets `app/global-not-found.tsx`.
+    globalNotFound: true,
   },
-  // CMS S2 (DP-134): the home page is "/" now, filled from the CMS. The former review routes of
-  // the prototype rendered the same content from code; they point at the real page instead, so
-  // the content has one source. Temporary: no browser caches the redirect.
+  // CMS S2 (DP-134): the home page is filled from the CMS. The former review routes of the
+  // prototype rendered the same content from code; they point at the real page instead, so the
+  // content has one source. Temporary: no browser caches the redirect. ML-3: the home is `/en`
+  // (one hop; `/` itself answers 301 to `/en` in proxy.ts).
   redirects() {
-    return [{ source: "/demo/:path*", destination: "/", permanent: false }];
+    return [{ source: "/demo/:path*", destination: "/en", permanent: false }];
   },
   // Preview links carry a signed token: never cached, never sent on as a referrer.
   headers() {

@@ -7,7 +7,9 @@ import { Suspense } from "react";
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { LeadRequestForm } from "@/components/products/lead-request-form";
 import { getProduct, getProductDocuments } from "@/lib/catalog-api";
-import { PRIVACY_PATH, sitePrivacy } from "@/lib/privacy";
+import { catalogLocale } from "@/lib/catalog-locale";
+import { localizeHref } from "@/lib/locale-routing";
+import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 import { COUNTRY_CODES, currentLeadFormTexts } from "@dream/contracts";
 
 export const metadata: Metadata = {
@@ -20,9 +22,18 @@ export const metadata: Metadata = {
  * page lists as `requestable` on BV get a form; everything else is a 404. DP-095 D-T5: where the
  * privacy texts are not published (production with drafts), no form is offered.
  */
-export default function DocumentRequestPage({ params }: PageProps<"/products/[slug]/documents/[id]">) {
+export default async function DocumentRequestPage({
+  params,
+}: PageProps<"/[locale]/products/[slug]/documents/[id]">) {
+  const locale = await catalogLocale();
   return (
-    <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products", href: "/products" }]}>
+    <CatalogShell
+      locale={locale}
+      crumbs={[
+        { label: "Home", href: localizeHref(locale, "/") },
+        { label: "Products", href: localizeHref(locale, "/products") },
+      ]}
+    >
       <Suspense fallback={<div className="h-96 animate-pulse rounded-2xl bg-glass/[0.03]" />}>
         <RequestDetail params={params} />
       </Suspense>
@@ -37,8 +48,13 @@ const TYPE_LABEL = {
   OTHER: "Document",
 } as const;
 
-async function RequestDetail({ params }: { params: PageProps<"/products/[slug]/documents/[id]">["params"] }) {
+async function RequestDetail({
+  params,
+}: {
+  params: PageProps<"/[locale]/products/[slug]/documents/[id]">["params"];
+}) {
   await connection();
+  const locale = await catalogLocale();
   const { slug, id } = await params;
   const [product, docs] = await Promise.all([getProduct(slug), getProductDocuments(slug)]);
   if ((!product.ok && product.reason === "not_found") || (!docs.ok && docs.reason === "not_found")) {
@@ -74,7 +90,7 @@ async function RequestDetail({ params }: { params: PageProps<"/products/[slug]/d
         </h1>
         <p className="mt-3 text-steel">
           {TYPE_LABEL[doc.type]} · revision {doc.revisionNumber} · for{" "}
-          <Link href={`/products/${slug}`} className="text-glass underline decoration-glass/30 underline-offset-4 hover:decoration-amber">
+          <Link href={localizeHref(locale, `/products/${slug}`)} className="text-glass underline decoration-glass/30 underline-offset-4 hover:decoration-amber">
             {product.data.name}
           </Link>
         </p>
@@ -92,7 +108,7 @@ async function RequestDetail({ params }: { params: PageProps<"/products/[slug]/d
         documentTitle={doc.title}
         countries={countries}
         texts={texts}
-        privacyHref={PRIVACY_PATH}
+        privacyHref={privacyPolicyHref(locale)}
       />
     </div>
   );

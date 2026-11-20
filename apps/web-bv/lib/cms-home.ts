@@ -16,6 +16,7 @@ import {
   BvFooterPublicSchema,
   BvNavPublicSchema,
   CmsArticleContentSchema,
+  CmsPublicAlternateSchema,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
   CmsTemplateContentSchema,
@@ -47,6 +48,17 @@ import { SITE_FOOTER_UI } from "@/content/site-footer";
 import type { SiteNavContent, SiteNavItem } from "@/content/site-nav";
 import { SITE_NAV_UI } from "@/content/site-nav";
 import { catalogConfig, type Read } from "@/lib/catalog-api";
+import {
+  DEFAULT_LOCALE,
+  isRouteLocale,
+  languageOptions,
+  localePath,
+  localizeHref,
+  localizeLinks,
+  storedAddress,
+  type RouteLocale,
+} from "@/lib/locale-routing";
+import { visibleLocales } from "@/lib/public-locales";
 
 const TIMEOUT_MS = 5_000;
 
@@ -112,6 +124,8 @@ export interface TemplatePageView {
   sections: TemplateSection[];
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-3/DP-250: the page's language (a preview names its draft's language). */
+  locale: RouteLocale;
   preview: boolean;
 }
 
@@ -128,6 +142,8 @@ export interface ArticleView {
   firstPublishedAt: string | null;
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-3/DP-250: the page's language (a preview names its draft's language). */
+  locale: RouteLocale;
   preview: boolean;
 }
 
@@ -152,6 +168,8 @@ export interface NewsIndexView {
   heading: NewsHeading;
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-3/DP-250: the page's language (a preview names its draft's language). */
+  locale: RouteLocale;
   preview: boolean;
 }
 
@@ -167,6 +185,8 @@ export interface CmsPageView {
   home: HomeProps;
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
+  /** ML-3/DP-250: the page's language (a preview names its draft's language). */
+  locale: RouteLocale;
   preview: boolean;
 }
 
@@ -368,14 +388,26 @@ function fragment<T>(
   return parsed.success ? map(parsed.data as T) : null;
 }
 
-/** Maps a public bundle to the view of its page; null when it does not validate. */
-export function pageView(json: unknown): AnyPageView | null {
+/**
+ * Maps a public bundle to the view of its page; null when it does not validate. ML-3: every
+ * internal link of the view (content, navigation, footer, home sections) is given the prefix of
+ * `locale` (`localizeLinks`); the page's own `path` stays the stored path inside its language.
+ */
+export function pageView(json: unknown, locale: RouteLocale = DEFAULT_LOCALE): AnyPageView | null {
+  const view = mapPage(json, locale);
+  return view ? localizeLinks(view, locale) : null;
+}
+
+function mapPage(json: unknown, locale: RouteLocale): AnyPageView | null {
   const bundle = CmsPublicBundleSchema.safeParse(json);
   if (!bundle.success) return null;
   const { page, fragments, preview } = bundle.data;
   const path = page.path ?? "/";
+  // The menu's links are stored addresses (ML-2: `/about-us`, `/nl/over-ons`); the current item
+  // is the one whose stored address is this page's.
+  const navPath = path === "/" ? "/" : storedAddress(locale, path);
   const nav = fragment<BvNavPublic>(fragments["bv.site-nav"], NAV, (c) =>
-    toNavProps(c, path),
+    toNavProps(c, navPath),
   ) as SiteNavContent | null;
   const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
     | SiteFooterContent
@@ -390,12 +422,13 @@ export function pageView(json: unknown): AnyPageView | null {
       home: toHomeProps(home.data as unknown as BvHomeContent),
       nav,
       footer,
+      locale,
       preview,
     };
   }
   if (page.kind === "DESIGN" && page.templateKey === "bv.news-index") {
     const heading = newsHeading(page);
-    return heading ? { kind: "newsIndex", heading, nav, footer, preview } : null;
+    return heading ? { kind: "newsIndex", heading, nav, footer, locale, preview } : null;
   }
   if (cmsIsArticle(page)) {
     const content = CmsArticleContentSchema.safeParse(page.content);
@@ -413,6 +446,7 @@ export function pageView(json: unknown): AnyPageView | null {
       firstPublishedAt: page.firstPublishedAt,
       nav,
       footer,
+      locale,
       preview,
     };
   }
@@ -427,6 +461,7 @@ export function pageView(json: unknown): AnyPageView | null {
       sections: content.data.sections as TemplateSection[],
       nav,
       footer,
+      locale,
       preview,
     };
   }
@@ -453,7 +488,45 @@ function unpublished(body: unknown): boolean {
   );
 }
 
-async function read(path: string): Promise<PageRead<AnyPageView>> {
+/**
+ * ML-3 (ADR-028 D3/D7): the language switcher of a page's navigation: the public languages, each
+ * to the page's published counterpart (`alternates` of the API) or to that language's home.
+ */
+async function languagesFor(
+  locale: RouteLocale,
+  currentPath: string,
+  alternates: readonly { locale: string; path: string }[] = [],
+) {
+  const targets: Partial<Record<RouteLocale, string>> = { [locale]: localePath(locale, currentPath) };
+  for (const a of alternates) {
+    if (isRouteLocale(a.locale) && a.locale !== locale) targets[a.locale] = localePath(a.locale, a.path);
+  }
+  return languageOptions(locale, await visibleLocales(), targets);
+}
+
+async function withLanguages(
+  view: AnyPageView,
+  locale: RouteLocale,
+  json: unknown,
+): Promise<AnyPageView> {
+  if (!view.nav) return view;
+  const raw = (json as { alternates?: unknown } | null)?.alternates;
+  const parsed = CmsPublicAlternateSchema.array().max(20).safeParse(raw ?? []);
+  const path = "path" in view ? view.path : view.kind === "newsIndex" ? "/news" : "/";
+  const languages = await languagesFor(locale, path, parsed.success ? parsed.data : []);
+  return { ...view, nav: { ...view.nav, languages } };
+}
+
+/** `&locale=` for a language other than the default (the default read is unchanged by ML-3). */
+function localeQuery(locale: RouteLocale, first: "?" | "&"): string {
+  return locale === DEFAULT_LOCALE ? "" : `${first}locale=${encodeURIComponent(locale)}`;
+}
+
+/**
+ * `locale`: the language of the read; "draft" for a preview, whose response names the draft's
+ * language (DP-250; the default language when it does not).
+ */
+async function read(path: string, wanted: RouteLocale | "draft"): Promise<PageRead<AnyPageView>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
   let res: Response;
@@ -472,7 +545,12 @@ async function read(path: string): Promise<PageRead<AnyPageView>> {
     return { ok: false, reason: unpublished(body) ? "unpublished" : "not_found" };
   }
   if (!res.ok) return { ok: false, reason: "unavailable" };
-  const view = pageView(await res.json().catch(() => null));
+  const json: unknown = await res.json().catch(() => null);
+  const named = (json as { locale?: unknown } | null)?.locale;
+  const locale: RouteLocale =
+    wanted !== "draft" ? wanted : isRouteLocale(named) ? named : DEFAULT_LOCALE;
+  const mapped = pageView(json, locale);
+  const view = mapped && !mapped.preview ? await withLanguages(mapped, locale, json) : mapped;
   if (!view) {
     console.error("public cms: the response does not match the contract; not rendered");
     return { ok: false, reason: "unavailable" };
@@ -480,9 +558,11 @@ async function read(path: string): Promise<PageRead<AnyPageView>> {
   return { ok: true, data: view };
 }
 
-/** The published home page with its navigation and footer. */
-export async function getPublishedHome(): Promise<Read<CmsPageView>> {
-  const res = await read(`/page?path=${encodeURIComponent("/")}`);
+/** The published home page of a language with its navigation and footer. */
+export async function getPublishedHome(
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<Read<CmsPageView>> {
+  const res = await read(`/page?path=${encodeURIComponent("/")}${localeQuery(locale, "&")}`, locale);
   if (!res.ok) return { ok: false, reason: res.reason === "unavailable" ? "unavailable" : "not_found" };
   return res.data.kind === "home" ? { ok: true, data: res.data } : { ok: false, reason: "unavailable" };
 }
@@ -490,9 +570,12 @@ export async function getPublishedHome(): Promise<Read<CmsPageView>> {
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** A published TEMPLATE page at `/<slug>` (CMS S3); anything else is not found. */
-export async function getPublishedPage(slug: string): Promise<Read<TemplatePageView>> {
+export async function getPublishedPage(
+  slug: string,
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<Read<TemplatePageView>> {
   if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
-  const res = await read(`/page?path=${encodeURIComponent(`/${slug}`)}`);
+  const res = await read(`/page?path=${encodeURIComponent(`/${slug}`)}${localeQuery(locale, "&")}`, locale);
   if (!res.ok) return { ok: false, reason: res.reason === "unavailable" ? "unavailable" : "not_found" };
   return res.data.kind === "template" ? { ok: true, data: res.data } : { ok: false, reason: "not_found" };
 }
@@ -501,9 +584,15 @@ export async function getPublishedPage(slug: string): Promise<Read<TemplatePageV
  * DP-020: a published news article at `/news/<slug>`. Unknown: not_found; taken off the site:
  * unpublished (the page says so); anything else: unavailable.
  */
-export async function getPublishedArticle(slug: string): Promise<PageRead<ArticleView>> {
+export async function getPublishedArticle(
+  slug: string,
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<PageRead<ArticleView>> {
   if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
-  const res = await read(`/page?path=${encodeURIComponent(`/news/${slug}`)}`);
+  const res = await read(
+    `/page?path=${encodeURIComponent(`/news/${slug}`)}${localeQuery(locale, "&")}`,
+    locale,
+  );
   if (!res.ok) return res;
   return res.data.kind === "article" ? { ok: true, data: res.data } : { ok: false, reason: "not_found" };
 }
@@ -516,12 +605,15 @@ interface NewsRead {
   footer: SiteFooterContent | null;
 }
 
-async function readNews(currentPath = "/news"): Promise<Read<NewsRead>> {
+async function readNews(
+  currentPath = "/news",
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<Read<NewsRead>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
   let res: Response;
   try {
-    res = await fetch(`${config.apiUrl}${PUBLIC_CMS_API}/news`, {
+    res = await fetch(`${config.apiUrl}${PUBLIC_CMS_API}/news${localeQuery(locale, "?")}`, {
       headers: { "X-DP-Proxy-Key": config.proxyKey, Accept: "application/json" },
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -547,7 +639,23 @@ async function readNews(currentPath = "/news"): Promise<Read<NewsRead>> {
   const footer = fragment<BvFooterPublic>(fragments["bv.site-footer"], FOOTER, toFooterProps) as
     | SiteFooterContent
     | null;
-  return { ok: true, data: { heading, articles, nav, footer } };
+  // ML-3: links in the language of the list; an article's `path` is its link here. The switcher
+  // goes to the same address in another language (the news list, the catalogue) or its home.
+  const localized = localizeLinks(
+    {
+      heading,
+      articles: articles.map((a) => ({ ...a, path: localizeHref(locale, a.path) })),
+      nav,
+      footer,
+    },
+    locale,
+  );
+  if (localized.nav) {
+    // The not-found frame ("/404") has no address of its own: its language links go home.
+    const here = currentPath === "/404" ? "/" : currentPath;
+    localized.nav = { ...localized.nav, languages: await languagesFor(locale, here) };
+  }
+  return { ok: true, data: localized };
 }
 
 /**
@@ -555,8 +663,8 @@ async function readNews(currentPath = "/news"): Promise<Read<NewsRead>> {
  * comes from the published `bv.news-index` page; without it the list is unavailable (no fallback
  * to text in code).
  */
-export async function getNews(): Promise<Read<NewsView>> {
-  const res = await readNews();
+export async function getNews(locale: RouteLocale = DEFAULT_LOCALE): Promise<Read<NewsView>> {
+  const res = await readNews("/news", locale);
   if (!res.ok) return res;
   const { heading, articles, nav, footer } = res.data;
   if (!heading) return { ok: false, reason: "unavailable" };
@@ -569,19 +677,22 @@ export async function getNews(): Promise<Read<NewsView>> {
  * catalogue), with the navigation's current item for `path`. Both are null while unavailable;
  * the page then shows its own minimal frame.
  */
-export async function getSiteChrome(path: string): Promise<{
+export async function getSiteChrome(
+  path: string,
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<{
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
 }> {
-  const res = await readNews(path);
+  const res = await readNews(path, locale);
   return res.ok ? { nav: res.data.nav, footer: res.data.footer } : { nav: null, footer: null };
 }
 
-export async function getNewsChrome(): Promise<{
+export async function getNewsChrome(locale: RouteLocale = DEFAULT_LOCALE): Promise<{
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
 }> {
-  const res = await readNews();
+  const res = await readNews("/news", locale);
   return res.ok ? { nav: res.data.nav, footer: res.data.footer } : { nav: null, footer: null };
 }
 
@@ -609,5 +720,6 @@ const TOKEN = /^v1\.[0-9a-f-]{36}\.(BV|CORPORATE)\.\d{10,13}\.[0-9a-f]{64}$/;
 /** The draft a preview link shows (the API checks the signature, expiry and site). */
 export function getPreview(token: string): Promise<PageRead<AnyPageView>> {
   if (!TOKEN.test(token)) return Promise.resolve({ ok: false, reason: "not_found" });
-  return read(`/preview/${token}`);
+  // ML-3/DP-250: a preview has no language in its address; it renders in its draft's language.
+  return read(`/preview/${token}`, "draft");
 }

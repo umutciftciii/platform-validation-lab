@@ -32,6 +32,13 @@ import {
 } from "@dream/contracts";
 
 import { catalogConfig } from "@/lib/catalog-api";
+import {
+  DEFAULT_LOCALE,
+  localePath,
+  localizeHref,
+  ogLocale,
+  type RouteLocale,
+} from "@/lib/locale-routing";
 
 export const SITE_NAME = "Dream Petroleum BV";
 export const ORGANIZATION_NAME = PRIVACY_CONTROLLER.legalName;
@@ -68,8 +75,13 @@ export function sitePolicy(env: Record<string, string | undefined> = process.env
 }
 
 export interface PageSeo {
-  /** The site path of the page ("/about-us", "/products/x"); the canonical URL is built from it. */
+  /**
+   * The site path of the page inside its language ("/about-us", "/products/x", "/"); the
+   * canonical URL is built from it with the language prefix (ML-3: "/en/about-us").
+   */
   path: string;
+  /** ML-3: the page's language (default: the site's default language). */
+  locale?: RouteLocale;
   /** Query parameters that are part of the canonical address (e.g. the product category). */
   query?: Readonly<Record<string, string | undefined>>;
   title: string;
@@ -81,8 +93,9 @@ export interface PageSeo {
   type?: "website" | "article";
   publishedTime?: string | null;
   /**
-   * DP-209: the page's canonical override, a path of this site. Checked again here: anything
-   * that is not a valid site path is ignored (the page's own address is used).
+   * DP-209: the page's canonical override, a path of this site (stored without the language
+   * prefix, ML-3 adds it). Checked again here: anything that is not a valid site path is ignored
+   * (the page's own address is used).
    */
   canonicalPath?: string | null;
   /** DP-209: Open Graph title and description (default: the title and description). */
@@ -118,12 +131,14 @@ export function pageMetadata(
     ...(i.width ? { width: i.width } : {}),
     ...(i.height ? { height: i.height } : {}),
   }));
-  // A valid override replaces the address and its query; anything else is ignored.
+  // ML-3: self-canonical inside the language (`/en/...`, `/nl/...` once public). A valid override
+  // replaces the address and its query (in the same language); anything else is ignored.
+  const locale = page.locale ?? DEFAULT_LOCALE;
   const override = seoCanonicalPathIsValid(page.canonicalPath) ? page.canonicalPath : null;
   const url = policy.origin
     ? override
-      ? canonicalUrl(policy.origin, override)
-      : withQuery(canonicalUrl(policy.origin, page.path), page.query)
+      ? canonicalUrl(policy.origin, localizeHref(locale, override))
+      : withQuery(canonicalUrl(policy.origin, localePath(locale, page.path)), page.query)
     : undefined;
   return {
     title: page.title,
@@ -132,7 +147,7 @@ export function pageMetadata(
     openGraph: {
       type: page.type ?? "website",
       siteName: site.siteName,
-      locale: "en_GB",
+      locale: ogLocale(locale),
       title: ogTitle,
       ...(ogDescription ? { description: ogDescription } : {}),
       ...(url ? { url } : {}),
@@ -196,13 +211,16 @@ export async function resolvePath(
   path: string,
   config = catalogConfig(),
   search = "",
+  locale?: string,
 ): Promise<Resolve> {
   if (!config) return { status: "unknown" };
   // DP-211: the request's query, so a redirect bound to it (`/old?id=5`) can match.
   const query = search.replace(/^\?/, "");
+  // ML-3: `path` is the stored address; a language other than the default is named (the API
+  // answers 404 for a language that is not public).
   const url = `${config.apiUrl}${PUBLIC_SEO_API}/resolve?path=${encodeURIComponent(path)}${
     query ? `&query=${encodeURIComponent(query.slice(0, 2000))}` : ""
-  }`;
+  }${locale ? `&locale=${encodeURIComponent(locale)}` : ""}`;
   let res: Response;
   try {
     res = await fetch(url, {

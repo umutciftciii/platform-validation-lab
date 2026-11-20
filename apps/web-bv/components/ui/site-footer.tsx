@@ -1,7 +1,21 @@
 import Image from "next/image";
 
 import { type FooterLink, type SiteFooterContent } from "@/content/site-footer";
-import { PRIVACY_PATH, privacyHref } from "@/lib/privacy";
+import { splitLocale } from "@/lib/locale-routing";
+import { PRIVACY_PATH, privacyHref, privacyPolicyHref } from "@/lib/privacy";
+
+/**
+ * DP-095 D-T5: the policy link of the legal line renders as text where the policy is not
+ * published. ML-3: the link arrives with its language prefix (`/en/privacy`) and points at the
+ * policy in a language that has one (a Dutch page links the English policy, ADR-028 D12).
+ */
+function legalLink(link: FooterLink): FooterLink {
+  const split = splitLocale(link.href ?? "");
+  const isPolicy = link.href === PRIVACY_PATH || split?.rest === PRIVACY_PATH;
+  if (!isPolicy) return link;
+  if (!privacyHref()) return { ...link, href: null };
+  return split ? { ...link, href: privacyPolicyHref(split.locale) } : link;
+}
 
 /**
  * Page footer. A server component with no client script: every link works with
@@ -125,7 +139,7 @@ export default function SiteFooter({
             {content.legal.map((link) => (
               <li key={link.label}>
                 <FooterItem
-                  link={link.href === PRIVACY_PATH ? { ...link, href: privacyHref() } : link}
+                  link={legalLink(link)}
                   pendingNote={content.pendingNote}
                   newTabNote={content.newTab}
                 />
