@@ -80,6 +80,8 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // DP-210 (ADR-024 D7/D8): a site's redirects and its address-change lock.
   SiteRedirect: { nullable: false },
   SitePathLock: { nullable: false },
+  // ML-1 (DP-073, ADR-028 D2): a site's languages (read only for the API).
+  SiteLocale: { nullable: false },
 };
 
 export interface RelationDef {
@@ -171,6 +173,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     productContentProposalEvents: { model: "ProductContentProposalEvent", list: true },
     redirects: { model: "SiteRedirect", list: true },
     pathLock: { model: "SitePathLock", list: false },
+    locales: { model: "SiteLocale", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -424,6 +427,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     updatedBy: { model: "User", list: false },
   },
   SitePathLock: {
+    site: { model: "Site", list: false },
+  },
+  SiteLocale: {
     site: { model: "Site", list: false },
   },
 };

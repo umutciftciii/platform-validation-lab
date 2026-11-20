@@ -77,6 +77,7 @@ import {
 import { CMS_SEEDS } from "./seed/bv.js";
 import { assertMenuReferences, menuTargets } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
+import { assertLocaleEnabled, siteLocalesOf } from "./site-locales.js";
 
 const READ = "content:read";
 const EDIT = "content:edit";
@@ -115,7 +116,10 @@ export class CmsService {
     @Inject(Clock) private readonly clock: Clock,
   ) {}
 
-  /** The sites the caller may read, with the site's locale and the caller's abilities. */
+  /**
+   * The sites the caller may read, with the site's locale, its languages (ML-1, read only) and
+   * the caller's abilities.
+   */
   private static async sites(a: StaffAccess): Promise<CmsSite[]> {
     const readable = a.sitesWith(READ);
     if (readable.length === 0) return [];
@@ -127,6 +131,7 @@ export class CmsService {
       select: { id: true, defaultLocale: true },
     });
     const locale = new Map(rows.map((r) => [r.id, r.defaultLocale]));
+    const locales = await siteLocalesOf(db, readable);
     return a.sites
       .filter((s) => readable.includes(s.id))
       .map((s) => ({
@@ -136,6 +141,7 @@ export class CmsService {
         locale: locale.get(s.id) ?? "en",
         canEdit: editable.has(s.id),
         canPublish: publishable.has(s.id),
+        locales: locales.get(s.id) ?? [],
       }));
   }
 
@@ -305,6 +311,8 @@ export class CmsService {
   async saveDraft(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
     const { row: before, db } = await CmsService.pageIn(a, EDIT, rawId);
+    // ML-1 (ADR-028 D2): only in a language that is enabled on the page's site (public or not).
+    await assertLocaleEnabled(db, before.siteId, before.locale);
     let version: number;
     let data: SeoColumns & {
       title: string;
@@ -493,6 +501,8 @@ export class CmsService {
   async preview(ctx: RequestContext, rawId: string): Promise<CmsPreviewResponse> {
     const a = await this.access.begin(ctx);
     const { row, db } = await CmsService.pageIn(a, READ, rawId);
+    // ML-1 (ADR-028 D2): only in a language that is enabled on the page's site (public or not).
+    await assertLocaleEnabled(db, row.siteId, row.locale);
     const site = await CmsService.site(a, row.siteId);
     const app = site.key === "BV" ? "WEB_BV" : "WEB_CORPORATE";
     const origin = [...this.config.allowedOrigins[app]][0];
@@ -539,6 +549,9 @@ export class CmsService {
     } catch {
       throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "invalid" }]);
     }
+    // ML-1 (ADR-028 D2/D14): only in an enabled language. A language that is not public may be
+    // published too; its content stays invisible to visitors (public reads filter by `public`).
+    await assertLocaleEnabled(db, row.siteId, row.locale);
     try {
       await db.$transaction(async (tx) => {
         // The revision copies the draft exactly as checked above (version `row.version`); a save
@@ -698,6 +711,8 @@ export class CmsService {
   async restore(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
     const { row, db } = await CmsService.pageIn(a, EDIT, rawId);
+    // ML-1 (ADR-028 D2): only in a language that is enabled on the page's site (public or not).
+    await assertLocaleEnabled(db, row.siteId, row.locale);
     const input = parseBody(CmsRestoreRequestSchema, body);
     if (input.version !== row.version) throw staleVersion();
     const revision = await db.cmsPageRevision.findFirst({
@@ -760,6 +775,8 @@ export class CmsService {
   async unpublish(ctx: RequestContext, rawId: string, body: unknown): Promise<CmsPageResponse> {
     const a = await this.access.begin(ctx);
     const { row, db } = await CmsService.pageIn(a, PUBLISH, rawId);
+    // ML-1 (ADR-028 D2): only in a language that is enabled on the page's site (public or not).
+    await assertLocaleEnabled(db, row.siteId, row.locale);
     const input = parseBody(CmsUnpublishRequestSchema, body);
     if (row.publication?.status !== "PUBLISHED") {
       throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "not_published" }]);

@@ -141,7 +141,8 @@ export interface LiveRow {
   publishedAt: Date;
   /** DP-020: when revision 1 was published (the date an article shows). */
   firstPublishedAt: Date;
-  page: { kind: CmsPage["kind"]; templateKey: string };
+  /** ML-1: `locale` lets the public reads drop languages that are not public. */
+  page: { kind: CmsPage["kind"]; templateKey: string; locale: string };
   revision: {
     revisionNumber: number;
     title: string;
@@ -178,7 +179,7 @@ export async function liveRows(db: CmsDb, siteId: string): Promise<LiveRow[]> {
     }),
     db.cmsPage.findMany({
       where: { id: { in: pubs.map((p) => p.pageId) } },
-      select: { id: true, kind: true, templateKey: true },
+      select: { id: true, kind: true, templateKey: true, locale: true },
     }),
     db.cmsPageRevision.findMany({
       where: { pageId: { in: pubs.map((p) => p.pageId) }, revisionNumber: 1 },

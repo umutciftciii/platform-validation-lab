@@ -41,6 +41,7 @@ import { ApiError } from "../iam/http/api-error.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import { PublicSiteService, type PublicSite } from "../iam/public-site.js";
 import { liveRows as liveProducts } from "../catalog/live.js";
+import { publicLocaleSet } from "../cms/site-locales.js";
 
 interface LivePath {
   path: string;
@@ -87,8 +88,15 @@ export class PublicSeoService {
 
   constructor(@Inject(PublicSiteService) private readonly sites: PublicSiteService) {}
 
-  /** Published CMS pages and articles of the site with their path (fragments have none). */
-  static async livePages(site: SiteReader): Promise<LivePath[]> {
+  /**
+   * Published CMS pages and articles of the site with their path (fragments have none).
+   * ML-1: `publicOnly` keeps only pages in a public language (resolve, sitemap); the admin's
+   * address checks see every published page, whatever its language.
+   */
+  static async livePages(
+    site: SiteReader,
+    { publicOnly = false }: { publicOnly?: boolean } = {},
+  ): Promise<LivePath[]> {
     const pubs = await site.db.cmsPagePublication.findMany({
       where: { siteId: site.siteId, status: "PUBLISHED" },
       select: { pageId: true, revisionId: true, publishedAt: true },
@@ -101,14 +109,16 @@ export class PublicSeoService {
       }),
       site.db.cmsPage.findMany({
         where: { id: { in: pubs.map((p) => p.pageId) } },
-        select: { id: true, kind: true, templateKey: true },
+        select: { id: true, kind: true, templateKey: true, locale: true },
       }),
     ]);
+    const visible = publicOnly ? await publicLocaleSet(site.db, site.siteId) : null;
     const out: LivePath[] = [];
     for (const p of pubs) {
       const r = revisions.find((x) => x.id === p.revisionId);
       const page = pages.find((x) => x.id === p.pageId);
       if (!r?.path || !page || page.kind === "FRAGMENT") continue;
+      if (visible && !visible.has(page.locale)) continue;
       out.push({
         path: r.path,
         kind: kindOf(r.path, page),
@@ -143,10 +153,22 @@ export class PublicSeoService {
 
   /** Whether the CMS page last published at `path` is UNPUBLISHED now (DP-020 rule). */
   private static async wasUnpublished(site: PublicSite, path: string): Promise<boolean> {
-    const revisions = await site.db.cmsPageRevision.findMany({
-      where: { siteId: site.siteId, path },
-      select: { id: true },
+    // ML-1: only pages in a public language count, so a page of a language that is not public
+    // (published or taken back) is never revealed by the `unpublished` detail.
+    const [found, visible] = await Promise.all([
+      site.db.cmsPageRevision.findMany({
+        where: { siteId: site.siteId, path },
+        select: { id: true, pageId: true },
+      }),
+      publicLocaleSet(site.db, site.siteId),
+    ]);
+    if (found.length === 0) return false;
+    const pages = await site.db.cmsPage.findMany({
+      where: { id: { in: [...new Set(found.map((r) => r.pageId))] } },
+      select: { id: true, locale: true },
     });
+    const shown = new Set(pages.filter((p) => visible.has(p.locale)).map((p) => p.id));
+    const revisions = found.filter((r) => shown.has(r.pageId));
     if (revisions.length === 0) return false;
     const pub = await site.db.cmsPagePublication.findFirst({
       where: {
@@ -231,7 +253,9 @@ export class PublicSeoService {
       if (moved) return moved;
       throw new ApiError("NOT_FOUND");
     }
-    const hit = (await PublicSeoService.livePages(site)).find((p) => p.path === path);
+    const hit = (await PublicSeoService.livePages(site, { publicOnly: true })).find(
+      (p) => p.path === path,
+    );
     if (hit) return { path, kind: hit.kind };
     const moved = await PublicSeoService.redirectOf(site, path, query);
     if (moved) return moved;
@@ -276,7 +300,7 @@ export class PublicSeoService {
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
     const [pages, products] = await Promise.all([
-      PublicSeoService.livePages(site),
+      PublicSeoService.livePages(site, { publicOnly: true }),
       PublicSeoService.liveProductPaths(site),
     ]);
     const entry = (p: LivePath): PublicSitemapEntry => ({
