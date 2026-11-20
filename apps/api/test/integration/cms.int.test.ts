@@ -1040,6 +1040,8 @@ describe("9. preview links", () => {
     const bundle = CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body);
     expect(bundle.page.templateKey).toBe("bv.home");
     expect(bundle.fragments["bv.site-nav"]?.revisionNumber).toBeNull();
+    // DP-250: an English fragment preview names English.
+    expect(bundle.locale).toBe("en");
   });
 
   it("issues links only to readers of the page's site", async () => {
@@ -4713,6 +4715,8 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
     const token = CmsPreviewResponseSchema.parse(pre.body).url.split("/preview/")[1]!;
     const view = CmsPublicBundleSchema.parse((await pub(`/preview/${token}`)).body);
     expect(view.page.title).toBe("Over ons (ML-2)");
+    // DP-250: the preview names the draft's language (its address carries none).
+    expect(view.locale).toBe("nl");
     // The preview never borrows English fragments for a Dutch page (no NL fragment yet).
     expect(view.fragments["bv.site-nav"] ?? null).toBeNull();
     const live = await publish(nlId);
@@ -5047,6 +5051,87 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
       // The English navigation is unchanged and still English.
       const enBundle = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-same`)).body);
       expect(JSON.stringify(enBundle.fragments["bv.site-nav"])).not.toContain("Over ons");
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+  // --- ML-3 (DP-236, ADR-028 D3/D7): the reads behind the /en and /nl routing of the site ------
+
+  it("ML-3 resolve: the default language without or with locale=en; other languages only while public", async () => {
+    // Default language: `locale=en` answers exactly like no locale (the site sends none).
+    const plain = await seoGet(`/resolve?path=/ml2-about`);
+    const named = await seoGet(`/resolve?path=/ml2-about&locale=en`);
+    expect(plain.status).toBe(200);
+    expect(named.body).toEqual(plain.body);
+    // NL not public: 404 without detail for any address, live or moved.
+    for (const p of ["/ml2-same", "/over-ons-nieuw", "/over-ons-ml2", "/"]) {
+      const r = await seoGet(`/resolve?path=${encodeURIComponent(p)}&locale=nl`);
+      expectError(r, 404, "NOT_FOUND");
+      expect(r.body.error.details).toEqual([]);
+    }
+    // Unknown or malformed languages are 404 too.
+    for (const l of ["xx", "de", "NL", "x".repeat(40)]) {
+      expectError(await seoGet(`/resolve?path=/ml2-about&locale=${l}`), 404, "NOT_FOUND");
+    }
+  });
+
+  it("ML-3 resolve once NL is public (owner switch, rolled back here): own pages, own redirects, no fallback", async () => {
+    await setNlPublic(true);
+    try {
+      expect((await seoGet(`/resolve?path=/ml2-same&locale=nl`)).body).toEqual({
+        path: "/nl/ml2-same",
+        kind: "page",
+      });
+      expect((await seoGet(`/resolve?path=/over-ons-nieuw&locale=nl`)).body).toEqual({
+        path: "/nl/over-ons-nieuw",
+        kind: "page",
+      });
+      // The ML-2 slug change row (/nl/over-ons-ml2 -> /nl/over-ons-nieuw), asked inside NL.
+      const moved = await seoGet(`/resolve?path=/over-ons-ml2&locale=nl`);
+      expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+      expect(moved.body).toEqual({
+        path: "/nl/over-ons-ml2",
+        redirect: { target: "/nl/over-ons-nieuw", statusCode: 301 },
+      });
+      // No English content under a Dutch address (ADR-028 D7): the English slug is a 404 in NL.
+      expectError(await seoGet(`/resolve?path=/ml2-about&locale=nl`), 404, "NOT_FOUND");
+      // No Dutch catalogue (ML-8c) and no old-site lookups inside NL.
+      expectError(await seoGet(`/resolve?path=/products/x&locale=nl`), 404, "NOT_FOUND");
+      expectError(
+        await seoGet(`/resolve?path=${encodeURIComponent("/en/about-us")}&locale=nl`),
+        404,
+        "NOT_FOUND",
+      );
+      // The English answers are unchanged by the switch.
+      expect((await seoGet(`/resolve?path=/ml2-same`)).body).toEqual({
+        path: "/ml2-same",
+        kind: "page",
+      });
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("ML-3 alternates: the published counterpart in public languages only, never a draft", async () => {
+    // NL not public: no alternates at all.
+    const hidden = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body);
+    expect(hidden.alternates).toEqual([]);
+    await setNlPublic(true);
+    try {
+      const en = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-about`)).body);
+      expect(en.alternates).toEqual([{ locale: "nl", path: "/over-ons-nieuw" }]);
+      const nl = CmsPublicBundleSchema.parse(
+        (await pub(`/page?path=/over-ons-nieuw&locale=nl`)).body,
+      );
+      expect(nl.alternates).toEqual([{ locale: "en", path: "/ml2-about" }]);
+      // A page whose group has no other published language has none.
+      const third = await owner.cmsPage.findFirstOrThrow({
+        where: { siteId: BV, locale: "en", path: "/ml2-third" },
+        select: { id: true },
+      });
+      await publish(third.id);
+      const alone = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-third`)).body);
+      expect(alone.alternates).toEqual([]);
     } finally {
       await setNlPublic(false);
     }

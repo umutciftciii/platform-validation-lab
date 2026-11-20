@@ -5,21 +5,25 @@ import { Suspense } from "react";
 import { filterProducts, paginate, parseBrowse, trail, type BrowseParams } from "@/components/products/browse";
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { BrowseResults } from "@/components/products/catalog-views";
-import { LIVE_LINKS } from "@/components/products/live-links";
+import { liveLinks } from "@/components/products/live-links";
 import { listCategories, listProducts } from "@/lib/catalog-api";
+import { catalogLocale } from "@/lib/catalog-locale";
+import { localizeHref } from "@/lib/locale-routing";
 import { pageMetadata, siteSeo } from "@/lib/seo";
 
 /**
  * DP-207: the list and each category view are their own canonical address (`?category=`, and
  * `?page=` beyond the first); a search result (`?q=`) is never indexed.
  */
-export async function generateMetadata({ searchParams }: PageProps<"/products">): Promise<Metadata> {
+export async function generateMetadata({ searchParams }: PageProps<"/[locale]/products">): Promise<Metadata> {
   await connection();
+  const locale = await catalogLocale();
   const p = parseBrowse(await searchParams);
   const site = await siteSeo();
   return pageMetadata(
     {
       path: "/products",
+      locale,
       query: { category: p.category ?? undefined, page: p.page > 1 ? String(p.page) : undefined },
       title: `Products | ${site.siteName}`,
       description: `Published products of ${site.siteName}.`,
@@ -36,9 +40,13 @@ export async function generateMetadata({ searchParams }: PageProps<"/products">)
  * DP-163: category cards with art and sub-category chips above the list, large horizontal
  * product cards from md, two compact cards per row on phones.
  */
-export default function ProductsPage({ searchParams }: PageProps<"/products">) {
+export default async function ProductsPage({ searchParams }: PageProps<"/[locale]/products">) {
+  const locale = await catalogLocale();
   return (
-    <CatalogShell crumbs={[{ label: "Home", href: "/" }, { label: "Products" }]}>
+    <CatalogShell
+      locale={locale}
+      crumbs={[{ label: "Home", href: localizeHref(locale, "/") }, { label: "Products" }]}
+    >
       <header className="pb-8 pt-8 sm:pb-12 sm:pt-12">
         <p className="tp-eyebrow">Dream Petroleum BV</p>
         <h1 className="tp-display">Products</h1>
@@ -54,8 +62,9 @@ export default function ProductsPage({ searchParams }: PageProps<"/products">) {
   );
 }
 
-async function Browse({ searchParams }: { searchParams: PageProps<"/products">["searchParams"] }) {
+async function Browse({ searchParams }: Pick<PageProps<"/[locale]/products">, "searchParams">) {
   await connection();
+  const locale = await catalogLocale();
   const params = parseBrowse(await searchParams);
   const [list, cats] = await Promise.all([listProducts(), listCategories()]);
   if (!list.ok) {
@@ -78,7 +87,7 @@ async function Browse({ searchParams }: { searchParams: PageProps<"/products">["
   const p: BrowseParams = { ...params, category: known ? params.category : null };
   const result = paginate(filterProducts(list.data, categories, p), p.page);
   const path = trail(categories, p.category);
-  return <BrowseResults categories={categories} params={p} active={path} result={result} links={LIVE_LINKS} />;
+  return <BrowseResults categories={categories} params={p} active={path} result={result} links={liveLinks(locale)} />;
 }
 
 function ListSkeleton() {

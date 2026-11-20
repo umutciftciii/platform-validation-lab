@@ -253,8 +253,12 @@ export class PublicSeoService {
     ctx: RequestContext,
     rawPath: unknown,
     rawQuery: unknown = "",
+    rawLocale: unknown = undefined,
   ): Promise<PublicSeoResolveResponse> {
     const path = typeof rawPath === "string" ? rawPath : "";
+    if (rawLocale !== undefined && rawLocale !== "") {
+      return this.resolveInLocale(ctx, path, rawQuery, rawLocale);
+    }
     // DP-212: an address the site does not serve in its own form (an old-site address such as
     // `/en/products/x`, `/en/About-Us`, `/en/contact-us.html`) is answered with its redirect only,
     // looked up in lower case like the stored sources; never with live content. A trailing "/"
@@ -299,6 +303,47 @@ export class PublicSeoService {
     const moved = await PublicSeoService.redirectOf(site, path, query);
     if (moved) return moved;
     if (await PublicSeoService.wasUnpublished(site, path, defaultLocale)) {
+      throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
+    }
+    throw new ApiError("NOT_FOUND");
+  }
+
+  /**
+   * ML-3 (DP-236, ADR-028 D3/D7): an address inside a language named by the site (`/over-ons`
+   * with `locale=nl` for the public address `/nl/over-ons`). The default language answers as
+   * without `locale`. Another language must be enabled and public on the site (else 404 without
+   * detail, a hidden language is never revealed); only its own live pages count (no fallback to
+   * English), then its redirects at their stored address (`/nl/old` → `/nl/new`, ML-2 slug
+   * changes) and the `unpublished` detail. Products and old-site addresses exist in the default
+   * language only (the Dutch catalogue comes with ML-8c).
+   */
+  private async resolveInLocale(
+    ctx: RequestContext,
+    path: string,
+    rawQuery: unknown,
+    rawLocale: unknown,
+  ): Promise<PublicSeoResolveResponse> {
+    if (typeof rawLocale !== "string" || rawLocale.length > 35) throw new ApiError("NOT_FOUND");
+    const site = await this.sites.begin(ctx);
+    const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
+    if (!locales.some((l) => l.locale === rawLocale)) throw new ApiError("NOT_FOUND");
+    if (rawLocale === defaultLocale) return this.resolve(ctx, path, rawQuery);
+    if (!SEO_RESOLVABLE_PATH.test(path) || path.startsWith(PRODUCTS_PREFIX)) {
+      throw new ApiError("NOT_FOUND");
+    }
+    const parsedQuery =
+      typeof rawQuery === "string" && rawQuery.length <= 2000
+        ? normalizeRedirectQuery(rawQuery)
+        : null;
+    const query = parsedQuery?.ok ? parsedQuery.value : "";
+    const address = cmsLocaleAddress(path, rawLocale, defaultLocale);
+    const hit = (
+      await PublicSeoService.livePages(site, { publicOnly: true, locale: rawLocale })
+    ).find((p) => p.path === path);
+    if (hit) return { path: address, kind: hit.kind };
+    const moved = await PublicSeoService.redirectOf(site, address, query);
+    if (moved) return moved;
+    if (await PublicSeoService.wasUnpublished(site, path, rawLocale)) {
       throw new ApiError("NOT_FOUND", [{ path: "path", rule: "unpublished" }]);
     }
     throw new ApiError("NOT_FOUND");
