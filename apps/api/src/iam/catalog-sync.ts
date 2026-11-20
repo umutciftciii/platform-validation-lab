@@ -10,6 +10,8 @@ import type { Db } from "./db.js";
 export interface CatalogSyncResult {
   modules: number;
   sites: number;
+  /** ML-1: languages added to existing sites (never changed, never made public). */
+  siteLocalesAdded: number;
   permissions: number;
   roles: number;
   rolePermissionsAdded: number;
@@ -24,12 +26,29 @@ export async function syncCatalog(db: Db): Promise<CatalogSyncResult> {
       update: { name: m.name, description: m.description, isCore: m.isCore },
     });
   }
-  for (const s of SITES) {
-    await db.site.upsert({
+  let localesAdded = 0;
+  for (const { extraLocales, ...s } of SITES) {
+    // A new site gets its default language row from a database trigger (ML-1).
+    const site = await db.site.upsert({
       where: { key: s.key },
       create: { ...s },
       update: { name: s.name, primaryDomain: s.primaryDomain, defaultLocale: s.defaultLocale },
+      select: { id: true },
     });
+    if (extraLocales.length > 0) {
+      const made = await db.siteLocale.createMany({
+        data: extraLocales.map((l) => ({
+          siteId: site.id,
+          locale: l.locale,
+          enabled: true,
+          public: false,
+          isDefault: false,
+          sortOrder: l.sortOrder,
+        })),
+        skipDuplicates: true,
+      });
+      localesAdded += made.count;
+    }
   }
   const permissionIds = new Map<string, string>();
   for (const p of PERMISSIONS) {
@@ -82,6 +101,7 @@ export async function syncCatalog(db: Db): Promise<CatalogSyncResult> {
   return {
     modules: MODULES.length,
     sites: SITES.length,
+    siteLocalesAdded: localesAdded,
     permissions: PERMISSIONS.length,
     roles: ROLES.length,
     rolePermissionsAdded: added,
