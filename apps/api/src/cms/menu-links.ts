@@ -10,9 +10,18 @@
  *    site (400 `unknown_reference` otherwise; ids of another site look unknown).
  *  - `menuTargets`: what the admin's target picker offers, with the state of each target.
  *
+ * ML-2 (ADR-028 D6/D7): menus are fragments per language. A page reference names a page of the
+ * site (in practice of the default language) and is resolved per language: the page of the
+ * reference's translation group in the menu's language, at its address in that language
+ * (`/nl/...` for Dutch; unchanged for the default language until ML-3). A page without a
+ * published counterpart in the menu's language gives the "not ready yet" text (href null), never
+ * the English page. Products and categories get the language prefix the same way; fixed paths
+ * and URLs stay as written (ML-7 decides their per-language form).
+ *
  * Plain functions over a site-scoped client, no Nest wiring.
  */
 import {
+  cmsLocaleAddress,
   BV_FOOTER_KEY,
   BV_NAV_KEY,
   BvFooterMenuSchema,
@@ -108,24 +117,44 @@ export async function assertMenuReferences(
   }
 }
 
+/** The language a menu is resolved in (ML-2). */
+export interface MenuLocale {
+  locale: string;
+  defaultLocale: string;
+}
+
 /** The address of each referenced live item of the site, read once per request. */
 async function publicResolver(
   site: PublicSite,
   live: LiveRow[],
   links: MenuLinkRef[],
+  { locale, defaultLocale }: MenuLocale,
 ): Promise<(t: MenuTarget) => string | null> {
   const refs = menuReferences(links);
-  const pagePath = new Map<string, string>();
+  const at = (path: string) => cmsLocaleAddress(path, locale, defaultLocale);
+  // Live pages of the menu's language by translation group.
+  const groupPath = new Map<string, string>();
   for (const row of live) {
-    if (row.page.kind !== "FRAGMENT" && row.revision.path)
-      pagePath.set(row.pageId, row.revision.path);
+    if (row.page.kind !== "FRAGMENT" && row.revision.path && row.page.locale === locale)
+      groupPath.set(row.page.translationGroupId, at(row.revision.path));
+  }
+  const pagePath = new Map<string, string>();
+  if (refs.pageIds.length) {
+    const pages = await site.db.cmsPage.findMany({
+      where: { siteId: site.siteId, id: { in: refs.pageIds } },
+      select: { id: true, translationGroupId: true },
+    });
+    for (const p of pages) {
+      const path = groupPath.get(p.translationGroupId);
+      if (path) pagePath.set(p.id, path);
+    }
   }
   const productPath = new Map<string, string>();
   if (refs.productIds.length) {
     const rows = await liveProductRows(site, { productId: { in: refs.productIds } });
     for (const r of rows) {
       const snap = PublishedSnapshotSchema.safeParse(r.snapshot);
-      if (snap.success) productPath.set(r.productId, `/products/${snap.data.slug}`);
+      if (snap.success) productPath.set(r.productId, at(`/products/${snap.data.slug}`));
     }
   }
   const categoryPath = new Map<string, string>();
@@ -134,7 +163,7 @@ async function publicResolver(
       where: { siteId: site.siteId, id: { in: refs.categoryIds } },
       select: { id: true, slug: true },
     });
-    for (const c of cats) categoryPath.set(c.id, menuCategoryPath(c.slug));
+    for (const c of cats) categoryPath.set(c.id, at(menuCategoryPath(c.slug)));
   }
   return (t) => {
     switch (t.type) {
@@ -163,6 +192,7 @@ export async function resolvePublicMenus(
   site: PublicSite,
   live: LiveRow[],
   fragments: Record<string, CmsPublicPage | null>,
+  locale: MenuLocale,
 ): Promise<void> {
   for (const key of [BV_NAV_KEY, BV_FOOTER_KEY] as const) {
     const page = fragments[key];
@@ -173,7 +203,7 @@ export async function resolvePublicMenus(
         fragments[key] = null;
         continue;
       }
-      const resolve = await publicResolver(site, live, navLinks(parsed.data));
+      const resolve = await publicResolver(site, live, navLinks(parsed.data), locale);
       fragments[key] = { ...page, content: menuPublicNav(parsed.data, resolve) };
     } else {
       const parsed = BvFooterMenuSchema.safeParse(page.content);
@@ -181,7 +211,7 @@ export async function resolvePublicMenus(
         fragments[key] = null;
         continue;
       }
-      const resolve = await publicResolver(site, live, footerLinks(parsed.data));
+      const resolve = await publicResolver(site, live, footerLinks(parsed.data), locale);
       fragments[key] = { ...page, content: menuPublicFooter(parsed.data, resolve) };
     }
   }
@@ -196,10 +226,12 @@ export async function menuTargets(
   db: CmsDb,
   siteId: string,
   readProducts: boolean,
+  /** ML-2: the site's default language; page targets are its pages (resolved per language). */
+  defaultLocale: string,
 ): Promise<CmsMenuTargetsResponse> {
   const [pages, pubs, categories, listings, productPubs] = await Promise.all([
     db.cmsPage.findMany({
-      where: { siteId, kind: { not: "FRAGMENT" }, path: { not: null } },
+      where: { siteId, locale: defaultLocale, kind: { not: "FRAGMENT" }, path: { not: null } },
       select: { id: true, title: true, kind: true, path: true },
       orderBy: { path: "asc" },
       take: MAX_TARGETS,

@@ -395,12 +395,18 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     updatedBy: { model: "User", list: false },
     revisions: { model: "CmsPageRevision", list: true },
     publication: { model: "CmsPagePublication", list: false },
+    // ML-2 (ADR-028 D6): language, translation group and the source revision of a translation.
+    siteLocale: { model: "SiteLocale", list: false },
+    translationGroup: { model: "CmsPage", list: false },
+    translations: { model: "CmsPage", list: true },
+    translationSource: { model: "CmsPageRevision", list: false },
   },
   CmsPageRevision: {
     page: { model: "CmsPage", list: false },
     site: { model: "Site", list: false },
     createdBy: { model: "User", list: false },
     publications: { model: "CmsPagePublication", list: true },
+    translationsFrom: { model: "CmsPage", list: true },
   },
   CmsPagePublication: {
     page: { model: "CmsPage", list: false },
@@ -431,6 +437,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   },
   SiteLocale: {
     site: { model: "Site", list: false },
+    cmsPages: { model: "CmsPage", list: true },
   },
 };
 

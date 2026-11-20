@@ -29,8 +29,11 @@ export class PublicSeoController {
   /** DP-209: the published SEO defaults of the site (null until published). */
   @Get("settings")
   @Header("Cache-Control", "no-store")
-  settings(@Ctx() ctx: RequestContext): Promise<PublicSiteSeoResponse> {
-    return this.seo.settings(ctx);
+  settings(
+    @Ctx() ctx: RequestContext,
+    @Query("locale") locale: unknown,
+  ): Promise<PublicSiteSeoResponse> {
+    return this.seo.settings(ctx, locale);
   }
 
   /** The indexable live addresses of the site (sitemap.xml). */

@@ -1697,10 +1697,19 @@ model CmsPage {
   kind           CmsPageKind
   /// "standard" for TEMPLATE pages; the registry key (contracts CMS_SITE_REGISTRY) otherwise.
   templateKey    String      @db.VarChar(80)
-  /// "/" or "/<slug>"; null for fragments. Unique per site.
+  /// "/" or "/<slug>"; null for fragments. Unique per site and language (ML-2), stored without
+  /// the language prefix (ADR-028 D3).
   path           String?     @db.VarChar(120)
-  /// The site's default locale (one locale until DP-073).
+  /// ML-2 (ADR-028 D6): one of the site's languages (SiteLocale); one row per language.
   locale         String      @db.VarChar(35)
+  /// ML-2 (ADR-028 D6, DP-074): the translation group: the id of the group's first page (its own
+  /// id for an original). One row per language per group; the rows of a group share site, kind
+  /// and template key (trigger CmsPage_translation_group).
+  translationGroupId          String @db.Uuid
+  /// ML-2 (DP-074): the revision of the group's source-language page this translation was made
+  /// from (null: an original, or a translation made before the source was published). When the
+  /// source has a newer revision the translation is "outdated".
+  translationSourceRevisionId String? @db.Uuid
   title          String      @db.VarChar(200)
   seoTitle       String?     @db.VarChar(120)
   seoDescription String?     @db.VarChar(320)
@@ -1727,13 +1736,23 @@ model CmsPage {
   updatedBy   User                @relation("CmsPageUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   revisions   CmsPageRevision[]
   publication CmsPagePublication?
+  /// ML-2: the language of the page is a language of its site.
+  siteLocale        SiteLocale       @relation(fields: [siteId, locale], references: [siteId, locale], onDelete: Restrict)
+  /// ML-2: the group's first page (itself for an original) and the pages of its group.
+  translationGroup  CmsPage          @relation("CmsTranslationGroup", fields: [translationGroupId], references: [id], onDelete: Restrict)
+  translations      CmsPage[]        @relation("CmsTranslationGroup")
+  translationSource CmsPageRevision? @relation("CmsTranslationSource", fields: [translationSourceRevisionId], references: [id], onDelete: Restrict)
 
-  @@unique([siteId, path])
+  /// ML-2: an address is unique per site and language (the same path may exist in two languages).
+  @@unique([siteId, locale, path])
   /// Target of the composite keys of revisions and the publication (same site as the page).
   @@unique([id, siteId])
-  /// One DESIGN page or fragment per registry key and site.
-  @@unique([siteId, templateKey], map: "CmsPage_registry_siteId_templateKey_key", where: raw("(kind <> 'TEMPLATE'::\"CmsPageKind\")"))
+  /// One DESIGN page or fragment per registry key, site and language (ML-2).
+  @@unique([siteId, locale, templateKey], map: "CmsPage_registry_siteId_locale_templateKey_key", where: raw("(kind <> 'TEMPLATE'::\"CmsPageKind\")"))
+  /// ML-2: at most one page per language in a translation group.
+  @@unique([translationGroupId, locale])
   @@index([siteId, kind])
+  @@index([translationSourceRevisionId])
 }
 
 // ===========================================================================================
@@ -1771,6 +1790,8 @@ model CmsPageRevision {
   site         Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   createdBy    User                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
   publications CmsPagePublication[]
+  /// ML-2: translations made from this revision (no column here: the table is unchanged).
+  translationsFrom CmsPage[]        @relation("CmsTranslationSource")
 
   @@unique([pageId, revisionNumber])
   /// Target of the publication's composite key (a revision of the same page).
@@ -1890,7 +1911,9 @@ model SiteLocale {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  site Site @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  /// ML-2: the CMS pages written in this language.
+  cmsPages CmsPage[]
 
   @@id([siteId, locale])
   @@unique([siteId], map: "SiteLocale_default_siteId_key", where: raw("\"isDefault\""))
