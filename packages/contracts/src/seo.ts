@@ -118,10 +118,26 @@ export const PublicSeoResolveResponseSchema = z.union([
 ]);
 export type PublicSeoResolveResponse = z.infer<typeof PublicSeoResolveResponseSchema>;
 
-export const PublicSitemapEntrySchema = z.strictObject({
+/**
+ * ML-5 (DP-019, ADR-028 D3): a published counterpart of a sitemap address in another PUBLIC
+ * language (same translation group), at its path inside that language. Listed only when the
+ * counterpart is itself in the sitemap (indexable, its own canonical): hreflang is reciprocal.
+ */
+export const PublicSitemapAlternateSchema = z.strictObject({
+  locale: z.string().min(2).max(35),
   path: z.string().startsWith("/"),
+});
+export type PublicSitemapAlternate = z.infer<typeof PublicSitemapAlternateSchema>;
+
+export const PublicSitemapEntrySchema = z.strictObject({
+  /** The path inside its language ("/about-us"); the site adds the language prefix (ML-3). */
+  path: z.string().startsWith("/"),
+  /** ML-5: the language of the address; only public languages are ever listed. */
+  locale: z.string().min(2).max(35),
   kind: z.enum(SEO_PATH_KINDS),
   lastModified: IsoDate.nullable(),
+  /** ML-5: the counterparts in the other public languages (empty: no hreflang). */
+  alternates: z.array(PublicSitemapAlternateSchema).max(20),
 });
 export type PublicSitemapEntry = z.infer<typeof PublicSitemapEntrySchema>;
 
@@ -189,6 +205,20 @@ export function seoPolicy(env: {
   return { deployEnv, origin, indexable };
 }
 
+/**
+ * ML-5 (ADR-028 D3): the public address of a path inside a language — every language under its
+ * prefix, the default one included: `("en", "/") → "/en"`, `("nl", "/over-ons") → "/nl/over-ons"`.
+ * The same rule as the BV site's `localePath` (apps/web-bv/lib/locale-routing.ts); the admin's
+ * SEO previews use it so they show the address the site renders.
+ */
+export function seoLocalePath(locale: string, path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return p === "/" ? `/${locale}` : `/${locale}${p}`;
+}
+
+/** The Open Graph locale of a language (`og:locale`): en → en_GB, nl → nl_NL. */
+export const SEO_OG_LOCALES: Readonly<Record<string, string>> = { en: "en_GB", nl: "nl_NL" };
+
 /** The canonical absolute URL of a site path ("/products/x"); query and fragment are dropped. */
 export function canonicalUrl(origin: string, path: string): string {
   const clean = path.split(/[?#]/, 1)[0] || "/";
@@ -200,6 +230,8 @@ export function canonicalUrl(origin: string, path: string): string {
 export interface OrganizationLd {
   name: string;
   origin: string;
+  /** ML-5: the site's home in the page's language ("/en"); default "/". */
+  homePath?: string;
   logoPath: string;
   email?: string | null;
   telephone?: string | null;
@@ -210,7 +242,7 @@ export function organizationJsonLd(o: OrganizationLd): Record<string, unknown> {
     "@context": "https://schema.org",
     "@type": "Organization",
     name: o.name,
-    url: canonicalUrl(o.origin, "/"),
+    url: canonicalUrl(o.origin, o.homePath ?? "/"),
     logo: canonicalUrl(o.origin, o.logoPath),
     ...(o.email ? { email: o.email } : {}),
     ...(o.telephone ? { telephone: o.telephone } : {}),

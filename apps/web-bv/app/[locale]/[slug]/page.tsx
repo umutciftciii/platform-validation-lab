@@ -33,7 +33,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/[slug]">
     if (res.reason === "not_found") notFound();
     return noindexMetadata("Dream Petroleum BV");
   }
-  const { path, title, seo } = res.data;
+  const { path, title, seo, alternates } = res.data;
   return pageMetadata(
     {
       path,
@@ -41,9 +41,10 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/[slug]">
       title: seo.title ?? title,
       description: seo.description,
       noindex: seo.noindex,
+      alternates,
       ...cmsPageSeo(seo),
     },
-    await siteSeo(),
+    await siteSeo(locale),
   );
 }
 

@@ -8,6 +8,8 @@ import {
   canonicalUrl,
   jsonLdText,
   organizationJsonLd,
+  seoLocalePath,
+  SEO_OG_LOCALES,
   productJsonLd,
   seoDeployEnv,
   seoPolicy,
@@ -98,19 +100,44 @@ describe("DP-207 resolvable addresses and sitemap contract", () => {
   it("parses a sitemap and refuses relative or unknown entries", () => {
     expect(
       PublicSitemapResponseSchema.safeParse({
-        entries: [{ path: "/", kind: "home", lastModified: "2026-11-18T10:00:00.000Z" }],
+        entries: [
+          {
+            path: "/",
+            locale: "en",
+            kind: "home",
+            lastModified: "2026-11-18T10:00:00.000Z",
+            alternates: [{ locale: "nl", path: "/" }],
+          },
+        ],
       }).success,
     ).toBe(true);
+    const e = { locale: "en", lastModified: null, alternates: [] };
+    expect(
+      PublicSitemapResponseSchema.safeParse({ entries: [{ ...e, path: "x", kind: "home" }] })
+        .success,
+    ).toBe(false);
+    expect(
+      PublicSitemapResponseSchema.safeParse({ entries: [{ ...e, path: "/x", kind: "draft" }] })
+        .success,
+    ).toBe(false);
+    // ML-5: every entry names its language; a relative alternate is refused.
     expect(
       PublicSitemapResponseSchema.safeParse({
-        entries: [{ path: "x", kind: "home", lastModified: null }],
+        entries: [{ path: "/x", kind: "page", lastModified: null, alternates: [] }],
       }).success,
     ).toBe(false);
     expect(
       PublicSitemapResponseSchema.safeParse({
-        entries: [{ path: "/x", kind: "draft", lastModified: null }],
+        entries: [{ ...e, path: "/x", kind: "page", alternates: [{ locale: "nl", path: "y" }] }],
       }).success,
     ).toBe(false);
+  });
+
+  it("ML-5: public addresses carry the language prefix, the default language included", () => {
+    expect(seoLocalePath("en", "/")).toBe("/en");
+    expect(seoLocalePath("en", "/about-us")).toBe("/en/about-us");
+    expect(seoLocalePath("nl", "/news/x")).toBe("/nl/news/x");
+    expect(SEO_OG_LOCALES).toEqual({ en: "en_GB", nl: "nl_NL" });
   });
 });
 
@@ -127,6 +154,15 @@ describe("DP-207 structured data", () => {
       url: "https://dreampetroleumbv.com/",
       logo: "https://dreampetroleumbv.com/media/logo.svg",
     });
+    // ML-5: the home of the page's language, not the bare "/" (a 301 to /en).
+    expect(
+      organizationJsonLd({
+        name: "Dream Petroleum B.V.",
+        origin,
+        homePath: "/nl",
+        logoPath: "/media/logo.svg",
+      }).url,
+    ).toBe("https://dreampetroleumbv.com/nl");
   });
 
   it("describes a product from its snapshot, without invented offers, ratings or brand", () => {

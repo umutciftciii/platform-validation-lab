@@ -27,8 +27,8 @@ export async function generateMetadata({ params }: PageProps<"/[locale]">): Prom
   const locale = await localeOf(params);
   const res = await published(locale);
   if (!res.ok) return noindexMetadata("Dream Petroleum BV");
-  const { seo } = res.data;
-  const site = await siteSeo();
+  const { seo, alternates } = res.data;
+  const site = await siteSeo(locale);
   // DP-207: indexable only under the site policy (production + DP_SEO_INDEXING=on), lib/seo.ts.
   // DP-209: without an SEO title of its own the home page uses the site's default title.
   return pageMetadata(
@@ -38,6 +38,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]">): Prom
       title: seo.title ?? site.defaultTitle,
       description: seo.description,
       noindex: seo.noindex,
+      alternates,
       ...cmsPageSeo(seo),
     },
     site,
@@ -54,11 +55,12 @@ export default function Home({ params }: PageProps<"/[locale]">) {
 
 async function PublishedHome({ params }: { params: PageProps<"/[locale]">["params"] }) {
   await connection();
-  const res = await published(await localeOf(params));
+  const locale = await localeOf(params);
+  const res = await published(locale);
   if (!res.ok) return <HomeUnavailable reason={res.reason} />;
   return (
     <>
-      <OrganizationJsonLd />
+      <OrganizationJsonLd locale={locale} />
       <HomePage view={res.data} />
     </>
   );

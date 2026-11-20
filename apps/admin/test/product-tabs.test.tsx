@@ -1354,7 +1354,8 @@ describe("DP-209 product SEO tab", () => {
     expect(seo).toContain("Link preview");
     // No SEO title: the product name and the site name (built-in default).
     expect(seo).toContain("ICCSYN 6 Synthetic | Dream Petroleum BV");
-    expect(seo).toContain("http://localhost:3110/products/iccsyn-6");
+    // ML-5: the public address with the /en prefix, as the site renders it.
+    expect(seo).toContain("http://localhost:3110/en/products/iccsyn-6");
     expect(seo).toContain("Cover image (default)");
   });
 
@@ -1370,7 +1371,7 @@ describe("DP-209 product SEO tab", () => {
     };
     const seo = panel(await render({ site: "bv", tab: "seo" }), "seo");
     expect(seo).toContain("Hidden from search engines (noindex): this result is not shown.");
-    expect(seo).toContain("http://localhost:3110/products/iccsyn-6-plus");
+    expect(seo).toContain("http://localhost:3110/en/products/iccsyn-6-plus");
     expect(seo).toContain("this page stays out of the sitemap");
     expect(seo).toContain("SEO title: 75 characters: about 60 are shown");
     expect(seo).not.toContain('aria-invalid="true"');

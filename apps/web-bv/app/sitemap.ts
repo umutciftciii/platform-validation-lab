@@ -2,8 +2,9 @@ import type { MetadataRoute } from "next";
 import { connection } from "next/server";
 import { canonicalUrl } from "@dream/contracts";
 
-import { DEFAULT_LOCALE, localePath } from "@/lib/locale-routing";
+import { publicLocales } from "@/lib/public-locales";
 import { sitemapEntries, sitePolicy } from "@/lib/seo";
+import { sitemapUrls } from "@/lib/sitemap-entries";
 
 /**
  * DP-207: sitemap.xml of the live, indexable addresses (`GET /api/v1/public/seo/sitemap`):
@@ -11,18 +12,27 @@ import { sitemapEntries, sitePolicy } from "@/lib/seo";
  * Drafts, unpublished, hidden and archived content never appear. Without a public origin the
  * sitemap is empty rather than pointing at a wrong host; while the API cannot answer it is an
  * error (5xx: crawlers retry later instead of reading an empty site).
- * ML-3: the API lists the default language (English) at its stored addresses; each one is listed
- * at its public `/en/...` address. Dutch is never listed here (not public; per-language sitemap
- * and hreflang are ML-5).
+ * ML-5 (DP-019): every public language at its own prefixed address (`/en/...`, `/nl/...` once
+ * public), each entry with its `xhtml:link` alternates (`en`, `nl`, `x-default`) when it has a
+ * listed counterpart; nothing of a language that is not public (lib/sitemap-entries.ts).
  */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   await connection();
   const { origin } = sitePolicy();
   if (!origin) return [];
-  const entries = await sitemapEntries();
+  const [entries, locales] = await Promise.all([sitemapEntries(), publicLocales()]);
   if (!entries) throw new Error("sitemap: the platform API did not answer");
-  return entries.map((e) => ({
-    url: canonicalUrl(origin, localePath(DEFAULT_LOCALE, e.path)),
-    ...(e.lastModified ? { lastModified: e.lastModified } : {}),
+  return sitemapUrls(entries, locales).map((u) => ({
+    url: canonicalUrl(origin, u.href),
+    ...(u.lastModified ? { lastModified: u.lastModified } : {}),
+    ...(u.languages
+      ? {
+          alternates: {
+            languages: Object.fromEntries(
+              Object.entries(u.languages).map(([l, href]) => [l, canonicalUrl(origin, href)]),
+            ),
+          },
+        }
+      : {}),
   }));
 }

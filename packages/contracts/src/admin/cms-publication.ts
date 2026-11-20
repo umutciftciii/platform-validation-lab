@@ -111,6 +111,12 @@ export type CmsPublicPage = z.infer<typeof CmsPublicPageSchema>;
 export const CmsPublicAlternateSchema = z.strictObject({
   locale: z.string().min(2).max(35),
   path: z.string().startsWith("/"),
+  /**
+   * ML-5 (DP-019): the counterpart may be named in hreflang — published without noindex and its
+   * own canonical address (as listed in the sitemap). false: the language switcher still goes
+   * there, but no hreflang points at it. Absent: treated as false.
+   */
+  indexable: z.boolean().optional(),
 });
 export type CmsPublicAlternate = z.infer<typeof CmsPublicAlternateSchema>;
 
@@ -153,5 +159,7 @@ export const CmsPublicNewsSchema = z.object({
   page: CmsPublicPageSchema.nullable(),
   articles: z.array(CmsPublicArticleSchema),
   fragments: z.record(z.string(), CmsPublicPageSchema.nullable()),
+  /** ML-5: published counterparts of the list's heading page in the other public languages. */
+  alternates: z.array(CmsPublicAlternateSchema).max(20).optional(),
 });
 export type CmsPublicNews = z.infer<typeof CmsPublicNewsSchema>;
