@@ -4,6 +4,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { LEAD_MESSAGE_MAX, LEAD_SUBJECT_MIN, LEAD_TEXT_OUTDATED } from "@dream/contracts";
 
+import { Rich } from "@/components/i18n/rich";
+import type { ContactFormUi } from "@/lib/i18n";
+import { interpolate, plural } from "@/lib/i18n/format";
+
 /**
  * DP-151: the contact form. Posts to this site's server (`/lead-form/contact`), which forwards it
  * to the platform API with the site's key; the message is stored on the sender's lead and read by
@@ -26,6 +30,9 @@ interface Props {
   countries: { code: string; name: string }[];
   notice: { version: string; text: string };
   privacyHref: string;
+  /** ML-6: the page's language (plural rules) and the form's words in it. */
+  locale: string;
+  ui: ContactFormUi;
 }
 
 type Status =
@@ -35,27 +42,36 @@ type Status =
   | { kind: "error"; message: string; fields: string[] }
   | { kind: "outdated" };
 
-const FIELD_LABEL: Record<string, string> = {
-  fullName: "Your name",
-  company: "Company",
-  email: "Your e-mail",
-  country: "Country",
-  phone: "Phone number",
-  subject: "Subject",
-  message: "Your message",
-};
-
-function messageFor(status: number, code: string, retryAfter: string | null): string {
-  if (status === 429) {
-    const minutes = Math.max(1, Math.ceil(Number(retryAfter ?? "60") / 60));
-    return `Too many messages. Please try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
-  }
-  if (status === 400 && code === "VALIDATION_FAILED") return "Please check the highlighted fields.";
-  if (status === 404) return "The contact form is not available right now. Please call or e-mail us.";
-  return "Something went wrong. Please try again in a moment, or call or e-mail us.";
+/** The form's field names as the visitor reads them (named in a validation message). */
+function fieldLabels(ui: ContactFormUi): Record<string, string> {
+  return {
+    fullName: ui.name,
+    company: ui.company,
+    email: ui.email,
+    country: ui.country,
+    phone: ui.phone,
+    subject: ui.subject,
+    message: ui.message,
+  };
 }
 
-export function ContactForm({ idPrefix, title, countries, notice, privacyHref }: Props) {
+function messageFor(
+  ui: ContactFormUi,
+  locale: string,
+  status: number,
+  code: string,
+  retryAfter: string | null,
+): string {
+  if (status === 429) {
+    const minutes = Math.max(1, Math.ceil(Number(retryAfter ?? "60") / 60));
+    return plural(locale, ui.tooMany, minutes);
+  }
+  if (status === 400 && code === "VALIDATION_FAILED") return ui.checkFields;
+  if (status === 404) return ui.unavailable;
+  return ui.failed;
+}
+
+export function ContactForm({ idPrefix, title, countries, notice, privacyHref, locale, ui }: Props) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const id = (name: string) => `${idPrefix}-${name}`;
   // The thank-you panel is much shorter than the form: bring it into view and move focus to it,
@@ -98,21 +114,21 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
       }
       setStatus({
         kind: "error",
-        message: messageFor(res.status, body?.code ?? "", res.headers.get("retry-after")),
+        message: messageFor(ui, locale, res.status, body?.code ?? "", res.headers.get("retry-after")),
         // The honeypot is never named to a person: it is not a field they can see.
         fields: (body?.fields ?? []).filter((f) => f !== "website"),
       });
     } catch {
-      setStatus({ kind: "error", message: "No connection. Please try again.", fields: [] });
+      setStatus({ kind: "error", message: ui.noConnection, fields: [] });
     }
   }
 
   if (status.kind === "done") {
     return (
       <div className="tp-contact-form" aria-live="polite" ref={doneRef} tabIndex={-1}>
-        <h3 className="tp-contact-form-title">Thank you</h3>
+        <h3 className="tp-contact-form-title">{ui.thankYou}</h3>
         <p className="tp-contact-form-note" role="status">
-          We have received your message and will reply by e-mail.
+          {ui.received}
         </p>
       </div>
     );
@@ -133,7 +149,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           <legend className="sr-only">{title}</legend>
           <label className="tp-contact-field">
             <span className="tp-contact-field-label">
-              Your name<span aria-hidden="true"> *</span>
+              {ui.name}<span aria-hidden="true"> *</span>
             </span>
             <input
               name="fullName"
@@ -147,7 +163,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           </label>
           <label className="tp-contact-field">
             <span className="tp-contact-field-label">
-              Your e-mail<span aria-hidden="true"> *</span>
+              {ui.email}<span aria-hidden="true"> *</span>
             </span>
             <input
               name="email"
@@ -162,7 +178,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           </label>
           <label className="tp-contact-field">
             <span className="tp-contact-field-label">
-              Company<span aria-hidden="true"> *</span>
+              {ui.company}<span aria-hidden="true"> *</span>
             </span>
             <input
               name="company"
@@ -175,7 +191,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           </label>
           <label className="tp-contact-field">
             <span className="tp-contact-field-label">
-              Country<span aria-hidden="true"> *</span>
+              {ui.country}<span aria-hidden="true"> *</span>
             </span>
             <select
               name="country"
@@ -185,7 +201,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
               aria-invalid={invalid("country")}
             >
               <option value="" disabled>
-                Select…
+                {ui.select}
               </option>
               {countries.map((c) => (
                 <option key={c.code} value={c.code}>
@@ -195,7 +211,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
             </select>
           </label>
           <label className="tp-contact-field">
-            <span className="tp-contact-field-label">Phone number</span>
+            <span className="tp-contact-field-label">{ui.phone}</span>
             <input
               name="phone"
               type="tel"
@@ -207,7 +223,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           </label>
           <label className="tp-contact-field">
             <span className="tp-contact-field-label">
-              Subject<span aria-hidden="true"> *</span>
+              {ui.subject}<span aria-hidden="true"> *</span>
             </span>
             <input
               name="subject"
@@ -221,7 +237,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           </label>
           <label className="tp-contact-field tp-contact-field-wide">
             <span className="tp-contact-field-label">
-              Your message<span aria-hidden="true"> *</span>
+              {ui.message}<span aria-hidden="true"> *</span>
             </span>
             <textarea
               name="message"
@@ -237,18 +253,23 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
           {/* Honeypot: hidden from people and assistive technology; bots fill it. */}
           <div aria-hidden="true" className="tp-contact-honeypot">
             <label>
-              Website
+              {ui.website}
               <input name="website" tabIndex={-1} autoComplete="off" defaultValue="" />
             </label>
           </div>
 
           {status.kind === "outdated" ? (
             <p role="alert" className="tp-contact-alert tp-contact-field-wide">
-              Our privacy information was updated after you opened this page.{" "}
-              <button type="button" onClick={() => window.location.reload()} className="tp-contact-inline-link">
-                Reload the page
-              </button>{" "}
-              to read the current version, then send your message again.
+              <Rich
+                text={ui.outdated}
+                values={{
+                  reload: (
+                    <button type="button" onClick={() => window.location.reload()} className="tp-contact-inline-link">
+                      {ui.reload}
+                    </button>
+                  ),
+                }}
+              />
             </p>
           ) : null}
 
@@ -257,7 +278,7 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
               {status.message}
               {status.fields.length ? (
                 <span className="tp-contact-alert-fields">
-                  {status.fields.map((f) => FIELD_LABEL[f] ?? f).join(", ")}
+                  {status.fields.map((f) => fieldLabels(ui)[f] ?? f).join(", ")}
                 </span>
               ) : null}
             </p>
@@ -265,19 +286,19 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref }:
 
           <section className="tp-contact-notice tp-contact-field-wide" aria-labelledby={id("notice")}>
             <h4 id={id("notice")} className="tp-contact-notice-title">
-              How we use your details
+              {ui.noticeTitle}
             </h4>
             <p>{notice.text}</p>
             <p>
               <a href={privacyHref} target="_blank" rel="noopener" className="tp-contact-inline-link">
-                Read the Privacy Policy
+                {ui.readPrivacyPolicy}
               </a>{" "}
-              <span className="tp-contact-version">· notice version {notice.version}</span>
+              <span className="tp-contact-version">{interpolate(ui.noticeVersion, { version: notice.version })}</span>
             </p>
           </section>
 
           <button type="submit" className="tp-button tp-contact-submit">
-            {sending ? "Sending…" : "Send message"}
+            {sending ? ui.sending : ui.send}
           </button>
         </fieldset>
       </form>

@@ -1,3 +1,5 @@
+import { dictionary } from "@/lib/i18n";
+
 /**
  * Shapes and UI strings of the Services showcase. The content comes from the CMS page `bv.home`
  * (CMS S2, ADR-020); sources and rules are in docs/cms/bv-content-sources.md. The images are
@@ -28,14 +30,12 @@ export type ServiceItem = {
   image: ServiceImage;
 };
 
-export const SERVICES_UI = {
-  listLabel: "Services",
-  controlsLabel: "Scroll services",
-  previous: "Previous services",
-  next: "Next services",
-} as const;
+/** ML-6: the list and scroll controls in the page's language (lib/i18n). */
+export function servicesUi(locale: string) {
+  return { ...dictionary(locale).home.services };
+}
 
-export type ServicesCopy = typeof SERVICES_UI & {
+export type ServicesCopy = ReturnType<typeof servicesUi> & {
   eyebrow: string;
   title: string;
   intro: string;

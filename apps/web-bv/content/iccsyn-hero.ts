@@ -19,6 +19,8 @@ export type IccsynHeroCopy = {
   supply: string;
   legal: string;
   mediaAlt: string;
+  /** ML-6: the skip link over the animation (site UI dictionary, not CMS content). */
+  skip: string;
 };
 
 export type IccsynHeroContent = { copy: IccsynHeroCopy; applications: IccsynApplication[] };

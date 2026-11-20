@@ -51,7 +51,8 @@ export default function NewsPage({ params }: PageProps<"/[locale]/news">) {
 
 async function News({ params }: { params: PageProps<"/[locale]/news">["params"] }) {
   await connection();
-  const res = await news(await localeOf(params));
-  if (!res.ok) return <HomeUnavailable reason="unavailable" />;
+  const locale = await localeOf(params);
+  const res = await news(locale);
+  if (!res.ok) return <HomeUnavailable reason="unavailable" locale={locale} />;
   return <NewsList view={res.data} />;
 }

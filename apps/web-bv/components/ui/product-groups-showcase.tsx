@@ -16,6 +16,7 @@ import {
   type ProductGroup,
   type ProductGroupsCopy,
 } from "@/content/product-groups";
+import { interpolate } from "@/lib/i18n/format";
 
 const MAX_FRAME_MS = 100;
 const MEDIA_SIZES = "(max-width: 899px) 100vw, min(56vw, 880px)";
@@ -270,7 +271,7 @@ export default function ProductGroupsShowcase({
             className="pg-slide"
             data-active={index === active}
             aria-roledescription={COPY.slideRole}
-            aria-label={`${index + 1} of ${COUNT}`}
+            aria-label={interpolate(COPY.slideOf, { index: index + 1, count: COUNT })}
           >
             <p className="pg-eyebrow">{group.eyebrow}</p>
             <h3 className="pg-title">
