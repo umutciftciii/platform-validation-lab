@@ -5,9 +5,10 @@
  *    short-lived signed link (product_proposal:review on the site, audited).
  *  - Public (the BV proxy key; GET only): /api/v1/public/catalog-preview/:token/... answers only
  *    for a valid link whose issuing session is still live with the review permission
- *    (preview.service.ts). Never cached, never indexed; no documents, forms or writes.
+ *    (preview.service.ts). Never cached, never indexed; no documents, forms or writes. ML-8b:
+ *    `?locale=` names an enabled language (default: the site's default language).
  */
-import { Controller, Get, Header, HttpCode, Inject, Param, Post, Res } from "@nestjs/common";
+import { Controller, Get, Header, HttpCode, Inject, Param, Post, Query, Res } from "@nestjs/common";
 import type { ServerResponse } from "node:http";
 import type {
   CatalogPreviewLinkResponse,
@@ -44,8 +45,9 @@ export class PublicCatalogPreviewController {
   list(
     @Ctx() ctx: RequestContext,
     @Param("token") token: string,
+    @Query() query: Record<string, unknown>,
   ): Promise<CatalogPreviewListResponse> {
-    return this.preview.list(ctx, token);
+    return this.preview.list(ctx, token, query);
   }
 
   @Get(":token/products/:slug")
@@ -55,8 +57,9 @@ export class PublicCatalogPreviewController {
     @Ctx() ctx: RequestContext,
     @Param("token") token: string,
     @Param("slug") slug: string,
+    @Query() query: Record<string, unknown>,
   ): Promise<CatalogPreviewProductResponse> {
-    return this.preview.product(ctx, token, slug);
+    return this.preview.product(ctx, token, slug, query);
   }
 
   /** WebP bytes of a public image variant of a listed product; never cached. */

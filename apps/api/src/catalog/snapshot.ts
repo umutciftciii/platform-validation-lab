@@ -8,6 +8,11 @@
  * description). Nothing is copied from another language: the product name is the only text
  * shared by all languages (names are codes or trade names, ADR-028 §1.2), everything else of a
  * language comes from that language's rows or stays null / out of the map.
+ *
+ * ML-8b: `only` limits the other languages written from their current rows to the ones the
+ * publisher chose; `carry` keeps a language of the live snapshot exactly as published (its
+ * specification names and alt texts reduced to the specifications and images still shown), so a
+ * publication in one language never publishes another language's draft.
  */
 import {
   PublishedSnapshotV2Schema,
@@ -77,6 +82,10 @@ export interface SnapshotInput {
   /** The public images in display order. */
   images: readonly { id: string; isCover: boolean; width: number; height: number }[];
   imageTexts: readonly { imageId: string; locale: string; altText: string | null }[];
+  /** ML-8b: the other languages to write from their rows (omitted: every one with own text). */
+  only?: readonly string[];
+  /** ML-8b: texts of the live snapshot kept for languages not written (enabled ones only). */
+  carry?: Readonly<Record<string, SnapshotLocaleTexts>>;
 }
 
 const hasOwnText = (t: ListingTextRow | undefined) =>
@@ -84,10 +93,11 @@ const hasOwnText = (t: ListingTextRow | undefined) =>
 
 /** The languages a publication writes (default first, then the others in tag order). */
 export function snapshotLocalesOf(
-  input: Pick<SnapshotInput, "defaultLocale" | "locales" | "listingTexts">,
+  input: Pick<SnapshotInput, "defaultLocale" | "locales" | "listingTexts" | "only">,
 ): string[] {
   const others = input.locales
     .filter((l) => l !== input.defaultLocale)
+    .filter((l) => !input.only || input.only.includes(l))
     .filter((l) => hasOwnText(input.listingTexts.find((t) => t.locale === l)))
     .sort();
   return [input.defaultLocale, ...others];
@@ -150,6 +160,20 @@ export function buildSnapshotV2(input: SnapshotInput): PublishedSnapshotV2 {
         ogTitle: t?.seoOgTitle ?? null,
         ogDescription: t?.seoOgDescription ?? null,
       },
+    };
+  }
+  // ML-8b: languages not written keep their live texts (only enabled ones; never the default).
+  const keys = new Set(specs.map((s) => s.key));
+  for (const [locale, t] of Object.entries(input.carry ?? {})) {
+    if (locale === def || Object.hasOwn(locales, locale) || !input.locales.includes(locale)) {
+      continue;
+    }
+    locales[locale] = {
+      ...t,
+      specNames: Object.fromEntries(Object.entries(t.specNames).filter(([k]) => keys.has(k))),
+      imageAlts: Object.fromEntries(
+        Object.entries(t.imageAlts).filter(([id]) => input.images.some((i) => i.id === id)),
+      ),
     };
   }
   const ogImageId = input.listing.seoOgImageId;

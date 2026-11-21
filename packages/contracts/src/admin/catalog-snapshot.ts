@@ -171,6 +171,34 @@ export function snapshotLocales(s: StoredSnapshot): string[] {
   ];
 }
 
+/**
+ * ML-8b: the raw texts of one language of a stored snapshot (v2: its `locales` entry, even when
+ * incomplete; v1: its English texts in the same shape), or null when it has none in `locale`.
+ * The console compares a translation with it ("Published"); readers use `localizeSnapshot`.
+ */
+export function snapshotLocaleTexts(s: StoredSnapshot, locale: string): SnapshotLocaleTexts | null {
+  if (s.schemaVersion === 2) return s.locales[locale] ?? null;
+  if (locale !== SNAPSHOT_V1_LOCALE) return null;
+  const specNames: Record<string, string> = {};
+  for (const x of s.specs) specNames[x.key] = x.name;
+  const imageAlts: Record<string, string> = {};
+  for (const i of s.images) if (i.altText) imageAlts[i.id] = i.altText;
+  return {
+    name: s.name,
+    summary: s.summary,
+    description: s.description,
+    categoryName: s.category.name,
+    specNames,
+    imageAlts,
+    seo: {
+      title: s.seo?.title ?? null,
+      description: s.seo?.description ?? null,
+      ogTitle: s.seo?.ogTitle ?? null,
+      ogDescription: s.seo?.ogDescription ?? null,
+    },
+  };
+}
+
 /** The slug of a stored snapshot (language-neutral); null when the JSON is not a snapshot. */
 export function storedSnapshotSlug(raw: unknown): string | null {
   return parseStoredSnapshot(raw)?.slug ?? null;

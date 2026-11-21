@@ -21,12 +21,23 @@
  *
  * Every transition names the version it was based on; each writes its history event and audit
  * event in the same transaction.
+ *
+ * ML-8b (ADR-028 D8, DP-257): the publication writes the default language and the languages the
+ * publisher names (`locales`, complete ones only, with a confirmed manual claim check where no
+ * reviewed word list exists); every other language of the live snapshot is kept as published.
+ * The workflow view lists the site's languages with their state (translation-state.ts).
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ApproveRequestSchema,
   ProposalReviewDataSchema,
   checkPublication,
+  claimScanOf,
+  findSensitiveClaims,
+  parseStoredSnapshot,
+  sortSiteLocales,
+  type SiteLanguagePublication,
+  type SiteLocale,
   PublishRequestSchema,
   RequestChangesRequestSchema,
   SubmitReviewRequestSchema,
@@ -63,6 +74,7 @@ import {
   LISTING_TEXT_SELECT,
   loadTextRows,
 } from "./snapshot.js";
+import { loadProductTextRows, localeView } from "./translation-state.js";
 
 const MASTER = "product_master:edit";
 const READ = "product:read";
@@ -220,6 +232,40 @@ async function loadProposals(
   );
 }
 
+/**
+ * ML-8b: the enabled languages of a site for the publication view (default first): live or not,
+ * the translation state, what blocks the language and the sensitive wording in its next text.
+ */
+async function siteLanguages(
+  db: Db,
+  productId: string,
+  siteId: string,
+  all: readonly SiteLocale[],
+): Promise<SiteLanguagePublication[]> {
+  const enabled = sortSiteLocales(all.filter((l) => l.enabled));
+  const rows = await loadProductTextRows(db, productId, siteId, [...all]);
+  if (!rows) return [];
+  return enabled.map((l) => {
+    const v = localeView(rows, l.locale);
+    const own = rows.listing?.texts.find((t) => t.locale === l.locale);
+    const src = v.listing?.source;
+    const claims = l.isDefault
+      ? findSensitiveClaims(src?.title, src?.summary, src?.description)
+      : findSensitiveClaims(own?.title, own?.summary, own?.description);
+    return {
+      locale: l.locale,
+      isDefault: l.isDefault,
+      public: l.public,
+      live: v.live,
+      hasText: v.hasText,
+      state: v.state,
+      requiredMissing: v.requiredMissing.slice(0, 600),
+      claims,
+      claimScan: claimScanOf(l.locale),
+    };
+  });
+}
+
 @Injectable()
 export class WorkflowService {
   constructor(@Inject(StaffAccessService) private readonly access: StaffAccessService) {}
@@ -238,8 +284,9 @@ export class WorkflowService {
     });
     if (!product) throw new ApiError("NOT_FOUND");
     // ML-8a: the default language of each readable site (texts and proposals are read in it).
+    const siteLocales = await siteLocalesOf(db, readable);
     const defaults = new Map(
-      [...(await siteLocalesOf(db, readable))].map(([siteId, list]) => [
+      [...siteLocales].map(([siteId, list]) => [
         siteId,
         list.find((l) => l.isDefault)?.locale ?? "",
       ]),
@@ -274,6 +321,14 @@ export class WorkflowService {
       if (readable.includes(s.id) && keepsOldAddress(a.sites, s.id)) {
         redirects.set(s.id, await redirectsTo(db, s.id, "PRODUCT", id));
       }
+    }
+    // ML-8b: the languages of each readable site that has a listing (one small read per site).
+    const languages = new Map<string, SiteLanguagePublication[]>();
+    for (const l of listings) {
+      languages.set(
+        l.siteId,
+        await siteLanguages(db, id, l.siteId, siteLocales.get(l.siteId) ?? []),
+      );
     }
     const approvesPlatform = a.allows(APPROVE, PLATFORM);
     const block = reviewBlock(a, product);
@@ -344,6 +399,7 @@ export class WorkflowService {
             canShowListing,
             proposal,
           }),
+          languages: languages.get(s.id) ?? [],
         };
       });
     return {
@@ -647,10 +703,14 @@ export class WorkflowService {
     const a = await this.access.begin(ctx);
     const id = uuidOr404(rawId);
     const siteId = await WorkflowService.requireSite(a, rawSiteId, id);
-    const { version, listingVersion, approvalMode, makeVisible } = parseBody(
-      PublishRequestSchema,
-      body,
-    );
+    const {
+      version,
+      listingVersion,
+      approvalMode,
+      makeVisible,
+      locales: chosen,
+      manualReview,
+    } = parseBody(PublishRequestSchema, body);
     const direct = approvalMode === "DIRECT";
     if (direct) {
       // DP-193: publishing without a review needs the approver's right too (audited when
@@ -665,9 +725,20 @@ export class WorkflowService {
     // ML-8a (ADR-028 D8): one publication writes every enabled language whose listing text is
     // there (the default language always), in this one transaction. Visibility of a language is
     // separate (SiteLocale.public); a language that is not enabled is never written.
-    const { defaultLocale, locales } = catalogLocales(
-      (await siteLocalesOf(db, [siteId])).get(siteId) ?? [],
-    );
+    const allLocales = (await siteLocalesOf(db, [siteId])).get(siteId) ?? [];
+    const { defaultLocale, locales } = catalogLocales(allLocales);
+    // ML-8b: the publisher's languages are other enabled languages of the site.
+    for (const l of chosen) {
+      if (l === defaultLocale) {
+        throw new ApiError("VALIDATION_FAILED", [{ path: "locales", rule: "default_locale" }]);
+      }
+      if (!locales.includes(l)) {
+        throw new ApiError("CONFLICT_STATE", [{ path: "locale", rule: "not_enabled" }]);
+      }
+    }
+    if (manualReview.some((l) => !chosen.includes(l))) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "manualReview", rule: "not_chosen" }]);
+    }
     try {
       await db.$transaction(async (tx) => {
         // DP-193 / DP-198: every publication locks the master first (a no-op UPDATE that keeps
@@ -716,6 +787,29 @@ export class WorkflowService {
             readiness.blocking.slice(0, 50).map((i) => ({ path: i.target, rule: i.code })),
           );
         }
+        // ML-8b: a chosen language must be complete, and checked by hand where no reviewed claim
+        // word list exists (DP-257).
+        if (chosen.length) {
+          const rows = await loadProductTextRows(tx, id, siteId, allLocales);
+          const missing = chosen.flatMap((l) =>
+            rows ? localeView(rows, l).requiredMissing.map((u) => `${l}:${u}`) : [`${l}:listing`],
+          );
+          if (missing.length) {
+            throw new ApiError(
+              "CONFLICT_STATE",
+              missing.slice(0, 50).map((path) => ({ path, rule: "translation_missing" })),
+            );
+          }
+          const unchecked = chosen.filter(
+            (l) => claimScanOf(l) === "MANUAL" && !manualReview.includes(l),
+          );
+          if (unchecked.length) {
+            throw new ApiError(
+              "CONFLICT_STATE",
+              unchecked.map((path) => ({ path, rule: "manual_review_required" })),
+            );
+          }
+        }
         const existing = await tx.productPublication.findUnique({
           where: { productId_siteId: { productId: id, siteId } },
           select: {
@@ -754,9 +848,15 @@ export class WorkflowService {
           definitionIds: [...new Set(specs.map((x) => x.d.id))],
           imageIds: images.map((i) => i.id),
         });
+        // ML-8b: languages not chosen keep the texts of the live snapshot (v2), never a draft.
+        const live =
+          existing?.status === "PUBLISHED" ? parseStoredSnapshot(existing.snapshot) : null;
+        const carry = live?.schemaVersion === 2 ? live.locales : {};
         const snapshot = buildSnapshotV2({
           defaultLocale,
           locales,
+          only: chosen,
+          carry,
           product,
           listing,
           listingTexts: listing.texts,
@@ -861,6 +961,9 @@ export class WorkflowService {
           warnings: readiness.warnings.length,
           // ML-8a: the languages the snapshot carries (names only).
           locales: Object.keys(snapshot.locales),
+          // ML-8b: written from current texts (default + chosen) and confirmed manual checks.
+          writtenLocales: [defaultLocale, ...chosen],
+          ...(manualReview.length ? { manualReview } : {}),
         };
         // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
         if (keepsOldAddress(a.sites, siteId)) {

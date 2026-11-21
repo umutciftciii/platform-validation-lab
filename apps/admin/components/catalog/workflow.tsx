@@ -27,6 +27,8 @@ import { Icon, type IconKey } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, SITE_SHORT, SiteStatusPill, TEXTAREA } from "./parts";
 import { PreviewLinkButton } from "./preview-link-button";
+import { LanguageChoices } from "./language-publication";
+import { canPublishLanguages, languageOptions } from "../../lib/translations";
 import { AddressSummary } from "../seo/address-summary";
 import { useNotice } from "./notices";
 import { TabLink, useUnsavedChanges } from "./product-tabs";
@@ -495,12 +497,22 @@ function SiteCard({
   const busy = pending !== null;
   // DP-187: a typed reason survives a tab change.
   useUnsavedChanges(reason.trim().length > 0);
+  // ML-8b: the other languages this publication writes, and their confirmed manual checks.
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [checked, setChecked] = useState<string[]>([]);
+  const languagesReady = canPublishLanguages(
+    plan,
+    site,
+    languageOptions(site.languages),
+    chosen,
+    checked,
+  );
 
   async function publish() {
     if (!site.listing) return;
     // DP-198 (R-29): one request in both modes. The API shows a hidden listing (makeVisible)
     // and publishes in one transaction, so a refusal leaves the listing and the site unchanged.
-    await run(
+    const ok = await run(
       "publish",
       `${base}/publish`,
       {
@@ -508,9 +520,16 @@ function SiteCard({
         listingVersion: site.listing.version,
         approvalMode: site.publishMode,
         makeVisible: plan.showListing,
+        // ML-8b: chosen languages only; the others keep their live texts.
+        locales: chosen,
+        manualReview: checked.filter((l) => chosen.includes(l)),
       },
       live ? `Republished on ${name}.` : `Published on ${name}.`,
     );
+    if (ok) {
+      setChosen([]);
+      setChecked([]);
+    }
   }
   async function unpublish() {
     if (!pub) return;
@@ -664,6 +683,19 @@ function SiteCard({
         </details>
       ) : null}
 
+      {!notListed ? (
+        <LanguageChoices
+          languages={site.languages}
+          chosen={chosen}
+          checked={checked}
+          onChosen={setChosen}
+          onChecked={setChecked}
+          canPublish={site.canPublish}
+          productId={data.productId}
+          siteId={site.siteId}
+        />
+      ) : null}
+
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
 
       <div className="mt-auto flex flex-wrap items-start gap-2 pt-1">
@@ -674,7 +706,7 @@ function SiteCard({
           <>
             <button
               type="button"
-              disabled={busy || !plan.canPublish}
+              disabled={busy || !languagesReady}
               onClick={publish}
               className={buttonStyles.primary}
             >

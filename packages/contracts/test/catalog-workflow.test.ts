@@ -244,13 +244,23 @@ describe("DP-193 publish request", () => {
       listingVersion: 2,
       approvalMode: "APPROVED",
       makeVisible: false,
+      // ML-8b: no other language is written unless named.
+      locales: [],
+      manualReview: [],
     });
   });
 
   it("DP-198: accepts makeVisible in the APPROVED mode too", () => {
     expect(
       PublishRequestSchema.parse({ version: 3, listingVersion: 2, makeVisible: true }),
-    ).toEqual({ version: 3, listingVersion: 2, approvalMode: "APPROVED", makeVisible: true });
+    ).toEqual({
+      version: 3,
+      listingVersion: 2,
+      approvalMode: "APPROVED",
+      makeVisible: true,
+      locales: [],
+      manualReview: [],
+    });
   });
 
   it("accepts DIRECT with makeVisible and refuses unknown modes and fields", () => {
