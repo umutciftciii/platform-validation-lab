@@ -1,13 +1,21 @@
 import Link from "next/link";
+import { connection } from "next/server";
+import { Suspense } from "react";
 
-import { CatalogShell } from "@/components/products/catalog-shell";
+import { CatalogShell, siteChrome } from "@/components/products/catalog-shell";
 import { dictionary } from "@/lib/i18n";
-import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import { CATALOGUE_LOCALES } from "@/lib/proxy-routes";
+
+const SECONDARY =
+  "inline-flex items-center rounded-full border border-glass/20 px-5 py-2 text-sm text-glass transition-colors hover:border-amber hover:text-amber";
 
 /**
  * DP-207: the site's not-found page, in the site frame (published navigation and footer). Unknown
  * addresses answer it with HTTP 404 (proxy.ts checks content addresses before rendering).
- * ML-3: in the frame and links of the address's language.
+ * ML-3: in the frame and links of the address's language. ML-7: the labels in that language, and
+ * only links that exist in it — the catalogue where it is translated (`CATALOGUE_LOCALES`), the
+ * contact page where the language's published navigation links to one; English is unchanged.
  */
 export function NotFoundView({ locale }: { locale: RouteLocale }) {
   const href = (path: string) => localizeHref(locale, path);
@@ -32,24 +40,41 @@ export function NotFoundView({ locale }: { locale: RouteLocale }) {
               {ui.common.home}
             </Link>
           </li>
-          <li>
-            <Link
-              href={href("/products")}
-              className="inline-flex items-center rounded-full border border-glass/20 px-5 py-2 text-sm text-glass transition-colors hover:border-amber hover:text-amber"
-            >
-              {ui.common.products}
-            </Link>
-          </li>
-          <li>
-            <Link
-              href={href("/contact")}
-              className="inline-flex items-center rounded-full border border-glass/20 px-5 py-2 text-sm text-glass transition-colors hover:border-amber hover:text-amber"
-            >
-              {ui.common.contact}
-            </Link>
-          </li>
+          {CATALOGUE_LOCALES.includes(locale) ? (
+            <li>
+              <Link href={href("/products")} className={SECONDARY}>
+                {ui.common.products}
+              </Link>
+            </li>
+          ) : null}
+          {locale === DEFAULT_LOCALE ? (
+            <li>
+              <Link href={href("/contact")} className={SECONDARY}>
+                {ui.common.contact}
+              </Link>
+            </li>
+          ) : (
+            <Suspense fallback={null}>
+              <ContactLink locale={locale} />
+            </Suspense>
+          )}
         </ul>
       </section>
     </CatalogShell>
+  );
+}
+
+/** ML-7: the contact page of a language, as its published navigation links to it (else none). */
+async function ContactLink({ locale }: { locale: RouteLocale }) {
+  await connection();
+  const { nav } = await siteChrome("/404", locale);
+  const target = nav?.contact?.href;
+  if (!target || !target.startsWith("/")) return null;
+  return (
+    <li>
+      <Link href={target} className={SECONDARY}>
+        {dictionary(locale).common.contact}
+      </Link>
+    </li>
   );
 }

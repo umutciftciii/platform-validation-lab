@@ -15,6 +15,7 @@ import {
   type MouseEvent,
 } from "react";
 
+import LanguageSelector from "@/components/ui/language-selector";
 import type { SiteNavContent, SiteNavItem } from "@/content/site-nav";
 import { interpolate } from "@/lib/i18n/format";
 
@@ -360,28 +361,32 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
           </ul>
         </nav>
 
-        {NAV.contact ? (
-          <NavLink
-            pendingNote={NAV.pendingNote}
-            item={NAV.contact}
-            className="site-nav-contact"
-            onPending={showNotice}
-          />
-        ) : null}
+        {/* ML-7: the right of the bar — language selector, contact button (wide screens) and the
+            menu button (phones and tablets). */}
+        <div className="site-nav-end">
+          <Languages content={NAV} variant="dropdown" className="site-nav-languages" />
 
-        <Languages content={NAV} className="site-nav-languages" />
+          {NAV.contact ? (
+            <NavLink
+              pendingNote={NAV.pendingNote}
+              item={NAV.contact}
+              className="site-nav-contact"
+              onPending={showNotice}
+            />
+          ) : null}
 
-        <button
-          type="button"
-          className="site-nav-toggle"
-          aria-label={NAV.openMenu}
-          aria-haspopup="dialog"
-          aria-expanded={menuOpen}
-          aria-controls="site-menu"
-          onClick={openMenu}
-        >
-          <span aria-hidden className="site-nav-toggle-lines" />
-        </button>
+          <button
+            type="button"
+            className="site-nav-toggle"
+            aria-label={NAV.openMenu}
+            aria-haspopup="dialog"
+            aria-expanded={menuOpen}
+            aria-controls="site-menu"
+            onClick={openMenu}
+          >
+            <span aria-hidden className="site-nav-toggle-lines" />
+          </button>
+        </div>
 
         <p role="status" className="site-nav-notice">
           {notice && !menuOpen ? NAV.pendingNote : ""}
@@ -391,6 +396,15 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
       <noscript>
         <nav aria-label={NAV.mainLabel} className="site-nav-fallback">
           <ul>
+            {(NAV.languages ?? [])
+              .filter((l) => l.href && !l.current)
+              .map((l) => (
+                <li key={`lang-${l.locale}`}>
+                  <a href={l.href as string} hrefLang={l.locale} lang={l.locale} className="site-nav-link">
+                    {l.label}
+                  </a>
+                </li>
+              ))}
             {NAV.noScriptLinks.map((item) => (
               <li key={item.label}>
                 <a
@@ -455,7 +469,12 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
               onPending={showNotice}
             />
           ) : null}
-          <Languages content={NAV} className="site-menu-languages" onNavigate={closeMenu} />
+          <Languages
+            content={NAV}
+            variant="list"
+            className="site-menu-languages"
+            onNavigate={closeMenu}
+          />
         </div>
       </dialog>
     </header>
@@ -464,40 +483,29 @@ export default function SiteNav({ content: NAV }: { content: SiteNavContent }) {
 }
 
 /**
- * ML-3 (ADR-028 D3/D7): the language switcher. Only public languages are listed (the server
- * builds the list); each goes to the page's counterpart or that language's home. Plain links:
- * the choice is never stored and never used for an automatic redirect.
+ * ML-7 (ADR-028 D3/D7): the language selector of the bar and of the phone menu. The server builds
+ * the options (every language; one that is not public yet is shown as "coming soon", no link).
  */
 function Languages({
   content,
+  variant,
   className,
   onNavigate,
 }: {
   content: SiteNavContent;
+  variant: "dropdown" | "list";
   className: string;
   onNavigate?: () => void;
 }) {
   const languages = content.languages ?? [];
-  if (languages.length < 2) return null;
+  if (languages.length === 0) return null;
   return (
-    <nav aria-label={content.languageLabel} className={className}>
-      <ul>
-        {languages.map((l) => (
-          <li key={l.locale}>
-            <a
-              href={l.href}
-              hrefLang={l.locale}
-              lang={l.locale}
-              aria-current={l.current ? "true" : undefined}
-              className="site-nav-language"
-              onClick={onNavigate}
-            >
-              <span aria-hidden="true">{l.locale.toUpperCase()}</span>
-              <span className="sr-only">{l.label}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <LanguageSelector
+      options={languages}
+      ui={content}
+      variant={variant}
+      className={className}
+      onNavigate={onNavigate}
+    />
   );
 }

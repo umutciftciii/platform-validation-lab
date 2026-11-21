@@ -15,13 +15,14 @@
  * reference's translation group in the menu's language, at its address in that language
  * (`/nl/...` for Dutch; unchanged for the default language until ML-3). A page without a
  * published counterpart in the menu's language gives the "not ready yet" text (href null), never
- * the English page. Products and categories get the language prefix the same way; fixed paths
- * and URLs stay as written (ML-7 decides their per-language form).
+ * the English page. ML-7 completes this for every other language (`menuLinkStates`): a link
+ * without a live destination in the menu's language is left out of that menu.
  *
  * Plain functions over a site-scoped client, no Nest wiring.
  */
 import {
   cmsLocaleAddress,
+  MENU_HIDDEN,
   BV_FOOTER_KEY,
   BV_NAV_KEY,
   BvFooterMenuSchema,
@@ -35,6 +36,9 @@ import {
   menuReferences,
   navLinks,
   type CmsMenuKey,
+  type CmsMenuLinkWarning,
+  type CmsMenuLinkWarningRule,
+  type MenuResolution,
   type CmsMenuTargetsResponse,
   type CmsPublicPage,
   type MenuLinkRef,
@@ -43,7 +47,8 @@ import {
 import { ApiError } from "../iam/http/api-error.js";
 import type { PublicSite } from "../iam/public-site.js";
 import { liveRows as liveProductRows } from "../catalog/live.js";
-import type { CmsDb, LiveRow } from "./cms-content.js";
+import type { SiteScopedClient } from "../iam/site-scope.js";
+import { liveRows, type CmsDb, type LiveRow } from "./cms-content.js";
 
 const MAX_TARGETS = 2000;
 
@@ -123,64 +128,208 @@ export interface MenuLocale {
   defaultLocale: string;
 }
 
-/** The address of each referenced live item of the site, read once per request. */
-async function publicResolver(
-  site: PublicSite,
+/** How one target shows in a menu of a language, and why it is not a link (admin warning). */
+export interface MenuLinkState {
+  href: MenuResolution;
+  rule: CmsMenuLinkWarningRule | null;
+}
+
+/** Splits `/x?y#z` / `#z` into the stored path ("/" for an in-page anchor) and the rest. */
+function splitTarget(path: string): { base: string; tail: string } {
+  if (path.startsWith("#")) return { base: "/", tail: path };
+  const cut = path.search(/[?#]/);
+  return cut === -1
+    ? { base: path, tail: "" }
+    : { base: path.slice(0, cut) || "/", tail: path.slice(cut) };
+}
+
+/**
+ * The state of each target of `links` in the menu's language, read once per request.
+ *
+ * Default language (unchanged by ML-7): a page or product that is not live is text with the
+ * pending note (href null); site paths and URLs stay as written.
+ *
+ * Any other language (ML-7, ADR-028 D7): a link is shown only when its destination exists in the
+ * menu's language; otherwise it is left out (`MENU_HIDDEN`), never the English page and never a
+ * pending text:
+ *  - a page reference resolves through its translation group to the live page of the language;
+ *  - a site path is a live page of the language (`/over-ons`, `/nl/over-ons`, "/" for the home and
+ *    in-page anchors), or the live counterpart of the default language's page at that path
+ *    (`/about-us` → `/nl/over-ons`); application routes without content in the language
+ *    (`/products`, `/privacy`) are left out;
+ *  - products and categories are left out until the catalogue is translated (ML-8c);
+ *  - URLs stay as written; "not ready yet" stays a pending text.
+ */
+export async function menuLinkStates(
+  db: CmsDb,
+  siteId: string,
+  /** Live rows of the menu's language (other languages are ignored). */
   live: LiveRow[],
   links: MenuLinkRef[],
   { locale, defaultLocale }: MenuLocale,
-): Promise<(t: MenuTarget) => string | null> {
+): Promise<(t: MenuTarget) => MenuLinkState> {
   const refs = menuReferences(links);
   const at = (path: string) => cmsLocaleAddress(path, locale, defaultLocale);
-  // Live pages of the menu's language by translation group.
+  const isDefault = locale === defaultLocale;
+  // Live pages of the menu's language by translation group and by stored path.
   const groupPath = new Map<string, string>();
+  const livePaths = new Set<string>();
   for (const row of live) {
-    if (row.page.kind !== "FRAGMENT" && row.revision.path && row.page.locale === locale)
-      groupPath.set(row.page.translationGroupId, at(row.revision.path));
+    if (row.page.kind !== "FRAGMENT" && row.revision.path && row.page.locale === locale) {
+      groupPath.set(row.page.translationGroupId, row.revision.path);
+      livePaths.add(row.revision.path);
+    }
   }
+  const known = new Set<string>();
   const pagePath = new Map<string, string>();
   if (refs.pageIds.length) {
-    const pages = await site.db.cmsPage.findMany({
-      where: { siteId: site.siteId, id: { in: refs.pageIds } },
+    const pages = await db.cmsPage.findMany({
+      where: { siteId, id: { in: refs.pageIds } },
       select: { id: true, translationGroupId: true },
     });
     for (const p of pages) {
+      known.add(p.id);
       const path = groupPath.get(p.translationGroupId);
-      if (path) pagePath.set(p.id, path);
+      if (path) pagePath.set(p.id, at(path));
+    }
+  }
+  // ML-7: a site path of the default language whose page has a live counterpart here.
+  const counterpart = new Map<string, string>();
+  if (!isDefault) {
+    const wanted = new Set<string>();
+    for (const { link } of links) {
+      if (link.target.type !== "path") continue;
+      const { base } = splitTarget(link.target.path);
+      const inLocale =
+        base === `/${locale}`
+          ? "/"
+          : base.startsWith(`/${locale}/`)
+            ? base.slice(locale.length + 1)
+            : base;
+      if (!livePaths.has(inLocale)) wanted.add(base);
+    }
+    if (wanted.size) {
+      const pages = await db.cmsPage.findMany({
+        where: {
+          siteId,
+          locale: defaultLocale,
+          kind: { not: "FRAGMENT" },
+          path: { in: [...wanted] },
+        },
+        select: { path: true, translationGroupId: true },
+      });
+      for (const p of pages) {
+        const path = groupPath.get(p.translationGroupId);
+        if (p.path && path) counterpart.set(p.path, path);
+      }
     }
   }
   const productPath = new Map<string, string>();
-  if (refs.productIds.length) {
-    const rows = await liveProductRows(site, { productId: { in: refs.productIds } });
+  const categoryPath = new Map<string, string>();
+  if (isDefault && refs.productIds.length) {
+    const rows = await liveProductRows(
+      { db: db as SiteScopedClient, siteId },
+      {
+        productId: { in: refs.productIds },
+      },
+    );
     for (const r of rows) {
       const snap = PublishedSnapshotSchema.safeParse(r.snapshot);
       if (snap.success) productPath.set(r.productId, at(`/products/${snap.data.slug}`));
     }
   }
-  const categoryPath = new Map<string, string>();
   if (refs.categoryIds.length) {
-    const cats = await site.db.productCategory.findMany({
-      where: { siteId: site.siteId, id: { in: refs.categoryIds } },
+    const cats = await db.productCategory.findMany({
+      where: { siteId, id: { in: refs.categoryIds } },
       select: { id: true, slug: true },
     });
-    for (const c of cats) categoryPath.set(c.id, at(menuCategoryPath(c.slug)));
+    for (const c of cats) {
+      categoryPath.set(c.id, at(menuCategoryPath(c.slug)));
+    }
   }
+  const unknownOr = (id: string, ids: Set<string>, rule: CmsMenuLinkWarningRule): MenuLinkState =>
+    ids.has(id)
+      ? { href: isDefault ? null : MENU_HIDDEN, rule }
+      : { href: isDefault ? null : MENU_HIDDEN, rule: "unknown_target" };
   return (t) => {
     switch (t.type) {
-      case "page":
-        return pagePath.get(t.pageId) ?? null;
-      case "product":
-        return productPath.get(t.productId) ?? null;
-      case "category":
-        return categoryPath.get(t.categoryId) ?? null;
-      case "path":
-        return t.path;
+      case "page": {
+        const path = pagePath.get(t.pageId);
+        if (path) return { href: path, rule: null };
+        return unknownOr(t.pageId, known, isDefault ? "not_live" : "no_translation");
+      }
+      case "product": {
+        if (!isDefault) return { href: MENU_HIDDEN, rule: "not_in_language" };
+        const path = productPath.get(t.productId);
+        return path ? { href: path, rule: null } : { href: null, rule: "not_live" };
+      }
+      case "category": {
+        if (!isDefault) return { href: MENU_HIDDEN, rule: "not_in_language" };
+        const path = categoryPath.get(t.categoryId);
+        return path ? { href: path, rule: null } : { href: null, rule: "unknown_target" };
+      }
+      case "path": {
+        if (isDefault) return { href: t.path, rule: null };
+        const { base, tail } = splitTarget(t.path);
+        const inLocale =
+          base === `/${locale}`
+            ? "/"
+            : base.startsWith(`/${locale}/`)
+              ? base.slice(locale.length + 1)
+              : base;
+        // An in-page anchor of the home page stays relative ("#top"); the site places it.
+        if (livePaths.has(inLocale)) {
+          return { href: t.path.startsWith("#") ? t.path : `${at(inLocale)}${tail}`, rule: null };
+        }
+        const other = counterpart.get(base);
+        if (other) return { href: `${at(other)}${tail}`, rule: null };
+        return { href: MENU_HIDDEN, rule: "not_in_language" };
+      }
       case "url":
-        return t.url;
+        return { href: t.url, rule: null };
       case "none":
-        return null;
+        return { href: null, rule: null };
     }
   };
+}
+
+/** The visible links of a menu's content (a submenu link of a hidden item is not shown either). */
+function shownLinks(key: CmsMenuKey, content: unknown): MenuLinkRef[] | null {
+  const links = linksOf(key, content);
+  if (!links) return null;
+  const hiddenItems = new Set<string>();
+  return links.filter(({ path, link }) => {
+    if ((link as { visible?: boolean }).visible === false) {
+      hiddenItems.add(path);
+      return false;
+    }
+    const parent = /^(items\.\d+)\.children\./.exec(path)?.[1];
+    return !(parent && hiddenItems.has(parent));
+  });
+}
+
+/**
+ * ML-7 (DP-238): the links of a menu draft that the site will not show as links in the draft's
+ * language (admin, before publishing; never a refusal). Empty for other templates.
+ */
+export async function menuWarnings(
+  db: CmsDb,
+  siteId: string,
+  templateKey: string,
+  content: unknown,
+  locale: MenuLocale,
+): Promise<CmsMenuLinkWarning[]> {
+  if (!cmsIsMenu(templateKey)) return [];
+  const links = shownLinks(templateKey, content);
+  if (!links || links.length === 0) return [];
+  const live = (await liveRows(db, siteId)).filter((r) => r.page.locale === locale.locale);
+  const state = await menuLinkStates(db, siteId, live, links, locale);
+  const out: CmsMenuLinkWarning[] = [];
+  for (const { path, link } of links) {
+    const { rule } = state(link.target);
+    if (rule) out.push({ path, label: link.label.slice(0, 200), rule });
+  }
+  return out.slice(0, 200);
 }
 
 /**
@@ -203,16 +352,22 @@ export async function resolvePublicMenus(
         fragments[key] = null;
         continue;
       }
-      const resolve = await publicResolver(site, live, navLinks(parsed.data), locale);
-      fragments[key] = { ...page, content: menuPublicNav(parsed.data, resolve) };
+      const state = await menuLinkStates(site.db, site.siteId, live, navLinks(parsed.data), locale);
+      fragments[key] = { ...page, content: menuPublicNav(parsed.data, (t) => state(t).href) };
     } else {
       const parsed = BvFooterMenuSchema.safeParse(page.content);
       if (!parsed.success) {
         fragments[key] = null;
         continue;
       }
-      const resolve = await publicResolver(site, live, footerLinks(parsed.data), locale);
-      fragments[key] = { ...page, content: menuPublicFooter(parsed.data, resolve) };
+      const state = await menuLinkStates(
+        site.db,
+        site.siteId,
+        live,
+        footerLinks(parsed.data),
+        locale,
+      );
+      fragments[key] = { ...page, content: menuPublicFooter(parsed.data, (t) => state(t).href) };
     }
   }
 }

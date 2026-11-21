@@ -11,6 +11,9 @@ import {
   cmsLocaleAddress,
   cmsStructureWarnings,
   cmsTranslationDraft,
+  cmsTranslationHasProposal,
+  menuNlProposal,
+  MENU_NL,
   cmsTranslationOutdated,
   cmsTranslationSlugSchema,
   cmsTranslationState,
@@ -217,5 +220,101 @@ describe("requests", () => {
     expect(cmsTranslationSlugSchema(false).safeParse("over-ons").success).toBe(true);
     expect(cmsTranslationSlugSchema(false).safeParse("nl").success).toBe(false);
     expect(cmsTranslationSlugSchema(true).safeParse("nieuws-1").success).toBe(true);
+  });
+});
+
+describe("ML-7: menu translations", () => {
+  const FOOTER = {
+    headline: "Let’s Move Energy Forward.",
+    cta: {
+      label: "Get in Touch",
+      target: { type: "page", pageId: "0190f2a1-0000-7000-8000-000000000001" },
+    },
+    intro: "Not in the proposal.",
+    contact: {
+      title: "Contact Us",
+      company: "Dream Petroleum B.V.",
+      addressLines: [{ text: "Herengracht 420" }, { text: "1017 AMSTERDAM" }],
+      phone: {
+        label: "020 210 13 50",
+        href: "tel:+31202101350",
+        note: "Mon–Fri 08:30–18:30",
+        visible: true,
+      },
+      email: {
+        label: "info@dreampetroleumbv.com",
+        href: "mailto:info@dreampetroleumbv.com",
+        note: "We reply within 24h",
+        visible: true,
+      },
+    },
+    columns: [
+      {
+        title: "Company & Resources",
+        visible: true,
+        links: [{ label: "Contact Us", target: { type: "none" }, visible: true }],
+      },
+    ],
+    social: [
+      { network: "linkedin", label: "LinkedIn", url: "https://www.linkedin.com/x", visible: true },
+    ],
+    copyright: "© 2026 Dream Petroleum BV. All rights reserved.",
+    legal: [{ label: "Privacy Policy", target: { type: "path", path: "/privacy" }, visible: true }],
+    pendingNote: "page not available yet",
+  };
+
+  it("empties every text but keeps the shared contact details and network names", () => {
+    const d = cmsTranslationDraft(
+      { kind: "FRAGMENT", templateKey: "bv.site-footer" },
+      FOOTER,
+    ) as typeof FOOTER;
+    expect(d.headline).toBe("");
+    expect(d.intro).toBe("");
+    expect(d.copyright).toBe("");
+    expect(d.cta).toEqual({ ...FOOTER.cta, label: "" });
+    expect(d.contact.title).toBe("");
+    expect(d.contact.phone).toEqual({ ...FOOTER.contact.phone, note: "" });
+    expect(d.contact.email.label).toBe("info@dreampetroleumbv.com");
+    expect(d.contact.company).toBe("Dream Petroleum B.V.");
+    expect(d.contact.addressLines).toEqual(FOOTER.contact.addressLines);
+    expect(d.social).toEqual(FOOTER.social);
+    expect(d.legal[0]?.target).toEqual({ type: "path", path: "/privacy" });
+  });
+
+  it("fills the Dutch proposal where one exists (place-dependent first), else leaves it empty", () => {
+    expect(cmsTranslationHasProposal("bv.site-footer", "nl")).toBe(true);
+    expect(cmsTranslationHasProposal("bv.site-nav", "nl")).toBe(true);
+    expect(cmsTranslationHasProposal("bv.home", "nl")).toBe(false);
+    expect(cmsTranslationHasProposal("bv.site-nav", "de")).toBe(false);
+    const d = cmsTranslationDraft({ kind: "FRAGMENT", templateKey: "bv.site-footer" }, FOOTER, {
+      locale: "nl",
+    }) as typeof FOOTER;
+    expect(d.headline).toBe("Samen brengen we energie in beweging.");
+    expect(d.intro).toBe("");
+    expect(d.contact.title).toBe("Contactgegevens");
+    expect(d.columns[0]?.links[0]?.label).toBe("Neem contact op");
+    expect(d.columns[0]?.title).toBe("Bedrijf en informatie");
+    expect(d.contact.email.note).toBe("Wij reageren binnen 24 uur");
+    expect(d.legal[0]?.label).toBe("Privacybeleid");
+    expect(d.contact.company).toBe("Dream Petroleum B.V.");
+    // Other languages: no proposal, texts empty.
+    const de = cmsTranslationDraft({ kind: "FRAGMENT", templateKey: "bv.site-footer" }, FOOTER, {
+      locale: "de",
+    }) as typeof FOOTER;
+    expect(de.headline).toBe("");
+  });
+
+  it("keeps designations, codes and the brand in the proposal", () => {
+    expect(
+      menuNlProposal("bv.site-footer", "columns.0.links.0.label", "Base Oils (Group I, II & III)"),
+    ).toBe("Basisoliën (Group I, II & III)");
+    expect(menuNlProposal("bv.site-nav", "noScriptLinks.3.label", "CTL Technology")).toContain(
+      "CTL",
+    );
+    for (const [en, nl] of Object.entries(MENU_NL)) {
+      if (en.includes("Dream Petroleum BV")) expect(nl).toContain("Dream Petroleum BV");
+      expect(nl.trim()).not.toBe("");
+      expect(nl).not.toBe(en);
+    }
   });
 });

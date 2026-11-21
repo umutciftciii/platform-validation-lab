@@ -16,6 +16,7 @@ import {
   type CmsSeoValue,
   type CmsPublication,
   type CmsPublicPage,
+  type CmsMenuLinkWarning,
   type CmsStructureWarning,
 } from "@dream/contracts";
 import { ApiError } from "../iam/http/api-error.js";
@@ -331,6 +332,8 @@ export interface PageAddresses {
   keepsOldAddress: boolean;
   /** ML-2: structure differences from the group's source page (translations only). */
   structureWarnings?: CmsStructureWarning[];
+  /** ML-7: links of a menu draft that the site will not show as links in its language. */
+  menuWarnings?: CmsMenuLinkWarning[];
 }
 
 export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
@@ -344,6 +347,7 @@ export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
     createdAt: row.createdAt.toISOString(),
     createdBy: userRef(row.createdBy),
     structureWarnings: addresses.structureWarnings ?? [],
+    menuWarnings: addresses.menuWarnings ?? [],
   };
 }
 

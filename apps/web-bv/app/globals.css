@@ -324,7 +324,7 @@ body {
 
 /* Amber stays what it is in the hero: a thin glint of light, never a fill. */
 .site-nav-links,
-.site-nav-inner > .site-nav-contact {
+.site-nav-end > .site-nav-contact {
   display: none;
 }
 
@@ -601,6 +601,153 @@ body {
   outline-offset: 3px;
 }
 
+/* ML-7: the right of the bar (language selector, contact button, menu button) and the
+   language selector. Same glass as the submenu panel; amber only as a thin glint. */
+.site-nav-end {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 0.5rem;
+}
+
+.site-nav-end > .site-nav-toggle {
+  justify-self: auto;
+}
+
+.site-nav-languages {
+  position: relative;
+  pointer-events: auto;
+}
+
+.lang-select-button {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  gap: 0.5rem;
+  padding-inline: 0.7rem;
+  border-radius: 5px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.lang-select-button .site-nav-sub-chevron {
+  width: 6px;
+  height: 6px;
+}
+
+.site-nav-languages[data-open="true"] .site-nav-sub-chevron {
+  transform: translateY(1px) rotate(225deg);
+}
+
+.site-nav-languages .lang-select-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 15rem;
+  flex-direction: column;
+  padding: 0.4rem;
+  border-radius: 5px;
+  background: rgb(0 4 7 / 0.94);
+  box-shadow: inset 0 0 0 1px rgb(237 243 247 / 0.14);
+  pointer-events: auto;
+}
+
+.site-nav-languages .lang-select-list[hidden] {
+  display: none;
+}
+
+.lang-select-list li {
+  list-style: none;
+}
+
+.lang-select-option {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.75rem;
+  padding-inline: 0.75rem;
+  border-radius: 4px;
+  font-size: 0.9375rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lang-select-code {
+  min-width: 1.6rem;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.lang-select-option[aria-current="true"] {
+  box-shadow: inset 2px 0 0 var(--color-amber);
+}
+
+.lang-select-option[data-unavailable="true"] {
+  color: rgb(237 243 247 / 0.55);
+  cursor: not-allowed;
+}
+
+.lang-select-soon {
+  margin-left: auto;
+  padding-left: 1rem;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+/* The phone menu: the languages as a short list under the contact button. */
+.site-menu-languages {
+  margin-top: 1rem;
+}
+
+.site-menu-languages .lang-select-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+  border-top: 1px solid rgb(237 243 247 / 0.12);
+  padding-top: 0.75rem;
+}
+
+.site-menu-languages .lang-select-option {
+  padding-inline: 0.25rem;
+  font-size: 1.0625rem;
+}
+
+@media (hover: hover) {
+  .lang-select-button:hover {
+    color: var(--color-amber);
+  }
+
+  .lang-select-option:not([data-unavailable="true"]):hover {
+    background: rgb(237 243 247 / 0.08);
+    color: var(--color-amber);
+  }
+}
+
+.lang-select-button:focus-visible,
+.lang-select-option:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Without script the button cannot open the list: the plain links of the fallback bar (phones)
+   and of the language's own pages take over. */
+@media (scripting: none) {
+  .site-nav-languages {
+    display: none;
+  }
+}
+
 /* DP-219: submenus of the header (only where the CMS gives an item children; the bar
    itself is unchanged). Desktop: a panel under the item, opened by hover, its button or,
    without script, focus inside it. Phone menu: the links indented under their item. */
@@ -754,7 +901,7 @@ button.site-nav-link {
     display: block;
   }
 
-  .site-nav-inner > .site-nav-contact {
+  .site-nav-end > .site-nav-contact {
     display: inline-flex;
   }
 

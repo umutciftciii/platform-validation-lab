@@ -4,15 +4,24 @@ import { connection } from "next/server";
 import { cache, Suspense, type ReactNode } from "react";
 
 import SiteFooter from "@/components/ui/site-footer";
+import LanguageSelector from "@/components/ui/language-selector";
 import SiteNav from "@/components/ui/site-nav";
 import { BRAND_LOGO } from "@/content/brand";
-import { getSiteChrome } from "@/lib/cms-home";
+import { getSiteChrome, siteLanguages } from "@/lib/cms-home";
 import { dictionary } from "@/lib/i18n";
-import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import {
+  DEFAULT_LOCALE,
+  localizeHref,
+  type LanguageOption,
+  type RouteLocale,
+} from "@/lib/locale-routing";
 import { privacyHref, privacyPolicyHref } from "@/lib/privacy";
 
 /** One read of the published navigation and footer per request (both slots use it). */
 const chrome = cache((path: string, locale: RouteLocale) => getSiteChrome(path, locale));
+
+/** ML-7: the same per-request read for other parts of a page in this frame (the 404 links). */
+export const siteChrome = chrome;
 
 /**
  * Frame of the product pages. DP-155: the published BV site navigation and footer (the same CMS
@@ -54,7 +63,9 @@ export function CatalogShell({
 async function CatalogNav({ path, locale }: { path: string; locale: RouteLocale }) {
   await connection();
   const { nav } = await chrome(path, locale);
-  return nav ? <SiteNav content={nav} /> : <MinimalHeader locale={locale} />;
+  if (nav) return <SiteNav content={nav} />;
+  // ML-7: the language selector stays reachable while the published navigation is missing.
+  return <MinimalHeader locale={locale} languages={await siteLanguages(locale, path)} />;
 }
 
 async function CatalogFooter({ path, locale }: { path: string; locale: RouteLocale }) {
@@ -86,11 +97,21 @@ function Breadcrumb({ crumbs, label }: { crumbs: { label: string; href?: string 
   );
 }
 
-/** PM-3 frame, kept as the fallback while the published navigation cannot be read. */
-function MinimalHeader({ locale }: { locale: RouteLocale }) {
+/**
+ * PM-3 frame, kept as the fallback while the published navigation cannot be read. ML-7: with the
+ * language selector once the languages are known (not in the streaming placeholder).
+ */
+function MinimalHeader({
+  locale,
+  languages,
+}: {
+  locale: RouteLocale;
+  languages?: LanguageOption[];
+}) {
+  const ui = dictionary(locale).nav;
   return (
     <header className="fixed inset-x-0 top-0 z-40 bg-ink/80 backdrop-blur">
-      <div className="mx-auto flex h-[72px] max-w-6xl items-center px-4 sm:px-8">
+      <div className="mx-auto flex h-[72px] max-w-6xl items-center justify-between gap-4 px-4 sm:px-8">
         <Link href={localizeHref(locale, "/")} aria-label={dictionary(locale).shell.homeLink} className="shrink-0">
           <Image
             src={BRAND_LOGO.src}
@@ -101,6 +122,14 @@ function MinimalHeader({ locale }: { locale: RouteLocale }) {
             priority
           />
         </Link>
+        {languages?.length ? (
+          <LanguageSelector
+            options={languages}
+            ui={ui}
+            variant="dropdown"
+            className="site-nav-languages"
+          />
+        ) : null}
       </div>
     </header>
   );
