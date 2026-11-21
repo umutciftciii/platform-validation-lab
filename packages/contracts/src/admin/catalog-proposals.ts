@@ -22,6 +22,7 @@
  * `reviewData` only and never reach a public site.
  */
 import { z } from "zod";
+import { LocaleTagSchema } from "../site-locales.js";
 import { UuidSchema } from "../auth/common.js";
 import { REVIEW_COMMENT_MAX } from "./catalog-workflow.js";
 
@@ -158,7 +159,8 @@ export const SourceRefSchema = Short(200);
 /** Start a proposal for one product on the site (one per product, site and locale). */
 export const CreateProposalRequestSchema = z.strictObject({
   productId: UuidSchema,
-  locale: z.literal("en"),
+  /** ML-8a: any language enabled on the site (409 `locale:not_enabled` otherwise). */
+  locale: LocaleTagSchema,
   summary: customerText(PROPOSAL_SUMMARY_MAX),
   description: customerText(PROPOSAL_DESCRIPTION_MAX),
   reviewData: ProposalReviewDataSchema,
@@ -326,7 +328,8 @@ export const ProposalDatasetSchema = z
     schemaVersion: z.literal(1),
     dp: z.literal("DP-171"),
     site: z.enum(["BV", "CORPORATE"]),
-    locale: z.literal("en"),
+    /** ML-8a: the dataset's language; the import refuses one the site has not enabled. */
+    locale: LocaleTagSchema,
     sourceRef: SourceRefSchema,
     generatedAt: IsoDate,
     proposals: z.array(ProposalDatasetEntrySchema).min(1).max(1000),

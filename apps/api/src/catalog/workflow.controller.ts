@@ -4,7 +4,18 @@
  * /api/v1/public/catalog (the BV and Corporate proxy keys only; GET only). Every handler
  * authorises inside its service.
  */
-import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Res } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Query,
+  Res,
+} from "@nestjs/common";
 import type { ServerResponse } from "node:http";
 import type {
   ProductWorkflowResponse,
@@ -84,20 +95,31 @@ export class WorkflowController {
 export class PublicCatalogController {
   constructor(@Inject(PublicCatalogService) private readonly catalog: PublicCatalogService) {}
 
+  /** ML-8a: `?locale` optional (default language); other languages are 404 until ML-8c. */
   @Get("products")
-  list(@Ctx() ctx: RequestContext): Promise<PublicProductListResponse> {
-    return this.catalog.list(ctx);
+  list(
+    @Ctx() ctx: RequestContext,
+    @Query("locale") locale?: string,
+  ): Promise<PublicProductListResponse> {
+    return this.catalog.list(ctx, locale);
   }
 
   /** DP-160: the category tree of the live products, with their counts. */
   @Get("categories")
-  categories(@Ctx() ctx: RequestContext): Promise<PublicCategoryListResponse> {
-    return this.catalog.categories(ctx);
+  categories(
+    @Ctx() ctx: RequestContext,
+    @Query("locale") locale?: string,
+  ): Promise<PublicCategoryListResponse> {
+    return this.catalog.categories(ctx, locale);
   }
 
   @Get("products/:slug")
-  product(@Ctx() ctx: RequestContext, @Param("slug") slug: string): Promise<PublicProductResponse> {
-    return this.catalog.product(ctx, slug);
+  product(
+    @Ctx() ctx: RequestContext,
+    @Param("slug") slug: string,
+    @Query("locale") locale?: string,
+  ): Promise<PublicProductResponse> {
+    return this.catalog.product(ctx, slug, locale);
   }
 
   /** WebP bytes of a published image; short public caching, never the original upload. */

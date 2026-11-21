@@ -45,6 +45,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   ProductCategory: { nullable: false },
   ProductSiteListing: { nullable: false },
   ProductListingText: { nullable: false },
+  // ML-8a (ADR-028 D8): a category's texts per language (specification and image texts are
+  // platform-wide master data and have no site).
+  ProductCategoryText: { nullable: false },
   // PM-3: a site's publications; review events (master events have no site).
   ProductPublication: { nullable: false },
   ProductReviewEvent: { nullable: true },
@@ -153,6 +156,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     productCategories: { model: "ProductCategory", list: true },
     productListings: { model: "ProductSiteListing", list: true },
     productListingTexts: { model: "ProductListingText", list: true },
+    productCategoryTexts: { model: "ProductCategoryText", list: true },
     productPublications: { model: "ProductPublication", list: true },
     productReviewEvents: { model: "ProductReviewEvent", list: true },
     productDocumentSites: { model: "ProductDocumentSite", list: true },
@@ -249,6 +253,10 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   // PM-2: platform-wide master data (no site).
   SpecDefinition: {
     values: { model: "ProductSpecValue", list: true },
+    texts: { model: "SpecDefinitionText", list: true },
+  },
+  SpecDefinitionText: {
+    definition: { model: "SpecDefinition", list: false },
   },
   ProductSpecValue: {
     product: { model: "Product", list: false },
@@ -256,12 +264,22 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   },
   ProductImage: {
     product: { model: "Product", list: false },
+    texts: { model: "ProductImageText", list: true },
+  },
+  ProductImageText: {
+    image: { model: "ProductImage", list: false },
   },
   ProductCategory: {
     site: { model: "Site", list: false },
     parent: { model: "ProductCategory", list: false },
     children: { model: "ProductCategory", list: true },
     listings: { model: "ProductSiteListing", list: true },
+    texts: { model: "ProductCategoryText", list: true },
+  },
+  ProductCategoryText: {
+    category: { model: "ProductCategory", list: false },
+    site: { model: "Site", list: false },
+    siteLocale: { model: "SiteLocale", list: false },
   },
   ProductSiteListing: {
     product: { model: "Product", list: false },
@@ -273,6 +291,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   ProductListingText: {
     listing: { model: "ProductSiteListing", list: false },
     site: { model: "Site", list: false },
+    siteLocale: { model: "SiteLocale", list: false },
   },
   // PM-3: review history and per-site publications.
   ProductReviewEvent: {
@@ -438,6 +457,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   SiteLocale: {
     site: { model: "Site", list: false },
     cmsPages: { model: "CmsPage", list: true },
+    productListingTexts: { model: "ProductListingText", list: true },
+    productCategoryTexts: { model: "ProductCategoryText", list: true },
   },
 };
 

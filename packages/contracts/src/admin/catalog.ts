@@ -58,8 +58,11 @@ export const LISTING_VISIBILITIES = ["VISIBLE", "HIDDEN"] as const;
 export const ListingVisibilitySchema = z.enum(LISTING_VISIBILITIES);
 export type ListingVisibility = z.infer<typeof ListingVisibilitySchema>;
 
-/** PM-1 manages English content only; the data model is ready for more locales. */
-export const CATALOG_CONTENT_LOCALE = "en";
+/*
+ * ML-8a (ADR-028 D8): catalogue texts exist per language (catalog-translations.ts); the endpoints
+ * of before ML-8a work in the site's default language. The former constant
+ * `CATALOG_CONTENT_LOCALE` is gone: the language comes from SiteLocale.
+ */
 
 // --- context ---------------------------------------------------------------------------------
 

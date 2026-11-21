@@ -184,6 +184,8 @@ model Site {
   productCategories          ProductCategory[]
   productListings            ProductSiteListing[]
   productListingTexts        ProductListingText[]
+  /// ML-8a: category texts per language.
+  productCategoryTexts       ProductCategoryText[]
   // PM-3 (DP-068): publications and their review history.
   productPublications        ProductPublication[]
   productReviewEvents        ProductReviewEvent[]
@@ -675,6 +677,8 @@ model ProductCategory {
   parent   ProductCategory?     @relation("ProductCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
   children ProductCategory[]    @relation("ProductCategoryTree")
   listings ProductSiteListing[]
+  /// ML-8a: name and description per language (the columns above mirror "en", one release).
+  texts    ProductCategoryText[]
 
   @@unique([siteId, slug])
   /// Target of the listings' composite foreign key: a listing's category is of the same site.
@@ -721,25 +725,52 @@ model ProductSiteListing {
   @@index([siteId, categoryId])
 }
 
-/// Site-specific product texts of a listing, one row per locale. PM-1 writes English ("en") only;
-/// the table is shaped for translations later. siteId is repeated so the site scope applies.
+/// Site-specific product texts of a listing, one row per locale (ML-8a: every enabled language
+/// of the site, foreign key to SiteLocale). siteId is repeated so the site scope applies.
 model ProductListingText {
   listingId   String   @db.Uuid
   siteId      String   @db.Uuid
-  /// BCP 47 language tag (CHECK); "en" only in PM-1.
+  /// BCP 47 language tag (CHECK); a language of the listing's site (ML-8a).
   locale      String   @db.VarChar(35)
   title       String?  @db.VarChar(200)
   summary     String?  @db.VarChar(500)
   /// Plain text, at most 8000 characters (CHECK in the migration).
   description String?
+  /// DP-214 (ML-8a): the product's SEO texts in this language. The "en" row mirrors the former
+  /// ProductSiteListing.seo* columns (trigger, both directions) for one release.
+  seoTitle         String? @db.VarChar(120)
+  seoDescription   String? @db.VarChar(320)
+  seoOgTitle       String? @db.VarChar(120)
+  seoOgDescription String? @db.VarChar(320)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
-  listing ProductSiteListing @relation(fields: [listingId, siteId], references: [id, siteId], onDelete: Restrict)
-  site    Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  listing    ProductSiteListing @relation(fields: [listingId, siteId], references: [id, siteId], onDelete: Restrict)
+  site       Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  siteLocale SiteLocale         @relation(fields: [siteId, locale], references: [siteId, locale], onDelete: Restrict)
 
   @@id([listingId, locale])
   @@index([siteId])
+}
+
+/// ML-8a (ADR-028 D8): a category's name and description in one language of its site. The "en"
+/// row mirrors ProductCategory.name/description (trigger, both directions) for one release.
+model ProductCategoryText {
+  categoryId  String   @db.Uuid
+  siteId      String   @db.Uuid
+  /// BCP 47 language tag (CHECK); a language of the category's site.
+  locale      String   @db.VarChar(35)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(1000)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  category   ProductCategory @relation(fields: [categoryId, siteId], references: [id, siteId], onDelete: Cascade)
+  site       Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  siteLocale SiteLocale      @relation(fields: [siteId, locale], references: [siteId, locale], onDelete: Restrict)
+
+  @@id([categoryId, locale])
+  @@index([siteId, locale])
 }
 
 // ===========================================================================================
@@ -779,8 +810,25 @@ model SpecDefinition {
   updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
 
   values ProductSpecValue[]
+  /// ML-8a: the name per language (the column `name` mirrors "en", one release).
+  texts  SpecDefinitionText[]
 
   @@index([archived, sortOrder])
+}
+
+/// ML-8a (ADR-028 D8): a specification's name in one language (platform-wide, no site). The "en"
+/// row mirrors SpecDefinition.name (trigger, both directions) for one release.
+model SpecDefinitionText {
+  definitionId String   @db.Uuid
+  /// BCP 47 language tag (CHECK).
+  locale       String   @db.VarChar(35)
+  name         String   @db.VarChar(120)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  definition SpecDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@id([definitionId, locale])
 }
 
 /// DP-156 (K1): what a value states. SPECIFICATION = a specification limit or value (binding for
@@ -848,9 +896,27 @@ model ProductImage {
   updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  /// ML-8a: the alt text per language (the column `altText` mirrors "en", one release).
+  texts   ProductImageText[]
 
   @@unique([productId], map: "ProductImage_cover_productId_key", where: raw("\"isCover\""))
   @@index([productId, sortOrder])
+}
+
+/// ML-8a (ADR-028 D8): an image's alt text in one language (platform-wide, no site). A null alt
+/// text: none in this language. The "en" row mirrors ProductImage.altText (trigger, both
+/// directions) for one release.
+model ProductImageText {
+  imageId   String   @db.Uuid
+  /// BCP 47 language tag (CHECK).
+  locale    String   @db.VarChar(35)
+  altText   String?  @db.VarChar(300)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  image ProductImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@id([imageId, locale])
 }
 
 // ===========================================================================================
@@ -916,7 +982,8 @@ model ProductPublication {
   status          PublicationStatus
   productVersion  Int
   listingVersion  Int
-  /// The public content (contracts PublishedSnapshotSchema); never edited, only replaced.
+  /// The public content (contracts StoredSnapshotSchema: v1, or v2 per language since ML-8a); never
+  /// edited, only replaced.
   snapshot        Json
   /// Images the snapshot shows: the public image route serves only these, and they cannot be
   /// deleted while the publication is PUBLISHED.
@@ -1914,6 +1981,9 @@ model SiteLocale {
   site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
   /// ML-2: the CMS pages written in this language.
   cmsPages CmsPage[]
+  /// ML-8a: catalogue texts written in this language.
+  productListingTexts  ProductListingText[]
+  productCategoryTexts ProductCategoryText[]
 
   @@id([siteId, locale])
   @@unique([siteId], map: "SiteLocale_default_siteId_key", where: raw("\"isDefault\""))

@@ -7,7 +7,7 @@ import {
   PublishRequestSchema,
   PublicProductSchema,
   PublicProductSummarySchema,
-  PublishedSnapshotSchema,
+  PublishedSnapshotV1Schema,
   RequestChangesRequestSchema,
   SubmitReviewRequestSchema,
   toPublicProduct,
@@ -155,7 +155,7 @@ describe("review requests", () => {
 });
 
 describe("public view of a snapshot", () => {
-  const snapshot = PublishedSnapshotSchema.parse({
+  const snapshot = PublishedSnapshotV1Schema.parse({
     schemaVersion: 1,
     slug: "iccsyn-6",
     code: "ICC-SYN-6",
@@ -219,18 +219,19 @@ describe("public view of a snapshot", () => {
       hasTechnicalData: true,
       hasDocuments: true,
     });
-    const bare = toPublicSummary(PublishedSnapshotSchema.parse({ ...snapshot, specs: [] }), at);
+    const bare = toPublicSummary(PublishedSnapshotV1Schema.parse({ ...snapshot, specs: [] }), at);
     expect(bare).toMatchObject({ hasTechnicalData: false, hasDocuments: false });
   });
 
   it("DP-161: a product without a summary is published with summary null", () => {
-    const none = PublishedSnapshotSchema.parse({ ...snapshot, summary: null });
+    const none = PublishedSnapshotV1Schema.parse({ ...snapshot, summary: null });
     expect(toPublicSummary(none, "2026-11-11T10:00:00.000Z").summary).toBeNull();
   });
 
   it("refuses snapshots with unexpected fields (strict)", () => {
     expect(
-      PublishedSnapshotSchema.safeParse({ ...snapshot, storageKey: "products/x/original" }).success,
+      PublishedSnapshotV1Schema.safeParse({ ...snapshot, storageKey: "products/x/original" })
+        .success,
     ).toBe(false);
   });
 });

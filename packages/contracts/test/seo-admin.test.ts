@@ -14,7 +14,7 @@ import {
   ListingSeoUpdateRequestSchema,
   ListingSchema,
   PublicSiteSeoSettingsSchema,
-  PublishedSnapshotSchema,
+  PublishedSnapshotV1Schema,
   SeoCanonicalPathSchema,
   cmsFieldsSchema,
   seoCanonicalPathIsValid,
@@ -167,7 +167,7 @@ describe("DP-209 product SEO", () => {
   });
 
   const snapshot = (seo?: unknown) =>
-    PublishedSnapshotSchema.parse({
+    PublishedSnapshotV1Schema.parse({
       schemaVersion: 1,
       slug: "x",
       code: "X",

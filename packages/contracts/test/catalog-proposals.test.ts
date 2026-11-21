@@ -129,7 +129,10 @@ describe("content proposal requests", () => {
     expect(CreateProposalRequestSchema.safeParse({ ...create, sourceSha256: "ABC" }).success).toBe(
       false,
     );
-    expect(CreateProposalRequestSchema.safeParse({ ...create, locale: "tr" }).success).toBe(false);
+    // ML-8a: any well-formed language tag (the API checks it is enabled on the site).
+    expect(CreateProposalRequestSchema.safeParse({ ...create, locale: "nl" }).success).toBe(true);
+    expect(CreateProposalRequestSchema.safeParse({ ...create, locale: "NL" }).success).toBe(false);
+    expect(CreateProposalRequestSchema.safeParse({ ...create, locale: "" }).success).toBe(false);
   });
 
   it("DP-172: accepts English review data with origin references, and only short hex refs", () => {
