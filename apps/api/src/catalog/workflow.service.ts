@@ -25,21 +25,19 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ApproveRequestSchema,
-  CATALOG_CONTENT_LOCALE,
   ProposalReviewDataSchema,
   checkPublication,
-  PublishedSnapshotSchema,
   PublishRequestSchema,
   RequestChangesRequestSchema,
   SubmitReviewRequestSchema,
   UnpublishRequestSchema,
+  storedSnapshotSlug,
   validateProductData,
   WithdrawReviewRequestSchema,
   type Actor,
   type ProductValidation,
   type ProductWorkflowResponse,
   type PublicationMode,
-  type PublishedSnapshot,
   type ReviewQueueResponse,
   type SiteProposal,
   type SitePublication,
@@ -49,7 +47,6 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
-import { listingSeo } from "./listing-seo.js";
 import { lockMaster, type ScopedTx } from "./master.js";
 import {
   applyAddressChange,
@@ -58,7 +55,14 @@ import {
   redirectsTo,
 } from "../seo/redirects.js";
 import { requireMasterRead, toRule, uuidOr404, valueData } from "./specs.service.js";
-import { assertLocaleEnabled } from "../cms/site-locales.js";
+import { siteLocalesOf } from "../cms/site-locales.js";
+import {
+  buildSnapshotV2,
+  catalogLocales,
+  displaySize,
+  LISTING_TEXT_SELECT,
+  loadTextRows,
+} from "./snapshot.js";
 
 const MASTER = "product_master:edit";
 const READ = "product:read";
@@ -77,9 +81,23 @@ type Db = SiteScopedClient | ScopedTx;
 
 /** DP-210: a product's address on a public site is `/products/<snapshot slug>`. */
 const PRODUCTS_PATH = "/products/";
-const snapshotSlug = (snapshot: unknown): string | null =>
-  PublishedSnapshotSchema.shape.slug.safeParse((snapshot as { slug?: unknown } | null)?.slug)
-    .data ?? null;
+/** ML-8a: equal JSON values, object key order ignored (jsonb does not keep it). */
+function sameJson(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.keys(v as object)
+              .sort()
+              .map((k) => [k, canon((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
+/** ML-8a: the slug of a v1 or v2 snapshot (language-neutral). */
+const snapshotSlug = (snapshot: unknown): string | null => storedSnapshotSlug(snapshot);
 type ReviewBlock = "no_permission" | "not_in_review" | "own_change" | "archived";
 
 interface UserRef {
@@ -159,10 +177,12 @@ async function loadProposals(
   db: Db,
   productId: string,
   siteIds: readonly string[],
+  /** ML-8a: the language whose proposal gates publication (the site's default language). */
+  localeOf: ReadonlyMap<string, string>,
 ): Promise<Map<string, SiteProposal>> {
   if (siteIds.length === 0) return new Map();
-  const rows = await db.productContentProposal.findMany({
-    where: { productId, siteId: { in: [...siteIds] }, locale: CATALOG_CONTENT_LOCALE },
+  const all = await db.productContentProposal.findMany({
+    where: { productId, siteId: { in: [...siteIds] } },
     select: {
       id: true,
       siteId: true,
@@ -171,8 +191,10 @@ async function loadProposals(
       proposedSummary: true,
       proposedDescription: true,
       reviewData: true,
+      locale: true,
     },
   });
+  const rows = all.filter((r) => r.locale === localeOf.get(r.siteId));
   return new Map(
     rows.map((r) => {
       const review = ProposalReviewDataSchema.safeParse(r.reviewData);
@@ -215,6 +237,13 @@ export class WorkflowService {
       include: { submittedBy: USER, approvedBy: USER },
     });
     if (!product) throw new ApiError("NOT_FOUND");
+    // ML-8a: the default language of each readable site (texts and proposals are read in it).
+    const defaults = new Map(
+      [...(await siteLocalesOf(db, readable))].map(([siteId, list]) => [
+        siteId,
+        list.find((l) => l.isDefault)?.locale ?? "",
+      ]),
+    );
     const [content, listings, publications, history, proposals] = await Promise.all([
       loadContent(db, [id]),
       db.productSiteListing.findMany({
@@ -223,10 +252,7 @@ export class WorkflowService {
           siteId: true,
           version: true,
           visibility: true,
-          texts: {
-            where: { locale: CATALOG_CONTENT_LOCALE },
-            select: { title: true, summary: true, description: true },
-          },
+          texts: { select: { locale: true, title: true, summary: true, description: true } },
         },
       }),
       db.productPublication.findMany({
@@ -239,7 +265,7 @@ export class WorkflowService {
         take: 100,
         include: { actor: USER },
       }),
-      loadProposals(db, id, readable),
+      loadProposals(db, id, readable, defaults),
     ]);
     const { validation, images } = content.of(id);
     // DP-210: older addresses of the product per site (BV only; one small read per site).
@@ -306,7 +332,12 @@ export class WorkflowService {
           },
           readiness: checkPublication({
             product,
-            listing: l ? { visibility: l.visibility, text: l.texts[0] ?? null } : null,
+            listing: l
+              ? {
+                  visibility: l.visibility,
+                  text: l.texts.find((t) => t.locale === defaults.get(s.id)) ?? null,
+                }
+              : null,
             validation,
             images,
             mode: publishMode,
@@ -631,9 +662,12 @@ export class WorkflowService {
       await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id });
     }
     const db = a.db({ siteIds: [siteId], includePlatform: true });
-    // ML-1 (ADR-028 D2): the snapshot's language must be enabled on the site (visibility of a
-    // language is separate; the catalogue publishes English only until ML-8).
-    await assertLocaleEnabled(db, siteId, CATALOG_CONTENT_LOCALE);
+    // ML-8a (ADR-028 D8): one publication writes every enabled language whose listing text is
+    // there (the default language always), in this one transaction. Visibility of a language is
+    // separate (SiteLocale.public); a language that is not enabled is never written.
+    const { defaultLocale, locales } = catalogLocales(
+      (await siteLocalesOf(db, [siteId])).get(siteId) ?? [],
+    );
     try {
       await db.$transaction(async (tx) => {
         // DP-193 / DP-198: every publication locks the master first (a no-op UPDATE that keeps
@@ -647,13 +681,13 @@ export class WorkflowService {
         if (!product) throw new ApiError("NOT_FOUND");
         let listing = await tx.productSiteListing.findUnique({
           where: { productId_siteId: { productId: id, siteId } },
-          include: { texts: { where: { locale: CATALOG_CONTENT_LOCALE } } },
+          include: { texts: { select: LISTING_TEXT_SELECT } },
         });
         // Read separately: the scoped client refuses to-one includes into site-bound models.
         const category = listing
           ? await tx.productCategory.findUnique({
               where: { id: listing.categoryId },
-              select: { slug: true, name: true },
+              select: { id: true, slug: true },
             })
           : null;
         if (product.version !== version) throw staleVersion();
@@ -662,11 +696,11 @@ export class WorkflowService {
         }
         const [content, proposals] = await Promise.all([
           loadContent(tx, [id]),
-          loadProposals(tx, id, [siteId]),
+          loadProposals(tx, id, [siteId], new Map([[siteId, defaultLocale]])),
         ]);
         const { validation, images, values } = content.of(id);
         const proposal = proposals.get(siteId) ?? null;
-        const text = listing?.texts[0] ?? null;
+        const text = listing?.texts.find((t) => t.locale === defaultLocale) ?? null;
         const readiness = checkPublication({
           product,
           listing: listing ? { visibility: listing.visibility, text } : null,
@@ -711,13 +745,47 @@ export class WorkflowService {
         }
         const previousSlug =
           existing?.status === "PUBLISHED" ? snapshotSlug(existing.snapshot) : null;
+        const defsById = new Map(content.defs.map((d) => [d.id, d]));
+        const specs = values
+          .map((v) => ({ v, d: defsById.get(v.definitionId) }))
+          .filter((x): x is { v: (typeof values)[number]; d: NonNullable<typeof x.d> } => !!x.d);
+        const textRows = await loadTextRows(tx, {
+          categoryIds: [category.id],
+          definitionIds: [...new Set(specs.map((x) => x.d.id))],
+          imageIds: images.map((i) => i.id),
+        });
+        const snapshot = buildSnapshotV2({
+          defaultLocale,
+          locales,
+          product,
+          listing,
+          listingTexts: listing.texts,
+          category,
+          categoryTexts: textRows.categoryTexts,
+          specs: specs.map(({ v, d }) => ({
+            definitionId: d.id,
+            key: d.key,
+            sortOrder: d.sortOrder,
+            basis: v.basis,
+            value: valueData(v),
+            unit: v.unit,
+            testMethod: v.testMethod,
+          })),
+          specTexts: textRows.specTexts,
+          images: images.map((i) => ({ id: i.id, isCover: i.isCover, ...displaySize(i.variants) })),
+          imageTexts: textRows.imageTexts,
+        });
         // DP-198: what is live already is not published twice (a repeated or concurrent request).
+        // ML-8a: "already live" also means the same content: a category, specification or alt
+        // text (any language) changes no master or listing version, so a publication whose
+        // snapshot would differ from the live one is allowed (and a v1 snapshot is replaced).
         if (
           existing?.status === "PUBLISHED" &&
           existing.approvalMode === approvalMode &&
           existing.productVersion === version &&
           existing.listingVersion === listing.version &&
-          listing.visibility === "VISIBLE"
+          listing.visibility === "VISIBLE" &&
+          sameJson(existing.snapshot, snapshot)
         ) {
           throw new ApiError("CONFLICT_STATE", [
             { path: "publication", rule: "already_published" },
@@ -751,52 +819,6 @@ export class WorkflowService {
           });
         }
         const publishedListingVersion = listing.version;
-        const defsById = new Map(content.defs.map((d) => [d.id, d]));
-        const snapshot: PublishedSnapshot = PublishedSnapshotSchema.parse({
-          schemaVersion: 1,
-          slug: product.slug,
-          code: product.code,
-          name: text?.title ?? product.name,
-          summary: text?.summary ?? product.summary,
-          description: text?.description ?? product.description,
-          category,
-          sortOrder: listing.sortOrder,
-          specs: values
-            .map((v) => ({ v, d: defsById.get(v.definitionId) }))
-            .filter((x): x is { v: (typeof values)[number]; d: NonNullable<typeof x.d> } => !!x.d)
-            .sort(
-              (x, y) =>
-                x.d.sortOrder - y.d.sortOrder ||
-                x.d.name.localeCompare(y.d.name) ||
-                // DP-156: the specification value before the typical value of the same property
-                (x.v.basis === y.v.basis ? 0 : x.v.basis === "SPECIFICATION" ? -1 : 1),
-            )
-            .map(({ v, d }) => ({
-              key: d.key,
-              name: d.name,
-              basis: v.basis,
-              value: valueData(v),
-              unit: v.unit,
-              testMethod: v.testMethod,
-            })),
-          images: images.map((i) => {
-            const display = (i.variants as { display?: { width?: number; height?: number } })
-              ?.display;
-            return {
-              id: i.id,
-              altText: i.altText,
-              isCover: i.isCover,
-              width: display?.width ?? 0,
-              height: display?.height ?? 0,
-            };
-          }),
-          // DP-209: the listing's SEO as published; an OG image no longer among the published
-          // images falls back to the cover (never a link to an image the site does not serve).
-          seo: ((seo) => ({
-            ...seo,
-            ogImageId: images.some((i) => i.id === seo.ogImageId) ? seo.ogImageId : null,
-          }))(listingSeo(listing)),
-        });
         const fields = {
           status: "PUBLISHED" as const,
           productVersion: version,
@@ -837,6 +859,8 @@ export class WorkflowService {
           ...(previousSlug !== null && previousSlug !== product.slug ? { slugChanged: true } : {}),
           images: fields.imageIds.length,
           warnings: readiness.warnings.length,
+          // ML-8a: the languages the snapshot carries (names only).
+          locales: Object.keys(snapshot.locales),
         };
         // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
         if (keepsOldAddress(a.sites, siteId)) {

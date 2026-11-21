@@ -27,7 +27,8 @@ import {
   BV_NAV_KEY,
   BvFooterMenuSchema,
   BvNavMenuSchema,
-  PublishedSnapshotSchema,
+  readSnapshot,
+  storedSnapshotSlug,
   cmsIsMenu,
   footerLinks,
   menuCategoryPath,
@@ -234,8 +235,9 @@ export async function menuLinkStates(
       },
     );
     for (const r of rows) {
-      const snap = PublishedSnapshotSchema.safeParse(r.snapshot);
-      if (snap.success) productPath.set(r.productId, at(`/products/${snap.data.slug}`));
+      // ML-8a: the slug is language-neutral (v1 and v2 snapshots).
+      const slug = storedSnapshotSlug(r.snapshot);
+      if (slug !== null) productPath.set(r.productId, at(`/products/${slug}`));
     }
   }
   if (refs.categoryIds.length) {
@@ -406,7 +408,7 @@ export async function menuTargets(
         id: true,
         productId: true,
         visibility: true,
-        texts: { where: { locale: "en" }, select: { title: true } },
+        texts: { where: { locale: defaultLocale }, select: { title: true } },
       },
       take: MAX_TARGETS,
     }),
@@ -450,22 +452,23 @@ export async function menuTargets(
     const master = masters.find((m) => m.id === l.productId);
     if (!master) continue;
     const pub = productPubs.find((p) => p.productId === l.productId);
-    const snap = pub ? PublishedSnapshotSchema.safeParse(pub.snapshot) : null;
+    // ML-8a: the default language's view of a v1 or v2 snapshot.
+    const snap = pub ? readSnapshot(pub.snapshot, defaultLocale) : null;
     const live =
       pub?.status === "PUBLISHED" &&
       pub.listingId === l.id &&
       l.visibility === "VISIBLE" &&
       master.status !== "ARCHIVED" &&
-      snap?.success;
-    if (live && snap?.success) {
-      liveBySlug.set(snap.data.category.slug, (liveBySlug.get(snap.data.category.slug) ?? 0) + 1);
+      snap !== null;
+    if (live && snap) {
+      liveBySlug.set(snap.category.slug, (liveBySlug.get(snap.category.slug) ?? 0) + 1);
     }
     if (!live && !readProducts) continue;
     products.push({
       id: master.id,
-      name: (live && snap?.success ? snap.data.name : null) ?? l.texts[0]?.title ?? master.name,
+      name: (live && snap ? snap.name : null) ?? l.texts[0]?.title ?? master.name,
       code: master.code,
-      livePath: live && snap?.success ? `/products/${snap.data.slug}` : null,
+      livePath: live && snap ? `/products/${snap.slug}` : null,
     });
   }
   products.sort((x, y) => x.name.localeCompare(y.name, "en"));

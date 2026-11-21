@@ -1,37 +1,40 @@
 /**
- * DP-209: the SEO of a product listing (columns `seo*` of ProductSiteListing) in the contracts'
- * shape. Saved by CatalogService.updateListingSeo, copied into the publication snapshot by
- * WorkflowService.publish, read back by the public catalogue and the SEO overview.
+ * DP-209 / DP-214 (ML-8a): the SEO of a product listing in the contracts' shape. The texts
+ * (title, description, OG title, OG description) are per language on `ProductListingText`; the
+ * canonical path, noindex and OG image are language-neutral columns of `ProductSiteListing`.
+ * Saved by CatalogService.updateListingSeo (default language) and the translation endpoints,
+ * copied into the publication snapshot, read back by the public catalogue and the SEO overview.
  */
 import type { ProductSeo } from "@dream/contracts";
 
-/** DP-209: the SEO columns of a listing as the contracts name them. */
-export function listingSeo(l: {
+interface SeoTexts {
   seoTitle: string | null;
   seoDescription: string | null;
   seoOgTitle: string | null;
   seoOgDescription: string | null;
+}
+
+interface SeoNeutral {
   seoCanonicalPath: string | null;
   seoNoindex: boolean;
   seoOgImageId: string | null;
-}): ProductSeo {
+}
+
+/** The listing's SEO in one language: its text row (null: none yet) and the neutral columns. */
+export function listingSeo(neutral: SeoNeutral, text: SeoTexts | null | undefined): ProductSeo {
   return {
-    title: l.seoTitle,
-    description: l.seoDescription,
-    ogTitle: l.seoOgTitle,
-    ogDescription: l.seoOgDescription,
-    canonicalPath: l.seoCanonicalPath,
-    noindex: l.seoNoindex,
-    ogImageId: l.seoOgImageId,
+    title: text?.seoTitle ?? null,
+    description: text?.seoDescription ?? null,
+    ogTitle: text?.seoOgTitle ?? null,
+    ogDescription: text?.seoOgDescription ?? null,
+    canonicalPath: neutral.seoCanonicalPath,
+    noindex: neutral.seoNoindex,
+    ogImageId: neutral.seoOgImageId,
   };
 }
 
-/** DP-209: the listing's SEO columns (selected wherever the listing's SEO is read). */
-export const LISTING_SEO_SELECT = {
-  seoTitle: true,
-  seoDescription: true,
-  seoOgTitle: true,
-  seoOgDescription: true,
+/** The language-neutral SEO columns of a listing. */
+export const LISTING_SEO_NEUTRAL_SELECT = {
   seoCanonicalPath: true,
   seoNoindex: true,
   seoOgImageId: true,

@@ -28,7 +28,7 @@
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
-  PublishedSnapshotSchema,
+  readSnapshotAddress,
   BV_SITE_SEO_FIELDS,
   BV_SITE_SEO_KEY,
   PublicSiteSeoSettingsSchema,
@@ -167,14 +167,15 @@ export class PublicSeoService {
     );
     const out: LivePath[] = [];
     for (const row of rows) {
-      const s = PublishedSnapshotSchema.safeParse(row.snapshot);
-      if (!s.success) continue;
+      // ML-8a: v1 and v2 snapshots; the address fields are language-neutral.
+      const s = readSnapshotAddress(row.snapshot);
+      if (!s) continue;
       out.push({
-        path: `${PRODUCTS_PREFIX}${s.data.slug}`,
+        path: `${PRODUCTS_PREFIX}${s.slug}`,
         locale: null,
         kind: "product",
-        noindex: s.data.seo?.noindex ?? false,
-        canonicalPath: s.data.seo?.canonicalPath ?? null,
+        noindex: s.noindex,
+        canonicalPath: s.canonicalPath,
         publishedAt: row.publishedAt,
         translationGroupId: null,
       });

@@ -7,6 +7,8 @@ export * from "./admin/catalog.js";
 export * from "./admin/catalog-specs.js";
 export * from "./admin/catalog-import.js";
 export * from "./admin/catalog-workflow.js";
+export * from "./admin/catalog-snapshot.js";
+export * from "./admin/catalog-translations.js";
 export * from "./admin/catalog-documents.js";
 export * from "./admin/catalog-xrefs.js";
 export * from "./admin/catalog-proposals.js";
