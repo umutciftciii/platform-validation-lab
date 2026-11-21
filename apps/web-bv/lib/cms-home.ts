@@ -386,7 +386,7 @@ export function toFooterProps(c: BvFooterPublic, locale: RouteLocale = DEFAULT_L
   return {
     ...siteFooterUi(locale),
     headline: c.headline,
-    cta: link(c.cta),
+    cta: c.cta ? link(c.cta) : null,
     intro: c.intro,
     contact: { ...c.contact, addressLines: c.contact.addressLines.map((l) => l.text) },
     columns: c.columns.map((col) => ({ title: col.title, links: col.links.map(link) })),
@@ -510,8 +510,9 @@ function unpublished(body: unknown): boolean {
 }
 
 /**
- * ML-3 (ADR-028 D3/D7): the language switcher of a page's navigation: the public languages, each
- * to the page's published counterpart (`alternates` of the API) or to that language's home.
+ * ML-3 (ADR-028 D3/D7): the language selector of a page's navigation. ML-7: every language of the
+ * site; a public one goes to the page's published counterpart (`alternates` of the API) or to that
+ * language's home, one that is not public is listed without a link ("coming soon").
  */
 async function languagesFor(
   locale: RouteLocale,
@@ -523,6 +524,14 @@ async function languagesFor(
     if (isRouteLocale(a.locale) && a.locale !== locale) targets[a.locale] = localePath(a.locale, a.path);
   }
   return languageOptions(locale, await visibleLocales(), targets);
+}
+
+/**
+ * ML-7: the language selector for a page whose navigation is not published (the minimal frame):
+ * each public language to its home, the page's own language to the page ("/404" → home).
+ */
+export async function siteLanguages(locale: RouteLocale, currentPath: string) {
+  return languagesFor(locale, currentPath === "/404" ? "/" : currentPath);
 }
 
 async function withLanguages(
@@ -539,6 +548,16 @@ async function withLanguages(
   const path = "path" in view ? view.path : view.kind === "newsIndex" ? "/news" : "/";
   const languages = await languagesFor(locale, path, alternates);
   return { ...withAlternates, nav: { ...view.nav, languages } };
+}
+
+/**
+ * ML-7: a preview shows the language selector as the page will (its own language current; a draft
+ * has no published counterparts, so the other languages go to their home pages).
+ */
+async function withPreviewLanguages(view: AnyPageView, locale: RouteLocale): Promise<AnyPageView> {
+  if (!view.nav) return view;
+  const path = "path" in view ? view.path : view.kind === "newsIndex" ? "/news" : "/";
+  return { ...view, nav: { ...view.nav, languages: await languagesFor(locale, path) } };
 }
 
 /** `&locale=` for a language other than the default (the default read is unchanged by ML-3). */
@@ -574,7 +593,11 @@ async function read(path: string, wanted: RouteLocale | "draft"): Promise<PageRe
   const locale: RouteLocale =
     wanted !== "draft" ? wanted : isRouteLocale(named) ? named : DEFAULT_LOCALE;
   const mapped = pageView(json, locale);
-  const view = mapped && !mapped.preview ? await withLanguages(mapped, locale, json) : mapped;
+  const view = !mapped
+    ? null
+    : mapped.preview
+      ? await withPreviewLanguages(mapped, locale)
+      : await withLanguages(mapped, locale, json);
   if (!view) {
     console.error("public cms: the response does not match the contract; not rendered");
     return { ok: false, reason: "unavailable" };

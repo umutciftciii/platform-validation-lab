@@ -41,8 +41,6 @@ const NL = flatten(nl);
  * languages write alike. Anything else identical to English is an untranslated string.
  */
 const SAME_IN_DUTCH = new Set([
-  "common.home",
-  "common.contact",
   "common.website",
   "meta.articleRemoved",
   "meta.productFallback",

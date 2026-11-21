@@ -11,6 +11,7 @@ import { buttonStyles, cx, Spinner } from "../ui";
  * ML-2 (DP-074): the two translation actions of a page.
  *  - Create translation: a new page in another enabled language with the same structure and empty
  *    texts (a draft; nothing is published). The API refuses a language the group already has.
+ *    ML-7: the menus in Dutch may start from the prepared proposal (still a draft).
  *  - Mark as up to date: records the source revision the translation now matches.
  */
 export function TranslationActions({
@@ -31,7 +32,8 @@ export function TranslationActions({
   slugEditable: boolean;
   slug: string | null;
   slugPrefix: string;
-  missing: { locale: string; label: string }[];
+  /** ML-7: `proposal` — the language has a reviewed-pending proposal for this page (menus, nl). */
+  missing: { locale: string; label: string; proposal?: boolean }[];
   outdated: { latest: number } | null;
 }) {
   const router = useRouter();
@@ -42,6 +44,7 @@ export function TranslationActions({
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
 
   if (!canEdit) return null;
+  const offersProposal = missing.some((m) => m.locale === locale && m.proposal);
 
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -49,6 +52,7 @@ export function TranslationActions({
     const form = new FormData(e.currentTarget);
     const body: Record<string, unknown> = { locale, title: String(form.get("title") ?? "") };
     if (slugEditable) body["slug"] = String(form.get("slug") ?? "");
+    if (offersProposal && form.get("proposal") === "on") body["proposal"] = true;
     setPending(true);
     setError(null);
     setIssues([]);
@@ -110,6 +114,19 @@ export function TranslationActions({
           <p className="text-sm text-ink-2">
             {`The new page copies the sections, images and links of this page with empty texts. It is created as a draft; nothing is published.`}
           </p>
+          {offersProposal ? (
+            <label key="proposal" className="flex items-start gap-2 text-sm text-ink-2">
+              <input
+                type="checkbox"
+                name="proposal"
+                defaultChecked
+                className="mt-0.5 h-4 w-4 rounded border-line-strong"
+              />
+              <span>
+                {`Fill the texts with the prepared translation proposal (written by hand, not machine translated; texts without a proposal stay empty). The draft still needs a language review before it is published. Company name, address, telephone and e-mail stay as they are.`}
+              </span>
+            </label>
+          ) : null}
           <Field label="Translated title" htmlFor="translation-title">
             <input
               id="translation-title"

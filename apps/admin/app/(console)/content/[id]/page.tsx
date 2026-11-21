@@ -14,7 +14,7 @@ import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { PageEditor } from "../../../../components/cms/page-editor";
 import { CmsKindPill, publicationState } from "../../../../components/cms/parts";
 import { languageLabel } from "../../../../components/cms/site-languages";
-import { TranslationTabs } from "../../../../components/cms/translation-tabs";
+import { MenuLinkWarnings, TranslationTabs } from "../../../../components/cms/translation-tabs";
 import { EmptyState, ErrorState, StatusPill } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
@@ -89,6 +89,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
           }
         />
         <TranslationTabs page={page} site={site} translations={translations} />
+        <MenuLinkWarnings page={page} />
         {editable ? (
           // Remounted per draft version: a restore or a save from elsewhere shows the new draft.
           <PageEditor

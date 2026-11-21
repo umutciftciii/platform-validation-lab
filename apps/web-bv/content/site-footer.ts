@@ -23,7 +23,8 @@ export function siteFooterUi(locale: string) {
 export type SiteFooterContent = {
   headline: string;
   /** href null only while the button's page is not live: shown as text (DP-219). */
-  cta: FooterLink;
+  /** ML-7: null when the button has no destination in the footer's language (no button). */
+  cta: FooterLink | null;
   logo: { src: string; alt: string; width: number; height: number };
   homeHref: string;
   homeLabel: string;

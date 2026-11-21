@@ -28,6 +28,9 @@ export const EN_BEFORE_ML6: Record<string, string> = {
   "nav.openSubmenu": "Show submenu of {label}",
   "nav.newTab": "(opens in a new tab)",
   "nav.languageLabel": "Language",
+  // ML-7 (DP-238): the language selector is new UI (never rendered before ML-7).
+  "nav.languageButton": "Language: {language}",
+  "nav.languageSoon": "Coming soon",
   "footer.homeLabel": "back to top of page",
   "footer.navLabel": "Footer",
   "footer.legalLabel": "Legal",

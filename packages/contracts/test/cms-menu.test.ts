@@ -9,6 +9,7 @@ import {
   BvNavMenuSchema,
   BvNavPublicSchema,
   CMS_DESIGN_TEMPLATES,
+  MENU_HIDDEN,
   MENU_LIMITS,
   cmsIsMenu,
   footerLinks,
@@ -393,5 +394,57 @@ describe("admin checks and the reference conversion", () => {
       expect(t?.fields).toEqual([]);
     }
     expect(cmsIsMenu("bv.home")).toBe(false);
+  });
+});
+
+describe("ML-7: links hidden in a language without a destination", () => {
+  // A Dutch menu: only /over-ons exists in Dutch; everything else has no destination there.
+  const resolve = (t: MenuTarget) =>
+    t.type === "path" && t.path === "/about-us"
+      ? "/nl/over-ons"
+      : t.type === "url" || t.type === "none"
+        ? t.type === "url"
+          ? t.url
+          : null
+        : MENU_HIDDEN;
+
+  it("leaves hidden links out of the navigation and keeps the order of the rest", () => {
+    const n = BvNavMenuSchema.parse(NAV_V1);
+    n.items[1]!.children = [
+      { label: "A", target: { type: "path", path: "/about-us" }, newTab: false, visible: true },
+      { label: "B", target: { type: "path", path: "/b" }, newTab: false, visible: true },
+    ];
+    const pub = menuPublicNav(n, resolve);
+    // "Products" itself has no destination: it stays as the heading of its shown submenu.
+    expect(pub.items).toEqual([
+      {
+        label: "Products",
+        href: null,
+        newTab: false,
+        children: [{ label: "A", href: "/nl/over-ons", newTab: false }],
+      },
+      { label: "Company", href: "/nl/over-ons", newTab: false, children: [] },
+    ]);
+    expect(pub.contact).toBeNull();
+    expect(pub.noScriptLinks).toEqual([]);
+    expect(BvNavPublicSchema.safeParse(pub).success).toBe(true);
+  });
+
+  it("drops the footer button, links and emptied columns; contact details stay", () => {
+    const f = BvFooterMenuSchema.parse(FOOTER_V1);
+    const pf = menuPublicFooter(f, resolve);
+    expect(pf.cta).toBeNull();
+    expect(pf.columns).toEqual([
+      { title: "Company", links: [{ label: "About Us", href: "/nl/over-ons", newTab: false }] },
+    ]);
+    expect(pf.contact.company).toBe("Dream Petroleum B.V.");
+    expect(BvFooterPublicSchema.safeParse(pf).success).toBe(true);
+  });
+
+  it("is not used by a resolver of the default language (unchanged shape)", () => {
+    const pub = menuPublicFooter(BvFooterMenuSchema.parse(FOOTER_V1), (t) =>
+      t.type === "path" ? t.path : t.type === "url" ? t.url : null,
+    );
+    expect(pub.cta).toEqual({ label: "Get in Touch", href: "/contact", newTab: false });
   });
 });

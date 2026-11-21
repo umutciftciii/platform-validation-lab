@@ -34,7 +34,7 @@ export default function SiteFooter({
       <div className="site-footer-inner">
         <div className="site-footer-call">
           <h2 className="site-footer-headline">{content.headline}</h2>
-          {content.cta.href === null ? (
+          {content.cta === null ? null : content.cta.href === null ? (
             // DP-219: the button's page is not live: text instead of a link that would 404.
             <span className="site-footer-cta" aria-disabled="true">
               {content.cta.label}

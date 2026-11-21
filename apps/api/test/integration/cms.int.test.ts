@@ -26,6 +26,7 @@ import {
   CmsMenuTargetsResponseSchema,
   CmsPreviewResponseSchema,
   CmsPublicBundleSchema,
+  menuNlProposal,
   CmsPublicNewsSchema,
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
@@ -5052,9 +5053,25 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
         select: { id: true, path: true, content: true },
       });
       if (!enRow) continue; // imported by an earlier section when present
+      // ML-7: the footer starts from the prepared Dutch proposal; the others with empty texts.
+      const proposal = key === "bv.site-footer";
+      if (key === "bv.home") {
+        // No proposal for pages other than the menus.
+        expectError(
+          await bvEditor.post(`/pages/${enRow.id}/translations`, {
+            locale: "nl",
+            title: "x",
+            proposal: true,
+          }),
+          400,
+          "VALIDATION_FAILED",
+          { path: "proposal", rule: "unavailable" },
+        );
+      }
       const res = await bvEditor.post(`/pages/${enRow.id}/translations`, {
         locale: "nl",
         title: `NL ${key}`,
+        ...(proposal ? { proposal: true } : {}),
       });
       expect(res.status, `${key}: ${JSON.stringify(res.body)}`).toBe(201);
       const created = CmsPageResponseSchema.parse(res.body).page;
@@ -5082,6 +5099,25 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
     });
     const targets = (c: unknown) => JSON.stringify(c).match(/"target":\{[^}]*\}/g) ?? [];
     expect(targets(nav.content)).toEqual(targets(enNav.content));
+    // ML-7: the NL footer: Dutch proposal where one exists, shared contact details kept, targets
+    // copied; nothing published.
+    if (nlIds["bv.site-footer"]) {
+      const nlFooter = (await pageOf(nlIds["bv.site-footer"])).page;
+      const enFooter = await owner.cmsPage.findFirstOrThrow({
+        where: { siteId: BV, locale: "en", templateKey: "bv.site-footer" },
+      });
+      const c = nlFooter.content as {
+        headline: string;
+        contact: { company: string; addressLines: unknown; phone: { label: string } };
+      };
+      const e = enFooter.content as typeof c;
+      expect(c.headline).toBe(menuNlProposal("bv.site-footer", "headline", e.headline));
+      expect(c.contact.company).toBe(e.contact.company);
+      expect(c.contact.addressLines).toEqual(e.contact.addressLines);
+      expect(c.contact.phone.label).toBe(e.contact.phone.label);
+      expect(targets(nlFooter.content)).toEqual(targets(enFooter.content));
+      expect(nlFooter.publication).toBeNull();
+    }
     // A second NL registry page is refused (registry key per language).
     const twinId = randomUUID();
     const twice = await owner.cmsPage
@@ -5141,6 +5177,25 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
           newTab: false,
           visible: true,
         },
+        // ML-7: an English address whose page has a Dutch counterpart resolves to it.
+        {
+          label: "Zelfde",
+          target: { type: "path", path: "/ml2-same?x=1" },
+          newTab: false,
+          visible: true,
+        },
+        {
+          label: "Extern",
+          target: { type: "url", url: "https://www.example.com/x" },
+          newTab: true,
+          visible: true,
+        },
+        {
+          label: "Privacy",
+          target: { type: "path", path: "/privacy" },
+          newTab: false,
+          visible: true,
+        },
       ],
     };
     const saved = await bvEditor.post(`/pages/${navId}/draft`, {
@@ -5157,13 +5212,28 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
         (await pub(`/page?path=/ml2-same&locale=nl`)).body,
       );
       const navPublic = BvNavPublicSchema.parse(bundle.fragments["bv.site-nav"]?.content);
+      // ML-7 (ADR-028 D7): a link without a destination in Dutch is left out (no pending text,
+      // never the English page); URLs stay; order kept.
       expect(navPublic.items.map((i) => [i.label, i.href])).toEqual([
         ["Over ons", "/nl/over-ons-nieuw"],
-        ["Derde", "/products"],
+        ["Zelfde", "/nl/ml2-same?x=1"],
+        ["Extern", "https://www.example.com/x"],
+      ]);
+      expect(JSON.stringify(navPublic)).not.toContain("Derde");
+      // The admin warns about the hidden links of the draft before publishing (never refuses).
+      const warnings = (await pageOf(navId)).page.menuWarnings;
+      expect(
+        warnings.filter((w) => w.path.startsWith("items.")).map((w) => [w.label, w.rule]),
+      ).toEqual([
+        ["Derde", "not_in_language"],
+        ["Privacy", "not_in_language"],
       ]);
       // The English navigation is unchanged and still English.
       const enBundle = CmsPublicBundleSchema.parse((await pub(`/page?path=/ml2-same`)).body);
       expect(JSON.stringify(enBundle.fragments["bv.site-nav"])).not.toContain("Over ons");
+      // The English navigation keeps its pending texts and site paths (unchanged by ML-7).
+      const enNav = BvNavPublicSchema.parse(enBundle.fragments["bv.site-nav"]?.content);
+      expect(enNav.items.length).toBeGreaterThan(0);
     } finally {
       await setNlPublic(false);
     }

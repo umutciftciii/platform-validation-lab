@@ -1,5 +1,12 @@
 import Link from "next/link";
-import type { CmsPage, CmsSite, CmsTranslation, CmsTranslationState } from "@dream/contracts";
+import {
+  cmsTranslationHasProposal,
+  type CmsMenuLinkWarningRule,
+  type CmsPage,
+  type CmsSite,
+  type CmsTranslation,
+  type CmsTranslationState,
+} from "@dream/contracts";
 import { StatusPill, cx, type PillTone } from "../ui";
 import { languageLabel } from "./site-languages";
 import { TranslationActions } from "./translation-actions";
@@ -106,7 +113,11 @@ export function TranslationTabs({
         slugEditable={page.kind === "TEMPLATE"}
         slug={page.slug}
         slugPrefix={page.templateKey === "article" ? "/news/" : "/"}
-        missing={missing.map((t) => ({ locale: t.locale, label: languageLabel(t.locale) }))}
+        missing={missing.map((t) => ({
+          locale: t.locale,
+          label: languageLabel(t.locale),
+          proposal: cmsTranslationHasProposal(page.templateKey, t.locale),
+        }))}
         outdated={
           isTranslation && current?.outdated && current.sourceLatestRevisionNumber !== null
             ? { latest: current.sourceLatestRevisionNumber }
@@ -137,5 +148,43 @@ function TranslationSummary({
     <p key="summary" className="text-sm text-ink-2">
       {text}
     </p>
+  );
+}
+
+const MENU_WARNING: Readonly<Record<CmsMenuLinkWarningRule, string>> = {
+  not_live: "its content is not live: shown as text with the note “not ready yet”",
+  no_translation: "the page has no published version in this language: left out of the menu",
+  not_in_language: "this address or catalogue item does not exist in this language yet: left out",
+  unknown_target: "the linked page, product or category no longer exists",
+};
+
+/**
+ * ML-7 (DP-238): links of this menu draft that the site will not show as links in the menu's
+ * language, so the editor sees them before publishing (a warning, never a refusal, like the
+ * structure warning). Rendered by the server page; no state.
+ */
+export function MenuLinkWarnings({ page }: { page: CmsPage }) {
+  const warnings = page.menuWarnings;
+  if (warnings.length === 0) return null;
+  return (
+    <section
+      aria-label="Links to check before publishing"
+      className="space-y-2 rounded-2xl bg-amber-soft p-4 text-sm text-ink ring-1 ring-inset ring-amber/30 sm:p-5"
+    >
+      <h2 className="font-semibold">
+        {`${warnings.length === 1 ? "1 link" : `${warnings.length} links`} will not be shown as ${warnings.length === 1 ? "a link" : "links"} in ${languageLabel(page.locale)}`}
+      </h2>
+      <ul className="list-disc space-y-1 pl-5">
+        {warnings.map((w) => (
+          <li key={`${w.path}-${w.rule}`}>
+            <span className="font-medium">{w.label}</span>
+            <span className="text-ink-2">{` — ${MENU_WARNING[w.rule]}`}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-ink-2">
+        {`Publishing is still possible. Check the preview; translate or publish the missing pages first where the link is needed.`}
+      </p>
+    </section>
   );
 }

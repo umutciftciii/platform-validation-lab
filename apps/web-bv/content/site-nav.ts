@@ -42,8 +42,8 @@ export type SiteNavContent = Omit<ReturnType<typeof siteNavUi>, "homeHref"> & {
   noScriptLinks: (SiteNavItem & { href: string })[];
   pendingNote: string;
   /**
-   * ML-3 (ADR-028 D3/D7): the language switcher, public languages only; empty or missing while
-   * fewer than two languages are public (the switcher is then not rendered).
+   * ML-7 (ADR-028 D3/D7): the language selector — every language of the site, a language that is
+   * not public without a link ("coming soon"). Missing only where no language is known.
    */
   languages?: LanguageOption[];
 };
