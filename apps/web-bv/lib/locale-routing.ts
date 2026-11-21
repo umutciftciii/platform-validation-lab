@@ -130,36 +130,60 @@ function walk(value: unknown, locale: RouteLocale): unknown {
   return out;
 }
 
-// --- language switcher (ADR-028 D3/D7) ----------------------------------------------------------
+// --- language selector (ADR-028 D3/D7, ML-7) -----------------------------------------------------
 
 export interface LanguageOption {
   locale: RouteLocale;
   /** The language's own name, as a visitor of that language reads it. */
   label: string;
-  href: string;
+  /** Where the option goes; null while the language is not open to visitors (`available`). */
+  href: string | null;
   current: boolean;
+  /** Public on the site (data, `SiteLocale.public`): only then is the option a link. */
+  available: boolean;
 }
 
 const LANGUAGE_NAMES: Record<RouteLocale, string> = { en: "English", nl: "Nederlands" };
 
+export function languageName(locale: RouteLocale): string {
+  return LANGUAGE_NAMES[locale];
+}
+
 /**
- * The options of the language switcher: only languages that are public on the site (data), in
- * route order. A language goes to the counterpart of the current page when one is published in it
- * (`alternates`, public addresses), otherwise to that language's home; never to a guessed address.
- * With fewer than two public languages there is nothing to switch (empty list: the switcher is
- * hidden). Never used for automatic redirects.
+ * ML-7: the options of the language selector, every language the site has routes for, in route
+ * order. A public language goes to the counterpart of the current page when one is published in
+ * it (`alternates`, public addresses), otherwise to that language's home; never to a guessed
+ * address. A language that is not public is listed without a link (`available: false`; the
+ * selector says it is coming soon): it becomes a link by data alone when it is made public, and the
+ * server still answers 404 under its prefix until then. Never used for automatic redirects.
  */
 export function languageOptions(
   current: RouteLocale,
   publicLocales: readonly string[],
   alternates: Partial<Record<RouteLocale, string>> = {},
 ): LanguageOption[] {
-  const visible = ROUTE_LOCALES.filter((l) => publicLocales.includes(l));
-  if (visible.length < 2 || !visible.includes(current)) return [];
-  return visible.map((locale) => ({
-    locale,
-    label: LANGUAGE_NAMES[locale],
-    href: alternates[locale] ?? localePath(locale, "/"),
-    current: locale === current,
-  }));
+  return ROUTE_LOCALES.map((locale) => {
+    const available = publicLocales.includes(locale);
+    return {
+      locale,
+      label: LANGUAGE_NAMES[locale],
+      href: available ? (alternates[locale] ?? localePath(locale, "/")) : null,
+      current: locale === current,
+      available,
+    };
+  });
+}
+
+/**
+ * ML-7: the routes on which a query keeps its meaning in another language (the catalogue list's
+ * `?category=`). Everywhere else a language change starts without the query.
+ */
+const QUERY_ROUTES: readonly string[] = ["/products"];
+
+/** The query to carry from `current` (a public address) to `target` (both "?…" or ""). */
+export function carriedQuery(current: string, target: string, search: string): string {
+  const a = splitLocale(current);
+  const b = splitLocale(target);
+  if (!a || !b || a.rest !== b.rest || !QUERY_ROUTES.includes(a.rest)) return "";
+  return search.startsWith("?") && search.length > 1 ? search : "";
 }

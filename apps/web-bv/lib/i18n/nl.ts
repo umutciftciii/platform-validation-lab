@@ -15,9 +15,9 @@ import type { Dictionary } from "./en.ts";
 
 export const nl: Dictionary = {
   common: {
-    home: "Home",
+    home: "Startpagina",
     products: "Producten",
-    contact: "Contact",
+    contact: "Contact opnemen",
     tryAgain: "Probeer het over een moment opnieuw.",
     select: "Selecteer…",
     sending: "Bezig met verzenden…",
@@ -43,6 +43,8 @@ export const nl: Dictionary = {
     openSubmenu: "Submenu van {label} tonen",
     newTab: "(opent in een nieuw tabblad)",
     languageLabel: "Taal",
+    languageButton: "Taal: {language}",
+    languageSoon: "Binnenkort beschikbaar",
   },
 
   footer: {

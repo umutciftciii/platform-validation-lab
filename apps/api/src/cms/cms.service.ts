@@ -39,6 +39,7 @@ import {
   cmsSlugOfPath,
   cmsStructureWarnings,
   cmsTranslationDraft,
+  cmsTranslationHasProposal,
   cmsTranslationSlugSchema,
   type CmsContextResponse,
   type CmsHistoryResponse,
@@ -83,7 +84,7 @@ import {
   redirectsTo,
 } from "../seo/redirects.js";
 import { CMS_SEEDS } from "./seed/bv.js";
-import { assertMenuReferences, menuTargets } from "./menu-links.js";
+import { assertMenuReferences, menuTargets, menuWarnings } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 import { assertLocaleEnabled, siteLocalesOf } from "./site-locales.js";
 import {
@@ -230,8 +231,20 @@ export class CmsService {
         structureWarnings = cmsStructureWarnings(asObject(source.content), asObject(row.content));
       }
     }
+    // ML-7 (DP-238): links of a menu draft that will not be links in its language (a warning).
+    const linkWarnings = cmsIsMenu(row.templateKey)
+      ? await menuWarnings(db, row.siteId, row.templateKey, row.content, {
+          locale: row.locale,
+          defaultLocale: defaultLocaleOf(site),
+        })
+      : [];
     return {
-      page: toPage(row, { redirectsHere, keepsOldAddress: keeps, structureWarnings }),
+      page: toPage(row, {
+        redirectsHere,
+        keepsOldAddress: keeps,
+        structureWarnings,
+        menuWarnings: linkWarnings,
+      }),
       site,
       translations: translations ?? [],
     };
@@ -980,7 +993,15 @@ export class CmsService {
       orderBy: { revisionNumber: "desc" },
       select: { id: true, revisionNumber: true },
     });
-    const content = cmsTranslationDraft(row, asObject(row.content));
+    // ML-7: the menus in Dutch may start from the reviewed-pending proposal (still a draft).
+    if (input.proposal && !cmsTranslationHasProposal(row.templateKey, input.locale)) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "proposal", rule: "unavailable" }]);
+    }
+    const content = cmsTranslationDraft(
+      row,
+      asObject(row.content),
+      input.proposal ? { locale: input.locale } : undefined,
+    );
     try {
       const id = await db.$transaction(async (tx) => {
         if (path && keepsOldAddress(a.sites, row.siteId)) {

@@ -969,6 +969,30 @@ export type CmsTranslation = z.infer<typeof CmsTranslationSchema>;
 export const CMS_STRUCTURE_WARNINGS = ["sections", "lists", "images", "links"] as const;
 export type CmsStructureWarning = (typeof CMS_STRUCTURE_WARNINGS)[number];
 
+/**
+ * ML-7 (DP-238): a link of a menu (header, footer) that the site will not show as a link in the
+ * menu's language, computed with the draft. A warning before publishing, never a refusal.
+ *  - `not_live`: its content is not live (the site shows the text with the pending note);
+ *  - `no_translation`: the page has no published counterpart in this language (hidden);
+ *  - `not_in_language`: the address or catalogue item does not exist in this language (hidden;
+ *    products and categories until the catalogue is translated, ML-8c);
+ *  - `unknown_target`: the referenced page, product or category no longer exists.
+ */
+export const CMS_MENU_LINK_WARNINGS = [
+  "not_live",
+  "no_translation",
+  "not_in_language",
+  "unknown_target",
+] as const;
+export type CmsMenuLinkWarningRule = (typeof CMS_MENU_LINK_WARNINGS)[number];
+export const CmsMenuLinkWarningSchema = z.strictObject({
+  /** Content path of the link (`items.3`, `columns.1.links.0`, `cta`). */
+  path: z.string().max(80),
+  label: z.string().max(200),
+  rule: z.enum(CMS_MENU_LINK_WARNINGS),
+});
+export type CmsMenuLinkWarning = z.infer<typeof CmsMenuLinkWarningSchema>;
+
 export const CmsPageSummarySchema = z.object({
   id: UuidSchema,
   siteId: UuidSchema,
@@ -1017,6 +1041,11 @@ export const CmsPageSchema = CmsPageSummarySchema.extend({
    * list sizes, images or link targets). A warning before publishing, never a refusal.
    */
   structureWarnings: z.array(z.enum(CMS_STRUCTURE_WARNINGS)).default([]),
+  /**
+   * ML-7: menus only — links of the draft that the site will not show as links in the page's
+   * language (see `CMS_MENU_LINK_WARNINGS`). Empty for other pages and an older API.
+   */
+  menuWarnings: z.array(CmsMenuLinkWarningSchema).max(200).default([]),
 });
 export type CmsPage = z.infer<typeof CmsPageSchema>;
 

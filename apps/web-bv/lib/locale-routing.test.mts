@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_LOCALE,
   isRouteLocale,
+  carriedQuery,
   languageOptions,
   localePath,
   localizeHref,
@@ -129,16 +130,19 @@ describe("publicRedirectTarget", () => {
   });
 });
 
-describe("languageOptions", () => {
-  it("is empty while only one language is public (NL public=false: the switcher is hidden)", () => {
-    assert.deepEqual(languageOptions("en", ["en"]), []);
-    assert.deepEqual(languageOptions("en", ["en"], { nl: "/nl/over-ons" }), []);
+describe("languageOptions (ML-7)", () => {
+  it("always lists English and Dutch; a language that is not public has no link", () => {
+    assert.deepEqual(languageOptions("en", ["en"]), [
+      { locale: "en", label: "English", href: "/en", current: true, available: true },
+      { locale: "nl", label: "Nederlands", href: null, current: false, available: false },
+    ]);
+    // A counterpart of a hidden language is never offered.
+    assert.equal(languageOptions("en", ["en"], { nl: "/nl/over-ons" })[1]?.href, null);
   });
 
-  it("shows public languages only, never a language the site has no routes for", () => {
-    const opts = languageOptions("en", ["en", "nl", "tr"]);
+  it("never lists a language the site has no routes for", () => {
     assert.deepEqual(
-      opts.map((o) => o.locale),
+      languageOptions("en", ["en", "nl", "tr"]).map((o) => o.locale),
       ["en", "nl"],
     );
   });
@@ -149,14 +153,36 @@ describe("languageOptions", () => {
       nl: "/nl/over-ons",
     });
     assert.deepEqual(withCounterpart, [
-      { locale: "en", label: "English", href: "/en/about-us", current: true },
-      { locale: "nl", label: "Nederlands", href: "/nl/over-ons", current: false },
+      { locale: "en", label: "English", href: "/en/about-us", current: true, available: true },
+      { locale: "nl", label: "Nederlands", href: "/nl/over-ons", current: false, available: true },
     ]);
     const without = languageOptions("en", ["en", "nl"], { en: "/en/about-us" });
     assert.equal(without[1]?.href, "/nl");
   });
 
-  it("is empty when the current language is not public", () => {
-    assert.deepEqual(languageOptions("nl", ["en"]), []);
+  it("marks the current language also when it is not public (a Dutch 404 while NL is closed)", () => {
+    const opts = languageOptions("nl", ["en"]);
+    assert.deepEqual(
+      opts.map((o) => [o.locale, o.current, o.available, o.href]),
+      [
+        ["en", false, true, "/en"],
+        ["nl", true, false, null],
+      ],
+    );
+  });
+});
+
+describe("carriedQuery (ML-7)", () => {
+  it("keeps the catalogue filter on the same catalogue list in another language", () => {
+    assert.equal(carriedQuery("/en/products", "/nl/products", "?category=base-oils"), "?category=base-oils");
+  });
+
+  it("drops the query everywhere else", () => {
+    assert.equal(carriedQuery("/en/about-us", "/nl/over-ons", "?x=1"), "");
+    assert.equal(carriedQuery("/en/contact", "/nl/contact", "?x=1"), "");
+    assert.equal(carriedQuery("/en/products", "/nl", "?category=x"), "");
+    assert.equal(carriedQuery("/en/products/x", "/nl/products/x", "?a=1"), "");
+    assert.equal(carriedQuery("/en/products", "/nl/products", ""), "");
+    assert.equal(carriedQuery("/en/products", "/nl/products", "?"), "");
   });
 });

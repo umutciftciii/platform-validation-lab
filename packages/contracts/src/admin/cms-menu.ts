@@ -360,8 +360,11 @@ const PublicContactLine = z.strictObject({
 
 export const BvFooterPublicSchema = z.strictObject({
   headline: z.string(),
-  /** href null only when the button's page is not live: shown as text, never a 404 link. */
-  cta: MenuPublicLinkSchema,
+  /**
+   * href null only when the button's page is not live: shown as text, never a 404 link. ML-7:
+   * null (no button) when its target has no counterpart in the footer's language.
+   */
+  cta: MenuPublicLinkSchema.nullable(),
   intro: z.string(),
   contact: z.strictObject({
     title: z.string(),
@@ -380,15 +383,29 @@ export const BvFooterPublicSchema = z.strictObject({
 });
 export type BvFooterPublic = z.infer<typeof BvFooterPublicSchema>;
 
-/** The address of a target now; null when it is not ready or its content is not live. */
-export type MenuResolve = (target: MenuTarget) => string | null;
+/**
+ * The address of a target now; null when it is not ready or its content is not live (shown as
+ * text with the pending note). ML-7 (ADR-028 D7): `MENU_HIDDEN` when the link is left out of the
+ * menu altogether: a menu in a language other than the site's default never shows a target that
+ * has no live counterpart in that language (no pending text, never the English page).
+ */
+export const MENU_HIDDEN = "hidden" as const;
+export type MenuResolution = string | null | typeof MENU_HIDDEN;
+export type MenuResolve = (target: MenuTarget) => MenuResolution;
+
+type PublicLink = z.infer<typeof MenuPublicLinkSchema>;
 
 function publicLink(
   l: { label: string; target: MenuTarget; newTab: boolean },
   resolve: MenuResolve,
-) {
+): PublicLink | null {
   const href = resolve(l.target);
+  if (href === MENU_HIDDEN) return null;
   return { label: l.label, href, newTab: href !== null && l.newTab };
+}
+
+function shown<T>(v: T | null): v is T {
+  return v !== null;
 }
 
 /** The navigation as the site renders it: visible links only, every target resolved. */
@@ -396,16 +413,22 @@ export function menuPublicNav(c: BvNavMenu, resolve: MenuResolve): BvNavPublic {
   return {
     items: c.items
       .filter((i) => i.visible)
-      .map((i) => ({
-        ...publicLink(i, resolve),
-        children: i.children.filter((ch) => ch.visible).map((ch) => publicLink(ch, resolve)),
-      })),
+      .flatMap((i) => {
+        const children = i.children
+          .filter((ch) => ch.visible)
+          .map((ch) => publicLink(ch, resolve))
+          .filter(shown);
+        const own = publicLink(i, resolve);
+        // ML-7: an item whose own target is hidden stays as the heading of its shown submenu.
+        if (own) return [{ ...own, children }];
+        return children.length ? [{ label: i.label, href: null, newTab: false, children }] : [];
+      }),
     contact: c.contact.visible ? publicLink(c.contact, resolve) : null,
     // Real destinations only: without JavaScript a pending item could not explain itself.
     noScriptLinks: c.noScriptLinks
       .filter((l) => l.visible)
       .map((l) => publicLink(l, resolve))
-      .filter((l) => l.href !== null),
+      .filter((l): l is PublicLink => l !== null && l.href !== null),
     pendingNote: c.pendingNote,
   };
 }
@@ -427,14 +450,20 @@ export function menuPublicFooter(c: BvFooterMenu, resolve: MenuResolve): BvFoote
       .filter((col) => col.visible)
       .map((col) => ({
         title: col.title,
-        links: col.links.filter((l) => l.visible).map((l) => publicLink(l, resolve)),
+        links: col.links
+          .filter((l) => l.visible)
+          .map((l) => publicLink(l, resolve))
+          .filter(shown),
       }))
       .filter((col) => col.links.length > 0),
     social: c.social
       .filter((s) => s.visible)
       .map((s) => ({ network: s.network, label: s.label, href: s.url })),
     copyright: c.copyright,
-    legal: c.legal.filter((l) => l.visible).map((l) => publicLink(l, resolve)),
+    legal: c.legal
+      .filter((l) => l.visible)
+      .map((l) => publicLink(l, resolve))
+      .filter(shown),
     pendingNote: c.pendingNote,
   };
 }

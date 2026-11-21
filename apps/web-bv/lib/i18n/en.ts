@@ -48,6 +48,10 @@ export const en = {
     openSubmenu: "Show submenu of {label}",
     newTab: "(opens in a new tab)",
     languageLabel: "Language",
+    /** ML-7: the language selector's button ("{language}": the current language's own name). */
+    languageButton: "Language: {language}",
+    /** ML-7: next to a language that is not open to visitors yet. */
+    languageSoon: "Coming soon",
   },
 
   footer: {

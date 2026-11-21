@@ -33,6 +33,7 @@ import {
 } from "./cms.js";
 import { cmsDesignTemplate } from "./cms-bv.js";
 import { cmsIsMenu } from "./cms-menu.js";
+import { menuNlProposal } from "./cms-menu-nl.js";
 
 const VersionSchema = z.number().int().min(1);
 
@@ -118,19 +119,48 @@ function blankSections(sections: Json): Json {
   });
 }
 
-/** Menu texts (labels, column titles, address lines, the "not ready" note); targets, URLs stay. */
-const MENU_TEXT_KEYS = new Set(["label", "title", "text", "pendingNote"]);
-function blankMenu(value: Json): Json {
-  if (Array.isArray(value)) return value.map(blankMenu);
+/**
+ * Menu texts (labels, column and contact titles, address-free notes, the footer's headline, intro
+ * and copyright, the "not ready" note). Targets, URLs and switches are structure. ML-7: the
+ * company's contact details are shared by every language and stay as they are: company name,
+ * address lines, the telephone number and e-mail address shown, and the names of social networks.
+ */
+const MENU_TEXT_KEYS = new Set([
+  "label",
+  "title",
+  "text",
+  "note",
+  "pendingNote",
+  "headline",
+  "intro",
+  "copyright",
+]);
+const MENU_SHARED = [
+  /^contact\.company$/,
+  /^contact\.addressLines\.\d+\.text$/,
+  /^contact\.(phone|email)\.label$/,
+  /^social\.\d+\.label$/,
+];
+type MenuFill = (path: string, english: string) => string;
+function blankMenu(value: Json, path = "", fill: MenuFill = () => ""): Json {
+  if (Array.isArray(value))
+    return value.map((v, i) => blankMenu(v, path ? `${path}.${i}` : `${i}`, fill));
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const at = path ? `${path}.${k}` : k;
     // A menu target (`{ type: "page", pageId }`) keeps everything.
     if (k === "target") out[k] = v;
-    else if (MENU_TEXT_KEYS.has(k) && typeof v === "string") out[k] = "";
-    else out[k] = blankMenu(v);
+    else if (MENU_TEXT_KEYS.has(k) && typeof v === "string") {
+      out[k] = MENU_SHARED.some((r) => r.test(at)) ? v : fill(at, v);
+    } else out[k] = blankMenu(v, at, fill);
   }
   return out;
+}
+
+/** Languages and templates with a reviewed-pending proposal for "Create translation" (ML-7). */
+export function cmsTranslationHasProposal(templateKey: string, locale: string): boolean {
+  return locale === "nl" && cmsIsMenu(templateKey);
 }
 
 /**
@@ -141,6 +171,11 @@ function blankMenu(value: Json): Json {
 export function cmsTranslationDraft(
   page: { kind: string; templateKey: string },
   content: Record<string, unknown>,
+  /**
+   * ML-7: fill the texts with the Dutch proposal (`cms-menu-nl.ts`) where one exists; only for
+   * the menus in Dutch (`cmsTranslationHasProposal`), ignored otherwise. Still a draft.
+   */
+  proposal?: { locale: string },
 ): Record<string, unknown> {
   if (page.kind === "TEMPLATE") {
     const base =
@@ -149,7 +184,13 @@ export function cmsTranslationDraft(
         : { ...content };
     return { ...base, sections: blankSections(content["sections"]) };
   }
-  if (cmsIsMenu(page.templateKey)) return blankMenu(content) as Record<string, unknown>;
+  if (cmsIsMenu(page.templateKey)) {
+    const fill: MenuFill | undefined =
+      proposal && cmsTranslationHasProposal(page.templateKey, proposal.locale)
+        ? (path, en) => menuNlProposal(page.templateKey, path, en)
+        : undefined;
+    return blankMenu(content, "", fill) as Record<string, unknown>;
+  }
   const template = cmsDesignTemplate(page.templateKey);
   if (template?.fields) return blankFields(template.fields, content) as Record<string, unknown>;
   // A template with its own schema and no field list: keep the structure, empty plain texts.
@@ -235,6 +276,11 @@ export const CmsTranslationCreateRequestSchema = z.strictObject({
   locale: LocaleTagSchema,
   title: z.string().trim().min(1).max(200),
   slug: z.string().optional(),
+  /**
+   * ML-7: start from the reviewed-pending proposal of the language (menus in Dutch,
+   * `cmsTranslationHasProposal`); 400 `proposal` `unavailable` where there is none. A draft.
+   */
+  proposal: z.boolean().optional(),
 });
 export type CmsTranslationCreateRequest = z.input<typeof CmsTranslationCreateRequestSchema>;
 
