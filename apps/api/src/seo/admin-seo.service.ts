@@ -11,7 +11,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   BV_SITE_SEO_KEY,
   PublicSiteSeoSettingsSchema,
-  PublishedSnapshotSchema,
+  readSnapshotAddress,
   seoIsSelfCanonical,
   type SeoOverviewItem,
   type SeoOverviewResponse,
@@ -19,7 +19,7 @@ import {
 import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService } from "../iam/staff/access.js";
 import { SEO_SELECT } from "../cms/cms-content.js";
-import { LISTING_SEO_SELECT } from "../catalog/listing-seo.js";
+import { LISTING_TEXT_SELECT } from "../catalog/snapshot.js";
 import { ApiError } from "../iam/http/api-error.js";
 import { kindOf, siteDefaultLocale } from "./public-seo.service.js";
 
@@ -177,8 +177,12 @@ export class AdminSeoService {
           productId: true,
           visibility: true,
           version: true,
-          texts: { where: { locale: "en" }, select: { title: true } },
-          ...LISTING_SEO_SELECT,
+          // ML-8a (DP-214): texts and SEO texts of the default language; canonical, noindex and
+          // OG image are language-neutral and stay on the listing.
+          texts: { where: { locale }, select: LISTING_TEXT_SELECT },
+          seoCanonicalPath: true,
+          seoNoindex: true,
+          seoOgImageId: true,
         },
         take: MAX_ITEMS,
       });
@@ -200,19 +204,19 @@ export class AdminSeoService {
         if (!p || p.status === "ARCHIVED") continue;
         const pub = pubs.find((x) => x.productId === p.id) ?? null;
         const live = pub?.status === "PUBLISHED" && l.visibility === "VISIBLE";
-        const snap = pub ? PublishedSnapshotSchema.safeParse(pub.snapshot) : null;
-        const published = snap?.success ? snap.data : null;
+        const published = pub ? readSnapshotAddress(pub.snapshot) : null;
         const path = `/products/${published?.slug ?? p.slug}`;
+        const text = l.texts[0];
         items.push({
           id: p.id,
           source: "product",
           kind: "product",
           name: l.texts[0]?.title ?? p.name,
           path: `/products/${p.slug}`,
-          title: l.seoTitle,
-          description: l.seoDescription,
-          ogTitle: l.seoOgTitle,
-          ogDescription: l.seoOgDescription,
+          title: text?.seoTitle ?? null,
+          description: text?.seoDescription ?? null,
+          ogTitle: text?.seoOgTitle ?? null,
+          ogDescription: text?.seoOgDescription ?? null,
           hasOgImage: l.seoOgImageId !== null,
           canonicalPath: l.seoCanonicalPath,
           noindex: l.seoNoindex,
@@ -220,8 +224,8 @@ export class AdminSeoService {
           pendingChanges: live && pub.listingVersion !== l.version,
           inSitemap:
             live &&
-            !(published?.seo?.noindex ?? false) &&
-            seoIsSelfCanonical(path, published?.seo?.canonicalPath ?? null),
+            !(published?.noindex ?? false) &&
+            seoIsSelfCanonical(path, published?.canonicalPath ?? null),
         });
       }
     }

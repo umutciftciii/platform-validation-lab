@@ -12,6 +12,8 @@ import { ImagesService } from "./images.service.js";
 import { SpecsImagesController } from "./specs-images.controller.js";
 import { SpecsService } from "./specs.service.js";
 import { PublicCatalogService } from "./public-catalog.service.js";
+import { CatalogTranslationsController } from "./translations.controller.js";
+import { CatalogTranslationsService } from "./translations.service.js";
 import { PublicCatalogController, WorkflowController } from "./workflow.controller.js";
 import { WorkflowService } from "./workflow.service.js";
 import { GlobalCatalogService } from "./global-catalog.service.js";
@@ -43,6 +45,7 @@ import { ProposalsService } from "./proposals.service.js";
     ProposalsController,
     CatalogPreviewLinkController,
     PublicCatalogPreviewController,
+    CatalogTranslationsController,
   ],
   providers: [
     CatalogService,
@@ -55,6 +58,7 @@ import { ProposalsService } from "./proposals.service.js";
     CrossReferencesService,
     ProposalsService,
     CatalogPreviewService,
+    CatalogTranslationsService,
     // PM-5: one stamper registry per process; DP-043: the watermark stamper of LEAD_REQUIRED.
     {
       provide: DocumentStampers,

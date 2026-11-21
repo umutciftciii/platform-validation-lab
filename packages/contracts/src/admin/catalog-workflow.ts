@@ -41,10 +41,9 @@ import {
   type ListingVisibility,
   type ProductStatus,
 } from "./catalog.js";
+import { PublishedSnapshotV1Schema, type PublishedSnapshot } from "./catalog-snapshot.js";
 import {
   ProductValidationSchema,
-  SpecValueBasisSchema,
-  SpecValueDataSchema,
   type ProductValidation,
   type ValidationIssue,
 } from "./catalog-specs.js";
@@ -527,52 +526,10 @@ export type ReviewQueueResponse = z.infer<typeof ReviewQueueResponseSchema>;
 
 // --- public content (the live sites) -------------------------------------------------------------
 
-/**
- * The published content of one product on one site, frozen at publication. Only approved,
- * public fields: no ids of staff, no storage keys, file names, hashes or original images.
+/*
+ * The published snapshot (v1, v2) and how it is read per language are in catalog-snapshot.ts
+ * (ML-8a). `PublishedSnapshot` is the view of one language, the shape every reader works with.
  */
-export const PublishedSnapshotSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  slug: z.string(),
-  code: z.string(),
-  name: z.string(),
-  /** DP-161: null when the product has no summary (no longer required for publication). */
-  summary: z.string().nullable(),
-  description: z.string().nullable(),
-  category: z.strictObject({ slug: z.string(), name: z.string() }),
-  sortOrder: z.number().int(),
-  specs: z
-    .array(
-      z.strictObject({
-        key: z.string(),
-        name: z.string(),
-        /** DP-156; snapshots taken before it hold specification values only. */
-        basis: SpecValueBasisSchema.default("SPECIFICATION"),
-        value: SpecValueDataSchema,
-        unit: z.string().nullable(),
-        testMethod: z.string().nullable(),
-      }),
-    )
-    .max(500),
-  images: z
-    .array(
-      z.strictObject({
-        id: UuidSchema,
-        altText: z.string().nullable(),
-        isCover: z.boolean(),
-        /** Size of the display variant. */
-        width: z.number().int(),
-        height: z.number().int(),
-      }),
-    )
-    .max(100),
-  /**
-   * DP-209: the listing's SEO at publication. Snapshots taken before DP-209 have none (the site
-   * falls back to the product's own fields). Changing it takes a new publication, like the texts.
-   */
-  seo: ProductSeoSchema.optional(),
-});
-export type PublishedSnapshot = z.infer<typeof PublishedSnapshotSchema>;
 
 export const PUBLIC_CATALOG_API = "/api/v1/public/catalog";
 /** Public image variants: never the original upload. */
@@ -637,7 +594,7 @@ export type PublicProductListResponse = z.infer<typeof PublicProductListResponse
 
 export const PublicProductSchema = PublicProductBaseSchema.extend({
   description: z.string().nullable(),
-  specs: PublishedSnapshotSchema.shape.specs,
+  specs: PublishedSnapshotV1Schema.shape.specs,
   images: z.array(PublicImageSchema).max(100),
   /** DP-209: the published SEO; `ogImageId` is always one of `images` or null. */
   seo: ProductSeoSchema.default(EMPTY_PRODUCT_SEO),

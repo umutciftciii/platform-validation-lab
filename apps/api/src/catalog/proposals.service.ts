@@ -38,6 +38,7 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
 import { uuidOr404 } from "./specs.service.js";
+import { assertLocaleEnabled } from "../cms/site-locales.js";
 
 const READ = "product:read";
 const EDIT = "product:edit";
@@ -246,6 +247,8 @@ export class ProposalsService {
     await a.require(EDIT, { scope: "site", siteId }, { type: "product_proposal", id: null });
     const req = parseBody(CreateProposalRequestSchema, body);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    // ML-8a: proposals in every enabled language of the site (409 locale:not_enabled otherwise).
+    await assertLocaleEnabled(db, siteId, req.locale);
     const listing = await db.productSiteListing.findUnique({
       where: { productId_siteId: { productId: req.productId, siteId } },
       select: { id: true },

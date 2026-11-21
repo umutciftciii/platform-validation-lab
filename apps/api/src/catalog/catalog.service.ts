@@ -14,7 +14,6 @@
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
-  CATALOG_CONTENT_LOCALE,
   proposalContentKey,
   CategoryCreateRequestSchema,
   CategoryDefaultRequestSchema,
@@ -38,7 +37,9 @@ import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { mapDbError, staleVersion } from "./errors.js";
 import { changeMaster } from "./master.js";
-import { LISTING_SEO_SELECT, listingSeo } from "./listing-seo.js";
+import { LISTING_SEO_NEUTRAL_SELECT, listingSeo } from "./listing-seo.js";
+import { LISTING_TEXT_SELECT, type ListingTextRow } from "./snapshot.js";
+import { siteLocalesOf } from "../cms/site-locales.js";
 import { parentProblem, subtreeIds } from "./tree.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,11 +73,8 @@ interface ListingRow {
   sortOrder: number;
   version: number;
   updatedAt: Date;
-  texts: { title: string | null; summary: string | null; description: string | null }[];
-  seoTitle: string | null;
-  seoDescription: string | null;
-  seoOgTitle: string | null;
-  seoOgDescription: string | null;
+  /** ML-8a: the row of the site's default language (at most one). */
+  texts: ListingTextRow[];
   seoCanonicalPath: string | null;
   seoNoindex: boolean;
   seoOgImageId: string | null;
@@ -121,7 +119,8 @@ function toListing(l: ListingRow): Listing {
     sortOrder: l.sortOrder,
     version: l.version,
     text: text ? { title: text.title, summary: text.summary, description: text.description } : null,
-    seo: listingSeo(l),
+    // DP-214 (ML-8a): SEO texts of the default language, neutral fields of the listing.
+    seo: listingSeo(l, text),
     updatedAt: l.updatedAt.toISOString(),
   };
 }
@@ -148,20 +147,29 @@ function changedFields(before: Record<string, unknown>, after: Record<string, un
   return Object.keys(after).filter((k) => before[k] !== after[k]);
 }
 
-const LISTING_SELECT = {
-  id: true,
-  siteId: true,
-  categoryId: true,
-  visibility: true,
-  sortOrder: true,
-  version: true,
-  updatedAt: true,
-  texts: {
-    where: { locale: CATALOG_CONTENT_LOCALE },
-    select: { title: true, summary: true, description: true },
-  },
-  ...LISTING_SEO_SELECT,
-} as const;
+/** ML-8a: a listing with its text in `locale` (the site's default language for these endpoints). */
+const listingSelect = (locale: string) =>
+  ({
+    id: true,
+    siteId: true,
+    categoryId: true,
+    visibility: true,
+    sortOrder: true,
+    version: true,
+    updatedAt: true,
+    texts: { where: { locale }, select: LISTING_TEXT_SELECT },
+    ...LISTING_SEO_NEUTRAL_SELECT,
+  }) as const;
+
+/**
+ * ML-8a: the site's default language. The endpoints of before ML-8a (listing texts, SEO) work in
+ * it; other languages go through the translation endpoints (translations.service.ts).
+ */
+export async function defaultLocaleOf(db: Parameters<typeof siteLocalesOf>[0], siteId: string) {
+  const def = ((await siteLocalesOf(db, [siteId])).get(siteId) ?? []).find((l) => l.isDefault);
+  if (!def) throw new ApiError("INTERNAL_ERROR");
+  return def.locale;
+}
 
 @Injectable()
 export class CatalogService {
@@ -339,9 +347,10 @@ export class CatalogService {
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     const product = await db.product.findUnique({ where: { id } });
     if (!product) throw new ApiError("NOT_FOUND");
+    const locale = await defaultLocaleOf(db, siteId);
     const listing = await db.productSiteListing.findUnique({
       where: { productId_siteId: { productId: id, siteId } },
-      select: LISTING_SELECT,
+      select: listingSelect(locale),
     });
     return { product: toProduct(product), listing: listing ? toListing(listing) : null };
   }
@@ -469,6 +478,8 @@ export class CatalogService {
     });
     const input = parseBody(ListingUpsertRequestSchema, body);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    const locale = await defaultLocaleOf(db, siteId);
+    const LISTING_SELECT = listingSelect(locale);
     try {
       const listing = await db.$transaction(async (tx) => {
         const product = await tx.product.findUnique({
@@ -492,7 +503,7 @@ export class CatalogService {
         if (input.source) {
           const src = input.source;
           const proposal = await tx.productContentProposal.findFirst({
-            where: { id: src.proposalId, productId, siteId, locale: CATALOG_CONTENT_LOCALE },
+            where: { id: src.proposalId, productId, siteId, locale },
             select: { version: true, proposedSummary: true, proposedDescription: true },
           });
           if (!proposal) {
@@ -577,8 +588,8 @@ export class CatalogService {
         const hasText = Boolean(text.title || text.summary || text.description);
         if (hasText || existing?.texts[0]) {
           await tx.productListingText.upsert({
-            where: { listingId_locale: { listingId, locale: CATALOG_CONTENT_LOCALE } },
-            create: { listingId, siteId, locale: CATALOG_CONTENT_LOCALE, ...text },
+            where: { listingId_locale: { listingId, locale } },
+            create: { listingId, siteId, locale, ...text },
             update: text,
           });
         }
@@ -639,11 +650,22 @@ export class CatalogService {
     });
     const input = parseBody(ListingSeoUpdateRequestSchema, body);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
+    // DP-214 (ML-8a): the SEO texts belong to the default language's listing text; canonical
+    // path, noindex and OG image stay on the listing (the English columns follow by trigger).
+    const locale = await defaultLocaleOf(db, siteId);
+    const SELECT = {
+      id: true,
+      siteId: true,
+      version: true,
+      updatedAt: true,
+      texts: { where: { locale }, select: LISTING_TEXT_SELECT },
+      ...LISTING_SEO_NEUTRAL_SELECT,
+    } as const;
     try {
       return await db.$transaction(async (tx) => {
         const existing = await tx.productSiteListing.findUnique({
           where: { productId_siteId: { productId, siteId } },
-          select: { id: true, version: true, ...LISTING_SEO_SELECT },
+          select: SELECT,
         });
         if (!existing) throw new ApiError("NOT_FOUND", [{ path: "listing", rule: "missing" }]);
         if (existing.version !== input.version) throw staleVersion();
@@ -656,27 +678,48 @@ export class CatalogService {
             throw new ApiError("VALIDATION_FAILED", [{ path: "ogImageId", rule: "unknown" }]);
           }
         }
-        const data = {
+        const texts = {
           seoTitle: input.title,
           seoDescription: input.description,
           seoOgTitle: input.ogTitle,
           seoOgDescription: input.ogDescription,
+        };
+        const neutral = {
           seoCanonicalPath: input.canonicalPath,
           seoNoindex: input.noindex,
           seoOgImageId: input.ogImageId,
         };
         const res = await tx.productSiteListing.updateMany({
           where: { id: existing.id, version: input.version },
-          data: { ...data, version: { increment: 1 } },
+          data: { ...neutral, version: { increment: 1 } },
         });
         if (res.count !== 1) throw staleVersion();
+        const before = existing.texts[0];
+        if (before) {
+          await tx.productListingText.update({
+            where: { listingId_locale: { listingId: existing.id, locale } },
+            data: texts,
+          });
+        } else if (Object.values(texts).some((v) => v !== null)) {
+          await tx.productListingText.create({
+            data: { listingId: existing.id, siteId, locale, ...texts },
+          });
+        }
         const after = await tx.productSiteListing.findUniqueOrThrow({
           where: { id: existing.id },
-          select: { id: true, siteId: true, version: true, updatedAt: true, ...LISTING_SEO_SELECT },
+          select: SELECT,
         });
-        const changed = (Object.keys(data) as (keyof typeof data)[]).filter(
-          (k) => existing[k] !== data[k],
-        );
+        const beforeFlat: Record<string, unknown> = {
+          seoTitle: before?.seoTitle ?? null,
+          seoDescription: before?.seoDescription ?? null,
+          seoOgTitle: before?.seoOgTitle ?? null,
+          seoOgDescription: before?.seoOgDescription ?? null,
+          seoCanonicalPath: existing.seoCanonicalPath,
+          seoNoindex: existing.seoNoindex,
+          seoOgImageId: existing.seoOgImageId,
+        };
+        const data: Record<string, unknown> = { ...texts, ...neutral };
+        const changed = Object.keys(data).filter((k) => beforeFlat[k] !== data[k]);
         await a.audit(tx, {
           action: "catalog.listing_seo_updated",
           resourceType: "product_listing",
@@ -689,7 +732,7 @@ export class CatalogService {
           listingId: after.id,
           siteId: after.siteId,
           version: after.version,
-          seo: listingSeo(after),
+          seo: listingSeo(after, after.texts[0]),
           updatedAt: after.updatedAt.toISOString(),
         };
       });

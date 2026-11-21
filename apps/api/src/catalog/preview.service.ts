@@ -23,8 +23,8 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ProposalReviewDataSchema,
+  localizeSnapshot,
   PUBLIC_IMAGE_VARIANTS,
-  PublishedSnapshotSchema,
   SlugSchema,
   toPublicProduct,
   toPublicSummary,
@@ -36,7 +36,14 @@ import {
   type PublicCategory,
   type PublishedSnapshot,
 } from "@dream/contracts";
-import { LISTING_SEO_SELECT, listingSeo } from "./listing-seo.js";
+import { siteLocalesOf } from "../cms/site-locales.js";
+import {
+  buildSnapshotV2,
+  catalogLocales,
+  displaySize,
+  LISTING_TEXT_SELECT,
+  loadTextRows,
+} from "./snapshot.js";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError } from "../iam/http/api-error.js";
 import { Clock } from "../iam/http/clock.js";
@@ -140,6 +147,10 @@ export class CatalogPreviewService {
 
   /** Every product the site lists (not archived), with its current data as a snapshot. */
   private static async items(site: PublicSite, slug?: string): Promise<PreviewItem[]> {
+    // ML-8a: the preview shows the default language, built exactly like the next publication.
+    const { defaultLocale, locales } = catalogLocales(
+      (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [],
+    );
     const listings = await site.db.productSiteListing.findMany({
       where: {
         siteId: site.siteId,
@@ -151,11 +162,10 @@ export class CatalogPreviewService {
         visibility: true,
         sortOrder: true,
         categoryId: true,
-        texts: {
-          where: { locale: "en" },
-          select: { title: true, summary: true, description: true },
-        },
-        ...LISTING_SEO_SELECT,
+        texts: { select: LISTING_TEXT_SELECT },
+        seoCanonicalPath: true,
+        seoNoindex: true,
+        seoOgImageId: true,
       },
       take: 500,
     });
@@ -176,23 +186,23 @@ export class CatalogPreviewService {
       }),
       site.db.productCategory.findMany({
         where: { siteId: site.siteId },
-        select: { id: true, slug: true, name: true },
+        select: { id: true, slug: true },
       }),
       site.db.productSpecValue.findMany({
         where: { productId: { in: productIds } },
-        include: { definition: { select: { key: true, name: true, sortOrder: true } } },
+        include: { definition: { select: { id: true, key: true, sortOrder: true } } },
       }),
       site.db.productImage.findMany({
         where: { productId: { in: productIds }, isPublic: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        select: { id: true, productId: true, altText: true, isCover: true, variants: true },
+        select: { id: true, productId: true, isCover: true, variants: true },
       }),
       site.db.productPublication.findMany({
         where: { siteId: site.siteId, productId: { in: productIds }, status: "PUBLISHED" },
         select: { productId: true },
       }),
       site.db.productContentProposal.findMany({
-        where: { siteId: site.siteId, locale: "en", productId: { in: productIds } },
+        where: { siteId: site.siteId, locale: defaultLocale, productId: { in: productIds } },
         select: {
           productId: true,
           status: true,
@@ -203,6 +213,11 @@ export class CatalogPreviewService {
         },
       }),
     ]);
+    const textRows = await loadTextRows(site.db, {
+      categoryIds: categories.map((c) => c.id),
+      definitionIds: [...new Set(values.map((v) => v.definition.id))],
+      imageIds: images.map((i) => i.id),
+    });
     const productById = new Map(products.map((p) => [p.id, p]));
     const categoryById = new Map(categories.map((c) => [c.id, c]));
     const published = new Set(publications.map((p) => p.productId));
@@ -212,54 +227,36 @@ export class CatalogPreviewService {
       const p = productById.get(l.productId);
       const cat = categoryById.get(l.categoryId);
       if (!p || !cat) continue;
-      const text = l.texts[0] ?? null;
-      const specs = values
-        .filter((v) => v.productId === p.id)
-        .sort(
-          (x, y) =>
-            x.definition.sortOrder - y.definition.sortOrder ||
-            x.definition.name.localeCompare(y.definition.name) ||
-            (x.basis === y.basis ? 0 : x.basis === "SPECIFICATION" ? -1 : 1),
-        )
-        .map((v) => ({
-          key: v.definition.key,
-          name: v.definition.name,
-          basis: v.basis,
-          value: valueData(v),
-          unit: v.unit,
-          testMethod: v.testMethod,
-        }));
-      const imgs = images
-        .filter((i) => i.productId === p.id)
-        .map((i) => {
-          const display = (i.variants as { display?: { width?: number; height?: number } } | null)
-            ?.display;
-          return {
-            id: i.id,
-            altText: i.altText,
-            isCover: i.isCover,
-            width: display?.width ?? 0,
-            height: display?.height ?? 0,
-          };
-        });
-      const snapshot = PublishedSnapshotSchema.parse({
-        schemaVersion: 1,
-        slug: p.slug,
-        code: p.code,
-        name: text?.title ?? p.name,
-        // CURRENT texts only; the research proposal is returned apart from them.
-        summary: text?.summary ?? p.summary,
-        description: text?.description ?? p.description,
-        category: { slug: cat.slug, name: cat.name },
-        sortOrder: l.sortOrder,
-        specs,
-        images: imgs,
-        // DP-209: the CURRENT listing SEO, as the next publication would carry it.
-        seo: {
-          ...listingSeo(l),
-          ogImageId: imgs.some((i) => i.id === l.seoOgImageId) ? l.seoOgImageId : null,
-        },
-      });
+      const imgs = images.filter((i) => i.productId === p.id);
+      // CURRENT texts only; the research proposal is returned apart from them. DP-209: the
+      // CURRENT listing SEO, as the next publication would carry it.
+      const snapshot = localizeSnapshot(
+        buildSnapshotV2({
+          defaultLocale,
+          locales,
+          product: p,
+          listing: l,
+          listingTexts: l.texts,
+          category: cat,
+          categoryTexts: textRows.categoryTexts.filter((t) => t.categoryId === cat.id),
+          specs: values
+            .filter((v) => v.productId === p.id)
+            .map((v) => ({
+              definitionId: v.definition.id,
+              key: v.definition.key,
+              sortOrder: v.definition.sortOrder,
+              basis: v.basis,
+              value: valueData(v),
+              unit: v.unit,
+              testMethod: v.testMethod,
+            })),
+          specTexts: textRows.specTexts,
+          images: imgs.map((i) => ({ id: i.id, isCover: i.isCover, ...displaySize(i.variants) })),
+          imageTexts: textRows.imageTexts,
+        }),
+        defaultLocale,
+      );
+      if (!snapshot) continue;
       const prop = proposalByProduct.get(p.id);
       out.push({
         productId: p.id,

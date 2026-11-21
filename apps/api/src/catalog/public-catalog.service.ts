@@ -14,8 +14,10 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   DOCUMENT_ACCESS_POLICIES,
+  LocaleTagSchema,
   PUBLIC_IMAGE_VARIANTS,
-  PublishedSnapshotSchema,
+  parseStoredSnapshot,
+  readSnapshot,
   SlugSchema,
   toPublicProduct,
   toPublicSummary,
@@ -50,6 +52,7 @@ import { ImageGateBusy, ImageProcessingGate } from "../media/image-gate.js";
 import { PUBLIC_RATE_LIMITS, PublicRateLimitService, ipSubject } from "../iam/public-rate-limit.js";
 import { DocumentGrantsService, type GrantForDownload } from "../leads/document-grants.service.js";
 import type { MediaStorage } from "../media/storage.js";
+import { siteLocalesOf } from "../cms/site-locales.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -71,17 +74,35 @@ export class PublicCatalogService {
     return liveRows(site, where);
   }
 
-  private parse(row: LiveRow): PublishedSnapshot | null {
-    const parsed = PublishedSnapshotSchema.safeParse(row.snapshot);
-    if (!parsed.success) {
+  /**
+   * ML-8a (ADR-028 D8): the language of a public catalogue request. Without `locale` the site's
+   * default language (as before ML-8a). A given language must be public on the site AND, until
+   * ML-8c opens the catalogue in other languages, the default one; anything else is a 404 that
+   * reveals nothing (Dutch products stay closed while `nl` is not public, and after that until
+   * ML-8c).
+   */
+  private static async locale(site: PublicSite, raw: unknown): Promise<string> {
+    const all = (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [];
+    const def = all.find((l) => l.isDefault);
+    if (!def) throw new ApiError("INTERNAL_ERROR");
+    if (raw === undefined) return def.locale;
+    const tag = LocaleTagSchema.safeParse(raw);
+    if (!tag.success || tag.data !== def.locale) throw new ApiError("NOT_FOUND");
+    return def.locale;
+  }
+
+  /** The view of `locale`; null (not served) when the snapshot has no complete text in it. */
+  private parse(row: LiveRow, locale: string): PublishedSnapshot | null {
+    if (!parseStoredSnapshot(row.snapshot)) {
       this.log.error("a published snapshot does not match the contract; it is not served");
       return null;
     }
-    return parsed.data;
+    return readSnapshot(row.snapshot, locale);
   }
 
-  async list(ctx: RequestContext): Promise<PublicProductListResponse> {
+  async list(ctx: RequestContext, rawLocale?: unknown): Promise<PublicProductListResponse> {
     const site = await this.sites.begin(ctx);
+    const locale = await PublicCatalogService.locale(site, rawLocale);
     const rows = await PublicCatalogService.live(site);
     const withDocuments = await PublicCatalogService.productsWithOfferedDocuments(
       site,
@@ -89,7 +110,7 @@ export class PublicCatalogService {
     );
     const items: (PublicProductSummary & { sortOrder: number })[] = [];
     for (const row of rows) {
-      const s = this.parse(row);
+      const s = this.parse(row, locale);
       if (s)
         items.push({
           ...toPublicSummary(s, row.publishedAt.toISOString(), {
@@ -132,22 +153,35 @@ export class PublicCatalogService {
    * snapshot names it or one of its descendants; ancestors come from the site's current tree.
    * Nothing about drafts, hidden listings or empty categories is revealed.
    */
-  async categories(ctx: RequestContext): Promise<PublicCategoryListResponse> {
+  async categories(ctx: RequestContext, rawLocale?: unknown): Promise<PublicCategoryListResponse> {
     const site = await this.sites.begin(ctx);
+    const locale = await PublicCatalogService.locale(site, rawLocale);
     const rows = await PublicCatalogService.live(site);
     const direct = new Map<string, number>();
     for (const row of rows) {
-      const s = this.parse(row);
+      const s = this.parse(row, locale);
       if (s) direct.set(s.category.slug, (direct.get(s.category.slug) ?? 0) + 1);
     }
     if (direct.size === 0) return { items: [] };
-    const cats = await site.db.productCategory.findMany({
-      where: { siteId: site.siteId },
-      select: { id: true, parentId: true, slug: true, name: true, sortOrder: true },
+    // ML-8a: names in the request's language; a category without one is left out.
+    const [tree, texts] = await Promise.all([
+      site.db.productCategory.findMany({
+        where: { siteId: site.siteId },
+        select: { id: true, parentId: true, slug: true, sortOrder: true },
+      }),
+      site.db.productCategoryText.findMany({
+        where: { siteId: site.siteId, locale },
+        select: { categoryId: true, name: true },
+      }),
+    ]);
+    const nameOf = new Map(texts.map((t) => [t.categoryId, t.name]));
+    const cats = tree.flatMap((c) => {
+      const name = nameOf.get(c.id);
+      return name === undefined ? [] : [{ ...c, name }];
     });
-    const byId = new Map(cats.map((c) => [c.id, c]));
+    const byId = new Map(tree.map((c) => [c.id, c]));
     const total = new Map<string, number>();
-    for (const c of cats) {
+    for (const c of tree) {
       const n = direct.get(c.slug) ?? 0;
       if (n === 0) continue;
       // add this category's products to it and every ancestor (the tree has at most 3 levels)
@@ -168,18 +202,23 @@ export class PublicCatalogService {
         sortOrder: c.sortOrder,
         count: total.get(c.id) as number,
       }))
-      .sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, "en"));
+      .sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, locale));
     return { items };
   }
 
-  async product(ctx: RequestContext, rawSlug: string): Promise<{ product: PublicProduct }> {
+  async product(
+    ctx: RequestContext,
+    rawSlug: string,
+    rawLocale?: unknown,
+  ): Promise<{ product: PublicProduct }> {
     const slug = SlugSchema.safeParse(rawSlug);
     if (!slug.success || slug.data !== rawSlug) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
+    const locale = await PublicCatalogService.locale(site, rawLocale);
     const [row] = await PublicCatalogService.live(site, {
       snapshot: { path: ["slug"], equals: slug.data },
     });
-    const s = row ? this.parse(row) : null;
+    const s = row ? this.parse(row, locale) : null;
     if (!row || !s) throw new ApiError("NOT_FOUND");
     return { product: toPublicProduct(s, row.publishedAt.toISOString()) };
   }
@@ -404,7 +443,7 @@ export class PublicCatalogService {
       throw new ApiError("NOT_FOUND");
     }
     const [live] = await PublicCatalogService.live(site, { productId: doc.productId });
-    const snapshot = live ? this.parse(live) : null;
+    const snapshot = live ? parseStoredSnapshot(live.snapshot) : null;
     if (!live || !snapshot) throw new ApiError("NOT_FOUND");
     let data: Buffer | null;
     try {

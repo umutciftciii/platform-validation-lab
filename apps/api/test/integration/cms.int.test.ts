@@ -4105,6 +4105,28 @@ describe("20. header and footer menus (DP-219)", () => {
 });
 
 /**
+ * ML-8a: the rollback statements of migration 39 from its header comment. Migration 39 adds
+ * foreign keys from ProductListingText and ProductCategoryText to SiteLocale, so ML-1's rollback
+ * runs after it (39, 38, then 37).
+ */
+function ml8aRollbackStatements(): string[] {
+  const sql = readFileSync(
+    path.join(API_DIR, "prisma/migrations/20261212090000_ml_8a_catalog_texts/migration.sql"),
+    "utf8",
+  );
+  const block = sql.split("-- Rollback")[1]!.split("-- ===")[0]!;
+  return block
+    .split("\n")
+    .filter((l) => l.startsWith("--   "))
+    .map((l) => l.slice(5))
+    .filter((l) => !l.startsWith("("))
+    .join("\n")
+    .split(/;\s*\n/)
+    .map((st) => st.trim().replace(/;$/, ""))
+    .filter(Boolean);
+}
+
+/**
  * ML-2: the rollback statements of migration 38 from its header comment. Migration 38 adds a
  * foreign key from CmsPage to SiteLocale, so ML-1's rollback runs after it (38, then 37).
  */
@@ -4336,7 +4358,10 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     const sitesBefore = await owner.site.findMany({ orderBy: { key: "asc" } });
     const pagesBefore = await owner.cmsPage.count();
     await rolledBack(async (tx) => {
-      // ML-2 first: its foreign key CmsPage -> SiteLocale depends on the table.
+      // ML-8a, then ML-2: their foreign keys to SiteLocale depend on the table.
+      const ml8a = ml8aRollbackStatements();
+      expect(ml8a).toHaveLength(15);
+      for (const stmt of ml8a) await tx.$executeRawUnsafe(stmt);
       for (const stmt of ml2RollbackStatements()) await tx.$executeRawUnsafe(stmt);
       for (const stmt of rollback ?? []) await tx.$executeRawUnsafe(stmt);
       const left = await tx.$queryRaw<{ n: bigint }[]>`
