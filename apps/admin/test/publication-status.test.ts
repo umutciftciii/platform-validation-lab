@@ -54,6 +54,7 @@ function site(over: Partial<SitePublication> = {}): SitePublication {
       blocking: [],
       warnings: [issue("WARNING", "listing_shown_on_publish")],
     },
+    languages: [],
     ...over,
   };
 }

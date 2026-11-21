@@ -1,11 +1,25 @@
 /**
  * ML-8a (ADR-028 D8): routes of the catalogue texts per language, under /api/v1/admin/catalog
  * (contracts catalog-translations.ts). Changes use POST, the method the admin proxy forwards;
- * every handler authorises inside the service.
+ * every handler authorises inside the service. ML-8b adds the language lists of categories and
+ * specification names and the per-language publication preview (GET, read only).
  */
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from "@nestjs/common";
 import type {
+  CategoryTranslationListResponse,
   CategoryTranslationResponse,
+  PublicationPreviewResponse,
+  SpecDefinitionTranslationListResponse,
   ImageTranslationResponse,
   ListingTranslationResponse,
   ProductTranslationsResponse,
@@ -27,6 +41,34 @@ export class CatalogTranslationsController {
     @Query() query: Record<string, unknown>,
   ): Promise<ProductTranslationsResponse> {
     return this.texts.product(ctx, id, query);
+  }
+
+  @Get("products/:id/sites/:siteId/publication-preview")
+  @Header("Cache-Control", "no-store")
+  publicationPreview(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Param("siteId") siteId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<PublicationPreviewResponse> {
+    return this.texts.publicationPreview(ctx, id, siteId, query);
+  }
+
+  @Get("sites/:siteId/categories/translations")
+  categories(
+    @Ctx() ctx: RequestContext,
+    @Param("siteId") siteId: string,
+    @Query() query: Record<string, unknown>,
+  ): Promise<CategoryTranslationListResponse> {
+    return this.texts.categoryList(ctx, siteId, query);
+  }
+
+  @Get("spec-definitions/translations")
+  definitions(
+    @Ctx() ctx: RequestContext,
+    @Query() query: Record<string, unknown>,
+  ): Promise<SpecDefinitionTranslationListResponse> {
+    return this.texts.definitionList(ctx, query);
   }
 
   @Post("products/:id/listings/:siteId/texts/:locale")

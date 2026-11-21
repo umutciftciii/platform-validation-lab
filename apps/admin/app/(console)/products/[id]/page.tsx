@@ -8,8 +8,11 @@ import {
   ProductDocumentListResponseSchema,
   ProductImageListResponseSchema,
   ProductSpecsResponseSchema,
+  ProductTranslationsResponseSchema,
   ProductWorkflowResponseSchema,
   ProposalResponseSchema,
+  type ProductTranslationsResponse,
+  type SiteLocale,
 } from "@dream/contracts";
 import { CrossReferenceManager } from "../../../../components/catalog/cross-reference-manager";
 import { DocumentManager } from "../../../../components/catalog/document-manager";
@@ -32,6 +35,18 @@ import {
 } from "../../../../components/catalog/workflow";
 import { ListingForm } from "../../../../components/catalog/listing-form";
 import { ProductSeoForm } from "../../../../components/catalog/product-seo-form";
+import {
+  CategoryTranslationForm,
+  ImageAltTranslationForm,
+  LanguageSummary,
+  LanguageTabs,
+  ListingSeoTranslationForm,
+  ListingTranslationForm,
+  SourceToggle,
+  SpecNamesTranslationForm,
+  TranslationSection,
+} from "../../../../components/catalog/translation-editor";
+import { localeLabel, parseLang } from "../../../../lib/translations";
 import {
   PageHeader,
   pickSite,
@@ -150,12 +165,130 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
     : null;
   const tab = parseProductTab(query["tab"]);
   // DP-180: the research notes of this site's proposal (review items and sources), read only.
-  const [research, siteSeo] = await Promise.all([
+  // ML-8b: the site's enabled languages (default first) and the texts of each other language.
+  const languages = currentSite?.languages ?? [];
+  const tabLocales: SiteLocale[] = languages.map((l, i) => ({
+    locale: l.locale,
+    enabled: true,
+    public: l.public,
+    isDefault: l.isDefault,
+    sortOrder: i,
+  }));
+  const defaultLocale = languages.find((l) => l.isDefault)?.locale ?? "en";
+  const lang = parseLang(query["lang"], tabLocales);
+  const others = languages.filter((l) => !l.isDefault);
+  const [research, siteSeo, ...translationReads] = await Promise.all([
     siteProposal
       ? serverRead(`${CATALOG}/proposals/${siteProposal.id}`, ProposalResponseSchema)
       : null,
     siteSeoDefaults(site.id),
+    ...others.map((l) =>
+      serverRead(
+        `${CATALOG}/products/${id}/translations?siteId=${site.id}&locale=${encodeURIComponent(l.locale)}`,
+        ProductTranslationsResponseSchema,
+      ),
+    ),
   ]);
+  const translations = new Map<string, ProductTranslationsResponse | null>(
+    others.map((l, i) => {
+      const r = translationReads[i];
+      return [l.locale, r && r.ok ? r.data : null];
+    }),
+  );
+  const languageStates = Object.fromEntries(languages.map((l) => [l.locale, l.state]));
+  /** The editors of one other language on the Content tab. */
+  const contentPanel = (locale: string) => {
+    const t = translations.get(locale) ?? null;
+    const name = localeLabel(locale);
+    if (!t) {
+      return (
+        <ErrorState title={`The ${name} texts could not be loaded`}>
+          Try again in a moment.
+        </ErrorState>
+      );
+    }
+    const v = (o: { version: number }) => o.version;
+    return (
+      <Panel
+        id={`listing-${locale}`}
+        title={`${name} texts on ${SITE_SHORT[site.key]}`}
+        description={`Everything a visitor reads about this product in ${name}, next to its English source. Codes, values, units, standards and brands stay as they are in every language.`}
+      >
+        <SourceToggle locale={defaultLocale}>
+          <div className="space-y-4">
+            <LanguageSummary data={t} />
+            <TranslationSection title="Product text" state={t.listing?.state ?? null}>
+              <KeepUnsaved resetKey={`tr-${locale}-listing-${t.listing?.version ?? 0}`}>
+                <ListingTranslationForm productId={product.id} data={t} canEdit={site.canEdit} />
+              </KeepUnsaved>
+            </TranslationSection>
+            {t.category ? (
+              <TranslationSection
+                title="Category"
+                state={t.category.state}
+                description="The name of this product's category on the site; shared by every product in it."
+              >
+                <KeepUnsaved resetKey={`tr-${locale}-category-${v(t.category)}`}>
+                  <CategoryTranslationForm
+                    category={t.category}
+                    locale={locale}
+                    enabled={t.enabled}
+                    canEdit={site.canEdit}
+                    idPrefix={`tr-${locale}-category`}
+                  />
+                </KeepUnsaved>
+              </TranslationSection>
+            ) : null}
+            <TranslationSection
+              title="Specification names"
+              state={null}
+              description="The names of this product's technical values (the values themselves are the same in every language)."
+            >
+              <KeepUnsaved resetKey={`tr-${locale}-specs-${t.specs.map(v).join(".")}`}>
+                <SpecNamesTranslationForm
+                  rows={t.specs.map((s) => ({ ...s, id: s.definitionId }))}
+                  locale={locale}
+                  enabled={t.enabled}
+                  canEdit={canEditMaster && !archived}
+                  idPrefix={`tr-${locale}`}
+                />
+              </KeepUnsaved>
+            </TranslationSection>
+            <TranslationSection
+              title="Image alt texts"
+              state={null}
+              description="What a screen reader says for each image; the images themselves are shared."
+            >
+              <KeepUnsaved resetKey={`tr-${locale}-alts-${t.images.map(v).join(".")}`}>
+                <ImageAltTranslationForm data={t} canEdit={canEditMaster && !archived} />
+              </KeepUnsaved>
+            </TranslationSection>
+          </div>
+        </SourceToggle>
+      </Panel>
+    );
+  };
+  /** The SEO texts of one other language on the SEO tab. */
+  const seoPanel = (locale: string) => {
+    const t = translations.get(locale) ?? null;
+    const name = localeLabel(locale);
+    if (!t) {
+      return (
+        <ErrorState title={`The ${name} SEO texts could not be loaded`}>
+          Try again in a moment.
+        </ErrorState>
+      );
+    }
+    return (
+      <Panel id={`seo-${locale}`} title={`${name} SEO on ${SITE_SHORT[site.key]}`}>
+        <SourceToggle locale={defaultLocale}>
+          <KeepUnsaved resetKey={`tr-${locale}-seo-${t.listing?.version ?? 0}`}>
+            <ListingSeoTranslationForm productId={product.id} data={t} canEdit={site.canEdit} />
+          </KeepUnsaved>
+        </SourceToggle>
+      </Panel>
+    );
+  };
 
   return (
     <NoticeProvider>
@@ -208,59 +341,70 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <ProductSiteSwitcher sites={sites} current={site.id} />
                 <p className="text-sm text-ink-3">Choose the site whose product text you edit.</p>
               </div>
-              <Panel
-                id="listing-panel"
-                title={`Product text on ${SITE_SHORT[site.key]}`}
-                description={
-                  listing
-                    ? `What the ${SITE_SHORT[site.key]} product page shows. Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
-                    : "This site does not list the product yet."
-                }
-                action={
-                  !listing ? (
-                    <SiteStatusPill status="NOT_LISTED" />
-                  ) : currentSite ? (
-                    <SiteStatusPill status={statusOf(currentSite)} />
-                  ) : undefined
-                }
-              >
-                {categories.ok && categories.data.items.length === 0 && !listing ? (
-                  <EmptyState
-                    icon="folder"
-                    title="No categories on this site"
-                    {...(site.canEdit
-                      ? {
-                          action: {
-                            href: `/products/categories?site=${sp}`,
-                            label: "Create categories",
-                          },
-                        }
-                      : {})}
-                  >
-                    A product is listed in one of the site&apos;s categories. Create the first
-                    category to list products here.
-                  </EmptyState>
-                ) : (
-                  // DP-209: kept while it has unsaved edits (an SEO save also raises the
-                  // listing version); remounted with the new version once it is clean.
-                  <KeepUnsaved resetKey={`${site.id}-${listing?.version ?? 0}`}>
-                    <ListingForm
-                      productId={product.id}
-                      siteId={site.id}
-                      siteName={SITE_SHORT[site.key]}
-                      listing={listing}
-                      categories={categories.ok ? categories.data.items : []}
-                      canEdit={site.canEdit}
-                      proposal={siteProposal}
-                      shared={{
-                        name: product.name,
-                        summary: product.summary,
-                        description: product.description,
-                      }}
-                    />
-                  </KeepUnsaved>
-                )}
-              </Panel>
+              <LanguageTabs
+                label="Language of the product text"
+                locales={tabLocales}
+                initial={lang}
+                states={languageStates}
+                panels={{
+                  ...Object.fromEntries(others.map((l) => [l.locale, contentPanel(l.locale)])),
+                  [defaultLocale]: (
+                    <Panel
+                      id="listing-panel"
+                      title={`Product text on ${SITE_SHORT[site.key]}`}
+                      description={
+                        listing
+                          ? `What the ${SITE_SHORT[site.key]} product page shows. Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
+                          : "This site does not list the product yet."
+                      }
+                      action={
+                        !listing ? (
+                          <SiteStatusPill status="NOT_LISTED" />
+                        ) : currentSite ? (
+                          <SiteStatusPill status={statusOf(currentSite)} />
+                        ) : undefined
+                      }
+                    >
+                      {categories.ok && categories.data.items.length === 0 && !listing ? (
+                        <EmptyState
+                          icon="folder"
+                          title="No categories on this site"
+                          {...(site.canEdit
+                            ? {
+                                action: {
+                                  href: `/products/categories?site=${sp}`,
+                                  label: "Create categories",
+                                },
+                              }
+                            : {})}
+                        >
+                          A product is listed in one of the site&apos;s categories. Create the first
+                          category to list products here.
+                        </EmptyState>
+                      ) : (
+                        // DP-209: kept while it has unsaved edits (an SEO save also raises the
+                        // listing version); remounted with the new version once it is clean.
+                        <KeepUnsaved resetKey={`${site.id}-${listing?.version ?? 0}`}>
+                          <ListingForm
+                            productId={product.id}
+                            siteId={site.id}
+                            siteName={SITE_SHORT[site.key]}
+                            listing={listing}
+                            categories={categories.ok ? categories.data.items : []}
+                            canEdit={site.canEdit}
+                            proposal={siteProposal}
+                            shared={{
+                              name: product.name,
+                              summary: product.summary,
+                              description: product.description,
+                            }}
+                          />
+                        </KeepUnsaved>
+                      )}
+                    </Panel>
+                  ),
+                }}
+              />
               <p className="px-1 text-xs text-ink-3">
                 Saving never publishes, unpublishes or changes the live site. Preview and publish on
                 the{" "}
@@ -448,48 +592,64 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <ProductSiteSwitcher sites={sites} current={site.id} />
                 <p className="text-sm text-ink-3">Choose the site whose SEO you edit.</p>
               </div>
-              <Panel
-                id="seo-panel"
-                title={`SEO on ${SITE_SHORT[site.key]}`}
-                description={
-                  site.key === "BV"
-                    ? "Search result and link preview of the product page. Saved on the site listing; the site shows it after the next publication. A product that is not published or not shown is never indexed."
-                    : "Only the BV site uses product SEO for now."
-                }
-                action={
-                  currentSite?.outdated.listing ? (
-                    <StatusPill tone="amber">Changes not published</StatusPill>
-                  ) : undefined
-                }
-              >
-                {!listing ? (
-                  <p className="text-sm text-ink-3">
-                    List the product on this site first (Content tab).
-                  </p>
-                ) : (
-                  <KeepUnsaved resetKey={`seo-${site.id}-${listing.version}`}>
-                    <ProductSeoForm
-                      productId={product.id}
-                      siteId={site.id}
-                      siteName={SITE_SHORT[site.key]}
-                      listing={listing}
-                      canEdit={site.canEdit}
-                      productName={listing.text?.title ?? product.name}
-                      productSummary={listing.text?.summary ?? product.summary}
-                      path={`/products/${product.slug}`}
-                      images={imageItems
-                        .filter((i) => i.isPublic)
-                        .map((i) => ({
-                          id: i.id,
-                          isCover: i.isCover,
-                          label: `${i.isCover ? "Cover · " : ""}${i.altText ?? i.originalFilename}`,
-                        }))}
-                      siteSeo={siteSeo}
-                      origin={site.key === "BV" ? bvPublicOrigin() : null}
-                    />
-                  </KeepUnsaved>
+              <LanguageTabs
+                label="Language of the SEO texts"
+                locales={tabLocales}
+                initial={lang}
+                states={Object.fromEntries(
+                  others.map((l) => [
+                    l.locale,
+                    translations.get(l.locale)?.listing?.seoState ?? null,
+                  ]),
                 )}
-              </Panel>
+                panels={{
+                  ...Object.fromEntries(others.map((l) => [l.locale, seoPanel(l.locale)])),
+                  [defaultLocale]: (
+                    <Panel
+                      id="seo-panel"
+                      title={`SEO on ${SITE_SHORT[site.key]}`}
+                      description={
+                        site.key === "BV"
+                          ? "Search result and link preview of the product page. Saved on the site listing; the site shows it after the next publication. A product that is not published or not shown is never indexed."
+                          : "Only the BV site uses product SEO for now."
+                      }
+                      action={
+                        currentSite?.outdated.listing ? (
+                          <StatusPill tone="amber">Changes not published</StatusPill>
+                        ) : undefined
+                      }
+                    >
+                      {!listing ? (
+                        <p className="text-sm text-ink-3">
+                          List the product on this site first (Content tab).
+                        </p>
+                      ) : (
+                        <KeepUnsaved resetKey={`seo-${site.id}-${listing.version}`}>
+                          <ProductSeoForm
+                            productId={product.id}
+                            siteId={site.id}
+                            siteName={SITE_SHORT[site.key]}
+                            listing={listing}
+                            canEdit={site.canEdit}
+                            productName={listing.text?.title ?? product.name}
+                            productSummary={listing.text?.summary ?? product.summary}
+                            path={`/products/${product.slug}`}
+                            images={imageItems
+                              .filter((i) => i.isPublic)
+                              .map((i) => ({
+                                id: i.id,
+                                isCover: i.isCover,
+                                label: `${i.isCover ? "Cover · " : ""}${i.altText ?? i.originalFilename}`,
+                              }))}
+                            siteSeo={siteSeo}
+                            origin={site.key === "BV" ? bvPublicOrigin() : null}
+                          />
+                        </KeepUnsaved>
+                      )}
+                    </Panel>
+                  ),
+                }}
+              />
             </div>
           </ProductTabPanel>
 

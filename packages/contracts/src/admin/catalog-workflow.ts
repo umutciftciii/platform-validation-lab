@@ -31,6 +31,16 @@
  * listing in the same transaction as the publication (`product:edit` of the site as well), so the
  * console no longer switches the listing on with a separate request first. Publishing again what
  * is already live (same mode, same master and listing versions) is refused (`already_published`).
+ *
+ * ML-8b (ADR-028 D8, DP-257): languages of a publication. The default language is always written
+ * from its current texts. Another enabled language is written from its current texts only when
+ * the publisher names it (`locales`); otherwise the live publication's texts in that language are
+ * kept as they are (a draft in one language never reaches a site with the publication of
+ * another). A named language must be complete (an own listing text, the category name and every
+ * specification name: 409 `{ path: "<locale>:<unit>", rule: "translation_missing" }`), and a
+ * language without a reviewed sensitive-claim word list (`CLAIM_SCAN_LOCALES`) needs the
+ * publisher's confirmation of a manual check (`manualReview`; 409 `{ path: "<locale>", rule:
+ * "manual_review_required" }`). Whether visitors see a language stays `SiteLocale.public`.
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
@@ -41,7 +51,9 @@ import {
   type ListingVisibility,
   type ProductStatus,
 } from "./catalog.js";
+import { LocaleTagSchema } from "../site-locales.js";
 import { PublishedSnapshotV1Schema, type PublishedSnapshot } from "./catalog-snapshot.js";
+import { ClaimScanSchema, TranslationStateSchema } from "./catalog-translations.js";
 import {
   ProductValidationSchema,
   type ProductValidation,
@@ -101,8 +113,41 @@ export const PublishRequestSchema = z.strictObject({
   listingVersion: VersionSchema,
   approvalMode: PublicationModeSchema.default("APPROVED"),
   makeVisible: z.boolean().default(false),
+  /** ML-8b: other languages whose CURRENT texts this publication writes (see the header). */
+  locales: z
+    .array(LocaleTagSchema)
+    .max(20)
+    .default([])
+    .transform((v) => [...new Set(v)].sort()),
+  /** ML-8b (DP-257): languages of `locales` whose text the publisher checked by hand. */
+  manualReview: z
+    .array(LocaleTagSchema)
+    .max(20)
+    .default([])
+    .transform((v) => [...new Set(v)].sort()),
 });
 export type PublishRequest = z.input<typeof PublishRequestSchema>;
+
+/**
+ * ML-8b: one language of a site in the publication view: whether the live snapshot has it, its
+ * translation state against the live snapshot, what blocks it and the sensitive wording found.
+ */
+export const SiteLanguagePublicationSchema = z.strictObject({
+  locale: LocaleTagSchema,
+  isDefault: z.boolean(),
+  public: z.boolean(),
+  /** The live publication carries texts in this language. */
+  live: z.boolean(),
+  /** The listing has an own text in this language (title, summary or description). */
+  hasText: z.boolean(),
+  /** Every text of the language together (OUTDATED, MISSING, DRAFT, PUBLISHED). */
+  state: TranslationStateSchema.nullable(),
+  /** Units that keep the language out of a publication (empty: it may be published). */
+  requiredMissing: z.array(z.string()).max(600),
+  claims: z.array(z.strictObject({ key: z.string(), label: z.string() })).max(50),
+  claimScan: ClaimScanSchema,
+});
+export type SiteLanguagePublication = z.infer<typeof SiteLanguagePublicationSchema>;
 
 /** Unpublish: the publication's own version. */
 export const UnpublishRequestSchema = z.strictObject({
@@ -473,6 +518,8 @@ export const SitePublicationSchema = z.strictObject({
     redirectsHere: z.array(z.string()).max(100),
   }),
   readiness: PublicationReadinessSchema,
+  /** ML-8b: the site's enabled languages, default first. */
+  languages: z.array(SiteLanguagePublicationSchema).max(20).default([]),
 });
 export type SitePublication = z.infer<typeof SitePublicationSchema>;
 

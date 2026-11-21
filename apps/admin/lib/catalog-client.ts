@@ -71,12 +71,28 @@ const RULE_MESSAGES: Readonly<Record<string, string>> = {
     "Only an active, non-internal document with a file can be shown on a site.",
   "(root):too_many_documents": "This product already has the maximum number of documents.",
   "(root):too_many_revisions": "This document already has the maximum number of revisions.",
+  // ML-8b: languages of a publication and translations.
+  "locale:not_enabled": "This language is not enabled on the site.",
+  "locales:default_locale":
+    "The default language is always published; choose other languages only.",
+  "manualReview:not_chosen": "Confirm the manual check only for languages you publish.",
+  "name:required": "The name is required in the site's default language.",
 };
 
 export function messageForIssues(code: string | null, issues: FieldIssue[]): string {
   for (const i of issues) {
     const text = RULE_MESSAGES[`${i.path}:${i.rule}`];
     if (text) return text;
+  }
+  // ML-8b: per-language publication rules ("nl:category" translation_missing, "nl" manual).
+  const missing = issues.filter((i) => i.rule === "translation_missing");
+  if (missing.length) {
+    const langs = [...new Set(missing.map((i) => i.path.split(":")[0]!.toUpperCase()))];
+    return `Some texts are not translated yet (${langs.join(", ")}): see what is needed under Languages.`;
+  }
+  const manual = issues.filter((i) => i.rule === "manual_review_required");
+  if (manual.length) {
+    return `Confirm that you checked the ${manual.map((i) => i.path.toUpperCase()).join(", ")} text by hand before publishing it.`;
   }
   if (code === "VALIDATION_FAILED" && issues.some((i) => i.path.startsWith("spec:"))) {
     return "Fix the blocking specification issues first (see the validation report).";
@@ -112,6 +128,28 @@ export async function callCatalog<T>(
     return { ok: false, status: 0, message: "The admin API cannot be reached.", issues: [] };
   }
   if (res.status === 204) return { ok: true, data: undefined as T };
+  const json: unknown = await res.json().catch(() => null);
+  if (res.ok) return { ok: true, data: json as T };
+  const parsed = ErrorBodySchema.safeParse(json);
+  const code = parsed.success ? parsed.data.error.code : null;
+  const issues = parsed.success
+    ? parsed.data.error.details.filter((d): d is FieldIssue => typeof d === "object")
+    : [];
+  return { ok: false, status: res.status, message: messageForIssues(code, issues), issues };
+}
+
+/** ML-8b: a read of the catalogue API (GET) through the same proxy, as a value. */
+export async function getCatalog<T>(path: string): Promise<CallResult<T>> {
+  let res: Response;
+  try {
+    res = await fetch(`${CATALOG_API}${path}`, {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, status: 0, message: "The admin API cannot be reached.", issues: [] };
+  }
   const json: unknown = await res.json().catch(() => null);
   if (res.ok) return { ok: true, data: json as T };
   const parsed = ErrorBodySchema.safeParse(json);
