@@ -41,6 +41,9 @@ import {
   localizeSnapshot,
   parseStoredSnapshot,
   ProductTranslationsResponseSchema,
+  CategoryTranslationListResponseSchema,
+  PublicationPreviewResponseSchema,
+  SpecDefinitionTranslationListResponseSchema,
   readSnapshot,
   snapshotCoverage,
 } from "@dream/contracts";
@@ -4475,11 +4478,14 @@ describe("17. ML-8a catalogue texts per language", () => {
   let id: string;
   let imageId: string;
   const slug = "ml8a-a";
-  async function republish() {
+  /** ML-8b: other languages are published only when named (with the manual claim check). */
+  async function republish(locales: string[] = []) {
     const res = await admin.post(`/products/${id}/publications/${BV}/publish`, {
       version: await version(id),
       listingVersion: await listingVersion(id, BV),
       approvalMode: "DIRECT",
+      locales,
+      manualReview: locales,
     });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
   }
@@ -4644,20 +4650,32 @@ describe("17. ML-8a catalogue texts per language", () => {
     expect(await publicEnglish()).toBe(englishBefore);
   });
 
-  it("publishing writes English and Dutch atomically; Dutch incomplete until category and spec names exist", async () => {
+  it("ML-8b: an English publication leaves the Dutch draft out; an incomplete Dutch cannot be chosen", async () => {
     const englishBefore = await publicEnglish();
     await republish();
     const snap = parseStoredSnapshot(await stored())!;
-    expect(Object.keys((snap as { locales: object }).locales)).toEqual(["en", "nl"]);
-    expect(snapshotCoverage(snap).find((c) => c.locale === "nl")).toMatchObject({
-      complete: false,
-      missing: expect.arrayContaining(["category", "spec:kv100", `image:${imageId}`]),
-    });
+    // ML-8b (DP-257): the Dutch draft is not published with the English publication
+    expect(Object.keys((snap as { locales: object }).locales)).toEqual(["en"]);
     expect(readSnapshot(snap, "nl")).toBeNull();
+    // chosen while incomplete (no category or specification name yet): refused, nothing written
+    const res = await admin.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+      locales: ["nl"],
+      manualReview: ["nl"],
+    });
+    expectError(res, 409, "CONFLICT_STATE", { path: "nl:category", rule: "translation_missing" });
+    expect(res.body.error.details).toContainEqual({
+      path: "nl:spec:kv100",
+      rule: "translation_missing",
+    });
+    expect(await stored()).toEqual(snap);
+    expect(snapshotCoverage(snap).map((c) => c.locale)).toEqual(["en"]);
     // the English output did not change
     expect(await publicEnglish()).toBe(englishBefore);
     expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
-      metadata: { locales: ["en", "nl"] },
+      metadata: { locales: ["en"], writtenLocales: ["en"] },
     });
   });
 
@@ -4732,7 +4750,7 @@ describe("17. ML-8a catalogue texts per language", () => {
 
   it("complete Dutch after republishing; still not public (nl public=false, ML-8c)", async () => {
     const englishBefore = await publicEnglish();
-    await republish();
+    await republish(["nl"]);
     const nl = readSnapshot(await stored(), "nl");
     expect(nl).toMatchObject({
       name: "Product ML8A-A",
@@ -4869,6 +4887,12 @@ describe("17. ML-8a catalogue texts per language", () => {
       .filter((l) => l.startsWith("--   ") && !l.startsWith("--   ("))
       .map((l) => l.slice(5).trim().replace(/;$/, ""));
     expect(rollback).toHaveLength(15);
+    // ML-8b: migration 40 lives on these tables, so it is rolled back first and re-run last.
+    const ml8b = ml8bRollbackStatements();
+    expect(ml8b).toHaveLength(4);
+    const ml8bForward = forwardStatements(
+      readFileSync(path.join(API_DIR, `prisma/migrations/${ML8B_MIGRATION}/migration.sql`), "utf8"),
+    );
     const forward: string[] = [];
     let cur = "";
     let inBody = false;
@@ -4895,6 +4919,7 @@ describe("17. ML-8a catalogue texts per language", () => {
       owner.$transaction(
         async (t) => {
           const tx = t as unknown as PrismaClient;
+          for (const st of ml8b) await tx.$executeRawUnsafe(st);
           for (const st of rollback) await tx.$executeRawUnsafe(st);
           const gone = await tx.$queryRaw<{ n: bigint }[]>`
             SELECT count(*)::bigint AS n FROM pg_class
@@ -4903,6 +4928,7 @@ describe("17. ML-8a catalogue texts per language", () => {
           // every English text is still in the columns of before ML-8a
           expect(await legacy(tx)).toEqual(before);
           for (const st of forward) await tx.$executeRawUnsafe(st);
+          for (const st of ml8bForward) await tx.$executeRawUnsafe(st);
           expect(await legacy(tx)).toEqual(before);
           // the English rows are back and equal to the columns; translations are gone
           const cats = await tx.productCategoryText.findMany({ where: { locale: "en" } });
@@ -4956,5 +4982,597 @@ describe("17. ML-8a catalogue texts per language", () => {
     expect(await owner.productCategoryText.count({ where: { categoryId: cid } })).toBe(2);
     expect((await bvEditor.del(`/categories/${cid}`)).status).toBe(204);
     expect(await owner.productCategoryText.count({ where: { categoryId: cid } })).toBe(0);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 18. ML-8b: admin language tabs — translation states, source revisions, languages of a
+//     publication and the manual claim check (ADR-028 D8, DP-239, DP-257)
+// ------------------------------------------------------------------------------------------
+
+const ML8B_MIGRATION = "20261213090000_ml_8b_translation_source";
+
+/** The rollback statements of migration 40 from its header comment. */
+function ml8bRollbackStatements(): string[] {
+  const sql = readFileSync(
+    path.join(API_DIR, `prisma/migrations/${ML8B_MIGRATION}/migration.sql`),
+    "utf8",
+  );
+  return sql
+    .split("-- Rollback")[1]!
+    .split("-- ML-8a (39)")[0]!
+    .split("\n")
+    .filter((l) => l.startsWith("--   ") && !l.startsWith("--   ("))
+    .map((l) => l.slice(5).trim().replace(/;$/, ""));
+}
+
+/** The statements of a migration (comments outside function bodies dropped). */
+function forwardStatements(sql: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inBody = false;
+  for (const line of sql.split("\n")) {
+    if (!inBody && /^\s*--/.test(line)) continue;
+    cur += `${line}\n`;
+    if ((line.match(/\$\$/g) ?? []).length % 2 === 1) inBody = !inBody;
+    if (!inBody && /;\s*$/.test(line)) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = "";
+    }
+  }
+  return out;
+}
+
+const sha = (values: (string | null)[]) =>
+  createHash("sha256").update(JSON.stringify(values)).digest("hex");
+
+describe("18. ML-8b language tabs: states, source revisions, languages of a publication", () => {
+  let admin: Staff; // approve (platform) + publish (BV): publishes directly
+  let id: string;
+  let imageId: string;
+  let listingId: string;
+  let cat: string;
+  const slug = "ml8b-a";
+  const tr = async (who: Staff, locale = "nl") => {
+    const res = await who.get(`/products/${id}/translations?siteId=${BV}&locale=${locale}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return ProductTranslationsResponseSchema.parse(res.body);
+  };
+  const publish = async (body: Record<string, unknown> = {}, who?: Staff) =>
+    (who ?? admin).post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+      ...body,
+    });
+  const stored = async () =>
+    (
+      await owner.productPublication.findUniqueOrThrow({
+        where: { productId_siteId: { productId: id, siteId: BV } },
+      })
+    ).snapshot;
+  const nlRow = () =>
+    owner.productListingText.findUnique({
+      where: { listingId_locale: { listingId, locale: "nl" } },
+    });
+  const saveNl = async (
+    texts: { title?: string | null; summary?: string | null; description?: string | null },
+    sections: string[] = ["texts"],
+    who: Staff = bvEditor,
+  ) =>
+    who.post(`/products/${id}/listings/${BV}/texts/nl`, {
+      version: await listingVersion(id, BV),
+      sections,
+      title: null,
+      summary: null,
+      description: null,
+      ...texts,
+    });
+  const catVersion = async () =>
+    (await owner.productCategory.findUniqueOrThrow({ where: { id: cat } })).version;
+  const defVersion = async () =>
+    (await owner.specDefinition.findUniqueOrThrow({ where: { id: kvDef } })).version;
+  const imgVersion = async () =>
+    (await owner.productImage.findUniqueOrThrow({ where: { id: imageId } })).version;
+  /** The public English product page without its publication date. */
+  const publicPage = async () =>
+    JSON.stringify((await pub("bv", `/products/${slug}`)).body, (k, v) =>
+      k === "publishedAt" ? undefined : v,
+    );
+
+  beforeAll(async () => {
+    admin = await staff(
+      "ml8b-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    id = await completeProduct("ml8b", "ML8B-A");
+    imageId = (await owner.productImage.findFirstOrThrow({ where: { productId: id } })).id;
+    const c = await bvEditor.post(`/sites/${BV}/categories`, {
+      name: "ML8B oils",
+      slug: "ml8b-oils",
+      parentId: null,
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    cat = c.body.category.id;
+    const l = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: await listingVersion(id, BV),
+      categoryId: cat,
+      visibility: "VISIBLE",
+      title: "ML8B-A for BV",
+    });
+    expect(l.status, JSON.stringify(l.body)).toBe(200);
+    listingId = l.body.listing.id;
+    // the specification name in Dutch, written against today's English name
+    const d = await pm.post(`/spec-definitions/${kvDef}/texts/nl`, {
+      version: await defVersion(),
+      name: "Kinematische viscositeit bij 100 °C",
+    });
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const res = await publish();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  });
+
+  it("migration 40: source hashes are null or lower-case hex SHA-256 (CHECK)", async () => {
+    const bad = "Z".repeat(64);
+    await rejectsDb(
+      owner.productListingText.update({
+        where: { listingId_locale: { listingId, locale: "en" } },
+        data: { seoSourceHash: bad },
+      }),
+      /ProductListingText_seoSourceHash_format/,
+    );
+    await rejectsDb(
+      owner.productCategoryText.update({
+        where: { categoryId_locale: { categoryId: cat, locale: "en" } },
+        data: { sourceHash: "a".repeat(63) + "G" },
+      }),
+      /ProductCategoryText_sourceHash_format/,
+    );
+    await rejectsDb(
+      owner.specDefinitionText.update({
+        where: { definitionId_locale: { definitionId: kvDef, locale: "en" } },
+        data: { sourceHash: bad },
+      }),
+      /SpecDefinitionText_sourceHash_format/,
+    );
+    await rejectsDb(
+      owner.productImageText.update({
+        where: { imageId_locale: { imageId, locale: "en" } },
+        data: { sourceHash: bad },
+      }),
+      /ProductImageText_sourceHash_format/,
+    );
+    // the default-language rows are the source: no hash
+    const en = await owner.productListingText.findUniqueOrThrow({
+      where: { listingId_locale: { listingId, locale: "en" } },
+    });
+    expect([en.sourceHash, en.seoSourceHash]).toEqual([null, null]);
+  });
+
+  it("a new language starts Missing: nothing copied, the required units listed, English next to it", async () => {
+    const t = await tr(bvReader);
+    expect(t).toMatchObject({
+      locale: "nl",
+      defaultLocale: "en",
+      enabled: true,
+      public: false,
+      live: { published: true, hasLocale: false },
+    });
+    expect(t.locales.map((l) => l.locale)).toEqual(["en", "nl"]);
+    expect(t.listing).toMatchObject({ hasText: false, state: "MISSING" });
+    // the source is what the English page shows: its own title, else the shared texts
+    expect(t.listing?.title).toEqual({ value: null, source: "ML8B-A for BV" });
+    expect(t.listing?.summary).toEqual({ value: null, source: "Summary of ML8B-A" });
+    expect(t.listing?.sharedSource).toEqual({ title: false, summary: true, description: true });
+    expect(t.category).toMatchObject({
+      state: "MISSING",
+      name: { value: null, source: "ML8B oils" },
+    });
+    expect(t.requiredMissing).toEqual(["listing", "category"]);
+    expect(t.missing).toEqual(expect.arrayContaining(["title", "summary", "description"]));
+    expect(t.missing).toContain(`image:${imageId}`);
+    expect(t.specs[0]).toMatchObject({ key: "kv100", state: "DRAFT" });
+    expect(await nlRow()).toBeNull();
+    // the English view of the same product: complete and live
+    const en = await tr(bvReader, "en");
+    expect(en.requiredMissing).toEqual([]);
+    expect(en.listing?.state).toBe("PUBLISHED");
+    expectError(
+      await nobody.get(`/products/${id}/translations?siteId=${BV}&locale=nl`),
+      403,
+      "FORBIDDEN",
+    );
+  });
+
+  it("saving Dutch records the source revision of the checked parts; Draft; nothing published", async () => {
+    const live = await stored();
+    const page = await publicPage();
+    expectError(await saveNl({ summary: "x" }, ["texts"], bvReader), 403, "FORBIDDEN");
+    expectError(
+      await bvEditor.post(`/products/${id}/listings/${BV}/texts/nl`, {
+        version: await listingVersion(id, BV),
+        sections: ["specs"],
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const res = await saveNl({ summary: "Samenvatting van ML8B-A." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const row = await nlRow();
+    expect(row?.sourceHash).toBe(
+      sha(["ML8B-A for BV", "Summary of ML8B-A", "Description of ML8B-A"]),
+    );
+    expect(row?.seoSourceHash).toBeNull(); // the SEO part was not checked
+    expect(await lastAudit("catalog.listing_translation_updated")).toMatchObject({
+      metadata: { locale: "nl", checked: ["texts"] },
+    });
+    const c = await bvEditor.post(`/categories/${cat}/texts/nl`, {
+      version: await catVersion(),
+      name: "ML8B-oliën",
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    expect(
+      (
+        await owner.productCategoryText.findUniqueOrThrow({
+          where: { categoryId_locale: { categoryId: cat, locale: "nl" } },
+        })
+      ).sourceHash,
+    ).toBe(sha(["ML8B oils", null]));
+    const t = await tr(bvReader);
+    expect([t.listing?.state, t.category?.state]).toEqual(["DRAFT", "DRAFT"]);
+    expect(t.requiredMissing).toEqual([]);
+    // nothing reached the site
+    expect(await stored()).toEqual(live);
+    expect(await publicPage()).toBe(page);
+  });
+
+  it("an English publication never carries the Dutch draft (DP-257)", async () => {
+    const page = await publicPage();
+    const res = await publish();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const snap = parseStoredSnapshot(await stored())!;
+    expect(Object.keys((snap as { locales: object }).locales)).toEqual(["en"]);
+    expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
+      metadata: { writtenLocales: ["en"], locales: ["en"] },
+    });
+    expect(await publicPage()).toBe(page);
+    const wf = await admin.workflow(id);
+    const langs = wf.sites.find((x) => x.siteId === BV)!.languages;
+    expect(langs.map((l) => [l.locale, l.isDefault, l.live, l.state, l.claimScan])).toEqual([
+      ["en", true, true, "PUBLISHED", "AUTOMATIC"],
+      ["nl", false, false, "DRAFT", "MANUAL"],
+    ]);
+    expect(langs[1]).toMatchObject({ hasText: true, public: false, requiredMissing: [] });
+    // Corporate has English only
+    expect(wf.sites.find((x) => x.siteId === COM)!.languages.map((l) => l.locale)).toEqual(["en"]);
+  });
+
+  it("choosing Dutch: enabled and complete only, a confirmed manual check, the publisher's right", async () => {
+    expectError(await publish({ locales: ["de"] }), 409, "CONFLICT_STATE", {
+      path: "locale",
+      rule: "not_enabled",
+    });
+    expectError(await publish({ locales: ["en"] }), 400, "VALIDATION_FAILED", {
+      path: "locales",
+      rule: "default_locale",
+    });
+    expectError(await publish({ manualReview: ["nl"] }), 400, "VALIDATION_FAILED", {
+      path: "manualReview",
+      rule: "not_chosen",
+    });
+    expectError(await publish({ locales: ["nl"] }), 409, "CONFLICT_STATE", {
+      path: "nl",
+      rule: "manual_review_required",
+    });
+    expectError(
+      await publish({ locales: ["nl"], manualReview: ["nl"] }, bvEditor),
+      403,
+      "FORBIDDEN",
+    );
+    // incomplete: without the category name
+    const c = await bvEditor.post(`/categories/${cat}/texts/nl`, {
+      version: await catVersion(),
+      name: null,
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    expectError(await publish({ locales: ["nl"], manualReview: ["nl"] }), 409, "CONFLICT_STATE", {
+      path: "nl:category",
+      rule: "translation_missing",
+    });
+    const c2 = await bvEditor.post(`/categories/${cat}/texts/nl`, {
+      version: await catVersion(),
+      name: "ML8B-oliën",
+    });
+    expect(c2.status, JSON.stringify(c2.body)).toBe(200);
+    const page = await publicPage();
+    const ok = await publish({ locales: ["nl"], manualReview: ["nl"] });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    const nl = readSnapshot(await stored(), "nl");
+    expect(nl).toMatchObject({
+      name: "Product ML8B-A",
+      summary: "Samenvatting van ML8B-A.",
+      description: null,
+      category: { slug: "ml8b-oils", name: "ML8B-oliën" },
+    });
+    expect(nl?.specs[0]?.name).toBe("Kinematische viscositeit bij 100 °C");
+    expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
+      metadata: { writtenLocales: ["en", "nl"], manualReview: ["nl"], locales: ["en", "nl"] },
+    });
+    // the English page is the same; Dutch is not public (nl public=false until ML-8c)
+    expect(await publicPage()).toBe(page);
+    expectError(await pub("bv", `/products/${slug}?locale=nl`), 404, "NOT_FOUND");
+    const t = await tr(bvReader);
+    expect(t.live.hasLocale).toBe(true);
+    expect([t.listing?.state, t.category?.state, t.specs[0]?.state]).toEqual([
+      "PUBLISHED",
+      "PUBLISHED",
+      "PUBLISHED",
+    ]);
+  });
+
+  it("a later Dutch draft stays off the site: republishing keeps the live Dutch texts", async () => {
+    const res = await saveNl({ summary: "Concept, nog niet nagekeken." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect((await tr(bvReader)).listing?.state).toBe("DRAFT");
+    const again = await publish();
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(readSnapshot(await stored(), "nl")?.summary).toBe("Samenvatting van ML8B-A.");
+    expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
+      metadata: { writtenLocales: ["en"], locales: ["en", "nl"] },
+    });
+    expect((await tr(bvReader)).listing?.state).toBe("DRAFT");
+  });
+
+  it("a changed English source makes Dutch Outdated; checking it again makes it current", async () => {
+    // English summary of the site (legacy listing endpoint)
+    const l = await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: await listingVersion(id, BV),
+      categoryId: cat,
+      visibility: "VISIBLE",
+      title: "ML8B-A for BV",
+      summary: "A new English summary.",
+    });
+    expect(l.status, JSON.stringify(l.body)).toBe(200);
+    let t = await tr(bvReader);
+    expect(t.listing?.state).toBe("OUTDATED");
+    expect(t.listing?.summary.source).toBe("A new English summary.");
+    const wf = await admin.workflow(id);
+    expect(wf.sites.find((x) => x.siteId === BV)!.languages[1]?.state).toBe("OUTDATED");
+    // saved again unchanged, checked against the new source
+    const ok = await saveNl({ summary: "Concept, nog niet nagekeken." });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    t = await tr(bvReader);
+    expect(t.listing?.state).toBe("DRAFT");
+    // the SEO part alone does not clear the texts part
+    await bvEditor.post(`/products/${id}/listings/${BV}`, {
+      version: await listingVersion(id, BV),
+      categoryId: cat,
+      visibility: "VISIBLE",
+      title: "ML8B-A for BV",
+      summary: "Another English summary.",
+    });
+    await saveNl({ summary: "Concept, nog niet nagekeken." }, ["seo"]);
+    expect((await tr(bvReader)).listing?.state).toBe("OUTDATED");
+    // the specification name: English changed → Outdated; back to the old name → current again
+    const en = await pm.post(`/spec-definitions/${kvDef}/texts/en`, {
+      version: await defVersion(),
+      name: "Kinematic viscosity at 100 °C (KV100)",
+    });
+    expect(en.status, JSON.stringify(en.body)).toBe(200);
+    expect((await tr(bvReader)).specs[0]?.state).toBe("OUTDATED");
+    const back = await pm.post(`/spec-definitions/${kvDef}/texts/en`, {
+      version: await defVersion(),
+      name: "Kinematic viscosity at 100 °C",
+    });
+    expect(back.status, JSON.stringify(back.body)).toBe(200);
+    expect((await tr(bvReader)).specs[0]?.state).toBe("PUBLISHED");
+    // the alt text: Dutch written against the English one, then the English one changes
+    const a = await pm.post(`/images/${imageId}/texts/nl`, {
+      version: await imgVersion(),
+      altText: "Vat van ML8B-A",
+    });
+    expect(a.status, JSON.stringify(a.body)).toBe(200);
+    expect(
+      (
+        await owner.productImageText.findUniqueOrThrow({
+          where: { imageId_locale: { imageId, locale: "nl" } },
+        })
+      ).sourceHash,
+    ).toBe(sha(["Drum of the product"]));
+    expect((await tr(bvReader)).images[0]?.state).toBe("DRAFT");
+    const e = await pm.post(`/images/${imageId}`, {
+      altText: "Steel drum of the product",
+      version: await imgVersion(),
+    });
+    expect(e.status, JSON.stringify(e.body)).toBe(200);
+    expect((await tr(bvReader)).images[0]?.state).toBe("OUTDATED");
+  });
+
+  it("category and specification lists per language: states, live counts, permissions", async () => {
+    const cats = await bvReader.get(`/sites/${BV}/categories/translations?locale=nl`);
+    expect(cats.status, JSON.stringify(cats.body)).toBe(200);
+    const list = CategoryTranslationListResponseSchema.parse(cats.body);
+    expect(list).toMatchObject({
+      locale: "nl",
+      defaultLocale: "en",
+      enabled: true,
+      canEdit: false,
+    });
+    expect(list.locales.map((l) => l.locale)).toEqual(["en", "nl"]);
+    expect(list.items.find((i) => i.id === cat)).toMatchObject({
+      slug: "ml8b-oils",
+      liveProducts: 1,
+      state: "PUBLISHED",
+      name: { value: "ML8B-oliën", source: "ML8B oils" },
+    });
+    const forEditor = CategoryTranslationListResponseSchema.parse(
+      (await bvEditor.get(`/sites/${BV}/categories/translations?locale=nl`)).body,
+    );
+    expect(forEditor.canEdit).toBe(true);
+    expectError(
+      await nobody.get(`/sites/${BV}/categories/translations?locale=nl`),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await bvReader.get(`/sites/${BV}/categories/translations?locale=xx-`),
+      404,
+      "NOT_FOUND",
+    );
+    // Corporate has no Dutch: readable, not enabled
+    const com = await root.get(`/sites/${COM}/categories/translations?locale=nl`);
+    expect(CategoryTranslationListResponseSchema.parse(com.body).enabled).toBe(false);
+
+    const defs = await bvReader.get(`/spec-definitions/translations?locale=nl`);
+    expect(defs.status, JSON.stringify(defs.body)).toBe(200);
+    const d = SpecDefinitionTranslationListResponseSchema.parse(defs.body);
+    expect(d).toMatchObject({ locale: "nl", sourceLocale: "en", enabled: true, canEdit: false });
+    expect(d.locales).toEqual(["en", "nl"]);
+    expect(d.items.find((i) => i.id === kvDef)).toMatchObject({
+      key: "kv100",
+      state: "PUBLISHED",
+      name: {
+        value: "Kinematische viscositeit bij 100 °C",
+        source: "Kinematic viscosity at 100 °C",
+      },
+    });
+    expect(
+      SpecDefinitionTranslationListResponseSchema.parse(
+        (await pm.get(`/spec-definitions/translations?locale=nl`)).body,
+      ).canEdit,
+    ).toBe(true);
+    expectError(await nobody.get(`/spec-definitions/translations?locale=nl`), 403, "FORBIDDEN");
+  });
+
+  it("the publication preview shows one language: the next Dutch text next to the live one", async () => {
+    const url = (locale: string, site = BV) =>
+      `/products/${id}/sites/${site}/publication-preview?locale=${locale}`;
+    const res = await bvReader.get(url("nl"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const p = PublicationPreviewResponseSchema.parse(res.body);
+    expect(p).toMatchObject({
+      locale: "nl",
+      public: false,
+      claimScan: "MANUAL",
+      requiredMissing: [],
+    });
+    expect(p.next?.summary).toBe("Concept, nog niet nagekeken.");
+    expect(p.live?.summary).toBe("Samenvatting van ML8B-A.");
+    expect(p.next?.category.name).toBe("ML8B-oliën");
+    const en = PublicationPreviewResponseSchema.parse((await bvReader.get(url("en"))).body);
+    expect(en).toMatchObject({ locale: "en", public: true, claimScan: "AUTOMATIC" });
+    expect(en.next?.summary).toBe("Another English summary.");
+    expectError(await bvReader.get(url("de")), 409, "CONFLICT_STATE", {
+      path: "locale",
+      rule: "not_enabled",
+    });
+    expectError(await root.get(url("nl", COM)), 409, "CONFLICT_STATE", {
+      path: "locale",
+      rule: "not_enabled",
+    });
+    expectError(await nobody.get(url("nl")), 403, "FORBIDDEN");
+    // nothing was written
+    expect(readSnapshot(await stored(), "nl")?.summary).toBe("Samenvatting van ML8B-A.");
+  });
+
+  it("DP-257: wording found in the Dutch text is listed; the manual check stays required", async () => {
+    const res = await saveNl({ summary: "Geschikt als grondstof voor SAF." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const wf = await admin.workflow(id);
+    const nl = wf.sites.find((x) => x.siteId === BV)!.languages[1]!;
+    expect(nl.claims.map((c) => c.key)).toEqual(["saf"]);
+    expect(nl.claimScan).toBe("MANUAL");
+    const p = PublicationPreviewResponseSchema.parse(
+      (await bvReader.get(`/products/${id}/sites/${BV}/publication-preview?locale=nl`)).body,
+    );
+    expect(p.claims.map((c) => c.key)).toEqual(["saf"]);
+    expectError(await publish({ locales: ["nl"] }), 409, "CONFLICT_STATE", {
+      path: "nl",
+      rule: "manual_review_required",
+    });
+  });
+
+  it("the BV catalogue preview takes ?locale: Dutch from its own texts only, other languages 404", async () => {
+    const reviewer = await staff(
+      "ml8b-preview",
+      [{ role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    const link = await reviewer.post(`/sites/${BV}/preview-link`);
+    expect(link.status, JSON.stringify(link.body)).toBe(200);
+    const token = /\/preview\/catalog\/([^/]+)\/products$/.exec(
+      CatalogPreviewLinkResponseSchema.parse(link.body).url,
+    )![1]!;
+    const get = async (p: string) =>
+      parse(
+        await fetch(`${base}/api/v1/public/catalog-preview/${token}${p}`, {
+          headers: { "x-dp-proxy-key": KEY.bv },
+        }),
+      );
+    const enRes = await get(`/products/${slug}`);
+    expect(enRes.status, JSON.stringify(enRes.body)).toBe(200);
+    expect(CatalogPreviewProductResponseSchema.parse(enRes.body).product.summary).toBe(
+      "Another English summary.",
+    );
+    expect((await get(`/products/${slug}?locale=en`)).body).toEqual(enRes.body);
+    const nlRes = await get(`/products/${slug}?locale=nl`);
+    expect(nlRes.status, JSON.stringify(nlRes.body)).toBe(200);
+    const nl = CatalogPreviewProductResponseSchema.parse(nlRes.body).product;
+    expect(nl.summary).toBe("Geschikt als grondstof voor SAF.");
+    expect(nl.category.name).toBe("ML8B-oliën");
+    const list = CatalogPreviewListResponseSchema.parse((await get("/products?locale=nl")).body);
+    // products without own Dutch text are not in the Dutch preview (no fallback to English)
+    expect(list.items.map((i) => i.slug)).toContain(slug);
+    expect(list.items.every((i) => i.slug !== "ml8a-a" || i.summary !== "Summary of ML8A-A")).toBe(
+      true,
+    );
+    expect(list.categories.find((c) => c.slug === "ml8b-oils")?.name).toBe("ML8B-oliën");
+    expect((await get(`/products/${slug}?locale=de`)).status).toBe(404);
+    expect((await get(`/products/${slug}?locale=NL`)).status).toBe(404);
+  });
+
+  it("migration 40: rollback (header) and a re-run, in a rolled-back transaction", async () => {
+    const rollback = ml8bRollbackStatements();
+    expect(rollback).toHaveLength(4);
+    const forward = forwardStatements(
+      readFileSync(path.join(API_DIR, `prisma/migrations/${ML8B_MIGRATION}/migration.sql`), "utf8"),
+    );
+    const cols = async (tx: PrismaClient) =>
+      Number(
+        (
+          await tx.$queryRaw<{ n: bigint }[]>`
+            SELECT count(*)::bigint AS n FROM information_schema.columns
+            WHERE column_name IN ('sourceHash', 'seoSourceHash')
+              AND table_name IN ('ProductListingText', 'ProductCategoryText',
+                                 'SpecDefinitionText', 'ProductImageText')`
+        )[0]?.n,
+      );
+    const textsBefore = await owner.productListingText.findMany({
+      where: { listingId },
+      orderBy: { locale: "asc" },
+      select: { locale: true, title: true, summary: true, description: true, seoTitle: true },
+    });
+    expect(await cols(owner)).toBe(5);
+    await expect(
+      owner.$transaction(
+        async (t) => {
+          const tx = t as unknown as PrismaClient;
+          for (const st of rollback) await tx.$executeRawUnsafe(st);
+          expect(await cols(tx)).toBe(0);
+          // only hashes are lost: every text is still there
+          const after = await tx.$queryRaw<{ locale: string; summary: string | null }[]>`
+            SELECT "locale", "summary" FROM "ProductListingText" WHERE "listingId" = ${listingId}::uuid
+            ORDER BY "locale"`;
+          expect(after).toEqual(textsBefore.map((x) => ({ locale: x.locale, summary: x.summary })));
+          for (const st of forward) await tx.$executeRawUnsafe(st);
+          expect(await cols(tx)).toBe(5);
+          throw new Error("rolled back by the test");
+        },
+        { timeout: 60_000 },
+      ),
+    ).rejects.toThrow("rolled back by the test");
+    expect(await cols(owner)).toBe(5);
   });
 });

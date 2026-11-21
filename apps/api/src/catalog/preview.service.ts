@@ -19,11 +19,17 @@
  * research proposal kept apart, and the DP-002 held / withheld values as their own list. It never
  * writes, never shows documents, cross-references or lead forms, and never publishes. The
  * public live routes (public-catalog.service.ts) are untouched.
+ *
+ * ML-8b (DP-257): `?locale=` shows one enabled language of the site, built as the next
+ * publication would build it if that language were chosen (its own rows only, no fallback to
+ * another language); without it the default language, as before. A language that is not enabled,
+ * and a product without a complete text in it, answer 404 / are left out.
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ProposalReviewDataSchema,
   localizeSnapshot,
+  LocaleTagSchema,
   PUBLIC_IMAGE_VARIANTS,
   SlugSchema,
   toPublicProduct,
@@ -145,12 +151,25 @@ export class CatalogPreviewService {
     return { site, claims };
   }
 
-  /** Every product the site lists (not archived), with its current data as a snapshot. */
-  private static async items(site: PublicSite, slug?: string): Promise<PreviewItem[]> {
-    // ML-8a: the preview shows the default language, built exactly like the next publication.
+  /** The language of a preview request: the default, or an enabled one named by `?locale`. */
+  private static async language(site: PublicSite, raw: unknown) {
     const { defaultLocale, locales } = catalogLocales(
       (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [],
     );
+    if (raw === undefined) return { defaultLocale, locales, locale: defaultLocale };
+    const r = LocaleTagSchema.safeParse(raw);
+    if (!r.success || !locales.includes(r.data)) throw new ApiError("NOT_FOUND");
+    return { defaultLocale, locales, locale: r.data };
+  }
+
+  /** Every product the site lists (not archived), with its current data as a snapshot. */
+  private static async items(
+    site: PublicSite,
+    lang: { defaultLocale: string; locales: string[]; locale: string },
+    slug?: string,
+  ): Promise<PreviewItem[]> {
+    // ML-8a: built exactly like the next publication; ML-8b: in the requested language.
+    const { defaultLocale, locales, locale } = lang;
     const listings = await site.db.productSiteListing.findMany({
       where: {
         siteId: site.siteId,
@@ -234,6 +253,7 @@ export class CatalogPreviewService {
         buildSnapshotV2({
           defaultLocale,
           locales,
+          only: [locale],
           product: p,
           listing: l,
           listingTexts: l.texts,
@@ -254,7 +274,7 @@ export class CatalogPreviewService {
           images: imgs.map((i) => ({ id: i.id, isCover: i.isCover, ...displaySize(i.variants) })),
           imageTexts: textRows.imageTexts,
         }),
-        defaultLocale,
+        locale,
       );
       if (!snapshot) continue;
       const prop = proposalByProduct.get(p.id);
@@ -286,6 +306,7 @@ export class CatalogPreviewService {
   private static async categories(
     site: PublicSite,
     items: PreviewItem[],
+    locale: string,
   ): Promise<PublicCategory[]> {
     const direct = new Map<string, number>();
     for (const i of items)
@@ -295,6 +316,16 @@ export class CatalogPreviewService {
       where: { siteId: site.siteId },
       select: { id: true, parentId: true, slug: true, name: true, sortOrder: true },
     });
+    // ML-8b: the category names of the previewed language (a parent without one keeps its slug).
+    const names = new Map(
+      (
+        await site.db.productCategoryText.findMany({
+          where: { siteId: site.siteId, locale },
+          select: { categoryId: true, name: true },
+        })
+      ).map((t) => [t.categoryId, t.name]),
+    );
+    for (const c of cats) c.name = names.get(c.id) ?? c.slug;
     const byId = new Map(cats.map((c) => [c.id, c]));
     const total = new Map<string, number>();
     for (const c of cats) {
@@ -320,9 +351,14 @@ export class CatalogPreviewService {
       .sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name, "en"));
   }
 
-  async list(ctx: RequestContext, token: string): Promise<CatalogPreviewListResponse> {
+  async list(
+    ctx: RequestContext,
+    token: string,
+    query: Record<string, unknown> = {},
+  ): Promise<CatalogPreviewListResponse> {
     const { site, claims } = await this.open(ctx, token);
-    const items = await CatalogPreviewService.items(site);
+    const lang = await CatalogPreviewService.language(site, query.locale);
+    const items = await CatalogPreviewService.items(site, lang);
     return {
       items: items.map((i) => ({
         ...toPublicSummary(i.snapshot, i.updatedAt.toISOString(), { hasDocuments: false }),
@@ -330,7 +366,7 @@ export class CatalogPreviewService {
         proposalStatus: i.proposal?.status ?? null,
         hasProposalText: !!(i.proposal && (i.proposal.summary || i.proposal.description)),
       })),
-      categories: await CatalogPreviewService.categories(site, items),
+      categories: await CatalogPreviewService.categories(site, items, lang.locale),
       expiresAt: claims.expiresAt.toISOString(),
     };
   }
@@ -339,11 +375,13 @@ export class CatalogPreviewService {
     ctx: RequestContext,
     token: string,
     rawSlug: string,
+    query: Record<string, unknown> = {},
   ): Promise<CatalogPreviewProductResponse> {
     const slug = SlugSchema.safeParse(rawSlug);
     if (!slug.success || slug.data !== rawSlug) throw new ApiError("NOT_FOUND");
     const { site, claims } = await this.open(ctx, token);
-    const [item] = await CatalogPreviewService.items(site, slug.data);
+    const lang = await CatalogPreviewService.language(site, query.locale);
+    const [item] = await CatalogPreviewService.items(site, lang, slug.data);
     if (!item) throw new ApiError("NOT_FOUND");
     const held: CatalogPreviewHeldValue[] = [];
     const review = item.proposal

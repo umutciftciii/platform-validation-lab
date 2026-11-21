@@ -742,6 +742,11 @@ model ProductListingText {
   seoDescription   String? @db.VarChar(320)
   seoOgTitle       String? @db.VarChar(120)
   seoOgDescription String? @db.VarChar(320)
+  /// ML-8b: SHA-256 (hex) of the default-language title/summary/description this translation was
+  /// written against (null: a default-language row, or not recorded). Differs → "Outdated".
+  sourceHash    String? @db.Char(64)
+  /// ML-8b: the same for the four SEO texts.
+  seoSourceHash String? @db.Char(64)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
@@ -762,6 +767,9 @@ model ProductCategoryText {
   locale      String   @db.VarChar(35)
   name        String   @db.VarChar(120)
   description String?  @db.VarChar(1000)
+  /// ML-8b: SHA-256 (hex) of the default-language name/description this translation was written
+  /// against (null for the default language).
+  sourceHash  String?  @db.Char(64)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
@@ -823,6 +831,8 @@ model SpecDefinitionText {
   /// BCP 47 language tag (CHECK).
   locale       String   @db.VarChar(35)
   name         String   @db.VarChar(120)
+  /// ML-8b: SHA-256 (hex) of the English name this translation was written against.
+  sourceHash   String?  @db.Char(64)
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 
@@ -911,6 +921,8 @@ model ProductImageText {
   /// BCP 47 language tag (CHECK).
   locale    String   @db.VarChar(35)
   altText   String?  @db.VarChar(300)
+  /// ML-8b: SHA-256 (hex) of the English alt text this translation was written against.
+  sourceHash String? @db.Char(64)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 

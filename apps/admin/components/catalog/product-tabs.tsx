@@ -106,7 +106,14 @@ export function ProductTabs({
       pendingSection.current = section ?? null;
       setActive(tab);
       setNavigation((n) => n + 1);
-      window.history.replaceState(null, "", productHref(productId, siteParam, tab));
+      // ML-8b: the language tab (`?lang=`) stays in the URL across product tabs.
+      const lang = new URLSearchParams(window.location.search).get("lang");
+      const href = productHref(productId, siteParam, tab);
+      window.history.replaceState(
+        null,
+        "",
+        lang ? `${href}&lang=${encodeURIComponent(lang)}` : href,
+      );
     },
     [productId, siteParam],
   );

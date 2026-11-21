@@ -187,6 +187,7 @@ function fixtures(opts: { canEditMaster: boolean }) {
           description: "Research description for BV.",
           claimRisks: ["Food/cosmetic suitability should not be written."],
         },
+        languages: [],
         addresses: {
           live: null,
           next: "/products/fx-g1",
@@ -232,6 +233,7 @@ function fixtures(opts: { canEditMaster: boolean }) {
         canShowListing: false,
         canPreview: false,
         proposal: null,
+        languages: [],
         addresses: {
           live: null,
           next: "/products/fx-g1",
@@ -1412,5 +1414,209 @@ describe("DP-209 product SEO tab", () => {
   it("keeps #seo links in the SEO tab", () => {
     expect(tabForHash("#seo")).toBe("seo");
     expect(parseProductTab("seo")).toBe("seo");
+  });
+});
+
+// ML-8b (ADR-028 D8, DP-239, DP-257): EN/NL language tabs on Content and SEO, and the languages
+// of a publication. English stays the existing editor; Dutch is written next to its source.
+describe("ML-8b EN/NL language tabs", () => {
+  const NL = `${C}/products/${PRODUCT}/translations?siteId=${BV}&locale=nl`;
+  const LISTING = "66666666-6666-4666-8666-666666666666";
+  const IMG = "77777777-7777-4777-8777-777777777777";
+  const p = (value: string | null, source: string | null) => ({ value, source });
+  function translations(over: Record<string, unknown> = {}) {
+    return {
+      productId: PRODUCT,
+      siteId: BV,
+      locale: "nl",
+      defaultLocale: "en",
+      enabled: true,
+      public: false,
+      locales: [
+        { locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+        { locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
+      ],
+      live: { published: false, hasLocale: false },
+      requiredMissing: ["listing", "category", "spec:viscosity"],
+      missing: ["summary", "description", "seo.title", "category.name", "spec:viscosity"],
+      listing: {
+        id: LISTING,
+        version: 2,
+        hasText: false,
+        state: "MISSING",
+        seoState: "MISSING",
+        sharedSource: { title: true, summary: false, description: true },
+        title: p(null, "ICCSYN 6 Synthetic"),
+        summary: p(null, "Full synthetic 5W-30 for passenger cars."),
+        description: p(null, "Fully synthetic engine oil."),
+        seo: {
+          title: p(null, "ICCSYN 6 engine oil"),
+          description: p(null, null),
+          ogTitle: p(null, null),
+          ogDescription: p(null, null),
+        },
+      },
+      category: {
+        id: CAT,
+        version: 1,
+        state: "MISSING",
+        name: p(null, "Engine oils"),
+        description: p(null, null),
+      },
+      specs: [
+        {
+          definitionId: DEF,
+          key: "viscosity",
+          version: 1,
+          state: "MISSING",
+          name: p(null, "Kinematic viscosity"),
+        },
+      ],
+      images: [
+        {
+          id: IMG,
+          version: 1,
+          isPublic: true,
+          originalFilename: "drum.jpg",
+          state: null,
+          altText: p(null, null),
+        },
+      ],
+      ...over,
+    };
+  }
+  function withDutch(opts: { canEditMaster: boolean } = { canEditMaster: true }, over = {}) {
+    fixtures(opts);
+    const wf = reads.get(`${C}/products/${PRODUCT}/workflow`) as ProductWorkflowResponse;
+    wf.sites[0]!.languages = [
+      {
+        locale: "en",
+        isDefault: true,
+        public: true,
+        live: false,
+        hasText: true,
+        state: "DRAFT",
+        requiredMissing: [],
+        claims: [],
+        claimScan: "AUTOMATIC",
+      },
+      {
+        locale: "nl",
+        isDefault: false,
+        public: false,
+        live: false,
+        hasText: false,
+        state: "MISSING",
+        requiredMissing: ["listing", "category", "spec:viscosity"],
+        claims: [],
+        claimScan: "MANUAL",
+      },
+    ];
+    reads.set(NL, translations(over));
+  }
+  /** One language panel of a tab (`data-lang-tab` buttons control `…-panel-<lang>`). */
+  const langPanel = (html: string, lang: string) => {
+    const start = html.indexOf(`data-lang-panel="${lang}"`);
+    expect(start, lang).toBeGreaterThan(-1);
+    const open = html.lastIndexOf("<div", start);
+    const end = html.indexOf("data-lang-panel=", start + 20);
+    return html.slice(open, end === -1 ? undefined : html.lastIndexOf("<div", end));
+  };
+
+  it("Content: EN and NL tabs, English (the existing editor) active by default, Dutch mounted and hidden", async () => {
+    withDutch();
+    const content = panel(await render({}), "content");
+    expect(content).toContain('aria-label="Language of the product text"');
+    expect(content).toMatch(/data-lang-tab="en"[^>]*>|aria-selected="true"[^>]*data-lang-tab="en"/);
+    const en = langPanel(content, "en");
+    expect(en).not.toMatch(/^<div[^>]*hidden=""/);
+    expect(en).toContain("Save Dream Petroleum BV text");
+    const nl = langPanel(content, "nl");
+    expect(nl).toMatch(/^<div[^>]*hidden=""/);
+    expect(nl).toContain('lang="nl"');
+  });
+
+  it("?lang=nl: empty Dutch fields next to the English source, missing marked, nothing invented", async () => {
+    withDutch();
+    const nl = langPanel(panel(await render({ lang: "nl" }), "content"), "nl");
+    expect(nl).not.toMatch(/^<div[^>]*hidden=""/);
+    // the English source is shown, never copied into the Dutch fields
+    expect(nl).toContain("Full synthetic 5W-30 for passenger cars.");
+    expect(nl).toMatch(/name="summary"[^>]*><\/textarea>/);
+    expect(nl).toMatch(/name="title"[^>]*value=""/);
+    expect(nl).toContain("English source · shared product text");
+    expect(nl).toContain('data-missing=""');
+    // what blocks Dutch in a publication, in words
+    expect(nl).toContain("Needed before Dutch can be published:");
+    expect(nl).toContain("Product text (title, summary or description)");
+    expect(nl).toContain("Category name");
+    expect(nl).toContain("Specification name: Kinematic viscosity");
+    expect(nl).toContain("Not public yet");
+    expect(nl).toContain("No text is translated or copied automatically");
+    expect(nl).toContain("Save Dutch text");
+    // codes stay codes
+    expect(nl).toContain("<code");
+  });
+
+  it("Dutch is read only without product:edit on the site or master edit rights", async () => {
+    withDutch({ canEditMaster: false });
+    const nl = langPanel(panel(await render({ lang: "nl" }), "content"), "nl");
+    expect(nl).toContain(
+      "Read only: editing this site&#x27;s listings needs product:edit on the site.",
+    );
+    expect(nl).toContain("Read only: specification names need product master edit rights.");
+    expect(nl).not.toContain("Save Dutch text");
+  });
+
+  it("Outdated texts offer “Still correct: mark as checked”", async () => {
+    withDutch(
+      { canEditMaster: true },
+      {
+        requiredMissing: [],
+        missing: [],
+        listing: {
+          ...translations().listing,
+          hasText: true,
+          state: "OUTDATED",
+          title: p("ICCSYN 6 Synthetisch", "ICCSYN 6 Synthetic"),
+        },
+      },
+    );
+    const nl = langPanel(panel(await render({ lang: "nl" }), "content"), "nl");
+    expect(nl).toContain('data-translation-state="OUTDATED"');
+    expect(nl).toContain("Still correct: mark as checked");
+    expect(nl).toContain("Complete enough to publish in Dutch.");
+  });
+
+  it("SEO: Dutch SEO texts next to the English ones; canonical, noindex and image stay shared", async () => {
+    withDutch();
+    const seo = panel(await render({ tab: "seo", lang: "nl" }), "seo");
+    expect(seo).toContain('aria-label="Language of the SEO texts"');
+    const nl = langPanel(seo, "nl");
+    expect(nl).toContain("SEO title (Dutch)");
+    expect(nl).toContain("ICCSYN 6 engine oil");
+    expect(nl).toContain("Canonical path, indexing and the link preview image are the same");
+    expect(nl).toContain("Save Dutch SEO");
+  });
+
+  it("Publication: Dutch is never published implicitly; an incomplete Dutch cannot be chosen", async () => {
+    withDutch();
+    const bv = card(
+      panel(await render({ tab: "publication" }), "publication"),
+      "Dream Petroleum BV",
+    );
+    expect(bv).toContain('data-languages=""');
+    expect(bv).toContain("Always published from the current texts (the default language).");
+    expect(bv).toContain("Not chosen: no Dutch texts are published.");
+    expect(bv).toMatch(/type="checkbox"[^>]*disabled=""/);
+    expect(bv).toContain("Dutch needs before publishing:");
+    expect(bv).toContain("Preview Dutch");
+  });
+
+  it("a site with one language (Corporate, or no languages known) renders without language tabs", async () => {
+    fixtures({ canEditMaster: true });
+    const content = panel(await render({}), "content");
+    expect(content).not.toContain("Language of the product text");
+    expect(content).toContain("Save Dream Petroleum BV text");
   });
 });

@@ -13,19 +13,35 @@
  * with the next publication. Each change writes its audit event (field names, never values) in
  * the same transaction. "en" rows also update the English columns of before ML-8a (database
  * triggers), so the English name of a category or definition cannot be removed.
+ *
+ * ML-8b: every save in a language other than the source records the source revision it was
+ * written against (translation-state.ts; migration 40), which drives the OUTDATED state; the
+ * reading endpoints return the translation state of every unit, what is missing and what blocks
+ * the language in a publication; `publicationPreview` shows one language of the next publication
+ * next to the live one (nothing written). The site scope and the permissions are the ones above.
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
   CategoryTranslationUpdateRequestSchema,
+  claimScanOf,
+  findSensitiveClaims,
   ImageTranslationUpdateRequestSchema,
   ListingTranslationUpdateRequestSchema,
+  localizeSnapshot,
   LocaleTagSchema,
   localeEditProblem,
+  parseStoredSnapshot,
+  snapshotLocaleTexts,
+  sortSiteLocales,
   SpecDefinitionTranslationUpdateRequestSchema,
+  translationState,
+  type CategoryTranslationListResponse,
   type CategoryTranslationResponse,
   type ImageTranslationResponse,
   type ListingTranslationResponse,
   type ProductTranslationsResponse,
+  type PublicationPreviewResponse,
+  type SpecDefinitionTranslationListResponse,
   type SpecDefinitionTranslationResponse,
 } from "@dream/contracts";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
@@ -34,8 +50,24 @@ import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { siteLocalesOf } from "../cms/site-locales.js";
 import { mapDbError, staleVersion } from "./errors.js";
 import { changeMaster } from "./master.js";
-import { LISTING_TEXT_SELECT } from "./snapshot.js";
-import { uuidOr404 } from "./specs.service.js";
+import {
+  buildSnapshotV2,
+  catalogLocales,
+  displaySize,
+  LISTING_TEXT_SELECT,
+  loadTextRows,
+} from "./snapshot.js";
+import { requireMasterRead, uuidOr404, valueData } from "./specs.service.js";
+import {
+  categoryHash,
+  listingSeoHash,
+  listingSource,
+  listingTextsHash,
+  loadProductTextRows,
+  localeView,
+  nameHash,
+  PLATFORM_SOURCE_LOCALE,
+} from "./translation-state.js";
 
 const READ = "product:read";
 const EDIT = "product:edit";
@@ -93,110 +125,337 @@ export class CatalogTranslationsService {
     await a.require(READ, { scope: "site", siteId }, { type: "product", id: productId });
     const locale = localeOr404(query.locale);
     const db = a.db({ siteIds: [siteId], includePlatform: false });
-    const locales = (await siteLocalesOf(db, [siteId])).get(siteId) ?? [];
+    const locales = sortSiteLocales((await siteLocalesOf(db, [siteId])).get(siteId) ?? []);
     const def = locales.find((l) => l.isDefault);
     if (!def) throw new ApiError("INTERNAL_ERROR");
-    const pick = [...new Set([locale, def.locale])];
-    const product = await db.product.findUnique({ where: { id: productId }, select: { id: true } });
-    if (!product) throw new ApiError("NOT_FOUND");
-    const [listing, values, images] = await Promise.all([
-      db.productSiteListing.findUnique({
-        where: { productId_siteId: { productId, siteId } },
-        select: {
-          id: true,
-          version: true,
-          categoryId: true,
-          texts: { where: { locale: { in: pick } }, select: LISTING_TEXT_SELECT },
-        },
-      }),
-      db.productSpecValue.findMany({
-        where: { productId },
-        select: { definition: { select: { id: true, key: true, version: true, sortOrder: true } } },
-      }),
-      db.productImage.findMany({
-        where: { productId },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        select: { id: true, version: true, isPublic: true },
-      }),
-    ]);
-    const category = listing
-      ? await db.productCategory.findUnique({
-          where: { id: listing.categoryId },
-          select: { id: true, version: true },
-        })
-      : null;
-    const defs = [...new Map(values.map((v) => [v.definition.id, v.definition])).values()].sort(
-      (x, y) => x.sortOrder - y.sortOrder || x.key.localeCompare(y.key),
-    );
-    const [categoryTexts, specTexts, imageTexts] = await Promise.all([
-      category
-        ? db.productCategoryText.findMany({
-            where: { categoryId: category.id, locale: { in: pick } },
-            select: { locale: true, name: true, description: true },
-          })
-        : [],
-      defs.length
-        ? db.specDefinitionText.findMany({
-            where: { definitionId: { in: defs.map((d) => d.id) }, locale: { in: pick } },
-            select: { definitionId: true, locale: true, name: true },
-          })
-        : [],
-      images.length
-        ? db.productImageText.findMany({
-            where: { imageId: { in: images.map((i) => i.id) }, locale: { in: pick } },
-            select: { imageId: true, locale: true, altText: true },
-          })
-        : [],
-    ]);
-    const lt = (l: string) => listing?.texts.find((t) => t.locale === l);
-    const ct = (l: string) => categoryTexts.find((t) => t.locale === l);
-    const pair = <T>(get: (l: string) => T | null | undefined) => ({
+    const rows = await loadProductTextRows(db, productId, siteId, locales);
+    if (!rows) throw new ApiError("NOT_FOUND");
+    const view = localeView(rows, locale);
+    const lt = (l: string) => rows.listing?.texts.find((t) => t.locale === l);
+    const ct = (l: string) => rows.categoryTexts.find((t) => t.locale === l);
+    const pair = <T>(get: (l: string) => T | null | undefined, source?: T | null) => ({
       value: get(locale) ?? null,
-      source: get(def.locale) ?? null,
+      source: source === undefined ? (get(def.locale) ?? null) : source,
     });
+    const src = view.listing?.source;
+    const row = locales.find((l) => l.locale === locale);
     return {
       productId,
       siteId,
       locale,
       defaultLocale: def.locale,
       enabled: localeEditProblem(locales, locale) === null,
-      listing: listing
-        ? {
-            id: listing.id,
-            version: listing.version,
-            hasText: lt(locale) !== undefined,
-            title: pair((l) => lt(l)?.title),
-            summary: pair((l) => lt(l)?.summary),
-            description: pair((l) => lt(l)?.description),
-            seo: {
-              title: pair((l) => lt(l)?.seoTitle),
-              description: pair((l) => lt(l)?.seoDescription),
-              ogTitle: pair((l) => lt(l)?.seoOgTitle),
-              ogDescription: pair((l) => lt(l)?.seoOgDescription),
-            },
-          }
-        : null,
-      category: category
-        ? {
-            id: category.id,
-            version: category.version,
-            name: pair((l) => ct(l)?.name),
-            description: pair((l) => ct(l)?.description),
-          }
-        : null,
-      specs: defs.map((d) => ({
-        definitionId: d.id,
+      public: Boolean(row?.enabled && row.public),
+      locales,
+      live: { published: rows.live !== null, hasLocale: view.live },
+      requiredMissing: view.requiredMissing,
+      missing: view.missing,
+      listing:
+        rows.listing && view.listing && src
+          ? {
+              id: rows.listing.id,
+              version: rows.listing.version,
+              hasText: lt(locale) !== undefined,
+              state: view.listing.state,
+              seoState: view.listing.seoState,
+              sharedSource: src.shared,
+              // ML-8b: the source is what the default-language page shows (own text, else the
+              // shared product text it falls back to).
+              title: pair((l) => lt(l)?.title, src.title),
+              summary: pair((l) => lt(l)?.summary, src.summary),
+              description: pair((l) => lt(l)?.description, src.description),
+              seo: {
+                title: pair((l) => lt(l)?.seoTitle),
+                description: pair((l) => lt(l)?.seoDescription),
+                ogTitle: pair((l) => lt(l)?.seoOgTitle),
+                ogDescription: pair((l) => lt(l)?.seoOgDescription),
+              },
+            }
+          : null,
+      category:
+        rows.category && view.category
+          ? {
+              id: rows.category.id,
+              version: rows.category.version,
+              state: view.category.state,
+              name: pair((l) => ct(l)?.name),
+              description: pair((l) => ct(l)?.description),
+            }
+          : null,
+      specs: view.specs.map((d) => ({
+        definitionId: d.definitionId,
         key: d.key,
         version: d.version,
-        name: pair((l) => specTexts.find((t) => t.definitionId === d.id && t.locale === l)?.name),
+        state: d.state,
+        name: pair(
+          (l) =>
+            rows.specTexts.find((t) => t.definitionId === d.definitionId && t.locale === l)?.name,
+          rows.specTexts.find(
+            (t) => t.definitionId === d.definitionId && t.locale === PLATFORM_SOURCE_LOCALE,
+          )?.name ?? null,
+        ),
       })),
-      images: images.map((i) => ({
+      images: view.images.map((i) => ({
         id: i.id,
         version: i.version,
         isPublic: i.isPublic,
-        altText: pair((l) => imageTexts.find((t) => t.imageId === i.id && t.locale === l)?.altText),
+        originalFilename: i.originalFilename,
+        state: i.state,
+        altText: pair(
+          (l) => rows.imageTexts.find((t) => t.imageId === i.id && t.locale === l)?.altText,
+          rows.imageTexts.find((t) => t.imageId === i.id && t.locale === PLATFORM_SOURCE_LOCALE)
+            ?.altText ?? null,
+        ),
       })),
     };
+  }
+
+  // --- ML-8b: language lists of categories and specification names ------------------------------
+
+  async categoryList(
+    ctx: RequestContext,
+    rawSiteId: string,
+    query: Record<string, unknown>,
+  ): Promise<CategoryTranslationListResponse> {
+    const a = await this.access.begin(ctx);
+    const siteId = CatalogTranslationsService.siteId(rawSiteId);
+    await a.require(READ, { scope: "site", siteId }, { type: "product_category", id: null });
+    const locale = localeOr404(query.locale);
+    const db = a.db({ siteIds: [siteId], includePlatform: false });
+    const locales = (await siteLocalesOf(db, [siteId])).get(siteId) ?? [];
+    const def = locales.find((l) => l.isDefault);
+    if (!def) throw new ApiError("INTERNAL_ERROR");
+    const [cats, texts, pubs] = await Promise.all([
+      db.productCategory.findMany({
+        where: { siteId },
+        orderBy: [{ sortOrder: "asc" }, { slug: "asc" }],
+        select: { id: true, slug: true, parentId: true, version: true },
+      }),
+      db.productCategoryText.findMany({
+        where: { siteId, locale: { in: [...new Set([locale, def.locale])] } },
+        select: { categoryId: true, locale: true, name: true, description: true, sourceHash: true },
+      }),
+      db.productPublication.findMany({
+        where: { siteId, status: "PUBLISHED" },
+        select: { snapshot: true },
+      }),
+    ]);
+    // The live products of each category (by slug: a snapshot names its category by slug).
+    const live = pubs.map((p) => parseStoredSnapshot(p.snapshot)).filter((x) => x !== null);
+    const isDefault = locale === def.locale;
+    return {
+      siteId,
+      locale,
+      defaultLocale: def.locale,
+      locales: sortSiteLocales(locales),
+      enabled: localeEditProblem(locales, locale) === null,
+      canEdit: a.allows(EDIT, { scope: "site", siteId }),
+      items: cats.map((c) => {
+        const own = texts.find((t) => t.categoryId === c.id && t.locale === locale);
+        const src = texts.find((t) => t.categoryId === c.id && t.locale === def.locale);
+        const shown = live.filter((s) => s.category.slug === c.slug);
+        // Published: every live snapshot that carries this language shows exactly this name.
+        const names = shown
+          .map((s) => snapshotLocaleTexts(s, locale))
+          .filter((t) => t !== null)
+          .map((t) => t.categoryName);
+        return {
+          id: c.id,
+          slug: c.slug,
+          parentId: c.parentId,
+          version: c.version,
+          liveProducts: shown.length,
+          state: translationState({
+            hasValue: !!own,
+            hasSource: !!src,
+            isDefault,
+            sourceChanged: !!own && !isDefault && own.sourceHash !== categoryHash(src),
+            live: !!own && names.length > 0 && names.every((n) => n === own.name),
+          }),
+          name: { value: own?.name ?? null, source: src?.name ?? null },
+          description: { value: own?.description ?? null, source: src?.description ?? null },
+        };
+      }),
+    };
+  }
+
+  async definitionList(
+    ctx: RequestContext,
+    query: Record<string, unknown>,
+  ): Promise<SpecDefinitionTranslationListResponse> {
+    const a = await this.access.begin(ctx);
+    await requireMasterRead(a, { type: "spec_definition", id: null });
+    const locale = localeOr404(query.locale);
+    const readable = a.sitesWith(READ);
+    const sites = a.db({ siteIds: readable, includePlatform: false });
+    const all = await siteLocalesOf(sites, readable);
+    const enabled = [...all.values()].some((list) => localeEditProblem(list, locale) === null);
+    const db = a.db({ siteIds: readable, includePlatform: true });
+    const [defs, texts, pubs] = await Promise.all([
+      db.specDefinition.findMany({
+        orderBy: [{ sortOrder: "asc" }, { key: "asc" }],
+        select: { id: true, key: true, archived: true, version: true },
+      }),
+      db.specDefinitionText.findMany({
+        where: { locale: { in: [...new Set([locale, PLATFORM_SOURCE_LOCALE])] } },
+        select: { definitionId: true, locale: true, name: true, sourceHash: true },
+      }),
+      readable.length
+        ? db.productPublication.findMany({
+            where: { siteId: { in: readable }, status: "PUBLISHED" },
+            select: { snapshot: true },
+          })
+        : [],
+    ]);
+    const live = pubs.map((p) => parseStoredSnapshot(p.snapshot)).filter((x) => x !== null);
+    const isSource = locale === PLATFORM_SOURCE_LOCALE;
+    const tags = new Set(
+      [...all.values()].flatMap((list) => list.filter((l) => l.enabled).map((l) => l.locale)),
+    );
+    return {
+      locale,
+      sourceLocale: PLATFORM_SOURCE_LOCALE,
+      locales: [
+        PLATFORM_SOURCE_LOCALE,
+        ...[...tags].filter((t) => t !== PLATFORM_SOURCE_LOCALE).sort(),
+      ],
+      enabled,
+      canEdit: a.allows(MASTER, PLATFORM),
+      items: defs.map((d) => {
+        const own = texts.find((t) => t.definitionId === d.id && t.locale === locale);
+        const src = texts.find(
+          (t) => t.definitionId === d.id && t.locale === PLATFORM_SOURCE_LOCALE,
+        );
+        const shown = live.filter((s) => s.specs.some((x) => x.key === d.key));
+        const names = shown
+          .map((s) => snapshotLocaleTexts(s, locale))
+          .filter((t) => t !== null)
+          .map((t) => t.specNames[d.key] ?? null);
+        return {
+          id: d.id,
+          key: d.key,
+          archived: d.archived,
+          version: d.version,
+          liveProducts: shown.length,
+          state: translationState({
+            hasValue: !!own,
+            hasSource: !!src,
+            isDefault: isSource,
+            sourceChanged: !!own && !isSource && own.sourceHash !== nameHash(src?.name),
+            live: !!own && names.length > 0 && names.every((n) => n === own.name),
+          }),
+          name: { value: own?.name ?? null, source: src?.name ?? null },
+        };
+      }),
+    };
+  }
+
+  // --- ML-8b (DP-257): one language of the next publication, next to the live one --------------
+
+  async publicationPreview(
+    ctx: RequestContext,
+    rawProductId: string,
+    rawSiteId: string,
+    query: Record<string, unknown>,
+  ): Promise<PublicationPreviewResponse> {
+    const a = await this.access.begin(ctx);
+    const productId = uuidOr404(rawProductId);
+    const siteId = CatalogTranslationsService.siteId(rawSiteId);
+    await a.require(READ, { scope: "site", siteId }, { type: "product", id: productId });
+    const locale = localeOr404(query.locale);
+    const db = a.db({ siteIds: [siteId], includePlatform: true });
+    const all = (await siteLocalesOf(db, [siteId])).get(siteId) ?? [];
+    if (localeEditProblem(all, locale)) throw notEnabled();
+    const { defaultLocale, locales } = catalogLocales(all);
+    const rows = await loadProductTextRows(db, productId, siteId, all);
+    if (!rows) throw new ApiError("NOT_FOUND");
+    const view = localeView(rows, locale);
+    const next = await CatalogTranslationsService.nextSnapshot(db, productId, siteId, {
+      defaultLocale,
+      locales,
+      locale,
+    });
+    const own = rows.listing?.texts.find((t) => t.locale === locale);
+    const row = all.find((l) => l.locale === locale);
+    return {
+      productId,
+      siteId,
+      locale,
+      defaultLocale,
+      public: Boolean(row?.enabled && row.public),
+      next: view.requiredMissing.length ? null : next,
+      live: rows.live ? localizeSnapshot(rows.live, locale) : null,
+      requiredMissing: view.requiredMissing,
+      missing: view.missing,
+      claims:
+        locale === defaultLocale
+          ? findSensitiveClaims(next?.name, next?.summary, next?.description)
+          : findSensitiveClaims(own?.title, own?.summary, own?.description),
+      claimScan: claimScanOf(locale),
+    };
+  }
+
+  /**
+   * The view of one language of the snapshot the next publication would store if the language
+   * were chosen (built like WorkflowService.publish, current rows only); null when the listing,
+   * its category or a complete text is missing.
+   */
+  private static async nextSnapshot(
+    db: ReturnType<StaffAccess["db"]>,
+    productId: string,
+    siteId: string,
+    o: { defaultLocale: string; locales: string[]; locale: string },
+  ) {
+    const product = await db.product.findUnique({ where: { id: productId } });
+    const listing = await db.productSiteListing.findUnique({
+      where: { productId_siteId: { productId, siteId } },
+      include: { texts: { select: LISTING_TEXT_SELECT } },
+    });
+    if (!product || !listing) return null;
+    const category = await db.productCategory.findUnique({
+      where: { id: listing.categoryId },
+      select: { id: true, slug: true },
+    });
+    if (!category) return null;
+    const [values, images] = await Promise.all([
+      db.productSpecValue.findMany({
+        where: { productId },
+        include: { definition: { select: { id: true, key: true, sortOrder: true } } },
+      }),
+      db.productImage.findMany({
+        where: { productId, isPublic: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, isCover: true, variants: true },
+      }),
+    ]);
+    const textRows = await loadTextRows(db, {
+      categoryIds: [category.id],
+      definitionIds: [...new Set(values.map((v) => v.definition.id))],
+      imageIds: images.map((i) => i.id),
+    });
+    const snapshot = buildSnapshotV2({
+      defaultLocale: o.defaultLocale,
+      locales: o.locales,
+      only: [o.locale],
+      product,
+      listing,
+      listingTexts: listing.texts,
+      category,
+      categoryTexts: textRows.categoryTexts,
+      specs: values.map((v) => ({
+        definitionId: v.definition.id,
+        key: v.definition.key,
+        sortOrder: v.definition.sortOrder,
+        basis: v.basis,
+        value: valueData(v),
+        unit: v.unit,
+        testMethod: v.testMethod,
+      })),
+      specTexts: textRows.specTexts,
+      images: images.map((i) => ({ id: i.id, isCover: i.isCover, ...displaySize(i.variants) })),
+      imageTexts: textRows.imageTexts,
+    });
+    return localizeSnapshot(snapshot, o.locale);
   }
 
   // --- listing texts ---------------------------------------------------------------------------
@@ -214,7 +473,8 @@ export class CatalogTranslationsService {
     await a.require(EDIT, { scope: "site", siteId }, { type: "product_listing", id: productId });
     const locale = localeOr404(rawLocale);
     const input = parseBody(ListingTranslationUpdateRequestSchema, body);
-    await CatalogTranslationsService.requireSiteLocale(a, siteId, locale);
+    const siteLocales = await CatalogTranslationsService.requireSiteLocale(a, siteId, locale);
+    const isDefault = siteLocales.find((l) => l.isDefault)?.locale === locale;
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     const text = {
       title: input.title,
@@ -232,12 +492,29 @@ export class CatalogTranslationsService {
           select: {
             id: true,
             version: true,
-            texts: { where: { locale }, select: LISTING_TEXT_SELECT },
+            texts: { select: LISTING_TEXT_SELECT },
           },
         });
         if (!listing) throw new ApiError("NOT_FOUND", [{ path: "listing", rule: "missing" }]);
         if (listing.version !== input.version) throw staleVersion();
-        const before = listing.texts[0];
+        const before = listing.texts.find((t) => t.locale === locale);
+        // ML-8b: the source revision of the parts this save was checked against (not for the
+        // default language, which is the source).
+        const hashes: { sourceHash?: string; seoSourceHash?: string } = {};
+        if (!isDefault) {
+          const def = listing.texts.find((t) =>
+            siteLocales.some((l) => l.isDefault && l.locale === t.locale),
+          );
+          const product = await tx.product.findUnique({
+            where: { id: productId },
+            select: { name: true, summary: true, description: true },
+          });
+          if (!product) throw new ApiError("NOT_FOUND");
+          if (input.sections.includes("texts")) {
+            hashes.sourceHash = listingTextsHash(listingSource(product, def));
+          }
+          if (input.sections.includes("seo")) hashes.seoSourceHash = listingSeoHash(def);
+        }
         const res = await tx.productSiteListing.updateMany({
           where: { id: listing.id, version: input.version },
           data: { version: { increment: 1 } },
@@ -246,11 +523,11 @@ export class CatalogTranslationsService {
         if (before) {
           await tx.productListingText.update({
             where: { listingId_locale: { listingId: listing.id, locale } },
-            data: text,
+            data: { ...text, ...hashes },
           });
         } else if (Object.values(text).some((v) => v !== null)) {
           await tx.productListingText.create({
-            data: { listingId: listing.id, siteId, locale, ...text },
+            data: { listingId: listing.id, siteId, locale, ...text, ...hashes },
           });
         }
         await a.audit(tx, {
@@ -263,6 +540,7 @@ export class CatalogTranslationsService {
             productId,
             locale,
             changed: changedKeys((before ?? {}) as Record<string, unknown>, text),
+            ...(isDefault ? {} : { checked: input.sections }),
             version: listing.version + 1,
           },
         });
@@ -311,7 +589,8 @@ export class CatalogTranslationsService {
     if (input.name === null && locale === LEGACY_LOCALE) {
       throw new ApiError("VALIDATION_FAILED", [{ path: "name", rule: "required" }]);
     }
-    await CatalogTranslationsService.requireSiteLocale(a, siteId, locale);
+    const siteLocales = await CatalogTranslationsService.requireSiteLocale(a, siteId, locale);
+    const defaultLocale = siteLocales.find((l) => l.isDefault)?.locale;
     const db = a.db({ siteIds: [siteId], includePlatform: false });
     try {
       return await db.$transaction(async (tx) => {
@@ -328,7 +607,19 @@ export class CatalogTranslationsService {
           if (before)
             await tx.productCategoryText.deleteMany({ where: { categoryId: id, locale } });
         } else {
-          const data = { name: input.name, description: input.description };
+          const source =
+            locale === defaultLocale
+              ? null
+              : await tx.productCategoryText.findUnique({
+                  where: { categoryId_locale: { categoryId: id, locale: defaultLocale ?? "" } },
+                  select: { name: true, description: true },
+                });
+          const data = {
+            name: input.name,
+            description: input.description,
+            // ML-8b: the source revision this translation was written against.
+            ...(locale === defaultLocale ? {} : { sourceHash: categoryHash(source ?? undefined) }),
+          };
           await tx.productCategoryText.upsert({
             where: { categoryId_locale: { categoryId: id, locale } },
             create: { categoryId: id, siteId, locale, ...data },
@@ -399,10 +690,26 @@ export class CatalogTranslationsService {
           if (before)
             await tx.specDefinitionText.deleteMany({ where: { definitionId: id, locale } });
         } else {
+          // ML-8b: the English name this translation was written against.
+          const hash =
+            locale === PLATFORM_SOURCE_LOCALE
+              ? {}
+              : {
+                  sourceHash: nameHash(
+                    (
+                      await tx.specDefinitionText.findUnique({
+                        where: {
+                          definitionId_locale: { definitionId: id, locale: PLATFORM_SOURCE_LOCALE },
+                        },
+                        select: { name: true },
+                      })
+                    )?.name,
+                  ),
+                };
           await tx.specDefinitionText.upsert({
             where: { definitionId_locale: { definitionId: id, locale } },
-            create: { definitionId: id, locale, name: input.name },
-            update: { name: input.name },
+            create: { definitionId: id, locale, name: input.name, ...hash },
+            update: { name: input.name, ...hash },
           });
         }
         await a.audit(tx, {
@@ -463,10 +770,24 @@ export class CatalogTranslationsService {
         if (input.altText === null && locale !== LEGACY_LOCALE) {
           if (before) await tx.productImageText.deleteMany({ where: { imageId: id, locale } });
         } else if (before || input.altText !== null) {
+          // ML-8b: the English alt text this translation was written against.
+          const hash =
+            locale === PLATFORM_SOURCE_LOCALE
+              ? {}
+              : {
+                  sourceHash: nameHash(
+                    (
+                      await tx.productImageText.findUnique({
+                        where: { imageId_locale: { imageId: id, locale: PLATFORM_SOURCE_LOCALE } },
+                        select: { altText: true },
+                      })
+                    )?.altText,
+                  ),
+                };
           await tx.productImageText.upsert({
             where: { imageId_locale: { imageId: id, locale } },
-            create: { imageId: id, locale, altText: input.altText },
-            update: { altText: input.altText },
+            create: { imageId: id, locale, altText: input.altText, ...hash },
+            update: { altText: input.altText, ...hash },
           });
         }
         await a.audit(tx, {
