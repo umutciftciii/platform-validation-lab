@@ -27,6 +27,8 @@ import { formatTime, plural } from "@/lib/i18n/format";
 interface Props {
   documentId: string;
   documentTitle: string;
+  /** ML-9: the `lang` of the title when the document's language is not the page's. */
+  documentLang?: string;
   countries: { code: string; name: string }[];
   texts: LeadFormTexts;
   privacyHref: string;
@@ -88,6 +90,7 @@ async function fetchCurrentTexts(): Promise<LeadFormTexts | null> {
 export function LeadRequestForm({
   documentId,
   documentTitle,
+  documentLang,
   countries,
   texts: initialTexts,
   privacyHref,
@@ -172,7 +175,7 @@ export function LeadRequestForm({
           <Rich
             text={ui.doneReference}
             values={{
-              title: documentTitle,
+              title: documentLang ? <span lang={documentLang}>{documentTitle}</span> : documentTitle,
               reference: <span className="font-mono text-glass">{status.result.reference}</span>,
             }}
           />

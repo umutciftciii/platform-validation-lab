@@ -13,7 +13,8 @@ import { Rich } from "@/components/i18n/rich";
 import { productAlternates, selectorKey } from "@/lib/catalog-alternates";
 import { catalogLocale } from "@/lib/catalog-locale";
 import { dictionary, formatDate, formatNumber, interpolate, plural } from "@/lib/i18n";
-import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import { documentLang, documentLanguageName, showsDocumentLanguage } from "@/lib/document-language";
+import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 import {
   documentHref,
@@ -178,6 +179,12 @@ function sizeLabel(bytes: number, locale: RouteLocale): string {
     : `${formatNumber(locale, Math.max(1, Math.round(bytes / 1024)), { useGrouping: false })} KB`;
 }
 
+/** ML-9: a text of a document in its own language (`lang` only where it differs from the page's). */
+function DocumentText({ locale, language, text }: { locale: RouteLocale; language: string; text: string }) {
+  const lang = documentLang(locale, language);
+  return lang ? <span lang={lang}>{text}</span> : <>{text}</>;
+}
+
 /**
  * PM-5: documents of this product. PUBLIC ones link to a download; lead-gated ones (DP-042) to the
  * short request form; members-only ones say why they are closed.
@@ -203,16 +210,17 @@ function Documents({
             <div className="min-w-0">
               <p className="text-glass">
                 <span className="mr-2 font-mono text-xs text-amber">{d.type === "OTHER" ? "PDF" : d.type}</span>
-                {d.title}
+                {/* ML-9: the title is in the document's language (ADR-028 D10). */}
+                <DocumentText locale={locale} language={d.language} text={d.title} />
               </p>
               <p className="text-xs text-steel">
                 {ui.type[d.type]} · PDF · {sizeLabel(d.byteSize, locale)}
-                {/* ML-8c: documents are not translated; outside English their language is named
-                    (ML-9 adds a language per document). */}
-                {locale !== DEFAULT_LOCALE ? (
+                {/* ML-9: files are not translated; outside English every document names its
+                    language as the language names itself (lib/document-language.ts). */}
+                {showsDocumentLanguage(locale, d.language) ? (
                   <>
                     {" · "}
-                    <span lang="en">{ui.inEnglish}</span>
+                    <span lang={d.language}>{documentLanguageName(d.language)}</span>
                   </>
                 ) : null}
                 {d.pageCount ? ` · ${plural(locale, ui.pages, d.pageCount)}` : ""} ·{" "}

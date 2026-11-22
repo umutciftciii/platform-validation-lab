@@ -1369,6 +1369,357 @@ describe("5. archived products", () => {
   });
 });
 
+// ------------------------------------------------------------------------------------------
+// 6. ML-9 (DP-240, ADR-028 D10): the language of a document. `nl` is made public ONLY in this
+// disposable test database, and set back to not public afterwards.
+// ------------------------------------------------------------------------------------------
+describe("6. ML-9 document languages", () => {
+  let product: string;
+  const slug = "doc-l";
+  const setNlPublic = (value: boolean) =>
+    owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { public: value },
+    });
+  const listOn = async (site: Site, locale?: string) => {
+    const res = await pub(site, `/products/${slug}/documents${locale ? `?locale=${locale}` : ""}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return PublicDocumentListResponseSchema.parse(res.body).items;
+  };
+  /** A document with one file, shown on BV by its publisher. */
+  async function shownOnBv(input: Record<string, unknown>, text: string): Promise<string> {
+    const d = await createDoc(product, input);
+    const withFile = await uploaded(d.id, makePdf({ text }));
+    const show = await bvPublisher.post(`/documents/${d.id}/sites/${BV}`, {
+      visible: true,
+      version: withFile.version,
+      revisionId: await activeRevisionId(d.id),
+    });
+    expect(show.status, JSON.stringify(show.body)).toBe(200);
+    return d.id;
+  }
+  let enTds: string;
+  let nlTds: string;
+  let nlSds: string;
+
+  beforeAll(async () => {
+    product = await completeProduct("d3", "DOC-L");
+    // Dutch texts of the product, its category, specification and image (ML-8a), so the
+    // product is live in Dutch once `nl` is public.
+    const nl = await bvEditor.post(`/products/${product}/listings/${BV}/texts/nl`, {
+      version: await listingVersion(product, BV),
+      title: "DOC-L voor BV",
+      summary: "Samenvatting van DOC-L.",
+      description: null,
+      seo: { title: null, description: null, ogTitle: null, ogDescription: null },
+    });
+    expect(nl.status, JSON.stringify(nl.body)).toBe(200);
+    const cat = await owner.productCategory.findUniqueOrThrow({ where: { id: bvCategory } });
+    const c = await bvEditor.post(`/categories/${bvCategory}/texts/nl`, {
+      version: cat.version,
+      name: "Basisoliën",
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    const def = await owner.specDefinition.findUniqueOrThrow({ where: { id: kvDef } });
+    const d = await pm.post(`/spec-definitions/${kvDef}/texts/nl`, {
+      version: def.version,
+      name: "Kinematische viscositeit bij 100 °C",
+    });
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const img = await owner.productImage.findFirstOrThrow({ where: { productId: product } });
+    const alt = await pm.post(`/images/${img.id}/texts/nl`, {
+      version: img.version,
+      altText: "Vat van DOC-L",
+    });
+    expect(alt.status, JSON.stringify(alt.body)).toBe(200);
+    const v = await version(product);
+    expect((await pm.post(`/products/${product}/submit`, { version: v })).status).toBe(200);
+    expect((await reviewer.post(`/products/${product}/approve`, { version: v + 1 })).status).toBe(
+      200,
+    );
+    const published = await bvPublisher.post(`/products/${product}/publications/${BV}/publish`, {
+      version: await version(product),
+      listingVersion: await listingVersion(product, BV),
+      locales: ["nl"],
+      manualReview: ["nl"],
+    });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+  });
+
+  afterAll(async () => {
+    await setNlPublic(false);
+  });
+
+  it("migration 41: a NOT NULL language with default 'en', the tag CHECK and both guards", async () => {
+    const cols = await owner.$queryRaw<{ data_type: string; is_nullable: string; d: string }[]>`
+      SELECT data_type, is_nullable, column_default AS d FROM information_schema.columns
+      WHERE table_name = 'ProductDocument' AND column_name = 'language'`;
+    expect(cols).toEqual([
+      { data_type: "character varying", is_nullable: "NO", d: "'en'::character varying" },
+    ]);
+    // every document created before (sections 2-5, without a language) is English
+    expect(await owner.productDocument.count({ where: { language: { not: "en" } } })).toBe(0);
+    const triggers = await owner.$queryRaw<{ t: string }[]>`
+      SELECT tgname AS t FROM pg_trigger
+      WHERE tgname IN ('ProductDocument_language_guard', 'ProductDocumentSite_language_guard')
+      ORDER BY 1`;
+    expect(triggers.map((r) => r.t)).toEqual([
+      "ProductDocumentSite_language_guard",
+      "ProductDocument_language_guard",
+    ]);
+    for (const bad of ["EN", "english", "", "nl_NL", "n"]) {
+      await rejectsDb(
+        owner.productDocument.create({
+          data: { productId: product, type: "OTHER", title: "Bad tag", language: bad },
+        }),
+        /ProductDocument_language_format/,
+      );
+    }
+  });
+
+  it("admin: English by default (callers of before ML-9), a language enabled on a site, never another", async () => {
+    const plain = await createDoc(product, { type: "OTHER", title: "Brochure" });
+    expect(plain.language).toBe("en");
+    expect((await lastAudit("catalog.document_created"))?.metadata).toMatchObject({
+      language: "en",
+    });
+    const nl = await createDoc(product, { type: "OTHER", title: "Brochure (NL)", language: "nl" });
+    expect(nl.language).toBe("nl");
+    expectError(
+      await pm.post(`/products/${product}/documents`, {
+        type: "OTHER",
+        title: "X",
+        language: "de",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "language", rule: "not_enabled" },
+    );
+    expectError(
+      await pm.post(`/products/${product}/documents`, {
+        type: "OTHER",
+        title: "X",
+        language: "NL",
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    // the language options come from SiteLocale: English (default, public), Dutch (not public)
+    const list = ProductDocumentListResponseSchema.parse(
+      (await bvReader.get(`/products/${product}/documents`)).body,
+    );
+    expect(list.languages).toEqual([
+      { locale: "en", isDefault: true, public: true },
+      { locale: "nl", isDefault: false, public: false },
+    ]);
+    // an update without `language` keeps it (clients of before ML-9 change nothing)
+    const kept = await pm.post(`/documents/${nl.id}`, {
+      type: "OTHER",
+      title: "Brochure (Nederlands)",
+      accessPolicy: "INTERNAL",
+      version: nl.version,
+    });
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect(kept.body.document.language).toBe("nl");
+    // not shown anywhere: the language can be corrected, and the change is audited
+    const fixed = await pm.post(`/documents/${nl.id}`, {
+      type: "OTHER",
+      title: "Brochure (Nederlands)",
+      accessPolicy: "INTERNAL",
+      language: "en",
+      version: kept.body.document.version,
+    });
+    expect(fixed.status, JSON.stringify(fixed.body)).toBe(200);
+    expect(fixed.body.document.language).toBe("en");
+    expect((await lastAudit("catalog.document_updated"))?.metadata).toMatchObject({
+      changed: ["language"],
+      language: { from: "nl", to: "en" },
+    });
+    // a site reader cannot change anything
+    expectError(
+      await bvReader.post(`/documents/${nl.id}`, {
+        type: "OTHER",
+        title: "Brochure",
+        accessPolicy: "INTERNAL",
+        language: "nl",
+        version: fixed.body.document.version,
+      }),
+      403,
+      "FORBIDDEN",
+    );
+  });
+
+  it("a document shown on a site keeps its language (API and trigger); archived ones are frozen", async () => {
+    const id = await shownOnBv(
+      { type: "COA", title: "COA lot 7", accessPolicy: "PUBLIC" },
+      "COA lot 7",
+    );
+    const doc = await owner.productDocument.findUniqueOrThrow({ where: { id } });
+    expectError(
+      await pm.post(`/documents/${id}`, {
+        type: doc.type,
+        title: doc.title,
+        accessPolicy: doc.accessPolicy,
+        language: "nl",
+        version: doc.version,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "language", rule: "shown_on_site" },
+    );
+    await rejectsDb(
+      owner.productDocument.update({ where: { id }, data: { language: "nl" } }),
+      /the language of a document shown on a site cannot change/,
+    );
+    // the other fields still change as before while it is shown
+    const renamed = await pm.post(`/documents/${id}`, {
+      type: doc.type,
+      title: "COA lot 7 (2026)",
+      accessPolicy: doc.accessPolicy,
+      version: doc.version,
+    });
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    // hide it, archive it: an archived document's language is frozen too
+    const hidden = await bvPublisher.post(`/documents/${id}/sites/${BV}`, {
+      visible: false,
+      version: renamed.body.document.version,
+    });
+    expect(hidden.status).toBe(200);
+    const archived = await pm.post(`/documents/${id}/archive`, {
+      version: await docVersion(id),
+    });
+    expect(archived.status, JSON.stringify(archived.body)).toBe(200);
+    await rejectsDb(
+      owner.productDocument.update({ where: { id }, data: { language: "nl" } }),
+      /an archived document cannot change/,
+    );
+  });
+
+  it("a site shows a document only in a language enabled there (Corporate has no Dutch)", async () => {
+    await publishOn(product, COM, comPublisher);
+    const d = await createDoc(product, {
+      type: "SDS",
+      title: "Veiligheidsinformatieblad",
+      accessPolicy: "PUBLIC",
+      language: "nl",
+    });
+    const withFile = await uploaded(d.id, makePdf({ text: "VIB" }));
+    const rev = await activeRevisionId(d.id);
+    expectError(
+      await comPublisher.post(`/documents/${d.id}/sites/${COM}`, {
+        visible: true,
+        version: withFile.version,
+        revisionId: rev,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "language", rule: "not_enabled" },
+    );
+    await rejectsDb(
+      owner.productDocumentSite.create({
+        data: { documentId: d.id, siteId: COM, revisionId: rev },
+      }),
+      /a site can only show a document in a language enabled on it/,
+    );
+    // BV has Dutch enabled (not public): shown by the publisher, waiting for the language
+    const show = await bvPublisher.post(`/documents/${d.id}/sites/${BV}`, {
+      visible: true,
+      version: withFile.version,
+      revisionId: rev,
+    });
+    expect(show.status, JSON.stringify(show.body)).toBe(200);
+    expect(show.body.document.sites.find((s: { siteId: string }) => s.siteId === BV)).toMatchObject(
+      { enabled: true, state: "language_not_public" },
+    );
+    expect(await lastAudit("catalog.document_site_shown")).toMatchObject({ siteId: BV });
+    expect((await lastAudit("catalog.document_site_shown"))?.metadata).toMatchObject({
+      language: "nl",
+    });
+    nlSds = d.id;
+  });
+
+  it("nl public=false: the English page lists English files only; a Dutch file is closed everywhere", async () => {
+    enTds = await shownOnBv({ type: "TDS", title: "TDS DOC-L", accessPolicy: "PUBLIC" }, "TDS EN");
+    nlTds = await shownOnBv(
+      { type: "TDS", title: "TDS DOC-L (NL)", accessPolicy: "PUBLIC", language: "nl" },
+      "TDS NL",
+    );
+    const items = await listOn("bv");
+    expect(items.map((i) => i.id)).toContain(enTds);
+    expect(items.every((i) => i.language === "en")).toBe(true);
+    expect(items.map((i) => i.id)).not.toContain(nlTds);
+    expect(items.map((i) => i.id)).not.toContain(nlSds);
+    expect((await pubBytes("bv", `/documents/${nlTds}/file`)).status).toBe(404);
+    expect((await pubBytes("bv", `/documents/${enTds}/file`)).status).toBe(200);
+    expectError(await pub("bv", `/products/${slug}/documents?locale=nl`), 404, "NOT_FOUND");
+    // site isolation: Corporate never lists or serves a BV document, in any language
+    expect((await listOn("com")).map((i) => i.id)).not.toContain(enTds);
+    expect((await pubBytes("com", `/documents/${nlTds}/file`)).status).toBe(404);
+    expect((await pubBytes("admin", `/documents/${nlTds}/file`)).status).toBe(404);
+  });
+
+  it("nl public=true (isolated): Dutch files in Dutch, English ones as the fallback, English unchanged", async () => {
+    const englishBefore = JSON.stringify(await listOn("bv"));
+    const flagBefore = PublicProductListResponseSchema.parse(
+      (await pub("bv", "/products")).body,
+    ).items.find((i) => i.slug === slug)?.hasDocuments;
+    await setNlPublic(true);
+    try {
+      expect(JSON.stringify(await listOn("bv"))).toBe(englishBefore);
+      const nl = await listOn("bv", "nl");
+      // every English document is still there (nothing missing compared with English) ...
+      for (const en of JSON.parse(englishBefore) as { id: string }[]) {
+        expect(nl.map((i) => i.id)).toContain(en.id);
+      }
+      // ... plus the Dutch files, each with its language; per type the page's language first
+      expect(nl.find((i) => i.id === nlTds)).toMatchObject({
+        language: "nl",
+        title: "TDS DOC-L (NL)",
+      });
+      expect(nl.find((i) => i.id === enTds)).toMatchObject({ language: "en" });
+      expect(nl.find((i) => i.id === nlSds)).toMatchObject({ language: "nl", type: "SDS" });
+      const tds = nl.filter((i) => i.type === "TDS").map((i) => i.language);
+      expect(tds.indexOf("nl")).toBeLessThan(tds.indexOf("en"));
+      expect(new Set(nl.map((i) => i.language))).toEqual(new Set(["nl", "en"]));
+      // the Dutch file downloads unchanged (PUBLIC: identity stamper, same SHA-256)
+      const file = await pubBytes("bv", `/documents/${nlTds}/file`);
+      expect(file.status).toBe(200);
+      const rev = await owner.productDocumentRevision.findFirstOrThrow({
+        where: { documentId: nlTds, isActive: true },
+      });
+      expect(createHash("sha256").update(file.body).digest("hex")).toBe(rev.sha256);
+      // the Dutch product list flags the product as well
+      expect(
+        PublicProductListResponseSchema.parse(
+          (await pub("bv", "/products?locale=nl")).body,
+        ).items.find((i) => i.slug === slug)?.hasDocuments,
+      ).toBe(true);
+      // admin: the Dutch document is now served on BV
+      const admin = ProductDocumentListResponseSchema.parse(
+        (await bvReader.get(`/products/${product}/documents`)).body,
+      );
+      expect(
+        admin.items.find((d) => d.id === nlTds)?.sites.find((s) => s.siteId === BV)?.state,
+      ).toBe("served");
+    } finally {
+      await setNlPublic(false);
+    }
+    expect(JSON.stringify(await listOn("bv"))).toBe(englishBefore);
+    expect(
+      PublicProductListResponseSchema.parse((await pub("bv", "/products")).body).items.find(
+        (i) => i.slug === slug,
+      )?.hasDocuments,
+    ).toBe(flagBefore);
+    expect((await pubBytes("bv", `/documents/${nlTds}/file`)).status).toBe(404);
+  });
+
+  it("a Dutch-only document type on an English page: nothing is listed in its place", async () => {
+    // the Dutch SDS has no English counterpart: English pages do not borrow another language
+    const items = await listOn("bv");
+    expect(items.some((i) => i.type === "SDS" && i.id === nlSds)).toBe(false);
+  });
+});
+
 async function readdirRecursive(dir: string): Promise<string[]> {
   const { readdir } = await import("node:fs/promises");
   const out: string[] = [];

@@ -10,6 +10,7 @@ import { LeadRequestForm } from "@/components/products/lead-request-form";
 import { getProduct, getProductDocuments } from "@/lib/catalog-api";
 import { catalogLocale } from "@/lib/catalog-locale";
 import { countryOptions, dictionary, leadFormUi } from "@/lib/i18n";
+import { documentLang } from "@/lib/document-language";
 import { localizeHref } from "@/lib/locale-routing";
 import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 import { COUNTRY_CODES, currentLeadFormTexts } from "@dream/contracts";
@@ -82,7 +83,11 @@ async function RequestDetail({
     <div className="grid grid-cols-1 gap-10 pt-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-14 lg:pt-10">
       <div>
         <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber">{t.eyebrow}</p>
-        <h1 className="mt-3 text-[clamp(1.75rem,4vw,2.75rem)] font-medium leading-[1.08] [font-stretch:115%]">
+        {/* ML-9: the title is in the document's language (ADR-028 D10). */}
+        <h1
+          lang={documentLang(locale, doc.language)}
+          className="mt-3 text-[clamp(1.75rem,4vw,2.75rem)] font-medium leading-[1.08] [font-stretch:115%]"
+        >
           {doc.title}
         </h1>
         <p className="mt-3 text-steel">
@@ -111,6 +116,7 @@ async function RequestDetail({
       <LeadRequestForm
         documentId={doc.id}
         documentTitle={doc.title}
+        documentLang={documentLang(locale, doc.language)}
         countries={countries}
         texts={texts}
         privacyHref={privacyPolicyHref(locale)}

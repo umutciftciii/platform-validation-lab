@@ -43,7 +43,7 @@ import {
   type DeliveryContext,
 } from "./document-delivery.js";
 import { GLOBAL_PRODUCT_INCLUDE } from "./global-catalog.service.js";
-import { liveRows, type LiveRow } from "./live.js";
+import { liveRows, pageDocumentLanguages, publicDocumentLanguages, type LiveRow } from "./live.js";
 import { compareProductNames } from "./product-order.js";
 import { currentSpecHash, factsOf } from "./xrefs.service.js";
 import { publicRelation } from "./xref-rules.js";
@@ -117,6 +117,7 @@ export class PublicCatalogService {
     const withDocuments = await PublicCatalogService.productsWithOfferedDocuments(
       site,
       rows.map((r) => r.productId),
+      locale,
     );
     const items: (PublicProductSummary & { sortOrder: number })[] = [];
     for (const row of rows) {
@@ -138,16 +139,25 @@ export class PublicCatalogService {
   /**
    * DP-163: the live products that have at least one document a visitor can obtain on this site:
    * shown here with a pinned revision, ACTIVE, and of a policy that is open (PUBLIC, or
-   * LEAD_REQUIRED through the request form). Two queries for the whole list, no per-product calls.
+   * LEAD_REQUIRED through the request form) and, ML-9, in a language the page of `locale` lists.
+   * A few queries for the whole list, no per-product calls.
    */
   private static async productsWithOfferedDocuments(
     site: PublicSite,
     productIds: string[],
+    locale: string,
   ): Promise<Set<string>> {
     const policies = DOCUMENT_ACCESS_POLICIES.filter((p) => offeredToVisitors(p));
     if (productIds.length === 0 || policies.length === 0) return new Set();
+    const languages = pageDocumentLanguages(await publicDocumentLanguages(site), locale);
+    if (languages.length === 0) return new Set();
     const docs = await site.db.productDocument.findMany({
-      where: { productId: { in: productIds }, status: "ACTIVE", accessPolicy: { in: policies } },
+      where: {
+        productId: { in: productIds },
+        status: "ACTIVE",
+        accessPolicy: { in: policies },
+        language: { in: languages },
+      },
       select: { id: true, productId: true },
     });
     if (docs.length === 0) return new Set();
@@ -378,6 +388,8 @@ export class PublicCatalogService {
   /**
    * Documents of a live product on this site: shown on the site by its publisher, active, not
    * INTERNAL. Each lists the revision this site pinned (DP-086), not simply the active one.
+   * ML-9 (ADR-028 D10): documents in the page's language and, as the fallback, in the site's
+   * default language (both public), each with its language; per type the page's language first.
    * LEAD_REQUIRED is `requestable` (short form, then a grant; ADR-016); MEMBERS_ONLY is listed
    * but closed until DP-039.
    */
@@ -393,14 +405,29 @@ export class PublicCatalogService {
     const [row] = await PublicCatalogService.live(site, {
       snapshot: { path: ["slug"], equals: slug.data },
     });
-    // ML-8c: only for a product published in the request's language. The documents themselves
-    // are not translated (ML-9 adds their language; the site labels them English until then).
+    // ML-8c: only for a product published in the request's language. ML-9: the files are not
+    // translated; each document has its own language, which the site names.
     if (!row || !this.liveIn(row, locale)) throw new ApiError("NOT_FOUND");
-    const candidates = await site.db.productDocument.findMany({
-      where: { productId: row.productId, status: "ACTIVE", accessPolicy: { not: "INTERNAL" } },
+    const languages = pageDocumentLanguages(await publicDocumentLanguages(site), locale);
+    if (languages.length === 0) return { items: [] };
+    const found = await site.db.productDocument.findMany({
+      where: {
+        productId: row.productId,
+        status: "ACTIVE",
+        accessPolicy: { not: "INTERNAL" },
+        language: { in: languages },
+      },
       orderBy: [{ type: "asc" }, { title: "asc" }],
       take: 50,
     });
+    // Stable: per type, the page's language before the fallback (the order of `languages`).
+    const rank = (l: string) => languages.indexOf(l);
+    const candidates = found
+      .map((d, i) => ({ d, i }))
+      .sort((x, y) =>
+        x.d.type === y.d.type ? rank(x.d.language) - rank(y.d.language) || x.i - y.i : x.i - y.i,
+      )
+      .map(({ d }) => d);
     if (candidates.length === 0) return { items: [] };
     const shown = await site.db.productDocumentSite.findMany({
       where: { siteId: site.siteId, documentId: { in: candidates.map((d) => d.id) } },
@@ -418,6 +445,7 @@ export class PublicCatalogService {
         type: d.type,
         title: d.title,
         description: d.description,
+        language: d.language,
         access: d.accessPolicy,
         downloadable: access.downloadable && access.requires === "nothing",
         // DP-042: a lead-gated document is requested with the short form first (ADR-016).
@@ -441,8 +469,8 @@ export class PublicCatalogService {
    *    counted and the download recorded (one transaction) before the bytes leave.
    *  - MEMBERS_ONLY / INTERNAL: never (DP-039 / ADR-014).
    *
-   * In every case the document must be shown on this site, ACTIVE, and its product live here at
-   * download time. Downloads are rate limited per client IP prefix (ADR-016 D7, R-18).
+   * In every case the document must be shown on this site, ACTIVE, in a language public here
+   * (ML-9) and its product live here at download time. Downloads are rate limited per client IP prefix (ADR-016 D7, R-18).
    */
   async documentFile(
     ctx: RequestContext,
@@ -466,6 +494,10 @@ export class PublicCatalogService {
     if (!shown) throw new ApiError("NOT_FOUND");
     const doc = await site.db.productDocument.findUnique({ where: { id } });
     if (!doc || !shown.revision || doc.status !== "ACTIVE") throw new ApiError("NOT_FOUND");
+    // ML-9: a document in a language that is not public here does not exist for visitors.
+    if (!(await publicDocumentLanguages(site)).languages.has(doc.language)) {
+      throw new ApiError("NOT_FOUND");
+    }
     const access = decideDocumentAccess(doc.accessPolicy);
     if (!access.downloadable) throw new ApiError("NOT_FOUND");
 
