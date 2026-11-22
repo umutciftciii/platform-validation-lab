@@ -11,6 +11,7 @@ import {
   type DeliveryContext,
 } from "../../../src/catalog/document-delivery.js";
 import { documentDisposition, siteState } from "../../../src/catalog/documents.service.js";
+import { pageDocumentLanguages } from "../../../src/catalog/live.js";
 
 const ctx: DeliveryContext = {
   documentId: "d",
@@ -78,6 +79,31 @@ describe("siteState", () => {
     expect(siteState({ ...base, productLive: false })).toBe("product_not_live");
     expect(siteState({ ...base, accessPolicy: "MEMBERS_ONLY" })).toBe("awaiting_membership");
     expect(siteState({ ...base, accessPolicy: "LEAD_REQUIRED" })).toBe("served_on_request");
+  });
+  it("ML-9: waits for the document's language to be public; earlier reasons come first", () => {
+    expect(siteState({ ...base, languagePublic: true })).toBe("served");
+    expect(siteState({ ...base, languagePublic: false })).toBe("language_not_public");
+    expect(siteState({ ...base, languagePublic: false, enabled: false })).toBe("hidden");
+    expect(siteState({ ...base, languagePublic: false, productLive: false })).toBe(
+      "product_not_live",
+    );
+    expect(siteState({ ...base, languagePublic: false, accessPolicy: "LEAD_REQUIRED" })).toBe(
+      "language_not_public",
+    );
+  });
+});
+
+describe("ML-9 page document languages", () => {
+  const open = { defaultLocale: "en", languages: new Set(["en", "nl"]) };
+  it("lists the page's language and the default as the fallback, page language first", () => {
+    expect(pageDocumentLanguages(open, "nl")).toEqual(["nl", "en"]);
+    expect(pageDocumentLanguages(open, "en")).toEqual(["en"]);
+  });
+  it("never lists a language that is not public on the site", () => {
+    expect(
+      pageDocumentLanguages({ defaultLocale: "en", languages: new Set(["en"]) }, "nl"),
+    ).toEqual(["en"]);
+    expect(pageDocumentLanguages({ defaultLocale: null, languages: new Set() }, "en")).toEqual([]);
   });
 });
 

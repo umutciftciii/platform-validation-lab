@@ -4,6 +4,7 @@ import {
   CATALOG_API,
   DEFAULT_ERROR_MESSAGES,
   DOCUMENT_ACCESS_POLICIES,
+  DOCUMENT_DEFAULT_LANGUAGE,
   DOCUMENT_DESCRIPTION_MAX,
   DOCUMENT_MAX_BYTES,
   DOCUMENT_MIME_TYPE,
@@ -20,6 +21,7 @@ import {
   type DocumentSiteState,
   type DocumentType,
   type ProductDocument,
+  type ProductDocumentListResponse,
 } from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useId, useRef, useState, type FormEvent } from "react";
@@ -69,7 +71,39 @@ export const SITE_STATE_TEXT: Readonly<
   product_not_live: { label: "Waits for publication", tone: "amber" },
   awaiting_membership: { label: "Listed, download closed", tone: "amber" },
   awaiting_lead_capture: { label: "Listed, download closed", tone: "amber" },
+  language_not_public: { label: "Waits for its language to be public", tone: "amber" },
 };
+
+/** ML-9: the languages a document can have (SiteLocale of the caller's sites). */
+export type DocumentLanguageOption = ProductDocumentListResponse["languages"][number];
+
+/** ML-9: "English (en)", "Dutch (nl)": the admin names a language in English, with its tag. */
+export function documentLanguageName(tag: string): string {
+  let name: string | undefined;
+  try {
+    name = new Intl.DisplayNames(["en"], { type: "language" }).of(tag);
+  } catch {
+    name = undefined;
+  }
+  return name && name !== tag ? `${name} (${tag})` : tag;
+}
+
+/**
+ * ML-9: the options of the language field — the enabled languages, English always, and the
+ * document's own language even when it is no longer enabled (so the field shows the truth).
+ */
+export function documentLanguageOptions(
+  languages: readonly DocumentLanguageOption[],
+  current?: string,
+): DocumentLanguageOption[] {
+  const out = [...languages];
+  for (const tag of [DOCUMENT_DEFAULT_LANGUAGE, current]) {
+    if (tag && !out.some((l) => l.locale === tag)) {
+      out.push({ locale: tag, isDefault: false, public: false });
+    }
+  }
+  return out;
+}
 
 const UPLOAD_RULES: Readonly<Record<string, string>> = {
   not_pdf: "Not a PDF file (the content was checked, not the name).",
@@ -274,16 +308,23 @@ interface DetailsValue {
   title: string;
   description: string;
   accessPolicy: DocumentAccessPolicy;
+  language: string;
 }
 
 function DetailsFields({
   value,
   onChange,
+  languages,
+  languageLocked = false,
 }: {
   value: DetailsValue;
   onChange: (v: DetailsValue) => void;
+  languages: readonly DocumentLanguageOption[];
+  /** ML-9: shown on a site; the language is fixed until it is hidden everywhere. */
+  languageLocked?: boolean;
 }) {
   const id = useId();
+  const options = documentLanguageOptions(languages, value.language);
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       <Field label="Type" htmlFor={`${id}-type`}>
@@ -319,6 +360,31 @@ function DetailsFields({
           onChange={(e) => onChange({ ...value, description: e.target.value })}
           className={cx(TEXTAREA, "min-h-20")}
         />
+      </Field>
+      <Field
+        label="Language of the file"
+        htmlFor={`${id}-language`}
+        className="sm:col-span-3"
+        hint={
+          languageLocked
+            ? "Shown on a site: hide it on every site first to change the language. A file in another language is a new document."
+            : "The language the PDF is written in. Files are not translated here: upload a Dutch file as its own document."
+        }
+      >
+        <select
+          id={`${id}-language`}
+          value={value.language}
+          disabled={languageLocked}
+          onChange={(e) => onChange({ ...value, language: e.target.value })}
+          className={cx(FIELD, "sm:max-w-sm")}
+        >
+          {options.map((l) => (
+            <option key={l.locale} value={l.locale}>
+              {documentLanguageName(l.locale)}
+              {l.public ? "" : " · not public on any site yet"}
+            </option>
+          ))}
+        </select>
       </Field>
       <fieldset className="sm:col-span-3">
         <legend className="mb-1.5 text-sm font-medium text-ink">Access on public sites</legend>
@@ -357,10 +423,12 @@ function DetailsFields({
 
 function NewDocumentForm({
   productId,
+  languages,
   onCreated,
   onCancel,
 }: {
   productId: string;
+  languages: readonly DocumentLanguageOption[];
   onCreated: (doc: ProductDocument, uploaded: boolean) => void;
   onCancel: () => void;
 }) {
@@ -370,6 +438,7 @@ function NewDocumentForm({
     title: "",
     description: "",
     accessPolicy: "INTERNAL",
+    language: DOCUMENT_DEFAULT_LANGUAGE,
   });
   const [file, setFile] = useState<File | null>(null);
   const [note, setNote] = useState("");
@@ -393,6 +462,7 @@ function NewDocumentForm({
         title: value.title,
         description: value.description || null,
         accessPolicy: value.accessPolicy,
+        language: value.language,
       },
     );
     if (!created.ok) {
@@ -420,7 +490,7 @@ function NewDocumentForm({
       <h3 id={`${id}-heading`} className="text-base font-semibold text-ink">
         New document
       </h3>
-      <DetailsFields value={value} onChange={setValue} />
+      <DetailsFields value={value} onChange={setValue} languages={languages} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <FilePicker
           id={`${id}-file`}
@@ -593,11 +663,13 @@ function DocumentCard({
   doc,
   canEdit,
   productArchived,
+  languages,
   onChange,
 }: {
   doc: ProductDocument;
   canEdit: boolean;
   productArchived: boolean;
+  languages: readonly DocumentLanguageOption[];
   onChange: (doc: ProductDocument, message: string) => void;
 }) {
   const id = useId();
@@ -610,6 +682,7 @@ function DocumentCard({
     title: doc.title,
     description: doc.description ?? "",
     accessPolicy: doc.accessPolicy,
+    language: doc.language,
   });
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -647,6 +720,7 @@ function DocumentCard({
           title: details.title,
           description: details.description || null,
           accessPolicy: details.accessPolicy,
+          language: details.language,
           version: doc.version,
         }),
       "Document details saved.",
@@ -759,6 +833,7 @@ function DocumentCard({
               {doc.title}
             </h3>
             <PolicyPill policy={doc.accessPolicy} />
+            <StatusPill tone="neutral">{documentLanguageName(doc.language)}</StatusPill>
             {archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
           </div>
           {doc.description ? <p className="text-sm text-ink-2">{doc.description}</p> : null}
@@ -803,7 +878,12 @@ function DocumentCard({
 
       {mode === "edit" ? (
         <form onSubmit={saveDetails} className="space-y-4 border-t border-line p-4">
-          <DetailsFields value={details} onChange={setDetails} />
+          <DetailsFields
+            value={details}
+            onChange={setDetails}
+            languages={languages}
+            languageLocked={doc.sites.some((x) => x.enabled)}
+          />
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button
               type="button"
@@ -987,11 +1067,14 @@ export function DocumentManager({
   initial,
   canEdit,
   productArchived,
+  languages = [],
 }: {
   productId: string;
   initial: readonly ProductDocument[];
   canEdit: boolean;
   productArchived: boolean;
+  /** ML-9: the languages a document can have (`ProductDocumentListResponse.languages`). */
+  languages?: readonly DocumentLanguageOption[];
 }) {
   const router = useRouter();
   const notify = useNotice();
@@ -1016,6 +1099,7 @@ export function DocumentManager({
       doc={d}
       canEdit={canEdit}
       productArchived={productArchived}
+      languages={languages}
       onChange={replace}
     />
   );
@@ -1043,6 +1127,7 @@ export function DocumentManager({
       {creating ? (
         <NewDocumentForm
           productId={productId}
+          languages={languages}
           onCancel={() => setCreating(false)}
           onCreated={(doc, uploaded) => {
             replace(

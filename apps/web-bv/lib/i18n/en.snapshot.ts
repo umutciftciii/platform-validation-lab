@@ -132,7 +132,6 @@ export const EN_BEFORE_ML6: Record<string, string> = {
   "documents.membersSoon": "Available to members soon",
   "documents.notAvailable": "Not available",
   // ML-8c (DP-239): new UI, shown only on pages in another language (never on English pages).
-  "documents.inEnglish": "English",
   "crossReferences.heading": "Cross-references",
   "crossReferences.verifiedBadge": "VERIFIED",
   "crossReferences.similarBadge": "SIMILAR",

@@ -131,6 +131,13 @@ export function mapDbError(error: unknown): never {
   ) {
     throw new ApiError("CONFLICT_STATE", [{ path: "(root)", rule: "not_publishable" }]);
   }
+  // ML-9 document language guards (migration 20261214090000_ml_9_document_language).
+  if (/catalog: the language of a document shown on a site cannot change/.test(text)) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "language", rule: "shown_on_site" }]);
+  }
+  if (/catalog: a site can only show a document in a language enabled on it/.test(text)) {
+    throw new ApiError("CONFLICT_STATE", [{ path: "language", rule: "not_enabled" }]);
+  }
   if (/catalog: a site can only pin the active revision of a document/.test(text)) {
     throw new ApiError("CONFLICT_STATE", [{ path: "revisionId", rule: "not_active" }]);
   }

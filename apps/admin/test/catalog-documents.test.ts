@@ -7,6 +7,8 @@ import type { ProxyConfig } from "../lib/api-proxy";
 import { messageForIssues } from "../lib/catalog-client";
 import { proxyDocumentUpload, proxyImageUpload } from "../lib/upload-proxy";
 import {
+  documentLanguageName,
+  documentLanguageOptions,
   documentPrecheck,
   documentUploadMessage,
   POLICY_TEXT,
@@ -170,5 +172,29 @@ describe("documents tab helpers", () => {
     expect(revisionHref(DOC, "inline")).toBe(
       `/api/v1/admin/catalog/document-revisions/${DOC}/inline`,
     );
+  });
+});
+
+describe("ML-9 document language (admin)", () => {
+  it("names a language in English with its tag", () => {
+    expect(documentLanguageName("en")).toBe("English (en)");
+    expect(documentLanguageName("nl")).toBe("Dutch (nl)");
+    expect(documentLanguageName("zz-Unknowntag")).toBe("zz-Unknowntag");
+  });
+
+  it("offers the enabled languages, English always, and the document's own one", () => {
+    const enabled = [
+      { locale: "en", isDefault: true, public: true },
+      { locale: "nl", isDefault: false, public: false },
+    ];
+    expect(documentLanguageOptions(enabled).map((l) => l.locale)).toEqual(["en", "nl"]);
+    // an answer without languages (API of before ML-9): English only
+    expect(documentLanguageOptions([]).map((l) => l.locale)).toEqual(["en"]);
+    // a language no longer enabled stays visible for the document that has it
+    expect(documentLanguageOptions(enabled, "de").map((l) => l.locale)).toEqual(["en", "nl", "de"]);
+  });
+
+  it("has wording for the language state of every site", () => {
+    expect(SITE_STATE_TEXT.language_not_public.label).toBe("Waits for its language to be public");
   });
 });

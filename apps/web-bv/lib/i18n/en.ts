@@ -195,8 +195,6 @@ export const en = {
     fileForScreenReaders: "{title} (PDF)",
     membersSoon: "Available to members soon",
     notAvailable: "Not available",
-    /** ML-8c: the language of a document on a page in another language (documents are English). */
-    inEnglish: "English",
   },
 
   /**

@@ -1060,6 +1060,9 @@ model ProductDocument {
   description   String?              @db.VarChar(2000)
   accessPolicy  DocumentAccessPolicy @default(INTERNAL)
   status        DocumentStatus       @default(ACTIVE)
+  /// ML-9 (ADR-028 D10): language of the file (BCP 47, CHECK). Fixed while shown on a site; a
+  /// site shows it only when the language is enabled there (triggers).
+  language      String               @default("en") @db.VarChar(35)
   /// The highest revision number given so far (revisions are numbered 1, 2, 3, ...).
   revisionCount Int                  @default(0)
   version       Int                  @default(1)

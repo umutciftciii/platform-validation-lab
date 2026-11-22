@@ -18,9 +18,19 @@
  *   Corporate may serve different revisions. Documents are not part of the PM-3 review.
  * - Uploads: one raw PDF body (`application/pdf`, at most 20 MB) per request; the API checks the
  *   real content (signature, structure, no encryption, no active content).
+ * - ML-9 (DP-240, ADR-028 D10): every document has the `language` of its file (BCP 47, default
+ *   "en"). Files are never translated by the platform: a Dutch file supplied by the company is
+ *   its own document with `language: "nl"`. The language is chosen from the languages enabled on
+ *   the caller's sites (`languages`); a site shows a document only in a language enabled there,
+ *   and it is fixed while the document is shown on any site (hide it first). Omitting `language`
+ *   keeps the behaviour of before ML-9: a new document is English, an update keeps its language.
+ *   Public pages list the documents in the page's language and, as the fallback, in the site's
+ *   default language, each with its language; a document in a language that is not public on
+ *   the site is never listed, downloaded or requested there.
  */
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
+import { LocaleTagSchema } from "../site-locales.js";
 
 const IsoDate = z.iso.datetime({ offset: true });
 const VersionSchema = z.number().int().min(1);
@@ -54,6 +64,8 @@ export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
 export const DOCUMENTS_PER_PRODUCT_MAX = 50;
 export const REVISIONS_PER_DOCUMENT_MAX = 100;
 export const DOCUMENT_TITLE_MAX = 200;
+/** ML-9: the language of every document created before ML-9 and of a new one without a language. */
+export const DOCUMENT_DEFAULT_LANGUAGE = "en";
 export const DOCUMENT_DESCRIPTION_MAX = 2000;
 export const REVISION_NOTE_MAX = 1000;
 /** Header carrying the percent-encoded change note of a new revision (optional). */
@@ -72,11 +84,15 @@ export const DocumentInputSchema = z.strictObject({
   title: z.string().trim().min(1).max(DOCUMENT_TITLE_MAX),
   description: optionalText(DOCUMENT_DESCRIPTION_MAX),
   accessPolicy: DocumentAccessPolicySchema.default("INTERNAL"),
+  /** ML-9: the language of the file; a new document without it is English (as before ML-9). */
+  language: LocaleTagSchema.default(DOCUMENT_DEFAULT_LANGUAGE),
 });
 export const DocumentCreateRequestSchema = DocumentInputSchema;
 export type DocumentCreateRequest = z.input<typeof DocumentCreateRequestSchema>;
 export const DocumentUpdateRequestSchema = DocumentInputSchema.extend({
   accessPolicy: DocumentAccessPolicySchema,
+  /** ML-9: omitted keeps the document's language (clients of before ML-9 change nothing). */
+  language: LocaleTagSchema.optional(),
   version: VersionSchema,
 });
 export type DocumentUpdateRequest = z.input<typeof DocumentUpdateRequestSchema>;
@@ -128,6 +144,8 @@ export const DOCUMENT_SITE_STATES = [
   "product_not_live",
   "awaiting_membership",
   "awaiting_lead_capture",
+  /** ML-9: shown by the publisher, but the document's language is not public on the site yet. */
+  "language_not_public",
 ] as const;
 export const DocumentSiteStateSchema = z.enum(DOCUMENT_SITE_STATES);
 export type DocumentSiteState = z.infer<typeof DocumentSiteStateSchema>;
@@ -159,6 +177,8 @@ export const ProductDocumentSchema = z.strictObject({
   type: DocumentTypeSchema,
   title: z.string(),
   description: z.string().nullable(),
+  /** ML-9: the language of the file (BCP 47); an answer of before ML-9 reads as English. */
+  language: LocaleTagSchema.default(DOCUMENT_DEFAULT_LANGUAGE),
   accessPolicy: DocumentAccessPolicySchema,
   status: DocumentStatusSchema,
   version: z.number().int(),
@@ -176,6 +196,14 @@ export const ProductDocumentListResponseSchema = z.strictObject({
   items: z.array(ProductDocumentSchema).max(DOCUMENTS_PER_PRODUCT_MAX),
   /** product_master:edit: may create, change, upload and archive. */
   canEdit: z.boolean(),
+  /**
+   * ML-9: the languages a document can be given — every language enabled on a site the caller
+   * may read (SiteLocale), the default language first. Whether a site shows it is per site.
+   */
+  languages: z
+    .array(z.strictObject({ locale: LocaleTagSchema, isDefault: z.boolean(), public: z.boolean() }))
+    .max(50)
+    .default([]),
 });
 export type ProductDocumentListResponse = z.infer<typeof ProductDocumentListResponseSchema>;
 export const ProductDocumentResponseSchema = z.strictObject({ document: ProductDocumentSchema });
@@ -192,6 +220,12 @@ export const PublicDocumentSchema = z.strictObject({
   type: DocumentTypeSchema,
   title: z.string(),
   description: z.string().nullable(),
+  /**
+   * ML-9: the language of the file, which is also the language of `title` and `description`
+   * (ADR-028 D10); it may differ from the page's language (the default-language fallback). An
+   * answer of before ML-9 (no field) reads as English, which every document then was.
+   */
+  language: LocaleTagSchema.default(DOCUMENT_DEFAULT_LANGUAGE),
   access: z.enum(["PUBLIC", "MEMBERS_ONLY", "LEAD_REQUIRED"]),
   /** Downloadable without anything else: PUBLIC only (fail-closed, ADR-014). */
   downloadable: z.boolean(),
