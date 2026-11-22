@@ -31,6 +31,7 @@ import { seoLegacyPath, seoRedirectLocation, type PublicDocument } from "@dream/
 
 import {
   DEFAULT_LOCALE,
+  ROUTE_LOCALES,
   TECHNICAL_SEGMENTS,
   isRouteLocale,
   localePath,
@@ -50,11 +51,13 @@ const LEGACY_PAGE_FILE = /\.(?:html?|php|aspx?|pdf)$/i;
 const LANGUAGE_LIKE = /^[a-z]{2}$/;
 
 /**
- * Languages whose catalogue and privacy policy exist on the site. The Dutch catalogue text comes
- * with ML-8c and the Dutch policy with its own approval (ADR-028 D12); until then those addresses
- * under `/nl` are a 404, never English content under a Dutch address (D7).
+ * Languages whose catalogue and privacy policy exist on the site. ML-8c (DP-239): the catalogue
+ * has routes in every language; what a language shows is data (the products published in it,
+ * answered by the API only while the language is public), so a Dutch product without its own
+ * text is a 404, never English content under a Dutch address (D7). The Dutch policy comes with
+ * its own approval (ADR-028 D12); until then `/nl/privacy` is a 404.
  */
-export const CATALOGUE_LOCALES: readonly RouteLocale[] = ["en"];
+export const CATALOGUE_LOCALES: readonly RouteLocale[] = ROUTE_LOCALES;
 export const PRIVACY_LOCALES: readonly RouteLocale[] = ["en"];
 
 /** At most this many redirects are followed to find the final address of a chain. */
@@ -184,7 +187,13 @@ export interface ProxyDeps {
   resolve(path: string, search: string, locale?: RouteLocale): Promise<ResolveAnswer>;
   /** The public languages of the site; null while the API cannot answer. */
   publicLocales(): Promise<readonly string[] | null>;
-  documents(slug: string): Promise<DocumentsRead>;
+  /** ML-8c: the documents of a product published in `locale` (404 when it is not). */
+  documents(slug: string, locale: RouteLocale): Promise<DocumentsRead>;
+  /**
+   * ML-8c: whether the catalogue of a language other than the default one has a product now
+   * ("unknown" while the API cannot answer: the page renders and shows its own notice).
+   */
+  catalogue(locale: RouteLocale): Promise<"products" | "empty" | "unknown">;
   /** DP-095: whether the privacy policy is published in this environment. */
   privacyPublished: boolean;
   /** Called when a redirect cycle or an over-long chain was refused (logged by the caller). */
@@ -254,6 +263,12 @@ export async function step(
       if (route.section === "products" && !CATALOGUE_LOCALES.includes(locale)) {
         return { action: "not-found", locale };
       }
+      // ML-8c: the product list of another language exists only while it has a product; an
+      // empty Dutch list is a 404 (never an indexable empty page, never the English list).
+      if (route.section === "products" && locale !== DEFAULT_LOCALE) {
+        if ((await deps.catalogue(locale)) === "empty") return { action: "not-found", locale };
+        return { action: "next" };
+      }
       // ML-4 (DP-237): a list view with a query may be an old address of the same form with a
       // row bound to that exact query (`/en/products?category=grease`, DP-037 K5). Only such a
       // bound row counts (never a plain row of the list address, never the request itself), and
@@ -275,7 +290,7 @@ export async function step(
     case "document-request": {
       if (!CATALOGUE_LOCALES.includes(locale)) return { action: "not-found", locale };
       // DP-220: the lead form of a requestable document (metadata read only, no file access).
-      const docs = await deps.documents(route.slug);
+      const docs = await deps.documents(route.slug, locale);
       return documentRequestStatus(docs, route.id) === "page"
         ? { action: "next" }
         : { action: "not-found", locale };

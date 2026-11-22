@@ -14,9 +14,10 @@ export function orderName(name: string): string {
   });
 }
 
-export function compareProductNames(a: string, b: string): number {
+/** ML-8c: `locale` is the collation of the list's language (English as before by default). */
+export function compareProductNames(a: string, b: string, locale = "en"): number {
   return (
-    orderName(a).localeCompare(orderName(b), "en", { numeric: true }) ||
-    a.localeCompare(b, "en", { numeric: true })
+    orderName(a).localeCompare(orderName(b), locale, { numeric: true }) ||
+    a.localeCompare(b, locale, { numeric: true })
   );
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { cache, Suspense } from "react";
 
@@ -13,14 +14,21 @@ import {
 import { CatalogNotice, CatalogShell } from "@/components/products/catalog-shell";
 import { BrowseResults } from "@/components/products/catalog-views";
 import { liveLinks } from "@/components/products/live-links";
+import { listAlternates, selectorKey } from "@/lib/catalog-alternates";
 import { listCategories, listProducts } from "@/lib/catalog-api";
 import { catalogLocale } from "@/lib/catalog-locale";
 import { dictionary, interpolate } from "@/lib/i18n";
-import { localizeHref } from "@/lib/locale-routing";
+import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { pageMetadata, siteSeo } from "@/lib/seo";
 
-/** The catalogue reads of one request, shared by the metadata and the list (one API read each). */
-const readCatalog = cache(() => Promise.all([listProducts(), listCategories()]));
+/**
+ * The catalogue reads of one request, shared by the metadata and the list (one API read each).
+ * ML-8c: in the page's language (the default language is asked as before).
+ */
+const readCatalog = cache((locale: RouteLocale) =>
+  Promise.all([listProducts(locale), listCategories(locale)]),
+);
+const alternates = cache((locale: RouteLocale) => listAlternates(locale));
 
 /**
  * DP-207: the list and each category view are their own canonical address (`?category=`, and
@@ -31,7 +39,11 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
   await connection();
   const locale = await catalogLocale();
   const p = parseBrowse(await searchParams);
-  const [site, [list, cats]] = await Promise.all([siteSeo(locale), readCatalog()]);
+  const [site, [list, cats], others] = await Promise.all([
+    siteSeo(locale),
+    readCatalog(locale),
+    alternates(locale),
+  ]);
   const canonical = canonicalBrowse(p, list.ok ? list.data : null, cats.ok ? cats.data : []);
   const meta = dictionary(locale).meta;
   return pageMetadata(
@@ -45,6 +57,9 @@ export async function generateMetadata({ searchParams }: PageProps<"/[locale]/pr
       title: interpolate(meta.products, { site: site.siteName }),
       description: interpolate(meta.productsDescription, { site: site.siteName }),
       noindex: Boolean(p.q),
+      // ML-8c: the lists of the other public languages that have products (only the unfiltered
+      // list names them; pageMetadata drops hreflang for a view with a query).
+      alternates: others.hreflang,
     },
     site,
   );
@@ -64,6 +79,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/[locale
     <CatalogShell
       locale={locale}
       crumbs={[{ label: ui.common.home, href: localizeHref(locale, "/") }, { label: ui.common.products }]}
+      languages={async () => selectorKey(await alternates(locale))}
     >
       <header className="pb-8 pt-8 sm:pb-12 sm:pt-12">
         <p className="tp-eyebrow">{ui.catalogue.eyebrow}</p>
@@ -81,8 +97,12 @@ async function Browse({ searchParams }: Pick<PageProps<"/[locale]/products">, "s
   await connection();
   const locale = await catalogLocale();
   const params = parseBrowse(await searchParams);
-  const [list, cats] = await readCatalog();
+  const [list, cats] = await readCatalog(locale);
   const ui = dictionary(locale);
+  // ML-8c: a language without a catalogue (not public, or no product published in it); the proxy
+  // already answers these with a real 404.
+  if (!list.ok && list.reason === "not_found") notFound();
+  if (list.ok && list.data.length === 0 && locale !== DEFAULT_LOCALE) notFound();
   if (!list.ok) {
     return <CatalogNotice title={ui.catalogue.unavailableTitle}>{ui.common.tryAgain}</CatalogNotice>;
   }

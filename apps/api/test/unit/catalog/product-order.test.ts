@@ -47,4 +47,17 @@ describe("product order (DP-160)", () => {
     );
     expect(orderName("Base Oil 6 cSt")).toBe("Base Oil 6 cSt");
   });
+
+  it("ML-8c: compares in the list's language, the natural number order kept", () => {
+    const names = ["Witte olie 100#", "Witte olie 15#", "Vet 25 kg", "Vet 50 g", "Basisolie"];
+    expect([...names].sort((a, b) => compareProductNames(a, b, "nl"))).toEqual([
+      "Basisolie",
+      "Vet 50 g",
+      "Vet 25 kg",
+      "Witte olie 15#",
+      "Witte olie 100#",
+    ]);
+    // English stays the default collation
+    expect(compareProductNames("a", "B")).toBe(compareProductNames("a", "B", "en"));
+  });
 });

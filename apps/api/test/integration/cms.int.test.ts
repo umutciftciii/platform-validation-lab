@@ -5321,7 +5321,8 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
       });
       // No English content under a Dutch address (ADR-028 D7): the English slug is a 404 in NL.
       expectError(await seoGet(`/resolve?path=/ml2-about&locale=nl`), 404, "NOT_FOUND");
-      // No Dutch catalogue (ML-8c) and no old-site lookups inside NL.
+      // No product published in Dutch in this database (ML-8c: a Dutch product resolves only with
+      // its own text, catalog-workflow section 19) and no old-site lookups inside NL.
       expectError(await seoGet(`/resolve?path=/products/x&locale=nl`), 404, "NOT_FOUND");
       expectError(
         await seoGet(`/resolve?path=${encodeURIComponent("/en/about-us")}&locale=nl`),
@@ -5405,7 +5406,7 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
       }
       // An English page without a published Dutch counterpart names none (no fake NL address).
       expect(of("en", "/ml2-third")).toMatchObject({ alternates: [] });
-      // The catalogue exists in English only (ML-8c): no Dutch product list or product.
+      // No product is published in Dutch here (ML-8c): no Dutch product list or product.
       expect(
         entries.filter((e) => e.locale === "nl" && (e.kind === "product" || e.kind === "products")),
       ).toEqual([]);

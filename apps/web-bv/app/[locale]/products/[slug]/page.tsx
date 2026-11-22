@@ -10,9 +10,10 @@ import { trail } from "@/components/products/browse";
 import { liveLinks } from "@/components/products/live-links";
 import { ProductJsonLd } from "@/components/seo/json-ld";
 import { Rich } from "@/components/i18n/rich";
+import { productAlternates, selectorKey } from "@/lib/catalog-alternates";
 import { catalogLocale } from "@/lib/catalog-locale";
 import { dictionary, formatDate, formatNumber, interpolate, plural } from "@/lib/i18n";
-import { localizeHref, type RouteLocale } from "@/lib/locale-routing";
+import { DEFAULT_LOCALE, localizeHref, type RouteLocale } from "@/lib/locale-routing";
 import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 import {
   documentHref,
@@ -25,7 +26,9 @@ import {
 } from "@/lib/catalog-api";
 import type { PublicCrossReference, PublicDocument } from "@dream/contracts";
 
-const product = cache(getProduct);
+/** ML-8c: one read per request and language (metadata and page share it). */
+const product = cache((slug: string, locale: RouteLocale) => getProduct(slug, locale));
+const alternates = cache((locale: RouteLocale, slug: string) => productAlternates(locale, slug));
 
 /**
  * DP-207: the product's title, description, canonical URL and Open Graph image from the published
@@ -36,7 +39,7 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/products
   await connection();
   const locale = await catalogLocale();
   const { slug } = await params;
-  const res = await product(slug);
+  const res = await product(slug, locale);
   if (!res.ok) return noindexMetadata(dictionary(locale).meta.productFallback);
   const p = res.data;
   const site = await siteSeo(locale);
@@ -60,10 +63,9 @@ export async function generateMetadata({ params }: PageProps<"/[locale]/products
       ogDescription: p.seo.ogDescription,
       ogImage: og ? image(og) : null,
       images: p.images.slice(0, 1).map(image),
-      // ML-5: a product has a counterpart only where it is published in that language's catalogue
-      // (its own snapshot). The catalogue exists in English only until ML-8c (CATALOGUE_LOCALES),
-      // so no hreflang is rendered, never a guessed /nl/products/... address.
-      alternates: [],
+      // ML-5 / ML-8c: a product has a counterpart only where it is published in that language's
+      // catalogue (its own complete text) and indexable there; never a guessed /nl address.
+      alternates: (await alternates(locale, p.slug)).hreflang,
     },
     site,
   );
@@ -88,6 +90,11 @@ export default async function ProductPage({ params }: PageProps<"/[locale]/produ
   );
 }
 
+/** ML-8c: the language selector targets of this product (same product, list or home). */
+function languagesOf(locale: RouteLocale, slug: string) {
+  return async () => selectorKey(await alternates(locale, slug));
+}
+
 function baseCrumbs(locale: RouteLocale) {
   const ui = dictionary(locale).common;
   return [
@@ -102,18 +109,18 @@ async function ProductDetail({ params }: { params: PageProps<"/[locale]/products
   const links = liveLinks(locale);
   const { slug } = await params;
   const [result, docs, xrefs, cats, list] = await Promise.all([
-    product(slug),
-    getProductDocuments(slug),
-    getProductCrossReferences(slug),
-    listCategories(),
-    listProducts(),
+    product(slug, locale),
+    getProductDocuments(slug, locale),
+    getProductCrossReferences(slug, locale),
+    listCategories(locale),
+    listProducts(locale),
   ]);
   if (!result.ok && result.reason === "not_found") notFound();
   const [home, products] = baseCrumbs(locale) as [{ label: string; href: string }, { label: string; href: string }];
   if (!result.ok) {
     const ui = dictionary(locale).product;
     return (
-      <CatalogShell locale={locale} crumbs={[home, products]}>
+      <CatalogShell locale={locale} crumbs={[home, products]} languages={languagesOf(locale, slug)}>
         <div className="pt-8">
           <CatalogNotice title={ui.unavailableTitle}>
             <Rich
@@ -141,7 +148,11 @@ async function ProductDetail({ params }: { params: PageProps<"/[locale]/products
     ? list.data.filter((x) => x.category.slug === p.category.slug && x.slug !== p.slug).slice(0, 4)
     : [];
   return (
-    <CatalogShell locale={locale} crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}>
+    <CatalogShell
+      locale={locale}
+      crumbs={[home, products, ...categoryCrumbs, { label: p.name }]}
+      languages={languagesOf(locale, slug)}
+    >
       <ProductJsonLd product={p} locale={locale} />
       <ProductDetailView
         p={p}
@@ -196,6 +207,14 @@ function Documents({
               </p>
               <p className="text-xs text-steel">
                 {ui.type[d.type]} · PDF · {sizeLabel(d.byteSize, locale)}
+                {/* ML-8c: documents are not translated; outside English their language is named
+                    (ML-9 adds a language per document). */}
+                {locale !== DEFAULT_LOCALE ? (
+                  <>
+                    {" · "}
+                    <span lang="en">{ui.inEnglish}</span>
+                  </>
+                ) : null}
                 {d.pageCount ? ` · ${plural(locale, ui.pages, d.pageCount)}` : ""} ·{" "}
                 {interpolate(ui.revision, { number: d.revisionNumber })}
               </p>

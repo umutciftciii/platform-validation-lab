@@ -25,9 +25,15 @@
  *    language is revealed). `settings(locale)` reads `bv.site-seo` of that language.
  *  - ML-5 (DP-019): `sitemap()` lists every public language with its translation counterparts
  *    (hreflang); see the method.
+ *  - ML-8c (DP-239): the catalogue exists in every public language: a product is live in a
+ *    language when its live publication has a complete text in it (`readSnapshot`, no fallback).
+ *    `resolve` answers `/products/<slug>` with `locale`, the sitemap lists each language's products
+ *    and product list, and a product's counterparts are the same product in the other public
+ *    languages it is published in.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
+  readSnapshot,
   readSnapshotAddress,
   BV_SITE_SEO_FIELDS,
   BV_SITE_SEO_KEY,
@@ -61,7 +67,10 @@ interface LivePath {
   /** DP-209: the published canonical override (null: the address itself). */
   canonicalPath: string | null;
   publishedAt: Date;
-  /** ML-5: the CMS translation group (products: null, they exist in the default language only). */
+  /**
+   * ML-5: the CMS translation group. ML-8c: a product's group is the product itself (the same
+   * product in another language is its counterpart); the product list is one group too.
+   */
   translationGroupId: string | null;
 }
 
@@ -69,6 +78,8 @@ interface LivePath {
 const listed = (p: LivePath) => !p.noindex && seoIsSelfCanonical(p.path, p.canonicalPath);
 
 const PRODUCTS_PREFIX = "/products/";
+/** ML-8c: the product lists of every language are counterparts of each other. */
+const PRODUCT_LIST_GROUP = "catalogue:products";
 
 /** The kind of a live CMS address; the two list pages are designed pages at fixed paths. */
 export function kindOf(path: string, page: { kind: string; templateKey: string }): SeoPathKind {
@@ -159,8 +170,16 @@ export class PublicSeoService {
     return out;
   }
 
-  /** Slugs of the live products of the site, from their published snapshot. */
-  static async liveProductPaths(site: SiteReader, slug?: string): Promise<LivePath[]> {
+  /**
+   * Slugs of the live products of the site, from their published snapshot. ML-8c: with
+   * `locale` (a language other than the default one) only the products whose live publication has
+   * a complete text in that language; the default language lists every live product, as before.
+   */
+  static async liveProductPaths(
+    site: SiteReader,
+    slug?: string,
+    locale?: string,
+  ): Promise<LivePath[]> {
     const rows = await liveProducts(
       site,
       slug ? { snapshot: { path: ["slug"], equals: slug } } : {},
@@ -170,6 +189,7 @@ export class PublicSeoService {
       // ML-8a: v1 and v2 snapshots; the address fields are language-neutral.
       const s = readSnapshotAddress(row.snapshot);
       if (!s) continue;
+      if (locale !== undefined && readSnapshot(row.snapshot, locale) === null) continue;
       out.push({
         path: `${PRODUCTS_PREFIX}${s.slug}`,
         locale: null,
@@ -177,7 +197,7 @@ export class PublicSeoService {
         noindex: s.noindex,
         canonicalPath: s.canonicalPath,
         publishedAt: row.publishedAt,
-        translationGroupId: null,
+        translationGroupId: `product:${row.productId}`,
       });
     }
     return out;
@@ -321,8 +341,10 @@ export class PublicSeoService {
    * without `locale`. Another language must be enabled and public on the site (else 404 without
    * detail, a hidden language is never revealed); only its own live pages count (no fallback to
    * English), then its redirects at their stored address (`/nl/old` → `/nl/new`, ML-2 slug
-   * changes) and the `unpublished` detail. Products and old-site addresses exist in the default
-   * language only (the Dutch catalogue comes with ML-8c).
+   * changes) and the `unpublished` detail. Old-site addresses exist in the default language only.
+   * ML-8c: `/products/<slug>` is found when the product's live publication has a complete text
+   * in the language; a product slug change (stored once, language-neutral: `/products/old` →
+   * `/products/new`) answers inside the language only towards a product live in it.
    */
   private async resolveInLocale(
     ctx: RequestContext,
@@ -335,15 +357,35 @@ export class PublicSeoService {
     const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
     if (!locales.some((l) => l.locale === rawLocale)) throw new ApiError("NOT_FOUND");
     if (rawLocale === defaultLocale) return this.resolve(ctx, path, rawQuery);
-    if (!SEO_RESOLVABLE_PATH.test(path) || path.startsWith(PRODUCTS_PREFIX)) {
-      throw new ApiError("NOT_FOUND");
-    }
+    if (!SEO_RESOLVABLE_PATH.test(path)) throw new ApiError("NOT_FOUND");
     const parsedQuery =
       typeof rawQuery === "string" && rawQuery.length <= 2000
         ? normalizeRedirectQuery(rawQuery)
         : null;
     const query = parsedQuery?.ok ? parsedQuery.value : "";
     const address = cmsLocaleAddress(path, rawLocale, defaultLocale);
+    if (path.startsWith(PRODUCTS_PREFIX)) {
+      const inLocale = (slug: string) =>
+        PublicSeoService.liveProductPaths(site, slug, rawLocale).then(([hit]) => hit);
+      const hit = await inLocale(path.slice(PRODUCTS_PREFIX.length));
+      if (hit?.path === path) return { path: address, kind: "product" };
+      // The product's own slug-change row (written at the stored, unprefixed address) only.
+      const moved = await PublicSeoService.redirectOf(site, path, "");
+      const redirect = moved && "redirect" in moved ? moved.redirect : null;
+      if (redirect?.target.startsWith(PRODUCTS_PREFIX)) {
+        const next = await inLocale(redirect.target.slice(PRODUCTS_PREFIX.length));
+        if (next?.path === redirect.target) {
+          return {
+            path: address,
+            redirect: {
+              target: cmsLocaleAddress(redirect.target, rawLocale, defaultLocale),
+              statusCode: redirect.statusCode,
+            },
+          };
+        }
+      }
+      throw new ApiError("NOT_FOUND");
+    }
     const hit = (
       await PublicSeoService.livePages(site, { publicOnly: true, locale: rawLocale })
     ).find((p) => p.path === path);
@@ -398,8 +440,9 @@ export class PublicSeoService {
   /**
    * ML-5 (DP-019, ADR-028 D3): the sitemap of every PUBLIC language. Each language lists its own
    * live, indexable pages at their paths inside the language (the site adds the prefix); a
-   * language that is not public lists nothing. The catalogue (product list and products) exists in
-   * the default language only until ML-8c. Each entry names its counterparts in the other public
+   * language that is not public lists nothing. ML-8c: the catalogue of each language lists the
+   * products published in it (complete text, `liveProductPaths(locale)`) and, while it has one,
+   * the product list. Each entry names its counterparts in the other public
    * languages — same translation group, itself listed (indexable, its own canonical) — so hreflang
    * is reciprocal and never points at a draft, a noindex page or a hidden language. Redirect
    * sources never have live content, so they are never listed.
@@ -407,10 +450,18 @@ export class PublicSeoService {
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
     const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
-    const [pages, products] = await Promise.all([
+    const [pages, products, ...translated] = await Promise.all([
       PublicSeoService.livePages(site, { publicOnly: true }),
       PublicSeoService.liveProductPaths(site),
+      ...locales
+        .filter((l) => l.locale !== defaultLocale)
+        .map((l) => PublicSeoService.liveProductPaths(site, undefined, l.locale)),
     ]);
+    const others = locales.filter((l) => l.locale !== defaultLocale);
+    const catalogueOf = (locale: string): LivePath[] =>
+      locale === defaultLocale
+        ? products
+        : (translated[others.findIndex((l) => l.locale === locale)] ?? []);
     const latest = (rows: LivePath[]): string | null =>
       rows.length
         ? new Date(Math.max(...rows.map((r) => r.publishedAt.getTime()))).toISOString()
@@ -427,27 +478,30 @@ export class PublicSeoService {
     for (const { locale } of locales) {
       const own = pages.filter((p) => p.locale === locale);
       const of = (kind: SeoPathKind) => own.filter((p) => p.kind === kind).sort(byPath);
-      const catalogue = locale === defaultLocale;
+      const catalogue = catalogueOf(locale);
       // The product list is an app page; its designed heading page may switch it to noindex.
+      // ML-8c: in another language it exists only while that language has a live product.
       const productsIndex = own.find((p) => p.kind === "products");
+      const hasList = locale === defaultLocale || catalogue.length > 0;
       drafts.push(
         ...of("home")
           .filter(listed)
           .map((p) => entry(p, locale)),
-        ...(catalogue && !productsIndex?.noindex
+        ...(hasList && !productsIndex?.noindex
           ? [
               {
                 path: "/products",
                 locale,
                 kind: "products" as const,
-                lastModified: latest(products),
-                group: null,
+                lastModified: latest(catalogue),
+                group: PRODUCT_LIST_GROUP,
               },
             ]
           : []),
-        ...(catalogue ? [...products].filter(listed).sort(byPath) : []).map((p) =>
-          entry(p, locale),
-        ),
+        ...[...catalogue]
+          .filter(listed)
+          .sort(byPath)
+          .map((p) => entry(p, locale)),
         ...of("page")
           .filter(listed)
           .map((p) => entry(p, locale)),

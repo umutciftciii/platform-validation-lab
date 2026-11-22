@@ -57,7 +57,10 @@ async function RequestDetail({
   const { slug, id } = await params;
   const ui = dictionary(locale);
   const t = ui.documentRequest;
-  const [product, docs] = await Promise.all([getProduct(slug), getProductDocuments(slug)]);
+  const [product, docs] = await Promise.all([
+    getProduct(slug, locale),
+    getProductDocuments(slug, locale),
+  ]);
   if ((!product.ok && product.reason === "not_found") || (!docs.ok && docs.reason === "not_found")) {
     notFound();
   }

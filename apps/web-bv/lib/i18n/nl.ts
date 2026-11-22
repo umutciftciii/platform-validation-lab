@@ -2,8 +2,9 @@
  * ML-6 (DP-138, ADR-028 D11/D13): the Dutch site UI dictionary of the BV site.
  *
  * DRAFT until human review: every value below is a draft translation (tool-assisted) and is not
- * approved. Nothing is published by this file: Dutch stays `public = false` (D14), the catalogue and
- * the privacy policy have no Dutch routes yet (ML-8c, ML-10), and the approval of these texts is
+ * approved. Nothing is published by this file: Dutch stays `public = false` (D14), the catalogue has
+ * Dutch routes since ML-8c (closed while Dutch is not public), the privacy policy none yet (ML-10),
+ * and the approval of these texts is
  * part of the "complete NL" acceptance (docs/i18n/multilingual-plan.md §5.1 item 6).
  *
  * Typed as `Dictionary`: a missing key (or one English does not have) is a compile error.
@@ -189,6 +190,8 @@ export const nl: Dictionary = {
     fileForScreenReaders: "{title} (pdf)",
     membersSoon: "Binnenkort beschikbaar voor leden",
     notAvailable: "Niet beschikbaar",
+    /** ML-8c: written as the language names itself (`lang="en"`), like the language selector. */
+    inEnglish: "English",
   },
 
   crossReferences: {

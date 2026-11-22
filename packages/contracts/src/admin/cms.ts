@@ -975,7 +975,7 @@ export type CmsStructureWarning = (typeof CMS_STRUCTURE_WARNINGS)[number];
  *  - `not_live`: its content is not live (the site shows the text with the pending note);
  *  - `no_translation`: the page has no published counterpart in this language (hidden);
  *  - `not_in_language`: the address or catalogue item does not exist in this language (hidden;
- *    products and categories until the catalogue is translated, ML-8c);
+ *    ML-8c: a product not published in it, a category or product list without such a product);
  *  - `unknown_target`: the referenced page, product or category no longer exists.
  */
 export const CMS_MENU_LINK_WARNINGS = [
