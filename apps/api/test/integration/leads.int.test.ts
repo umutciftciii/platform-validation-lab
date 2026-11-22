@@ -4129,3 +4129,107 @@ describe("DP-227 lead CSV export", () => {
     expect(failure?.metadata).toMatchObject({ count: LEAD_EXPORT_MAX_ROWS + 1 });
   });
 });
+
+// ------------------------------------------------------------------------------------------
+// ML-9 (DP-240, ADR-028 D10): a document's language never opens a way around the lead flow. A
+// Dutch file stays closed (list, request, grant download) while `nl` is not public; with `nl`
+// made public ONLY in this disposable database, the form, consent evidence, grant and watermark
+// are exactly those of an English document.
+// ------------------------------------------------------------------------------------------
+describe("ML-9 document language and the lead flow", () => {
+  let product: string;
+  let nlLead: string;
+  const nlSlug = "lead-ml9";
+  const setNlPublic = (value: boolean) =>
+    owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { public: value },
+    });
+
+  beforeAll(async () => {
+    product = await completeProduct("ml9", "LEAD-ML9");
+    await publishOn(product, BV, bvPublisher);
+    const d = await createDoc(product, {
+      type: "SDS",
+      title: "Veiligheidsinformatieblad",
+      accessPolicy: "LEAD_REQUIRED",
+      language: "nl",
+    });
+    const withFile = await uploaded(d.id, makePdf({ text: "VIB NL", pages: 2 }));
+    const show = await bvPublisher.post(`/documents/${d.id}/sites/${BV}`, {
+      visible: true,
+      version: withFile.version,
+      revisionId: await activeRevisionId(d.id),
+    });
+    expect(show.status, JSON.stringify(show.body)).toBe(200);
+    expect(show.body.document.sites[0]).toMatchObject({
+      enabled: true,
+      state: "language_not_public",
+    });
+    nlLead = d.id;
+  });
+
+  afterAll(async () => {
+    await setNlPublic(false);
+  });
+
+  it("nl public=false: a Dutch lead document is not listed, not requestable, not downloadable", async () => {
+    const items = PublicDocumentListResponseSchema.parse(
+      (await pub("bv", `/products/${nlSlug}/documents`)).body,
+    ).items;
+    expect(items.map((i) => i.id)).not.toContain(nlLead);
+    const leads = await owner.lead.count();
+    const requests = await owner.leadDocumentRequest.count();
+    expectError(
+      await requestLead("bv", form({ documentId: nlLead, email: "nl-closed@probe.example" })),
+      404,
+      "NOT_FOUND",
+    );
+    expect(await owner.lead.count()).toBe(leads);
+    expect(await owner.leadDocumentRequest.count()).toBe(requests);
+    expect((await download("bv", nlLead)).status).toBe(404);
+  });
+
+  it("nl public=true (isolated): the same form, consent evidence, grant and watermark; closed again after", async () => {
+    await setNlPublic(true);
+    let token = "";
+    try {
+      const res = await requestLead(
+        "bv",
+        form({ documentId: nlLead, fullName: "Anna de Vries", email: "anna@ml9.example" }),
+      );
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      const out = LeadDocumentRequestResponseSchema.parse(res.body);
+      token = out.grant.token;
+      const request = await owner.leadDocumentRequest.findFirstOrThrow({
+        where: { documentId: nlLead },
+      });
+      expect(request.privacyNoticeVersion).toBe(LEAD_PRIVACY_NOTICE.version);
+      const revision = await owner.productDocumentRevision.findFirstOrThrow({
+        where: { documentId: nlLead, isActive: true },
+      });
+      expect(request.revisionId).toBe(revision.id);
+      const first = await download("bv", nlLead, token);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("no-store");
+      // watermarked for its recipient: never the stored bytes
+      expect(createHash("sha256").update(first.body).digest("hex")).not.toBe(revision.sha256);
+      const stamped = await PDFDocument.load(first.body);
+      expect(stamped.getKeywords()).toContain(`ref:${out.reference}`);
+      expect(stamped.getSubject()).toContain("Anna de Vries");
+      // the stored file itself is unchanged (hash of the storage object)
+      expect(
+        (await owner.productDocumentRevision.findUniqueOrThrow({ where: { id: revision.id } }))
+          .sha256,
+      ).toBe(revision.sha256);
+    } finally {
+      await setNlPublic(false);
+    }
+    // a grant issued while Dutch was public does not outlive the language: fail-closed 404
+    expect((await download("bv", nlLead, token)).status).toBe(404);
+    const grant = await owner.documentDownloadGrant.findFirstOrThrow({
+      where: { request: { documentId: nlLead } },
+    });
+    expect(grant.downloadCount).toBe(1);
+  });
+});

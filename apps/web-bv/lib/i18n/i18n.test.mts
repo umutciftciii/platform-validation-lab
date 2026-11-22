@@ -50,7 +50,6 @@ const SAME_IN_DUTCH = new Set([
   "catalogue.inCategory",
   "catalogue.categoryCard",
   "documents.type.OTHER",
-  "documents.inEnglish",
   "contactSection.email",
   "privacy.eyebrow",
   "leadForm.privacyLegend",

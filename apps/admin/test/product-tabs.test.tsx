@@ -1620,3 +1620,65 @@ describe("ML-8b EN/NL language tabs", () => {
     expect(content).toContain("Save Dream Petroleum BV text");
   });
 });
+
+describe("ML-9 document languages on the Media & Documents tab", () => {
+  const doc = (id: string, language: string, shown: boolean) => ({
+    id,
+    productId: PRODUCT,
+    type: "TDS",
+    title: language === "nl" ? "TDS (Nederlands)" : "TDS (English)",
+    description: null,
+    language,
+    accessPolicy: "PUBLIC",
+    status: "ACTIVE",
+    version: 2,
+    revisionCount: 0,
+    activeRevision: null,
+    revisions: [],
+    sites: [
+      {
+        siteId: BV,
+        siteKey: "BV",
+        enabled: shown,
+        pinnedRevision: null,
+        updateAvailable: false,
+        state: shown && language === "nl" ? "language_not_public" : shown ? "served" : "hidden",
+        canPublish: true,
+      },
+    ],
+    archivedAt: null,
+    createdAt: T,
+    updatedAt: T,
+  });
+
+  beforeEach(() => {
+    fixtures({ canEditMaster: true });
+    reads.set(`${C}/products/${PRODUCT}/documents`, {
+      items: [
+        doc("0190f2a1-0000-7000-8000-0000000000e1", "en", true),
+        doc("0190f2a1-0000-7000-8000-0000000000e2", "nl", true),
+      ],
+      canEdit: true,
+      languages: [
+        { locale: "en", isDefault: true, public: true },
+        { locale: "nl", isDefault: false, public: false },
+      ],
+    });
+  });
+
+  it("names each document's language and says when a site waits for Dutch to be public", async () => {
+    const media = panel(await render({ tab: "media" }), "media");
+    expect(media).toContain("TDS (English)");
+    expect(media).toContain("English (en)");
+    expect(media).toContain("Dutch (nl)");
+    expect(media).toContain("Waits for its language to be public");
+  });
+
+  it("reads an answer of before ML-9 (no languages, no language) as English", async () => {
+    const { language: _l, ...old } = doc("0190f2a1-0000-7000-8000-0000000000e3", "en", false);
+    void _l;
+    reads.set(`${C}/products/${PRODUCT}/documents`, { items: [old], canEdit: true });
+    const media = panel(await render({ tab: "media" }), "media");
+    expect(media).toContain("English (en)");
+  });
+});

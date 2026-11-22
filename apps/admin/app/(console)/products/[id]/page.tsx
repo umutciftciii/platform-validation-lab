@@ -576,6 +576,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   initial={documentItems}
                   canEdit={documents.data.canEdit}
                   productArchived={archived}
+                  languages={documents.data.languages}
                 />
               ) : (
                 <ErrorState title="The documents could not be loaded">

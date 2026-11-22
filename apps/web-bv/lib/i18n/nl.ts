@@ -190,8 +190,6 @@ export const nl: Dictionary = {
     fileForScreenReaders: "{title} (pdf)",
     membersSoon: "Binnenkort beschikbaar voor leden",
     notAvailable: "Niet beschikbaar",
-    /** ML-8c: written as the language names itself (`lang="en"`), like the language selector. */
-    inEnglish: "English",
   },
 
   crossReferences: {

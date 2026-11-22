@@ -18,11 +18,16 @@
  *  - Uploads: the raw PDF is streamed with a 20 MB cap, inspected (pdf-inspect.ts) inside the
  *    processing gate, stored under a fresh random key, then the row and its audit event are
  *    written in one transaction. If the transaction fails, the stored file is deleted again.
+ *  - ML-9 (DP-240, ADR-028 D10): a document has the language of its file. It is one of the
+ *    languages enabled on the caller's sites (English without one, as before ML-9). A site shows a
+ *    document only in a language enabled there, and the language is fixed while any site shows
+ *    it, so changing it never re-publishes a file as another language (API check + triggers).
  *  - Unknown and out-of-reach ids look the same (404); every change and every refusal is audited.
  */
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import type { IncomingMessage } from "node:http";
 import {
+  DOCUMENT_DEFAULT_LANGUAGE,
   DOCUMENT_MAX_BYTES,
   DOCUMENTS_PER_PRODUCT_MAX,
   DocumentCreateRequestSchema,
@@ -41,6 +46,7 @@ import {
   type ProductDocument,
   type ProductDocumentListResponse,
 } from "@dream/contracts";
+import { siteLocalesOf } from "../cms/site-locales.js";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
 import { FaultInjector } from "../iam/http/clock.js";
 import type { RequestContext } from "../iam/http/request-context.js";
@@ -81,6 +87,7 @@ interface DocumentRow {
   type: ProductDocument["type"];
   title: string;
   description: string | null;
+  language: string;
   accessPolicy: DocumentAccessPolicy;
   status: ProductDocument["status"];
   revisionCount: number;
@@ -125,12 +132,15 @@ export function siteState(input: {
   hasActiveRevision: boolean;
   enabled: boolean;
   productLive: boolean;
+  /** ML-9: the document's language is enabled and public on the site (default: true). */
+  languagePublic?: boolean;
 }): DocumentSiteState {
   if (input.status === "ARCHIVED") return "archived";
   if (input.accessPolicy === "INTERNAL") return "internal";
   if (!input.hasActiveRevision) return "no_file";
   if (!input.enabled) return "hidden";
   if (!input.productLive) return "product_not_live";
+  if (input.languagePublic === false) return "language_not_public";
   const access = decideDocumentAccess(input.accessPolicy);
   if (!access.downloadable) return access.reason;
   // DP-042 (ADR-016): a lead-gated document is served after the short form, with a grant.
@@ -213,9 +223,47 @@ export class DocumentsService {
     return a.db({ siteIds: a.sitesWith(READ), includePlatform: true });
   }
 
+  /**
+   * ML-9: the languages a document can be given — enabled on a site the caller may read — with
+   * whether one is a site's default or public somewhere; the default language first.
+   */
+  private static async languages(a: StaffAccess, db: Db) {
+    const bySite = await siteLocalesOf(db, a.sitesWith(READ));
+    const out = new Map<string, { locale: string; isDefault: boolean; public: boolean }>();
+    for (const list of bySite.values()) {
+      for (const l of list) {
+        if (!l.enabled) continue;
+        const seen = out.get(l.locale) ?? { locale: l.locale, isDefault: false, public: false };
+        seen.isDefault ||= l.isDefault;
+        seen.public ||= l.public;
+        out.set(l.locale, seen);
+      }
+    }
+    return [...out.values()].sort(
+      (x, y) =>
+        Number(y.isDefault) - Number(x.isDefault) ||
+        Number(y.locale === DOCUMENT_DEFAULT_LANGUAGE) -
+          Number(x.locale === DOCUMENT_DEFAULT_LANGUAGE) ||
+        x.locale.localeCompare(y.locale, "en"),
+    );
+  }
+
+  /**
+   * ML-9: refuses a language that is not enabled on any site the caller may read (409
+   * `language` / `not_enabled`). English is always accepted: the behaviour of before ML-9.
+   */
+  private static async requireLanguage(a: StaffAccess, db: Db, language: string): Promise<void> {
+    if (language === DOCUMENT_DEFAULT_LANGUAGE) return;
+    const known = await DocumentsService.languages(a, db);
+    if (!known.some((l) => l.locale === language)) {
+      throw new ApiError("CONFLICT_STATE", [{ path: "language", rule: "not_enabled" }]);
+    }
+  }
+
   private async toDocument(a: StaffAccess, db: Db, row: DocumentRow): Promise<ProductDocument> {
     const readable = a.sitesWith(READ);
     const live = await liveSites(db, row.productId, readable);
+    const locales = await siteLocalesOf(db, readable);
     const pins = new Map(row.sites.map((s) => [s.siteId, s]));
     const numbers = new Map(row.revisions.map((r) => [r.id, r.revisionNumber]));
     const active = row.revisions.find((r) => r.isActive) ?? null;
@@ -241,6 +289,9 @@ export class DocumentsService {
             hasActiveRevision: active !== null,
             enabled: pin !== undefined,
             productLive: live.has(s.id),
+            languagePublic: (locales.get(s.id) ?? []).some(
+              (l) => l.locale === row.language && l.enabled && l.public,
+            ),
           }),
           canPublish: a.allows(PUBLISH, { scope: "site", siteId: s.id }),
         };
@@ -251,6 +302,7 @@ export class DocumentsService {
       type: row.type,
       title: row.title,
       description: row.description,
+      language: row.language,
       accessPolicy: row.accessPolicy,
       status: row.status,
       version: row.version,
@@ -289,7 +341,11 @@ export class DocumentsService {
     })) as DocumentRow[];
     const items: ProductDocument[] = [];
     for (const row of rows) items.push(await this.toDocument(a, db, row));
-    return { items, canEdit: a.allows(MASTER, PLATFORM) };
+    return {
+      items,
+      canEdit: a.allows(MASTER, PLATFORM),
+      languages: await DocumentsService.languages(a, db),
+    };
   }
 
   async create(
@@ -302,6 +358,7 @@ export class DocumentsService {
     await a.require(MASTER, PLATFORM, { type: "product_document", id: null });
     const input = parseBody(DocumentCreateRequestSchema, body);
     const db = DocumentsService.db(a);
+    await DocumentsService.requireLanguage(a, db, input.language);
     let id = "";
     try {
       id = await db.$transaction(async (tx) => {
@@ -324,6 +381,7 @@ export class DocumentsService {
             title: input.title,
             description: input.description,
             accessPolicy: input.accessPolicy,
+            language: input.language,
           },
         });
         await a.audit(tx, {
@@ -332,7 +390,12 @@ export class DocumentsService {
           resourceId: created.id,
           siteId: null,
           permission: MASTER,
-          metadata: { productId, type: created.type, accessPolicy: created.accessPolicy },
+          metadata: {
+            productId,
+            type: created.type,
+            accessPolicy: created.accessPolicy,
+            language: created.language,
+          },
         });
         return created.id;
       });
@@ -365,6 +428,16 @@ export class DocumentsService {
         if (before.status === "ARCHIVED") {
           throw new ApiError("CONFLICT_STATE", [{ path: "status", rule: "document_archived" }]);
         }
+        // ML-9: omitted keeps the language. A new one must be enabled on a site, and a document
+        // shown on any site keeps its language (the trigger checks it again).
+        const language = input.language ?? before.language;
+        if (language !== before.language) {
+          await DocumentsService.requireLanguage(a, db, language);
+          const shown = await tx.productDocumentSite.count({ where: { documentId: id } });
+          if (shown > 0) {
+            throw new ApiError("CONFLICT_STATE", [{ path: "language", rule: "shown_on_site" }]);
+          }
+        }
         const res = await tx.productDocument.updateMany({
           where: { id, version: input.version },
           data: {
@@ -372,13 +445,15 @@ export class DocumentsService {
             title: input.title,
             description: input.description,
             accessPolicy: input.accessPolicy,
+            language,
             version: { increment: 1 },
           },
         });
         if (res.count !== 1) throw staleVersion();
-        const changed = (["type", "title", "description", "accessPolicy"] as const).filter(
-          (k) => before[k] !== input[k],
-        );
+        const after = { ...input, language };
+        const changed = (
+          ["type", "title", "description", "accessPolicy", "language"] as const
+        ).filter((k) => before[k] !== after[k]);
         await a.audit(tx, {
           action: "catalog.document_updated",
           resourceType: "product_document",
@@ -390,6 +465,9 @@ export class DocumentsService {
             changed,
             ...(changed.includes("accessPolicy")
               ? { accessPolicy: { from: before.accessPolicy, to: input.accessPolicy } }
+              : {}),
+            ...(changed.includes("language")
+              ? { language: { from: before.language, to: language } }
               : {}),
           },
         });
@@ -670,7 +748,13 @@ export class DocumentsService {
       await siteDb.$transaction(async (tx) => {
         const doc = await tx.productDocument.findUnique({
           where: { id },
-          select: { version: true, productId: true, accessPolicy: true, status: true },
+          select: {
+            version: true,
+            productId: true,
+            accessPolicy: true,
+            status: true,
+            language: true,
+          },
         });
         if (!doc) throw new ApiError("NOT_FOUND");
         // The publisher decides on what they saw: a changed policy or file needs a new look.
@@ -704,6 +788,11 @@ export class DocumentsService {
         if (doc.status !== "ACTIVE" || doc.accessPolicy === "INTERNAL" || hasFile === 0) {
           throw new ApiError("CONFLICT_STATE", [{ path: "(root)", rule: "not_publishable" }]);
         }
+        // ML-9: a site shows a document only in a language enabled on it (trigger too).
+        const siteLocales = (await siteLocalesOf(tx, [siteId])).get(siteId) ?? [];
+        if (!siteLocales.some((l) => l.locale === doc.language && l.enabled)) {
+          throw new ApiError("CONFLICT_STATE", [{ path: "language", rule: "not_enabled" }]);
+        }
         // Only the active revision can be confirmed for a site (the trigger checks it again).
         const target = await tx.productDocumentRevision.findFirst({
           where: { id: revisionId, documentId: id },
@@ -734,6 +823,7 @@ export class DocumentsService {
           metadata: {
             productId: doc.productId,
             accessPolicy: doc.accessPolicy,
+            language: doc.language,
             revisionId: target.id,
             revisionNumber: target.revisionNumber,
             ...(existing
