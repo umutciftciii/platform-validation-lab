@@ -11,6 +11,10 @@
  *    Drafts, private originals and staff data never leave the API.
  *  - Responses are validated against @dream/contracts before rendering; anything else is
  *    treated as unavailable. 5 s timeout; failures are logged without the key.
+ *  - ML-8c (DP-239): every read takes the page's language. The default language is asked exactly
+ *    as before (no `locale` parameter); another one with `?locale=`, which the API answers only
+ *    while that language is public, and then only with the products published in it (a product
+ *    without its own complete text in the language is a 404, never English under a Dutch address).
  */
 import {
   PUBLIC_CATALOG_API,
@@ -26,7 +30,14 @@ import {
   type PublicProductSummary,
 } from "@dream/contracts";
 
+import { DEFAULT_LOCALE } from "@/lib/locale-routing";
+
 const KEY = /^[A-Za-z0-9_-]{43,}$/;
+
+/** The default language is read without a parameter (the requests of ML-8a stay byte-identical). */
+function localeParam(locale: string | undefined): string {
+  return locale && locale !== DEFAULT_LOCALE ? `?locale=${encodeURIComponent(locale)}` : "";
+}
 const TIMEOUT_MS = 5_000;
 
 interface Config {
@@ -69,8 +80,13 @@ async function get(
   }
 }
 
-export async function listProducts(config = catalogConfig()): Promise<Read<PublicProductSummary[]>> {
-  const res = await get("/products", config);
+export async function listProducts(
+  locale?: string,
+  config = catalogConfig(),
+): Promise<Read<PublicProductSummary[]>> {
+  const res = await get(`/products${localeParam(locale)}`, config);
+  // ML-8c: another language that is not public (404) has no catalogue at all.
+  if (res?.status === 404 && localeParam(locale)) return { ok: false, reason: "not_found" };
   // 404: the platform has no catalogue for this site yet (sites not set up), so nothing is
   // published; every other failure is "unavailable".
   if (res?.status === 404) return { ok: true, data: [] };
@@ -83,8 +99,12 @@ export async function listProducts(config = catalogConfig()): Promise<Read<Publi
  * DP-160: the category tree of the live products. A failure is not fatal for the list: the page
  * then shows the products without the category filter.
  */
-export async function listCategories(config = catalogConfig()): Promise<Read<PublicCategory[]>> {
-  const res = await get("/categories", config);
+export async function listCategories(
+  locale?: string,
+  config = catalogConfig(),
+): Promise<Read<PublicCategory[]>> {
+  const res = await get(`/categories${localeParam(locale)}`, config);
+  if (res?.status === 404 && localeParam(locale)) return { ok: false, reason: "not_found" };
   if (res?.status === 404) return { ok: true, data: [] };
   if (!res || !res.ok) return { ok: false, reason: "unavailable" };
   const parsed = PublicCategoryListResponseSchema.safeParse(await res.json().catch(() => null));
@@ -93,9 +113,13 @@ export async function listCategories(config = catalogConfig()): Promise<Read<Pub
 
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-export async function getProduct(slug: string, config = catalogConfig()): Promise<Read<PublicProduct>> {
+export async function getProduct(
+  slug: string,
+  locale?: string,
+  config = catalogConfig(),
+): Promise<Read<PublicProduct>> {
   if (!SLUG.test(slug) || slug.length > 120) return { ok: false, reason: "not_found" };
-  const res = await get(`/products/${slug}`, config);
+  const res = await get(`/products/${slug}${localeParam(locale)}`, config);
   if (res?.status === 404) return { ok: false, reason: "not_found" };
   if (!res || !res.ok) return { ok: false, reason: "unavailable" };
   const parsed = PublicProductResponseSchema.safeParse(await res.json().catch(() => null));
@@ -142,10 +166,11 @@ export const imageSrc = (id: string, variant: "display" | "thumb") =>
  */
 export async function getProductDocuments(
   slug: string,
+  locale?: string,
   config = catalogConfig(),
 ): Promise<Read<PublicDocument[]>> {
   if (!SLUG.test(slug) || slug.length > 120) return { ok: false, reason: "not_found" };
-  const res = await get(`/products/${slug}/documents`, config);
+  const res = await get(`/products/${slug}/documents${localeParam(locale)}`, config);
   if (res?.status === 404) return { ok: false, reason: "not_found" };
   if (!res || !res.ok) return { ok: false, reason: "unavailable" };
   const parsed = PublicDocumentListResponseSchema.safeParse(await res.json().catch(() => null));
@@ -159,10 +184,11 @@ export async function getProductDocuments(
  */
 export async function getProductCrossReferences(
   slug: string,
+  locale?: string,
   config = catalogConfig(),
 ): Promise<Read<PublicCrossReference[]>> {
   if (!SLUG.test(slug) || slug.length > 120) return { ok: false, reason: "not_found" };
-  const res = await get(`/products/${slug}/cross-references`, config);
+  const res = await get(`/products/${slug}/cross-references${localeParam(locale)}`, config);
   if (res?.status === 404) return { ok: false, reason: "not_found" };
   if (!res || !res.ok) return { ok: false, reason: "unavailable" };
   const parsed = PublicCrossReferenceListResponseSchema.safeParse(await res.json().catch(() => null));

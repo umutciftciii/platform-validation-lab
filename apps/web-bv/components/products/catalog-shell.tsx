@@ -7,6 +7,7 @@ import SiteFooter from "@/components/ui/site-footer";
 import LanguageSelector from "@/components/ui/language-selector";
 import SiteNav from "@/components/ui/site-nav";
 import { BRAND_LOGO } from "@/content/brand";
+import { parseSelectorKey } from "@/lib/catalog-alternates";
 import { getSiteChrome, siteLanguages } from "@/lib/cms-home";
 import { dictionary } from "@/lib/i18n";
 import {
@@ -17,8 +18,13 @@ import {
 } from "@/lib/locale-routing";
 import { privacyHref, privacyPolicyHref } from "@/lib/privacy";
 
-/** One read of the published navigation and footer per request (both slots use it). */
-const chrome = cache((path: string, locale: RouteLocale) => getSiteChrome(path, locale));
+/**
+ * One read of the published navigation and footer per request (both slots use it). ML-8c: the
+ * language selector targets come in as a string key (`selectorKey`), so the cache matches.
+ */
+const chrome = cache((path: string, locale: RouteLocale, targets = "") =>
+  getSiteChrome(path, locale, parseSelectorKey(targets)),
+);
 
 /** ML-7: the same per-request read for other parts of a page in this frame (the 404 links). */
 export const siteChrome = chrome;
@@ -34,18 +40,24 @@ export function CatalogShell({
   crumbs,
   path = "/products",
   locale = DEFAULT_LOCALE,
+  languages,
   children,
 }: {
   crumbs: { label: string; href?: string }[];
   /** The page's stored path inside its language: marks the current navigation item. */
   path?: string;
   locale?: RouteLocale;
+  /**
+   * ML-8c: the page's counterparts in the other public languages (`selectorKey` of
+   * lib/catalog-alternates.ts), read inside the navigation's Suspense boundary.
+   */
+  languages?: () => Promise<string>;
   children: ReactNode;
 }) {
   return (
     <>
       <Suspense fallback={<MinimalHeader locale={locale} />}>
-        <CatalogNav path={path} locale={locale} />
+        <CatalogNav path={path} locale={locale} languages={languages} />
       </Suspense>
       <main id="top" className="tp catalog">
         <div className="tp-inner pb-24">
@@ -54,23 +66,47 @@ export function CatalogShell({
         </div>
       </main>
       <Suspense fallback={<MinimalFooter locale={locale} />}>
-        <CatalogFooter path={path} locale={locale} />
+        <CatalogFooter path={path} locale={locale} languages={languages} />
       </Suspense>
     </>
   );
 }
 
-async function CatalogNav({ path, locale }: { path: string; locale: RouteLocale }) {
+type LanguagesRead = (() => Promise<string>) | undefined;
+
+async function CatalogNav({
+  path,
+  locale,
+  languages,
+}: {
+  path: string;
+  locale: RouteLocale;
+  languages: LanguagesRead;
+}) {
   await connection();
-  const { nav } = await chrome(path, locale);
+  const targets = languages ? await languages() : "";
+  const { nav } = await chrome(path, locale, targets);
   if (nav) return <SiteNav content={nav} />;
   // ML-7: the language selector stays reachable while the published navigation is missing.
-  return <MinimalHeader locale={locale} languages={await siteLanguages(locale, path)} />;
+  return (
+    <MinimalHeader
+      locale={locale}
+      languages={await siteLanguages(locale, path, parseSelectorKey(targets))}
+    />
+  );
 }
 
-async function CatalogFooter({ path, locale }: { path: string; locale: RouteLocale }) {
+async function CatalogFooter({
+  path,
+  locale,
+  languages,
+}: {
+  path: string;
+  locale: RouteLocale;
+  languages: LanguagesRead;
+}) {
   await connection();
-  const { footer } = await chrome(path, locale);
+  const { footer } = await chrome(path, locale, languages ? await languages() : "");
   return footer ? <SiteFooter content={footer} /> : <MinimalFooter locale={locale} />;
 }
 

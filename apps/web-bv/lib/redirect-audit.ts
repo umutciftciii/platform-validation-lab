@@ -101,6 +101,8 @@ export function simulatedDeps(site: SiteState, loops: string[][] = []): ProxyDep
     resolve: simulatedResolve(site),
     publicLocales: async () => site.publicLocales,
     documents: async () => ({ ok: false, reason: "not_found" }),
+    // ML-8c: the audit simulates addresses only; another language's catalogue has no product.
+    catalogue: async () => "empty",
     privacyPublished: true,
     onLoop: (trail) => loops.push([...trail]),
   };

@@ -70,14 +70,16 @@ const entry = (e: Partial<PublicSitemapEntry> & Pick<PublicSitemapEntry, "path" 
 describe("sitemapUrls", () => {
   const api: PublicSitemapEntry[] = [
     entry({ path: "/", locale: "en", kind: "home", alternates: [{ locale: "nl", path: "/" }] }),
-    entry({ path: "/products", locale: "en", kind: "products" }),
-    entry({ path: "/products/iccsyn-6", locale: "en", kind: "product" }),
+    entry({ path: "/products", locale: "en", kind: "products", alternates: [{ locale: "nl", path: "/products" }] }),
+    entry({ path: "/products/iccsyn-6", locale: "en", kind: "product", alternates: [{ locale: "nl", path: "/products/iccsyn-6" }] }),
+    entry({ path: "/products/white-oil-15", locale: "en", kind: "product" }),
     entry({ path: "/about-us", locale: "en", alternates: [{ locale: "nl", path: "/over-ons" }] }),
     entry({ path: "/our-team", locale: "en", alternates: [{ locale: "nl", path: "/ons-team" }] }),
     entry({ path: "/", locale: "nl", kind: "home", alternates: [{ locale: "en", path: "/" }] }),
     entry({ path: "/over-ons", locale: "nl", alternates: [{ locale: "en", path: "/about-us" }] }),
-    // A Dutch catalogue entry can never be listed before ML-8c.
-    entry({ path: "/products", locale: "nl", kind: "products" }),
+    // ML-8c: the Dutch catalogue (the API lists only products published in Dutch).
+    entry({ path: "/products", locale: "nl", kind: "products", alternates: [{ locale: "en", path: "/products" }] }),
+    entry({ path: "/products/iccsyn-6", locale: "nl", kind: "product", alternates: [{ locale: "en", path: "/products/iccsyn-6" }] }),
     entry({ path: "/de-only", locale: "de" }),
   ];
 
@@ -85,7 +87,7 @@ describe("sitemapUrls", () => {
     const urls = sitemapUrls(api, ["en"]);
     assert.deepEqual(
       urls.map((u) => u.href),
-      ["/en", "/en/products", "/en/products/iccsyn-6", "/en/about-us", "/en/our-team"],
+      ["/en", "/en/products", "/en/products/iccsyn-6", "/en/products/white-oil-15", "/en/about-us", "/en/our-team"],
     );
     assert.ok(urls.every((u) => u.languages === null));
     assert.ok(!JSON.stringify(urls).includes("/nl"));
@@ -103,10 +105,13 @@ describe("sitemapUrls", () => {
       "/en",
       "/en/products",
       "/en/products/iccsyn-6",
+      "/en/products/white-oil-15",
       "/en/about-us",
       "/en/our-team",
       "/nl",
       "/nl/over-ons",
+      "/nl/products",
+      "/nl/products/iccsyn-6",
     ]);
     const pair = { en: "/en/about-us", nl: "/nl/over-ons", "x-default": "/en/about-us" };
     assert.deepEqual(by["/en/about-us"], pair);
@@ -114,7 +119,19 @@ describe("sitemapUrls", () => {
     assert.deepEqual(by["/en"], { en: "/en", nl: "/nl", "x-default": "/en" });
     // /ons-team is not in the sitemap (e.g. noindex): no hreflang towards it.
     assert.equal(by["/en/our-team"], null);
-    assert.equal(by["/en/products"], null);
+    // ML-8c: the lists and a product published in both languages are reciprocal pairs; a product
+    // without a Dutch publication names no counterpart.
+    const list = { en: "/en/products", nl: "/nl/products", "x-default": "/en/products" };
+    assert.deepEqual(by["/en/products"], list);
+    assert.deepEqual(by["/nl/products"], list);
+    const product = {
+      en: "/en/products/iccsyn-6",
+      nl: "/nl/products/iccsyn-6",
+      "x-default": "/en/products/iccsyn-6",
+    };
+    assert.deepEqual(by["/en/products/iccsyn-6"], product);
+    assert.deepEqual(by["/nl/products/iccsyn-6"], product);
+    assert.equal(by["/en/products/white-oil-15"], null);
     // Every hreflang target is itself a sitemap URL (reciprocity).
     for (const langs of Object.values(by)) {
       for (const [l, href] of Object.entries(langs ?? {})) {

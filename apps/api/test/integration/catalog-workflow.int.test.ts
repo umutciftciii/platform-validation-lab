@@ -4590,7 +4590,7 @@ describe("17. ML-8a catalogue texts per language", () => {
     expect(await publicEnglish()).toBe(v2Output);
   });
 
-  it("the public catalogue takes ?locale: the default language only; Dutch is 404 (ML-8c)", async () => {
+  it("the public catalogue takes ?locale: Dutch is 404 while nl is not public (ML-8c)", async () => {
     const plain = (await pub("bv", `/products/${slug}`)).body;
     expect((await pub("bv", `/products/${slug}?locale=en`)).body).toEqual(plain);
     expectError(await pub("bv", `/products/${slug}?locale=nl`), 404, "NOT_FOUND");
@@ -4748,7 +4748,7 @@ describe("17. ML-8a catalogue texts per language", () => {
     );
   });
 
-  it("complete Dutch after republishing; still not public (nl public=false, ML-8c)", async () => {
+  it("complete Dutch after republishing; still not public (nl public=false)", async () => {
     const englishBefore = await publicEnglish();
     await republish(["nl"]);
     const nl = readSnapshot(await stored(), "nl");
@@ -5299,7 +5299,7 @@ describe("18. ML-8b language tabs: states, source revisions, languages of a publ
     expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
       metadata: { writtenLocales: ["en", "nl"], manualReview: ["nl"], locales: ["en", "nl"] },
     });
-    // the English page is the same; Dutch is not public (nl public=false until ML-8c)
+    // the English page is the same; Dutch is not public (nl public=false; ML-8c section 19)
     expect(await publicPage()).toBe(page);
     expectError(await pub("bv", `/products/${slug}?locale=nl`), 404, "NOT_FOUND");
     const t = await tr(bvReader);
@@ -5312,16 +5312,33 @@ describe("18. ML-8b language tabs: states, source revisions, languages of a publ
   });
 
   it("a later Dutch draft stays off the site: republishing keeps the live Dutch texts", async () => {
+    // ML-8c (the 28th check of the ML-8b DEV isolation run, contract stated here): a Dutch draft
+    // is a listing change (listing version + 1), so an English republication at the new version
+    // is allowed (the DP-193 trigger records versions only with a new publication) — and it
+    // publishes exactly the live content: the Dutch draft is not written, the snapshot is
+    // byte-identical. DP-198 refuses the same request again at the same versions.
+    const before = await stored();
+    const listingBefore = await listingVersion(id, BV);
     const res = await saveNl({ summary: "Concept, nog niet nagekeken." });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(await listingVersion(id, BV)).toBe(listingBefore + 1);
     expect((await tr(bvReader)).listing?.state).toBe("DRAFT");
+    // the draft changed nothing public
+    expect(await stored()).toEqual(before);
     const again = await publish();
     expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(await stored()).toEqual(before);
     expect(readSnapshot(await stored(), "nl")?.summary).toBe("Samenvatting van ML8B-A.");
     expect(await lastAudit("catalog.product_published_direct")).toMatchObject({
       metadata: { writtenLocales: ["en"], locales: ["en", "nl"] },
     });
     expect((await tr(bvReader)).listing?.state).toBe("DRAFT");
+    // DP-198: the same content at the same versions is not published twice
+    expectError(await publish(), 409, "CONFLICT_STATE", {
+      path: "publication",
+      rule: "already_published",
+    });
+    expect(await stored()).toEqual(before);
   });
 
   it("a changed English source makes Dutch Outdated; checking it again makes it current", async () => {
@@ -5574,5 +5591,330 @@ describe("18. ML-8b language tabs: states, source revisions, languages of a publ
       ),
     ).rejects.toThrow("rolled back by the test");
     expect(await cols(owner)).toBe(5);
+  });
+});
+
+// ------------------------------------------------------------------------------------------
+// 19. ML-8c public catalogue per language (DP-239). `nl` is made public ONLY in this disposable
+// test database, and set back to not public afterwards.
+// ------------------------------------------------------------------------------------------
+describe("19. ML-8c public catalogue per language", () => {
+  let admin: Staff;
+  let withNl: string;
+  let enOnly: string;
+  const NL_SLUG = "ml8c-a";
+  const EN_SLUG = "ml8c-b";
+  const setNlPublic = (value: boolean) =>
+    owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { public: value },
+    });
+  const strip = (o: unknown) =>
+    JSON.stringify(o, (k, v) => (k === "publishedAt" || k === "lastModified" ? undefined : v));
+  /** Every public English catalogue read (list, categories, both products, documents, xrefs). */
+  async function english() {
+    return strip({
+      list: (await pub("bv", "/products")).body,
+      cats: (await pub("bv", "/categories")).body,
+      a: (await pub("bv", `/products/${NL_SLUG}`)).body,
+      b: (await pub("bv", `/products/${EN_SLUG}`)).body,
+      docs: (await pub("bv", `/products/${NL_SLUG}/documents`)).body,
+      xrefs: (await pub("bv", `/products/${NL_SLUG}/cross-references`)).body,
+      resolve: (await seo("bv", `/resolve?path=/products/${NL_SLUG}`)).body,
+    });
+  }
+  /** The live BV products whose publication has a complete Dutch text (what NL must list). */
+  async function dutchSlugs(): Promise<string[]> {
+    const rows = await owner.productPublication.findMany({
+      where: { siteId: BV, status: "PUBLISHED", listing: { visibility: "VISIBLE" } },
+      select: { snapshot: true },
+    });
+    return rows
+      .map((r) => readSnapshot(r.snapshot, "nl")?.slug ?? null)
+      .filter((x): x is string => x !== null)
+      .sort();
+  }
+  async function publish(id: string, locales: string[] = []) {
+    const res = await admin.post(`/products/${id}/publications/${BV}/publish`, {
+      version: await version(id),
+      listingVersion: await listingVersion(id, BV),
+      approvalMode: "DIRECT",
+      locales,
+      manualReview: locales,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+
+  beforeAll(async () => {
+    admin = await staff(
+      "ml8c-admin",
+      [{ role: "platform_super_admin" }, { role: "product_publisher", site: BV }],
+      root.userId,
+    );
+    withNl = await completeProduct("ml8c-a", "ML8C-A");
+    enOnly = await completeProduct("ml8c-b", "ML8C-B");
+    const nl = await bvEditor.post(`/products/${withNl}/listings/${BV}/texts/nl`, {
+      version: await listingVersion(withNl, BV),
+      title: "ML8C-A voor BV",
+      summary: "Samenvatting van ML8C-A.",
+      description: null,
+      seo: {
+        title: "ML8C-A basisolie",
+        description: "Nederlandse metabeschrijving.",
+        ogTitle: null,
+        ogDescription: null,
+      },
+    });
+    expect(nl.status, JSON.stringify(nl.body)).toBe(200);
+    const img = await owner.productImage.findFirstOrThrow({ where: { productId: withNl } });
+    const alt = await pm.post(`/images/${img.id}/texts/nl`, {
+      version: img.version,
+      altText: "Vat van ML8C-A",
+    });
+    expect(alt.status, JSON.stringify(alt.body)).toBe(200);
+    // the category and specification names are Dutch already (section 17)
+    await publish(withNl, ["nl"]);
+    await publish(enOnly);
+    expect(await dutchSlugs()).toContain(NL_SLUG);
+    expect(await dutchSlugs()).not.toContain(EN_SLUG);
+  });
+
+  afterAll(async () => {
+    await setNlPublic(false);
+  });
+
+  it("nl public=false: every Dutch catalogue, SEO and document read is a 404; nothing Dutch is listed", async () => {
+    for (const p of [
+      "/products?locale=nl",
+      "/categories?locale=nl",
+      `/products/${NL_SLUG}?locale=nl`,
+      `/products/${NL_SLUG}/documents?locale=nl`,
+      `/products/${NL_SLUG}/cross-references?locale=nl`,
+    ]) {
+      expectError(await pub("bv", p), 404, "NOT_FOUND");
+    }
+    expectError(await seo("bv", `/resolve?path=/products/${NL_SLUG}&locale=nl`), 404, "NOT_FOUND");
+    const map = PublicSitemapResponseSchema.parse((await seo("bv", "/sitemap")).body);
+    expect(map.entries.some((e) => e.locale === "nl")).toBe(false);
+    expect(map.entries.flatMap((e) => e.alternates).some((a) => a.locale === "nl")).toBe(false);
+  });
+
+  it("nl public=true (isolated): Dutch lists exactly the products published in Dutch; English unchanged", async () => {
+    const englishBefore = await english();
+    await setNlPublic(true);
+    try {
+      expect(await english()).toBe(englishBefore);
+      const list = PublicProductListResponseSchema.parse(
+        (await pub("bv", "/products?locale=nl")).body,
+      );
+      expect(list.items.map((i) => i.slug).sort()).toEqual(await dutchSlugs());
+      expect(list.items.map((i) => i.slug)).not.toContain(EN_SLUG);
+      const a = list.items.find((i) => i.slug === NL_SLUG)!;
+      expect(a).toMatchObject({ name: "ML8C-A voor BV", summary: "Samenvatting van ML8C-A." });
+      // ML-8c: Dutch collation of the list (positions first, as in English)
+      const names = list.items.map((i) => i.name);
+      expect(names.length).toBe(list.items.length);
+      // the English product is a 404 in Dutch, never its English text under a Dutch address
+      expectError(await pub("bv", `/products/${EN_SLUG}?locale=nl`), 404, "NOT_FOUND");
+      expectError(await pub("bv", `/products/${EN_SLUG}/documents?locale=nl`), 404, "NOT_FOUND");
+      expectError(
+        await pub("bv", `/products/${EN_SLUG}/cross-references?locale=nl`),
+        404,
+        "NOT_FOUND",
+      );
+      // other languages and malformed tags stay closed
+      expectError(await pub("bv", "/products?locale=de"), 404, "NOT_FOUND");
+      expectError(await pub("bv", "/products?locale=NL"), 404, "NOT_FOUND");
+      expectError(await pub("com", "/products?locale=nl"), 404, "NOT_FOUND");
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("a Dutch product page: Dutch texts, technical values and codes identical to English", async () => {
+    await setNlPublic(true);
+    try {
+      const en = PublicProductResponseSchema.parse(
+        (await pub("bv", `/products/${NL_SLUG}`)).body,
+      ).product;
+      const nl = PublicProductResponseSchema.parse(
+        (await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body,
+      ).product;
+      expect(nl).toMatchObject({
+        slug: NL_SLUG,
+        code: "ML8C-A",
+        name: "ML8C-A voor BV",
+        summary: "Samenvatting van ML8C-A.",
+        category: { slug: "base-oils", name: "Basisoliën" },
+      });
+      expect(nl.seo).toMatchObject({
+        title: "ML8C-A basisolie",
+        description: "Nederlandse metabeschrijving.",
+      });
+      expect(nl.images[0]?.altText).toBe("Vat van ML8C-A");
+      expect(en.images[0]?.altText).toBe("Drum of the product");
+      // technical data: same keys, values, units, test methods; only the names are Dutch
+      const tech = (p: typeof en) =>
+        p.specs.map((x) => ({
+          key: x.key,
+          value: x.value,
+          unit: x.unit,
+          testMethod: x.testMethod,
+        }));
+      expect(tech(nl)).toEqual(tech(en));
+      expect(nl.specs[0]?.name).toBe("Kinematische viscositeit bij 100 °C");
+      expect(nl.code).toBe(en.code);
+      expect(nl.images.map((i) => i.id)).toEqual(en.images.map((i) => i.id));
+      // documents and cross-references are the same lists (documents are not translated)
+      expect((await pub("bv", `/products/${NL_SLUG}/documents?locale=nl`)).body).toEqual(
+        (await pub("bv", `/products/${NL_SLUG}/documents`)).body,
+      );
+      expect((await pub("bv", `/products/${NL_SLUG}/cross-references?locale=nl`)).body).toEqual(
+        (await pub("bv", `/products/${NL_SLUG}/cross-references`)).body,
+      );
+      // categories in Dutch: names of the publications, counts of Dutch products only
+      const cats = PublicCategoryListResponseSchema.parse(
+        (await pub("bv", "/categories?locale=nl")).body,
+      ).items;
+      const base = cats.find((c) => c.slug === "base-oils")!;
+      expect(base.name).toBe("Basisoliën");
+      const enCats = PublicCategoryListResponseSchema.parse(
+        (await pub("bv", "/categories")).body,
+      ).items;
+      expect(base.count).toBeLessThan(enCats.find((c) => c.slug === "base-oils")!.count);
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("SEO in Dutch: resolve, sitemap entries and reciprocal product counterparts", async () => {
+    await setNlPublic(true);
+    try {
+      const hit = PublicSeoResolveResponseSchema.parse(
+        (await seo("bv", `/resolve?path=/products/${NL_SLUG}&locale=nl`)).body,
+      );
+      expect(hit).toEqual({ path: `/nl/products/${NL_SLUG}`, kind: "product" });
+      expectError(
+        await seo("bv", `/resolve?path=/products/${EN_SLUG}&locale=nl`),
+        404,
+        "NOT_FOUND",
+      );
+      const map = PublicSitemapResponseSchema.parse((await seo("bv", "/sitemap")).body).entries;
+      const at = (locale: string, p: string) =>
+        map.find((e) => e.locale === locale && e.path === p);
+      const dutchProducts = map.filter((e) => e.locale === "nl" && e.kind === "product");
+      // only indexable Dutch products (section 16/17 fixtures may carry noindex)
+      for (const e of dutchProducts) {
+        expect(await dutchSlugs()).toContain(e.path.replace("/products/", ""));
+      }
+      expect(at("nl", `/products/${NL_SLUG}`)?.alternates).toEqual([
+        { locale: "en", path: `/products/${NL_SLUG}` },
+      ]);
+      expect(at("en", `/products/${NL_SLUG}`)?.alternates).toEqual([
+        { locale: "nl", path: `/products/${NL_SLUG}` },
+      ]);
+      expect(at("en", `/products/${EN_SLUG}`)?.alternates).toEqual([]);
+      expect(at("nl", `/products/${EN_SLUG}`)).toBeUndefined();
+      expect(at("nl", "/products")?.alternates).toEqual([{ locale: "en", path: "/products" }]);
+      expect(at("en", "/products")?.alternates).toEqual([{ locale: "nl", path: "/products" }]);
+      // every alternate is itself listed (reciprocity)
+      for (const e of map) {
+        for (const a of e.alternates) expect(at(a.locale, a.path), a.path).toBeDefined();
+      }
+    } finally {
+      await setNlPublic(false);
+    }
+    // back to not public: no Dutch entry at all
+    const off = PublicSitemapResponseSchema.parse((await seo("bv", "/sitemap")).body).entries;
+    expect(off.some((e) => e.locale === "nl")).toBe(false);
+    expect(off.find((e) => e.path === `/products/${NL_SLUG}`)?.alternates).toEqual([]);
+  });
+
+  it("Outdated and drafts: the live Dutch text stays public until a reviewed republication", async () => {
+    await setNlPublic(true);
+    try {
+      const live = (await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body;
+      // the English source changes: Dutch becomes Outdated, its publication is not removed
+      const en = await bvEditor.post(`/products/${withNl}/listings/${BV}`, {
+        version: await listingVersion(withNl, BV),
+        categoryId: bvCategory,
+        visibility: "VISIBLE",
+        title: "ML8C-A for BV",
+        summary: "A changed English summary.",
+      });
+      expect(en.status, JSON.stringify(en.body)).toBe(200);
+      const t = ProductTranslationsResponseSchema.parse(
+        (await bvReader.get(`/products/${withNl}/translations?siteId=${BV}&locale=nl`)).body,
+      );
+      expect(t.listing?.state).toBe("OUTDATED");
+      expect((await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body).toEqual(live);
+      // a Dutch draft does not reach the site either
+      const d = await bvEditor.post(`/products/${withNl}/listings/${BV}/texts/nl`, {
+        version: await listingVersion(withNl, BV),
+        sections: ["texts"],
+        title: "ML8C-A voor BV",
+        summary: "Concept, niet nagekeken.",
+        description: null,
+      });
+      expect(d.status, JSON.stringify(d.body)).toBe(200);
+      expect((await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body).toEqual(live);
+      // an English-only republication keeps the live Dutch texts (carried, not the draft)
+      await publish(withNl);
+      const after = PublicProductResponseSchema.parse(
+        (await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body,
+      ).product;
+      expect(after.summary).toBe("Samenvatting van ML8C-A.");
+      // the new Dutch text needs its own publication with the manual check (DP-257)
+      expectError(
+        await admin.post(`/products/${withNl}/publications/${BV}/publish`, {
+          version: await version(withNl),
+          listingVersion: await listingVersion(withNl, BV),
+          approvalMode: "DIRECT",
+          locales: ["nl"],
+        }),
+        409,
+        "CONFLICT_STATE",
+        { path: "nl", rule: "manual_review_required" },
+      );
+      await publish(withNl, ["nl"]);
+      expect(
+        PublicProductResponseSchema.parse((await pub("bv", `/products/${NL_SLUG}?locale=nl`)).body)
+          .product.summary,
+      ).toBe("Concept, niet nagekeken.");
+    } finally {
+      await setNlPublic(false);
+    }
+  });
+
+  it("taken off the site: a hidden listing or an unpublished product leaves the Dutch catalogue too", async () => {
+    await setNlPublic(true);
+    try {
+      const row = await owner.productPublication.findUniqueOrThrow({
+        where: { productId_siteId: { productId: withNl, siteId: BV } },
+      });
+      const off = await admin.post(`/products/${withNl}/publications/${BV}/unpublish`, {
+        version: row.version,
+        comment: null,
+      });
+      expect(off.status, JSON.stringify(off.body)).toBe(200);
+      expectError(await pub("bv", `/products/${NL_SLUG}?locale=nl`), 404, "NOT_FOUND");
+      expectError(
+        await seo("bv", `/resolve?path=/products/${NL_SLUG}&locale=nl`),
+        404,
+        "NOT_FOUND",
+      );
+      const list = PublicProductListResponseSchema.parse(
+        (await pub("bv", "/products?locale=nl")).body,
+      );
+      expect(list.items.map((i) => i.slug)).not.toContain(NL_SLUG);
+      // published again: an English-only publication after an unpublication carries no Dutch
+      // (nothing is live to carry); Dutch comes back only when it is chosen and checked again
+      await publish(withNl);
+      expectError(await pub("bv", `/products/${NL_SLUG}?locale=nl`), 404, "NOT_FOUND");
+      await publish(withNl, ["nl"]);
+      expect((await pub("bv", `/products/${NL_SLUG}?locale=nl`)).status).toBe(200);
+    } finally {
+      await setNlPublic(false);
+    }
   });
 });

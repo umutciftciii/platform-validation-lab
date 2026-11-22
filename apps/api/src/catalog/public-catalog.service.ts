@@ -75,20 +75,30 @@ export class PublicCatalogService {
   }
 
   /**
-   * ML-8a (ADR-028 D8): the language of a public catalogue request. Without `locale` the site's
-   * default language (as before ML-8a). A given language must be public on the site AND, until
-   * ML-8c opens the catalogue in other languages, the default one; anything else is a 404 that
-   * reveals nothing (Dutch products stay closed while `nl` is not public, and after that until
-   * ML-8c).
+   * ML-8a / ML-8c (ADR-028 D8): the language of a public catalogue request. Without `locale` the
+   * site's default language (as before ML-8a). A given language must be enabled AND public on the
+   * site (`SiteLocale.public`); anything else is a 404 that reveals nothing, so the Dutch catalogue
+   * stays closed while `nl` is not public, whatever was published in Dutch.
    */
-  private static async locale(site: PublicSite, raw: unknown): Promise<string> {
+  static async locale(site: PublicSite, raw: unknown): Promise<string> {
     const all = (await siteLocalesOf(site.db, [site.siteId])).get(site.siteId) ?? [];
     const def = all.find((l) => l.isDefault);
     if (!def) throw new ApiError("INTERNAL_ERROR");
     if (raw === undefined) return def.locale;
     const tag = LocaleTagSchema.safeParse(raw);
-    if (!tag.success || tag.data !== def.locale) throw new ApiError("NOT_FOUND");
-    return def.locale;
+    if (!tag.success) throw new ApiError("NOT_FOUND");
+    if (tag.data === def.locale) return def.locale;
+    const row = all.find((l) => l.locale === tag.data);
+    if (!row?.enabled || !row.public) throw new ApiError("NOT_FOUND");
+    return row.locale;
+  }
+
+  /**
+   * ML-8c: the live publication of a product in `locale`: its snapshot must have a complete text
+   * in that language (nothing falls back to another language). null: not in this language.
+   */
+  private liveIn(row: LiveRow | undefined, locale: string): PublishedSnapshot | null {
+    return row ? this.parse(row, locale) : null;
   }
 
   /** The view of `locale`; null (not served) when the snapshot has no complete text in it. */
@@ -119,8 +129,9 @@ export class PublicCatalogService {
           sortOrder: s.sortOrder,
         });
     }
-    // DP-160: names compare naturally ("White Oil 15#" before "White Oil 100#", "50 g" before "25 kg")
-    items.sort((x, y) => x.sortOrder - y.sortOrder || compareProductNames(x.name, y.name));
+    // DP-160: names compare naturally ("White Oil 15#" before "White Oil 100#", "50 g" before "25 kg");
+    // ML-8c: in the collation of the request's language
+    items.sort((x, y) => x.sortOrder - y.sortOrder || compareProductNames(x.name, y.name, locale));
     return { items: items.map(({ sortOrder: _s, ...rest }) => (void _s, rest)) };
   }
 
@@ -158,9 +169,17 @@ export class PublicCatalogService {
     const locale = await PublicCatalogService.locale(site, rawLocale);
     const rows = await PublicCatalogService.live(site);
     const direct = new Map<string, number>();
+    const def = await PublicCatalogService.locale(site, undefined);
+    const snapshotNames = new Map<string, string>();
     for (const row of rows) {
       const s = this.parse(row, locale);
-      if (s) direct.set(s.category.slug, (direct.get(s.category.slug) ?? 0) + 1);
+      if (!s) continue;
+      direct.set(s.category.slug, (direct.get(s.category.slug) ?? 0) + 1);
+      // one approved name per category (publications of one category carry the same table text
+      // unless one was published before a later edit; the first one read is kept)
+      if (locale !== def && !snapshotNames.has(s.category.slug)) {
+        snapshotNames.set(s.category.slug, s.category.name);
+      }
     }
     if (direct.size === 0) return { items: [] };
     // ML-8a: names in the request's language; a category without one is left out.
@@ -175,6 +194,15 @@ export class PublicCatalogService {
       }),
     ]);
     const nameOf = new Map(texts.map((t) => [t.categoryId, t.name]));
+    // ML-8c: in a language other than the default one, a category that live products name takes
+    // the name those publications carry (the approved text), never a later draft of the table;
+    // its ancestors (named by no snapshot) keep their saved name in that language.
+    if (snapshotNames.size) {
+      for (const c of tree) {
+        const published = snapshotNames.get(c.slug);
+        if (published !== undefined) nameOf.set(c.id, published);
+      }
+    }
     const cats = tree.flatMap((c) => {
       const name = nameOf.get(c.id);
       return name === undefined ? [] : [{ ...c, name }];
@@ -267,14 +295,17 @@ export class PublicCatalogService {
   async crossReferences(
     ctx: RequestContext,
     rawSlug: string,
+    rawLocale?: unknown,
   ): Promise<PublicCrossReferenceListResponse> {
     const slug = SlugSchema.safeParse(rawSlug);
     if (!slug.success || slug.data !== rawSlug) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
+    const locale = await PublicCatalogService.locale(site, rawLocale);
     const [row] = await PublicCatalogService.live(site, {
       snapshot: { path: ["slug"], equals: slug.data },
     });
-    if (!row) throw new ApiError("NOT_FOUND");
+    // ML-8c: only for a product published in the request's language.
+    if (!row || !this.liveIn(row, locale)) throw new ApiError("NOT_FOUND");
     const shown = await site.db.productCrossReferenceSite.findMany({
       where: { siteId: site.siteId, crossReference: { productId: row.productId } },
       select: { crossReferenceId: true },
@@ -350,14 +381,21 @@ export class PublicCatalogService {
    * LEAD_REQUIRED is `requestable` (short form, then a grant; ADR-016); MEMBERS_ONLY is listed
    * but closed until DP-039.
    */
-  async documents(ctx: RequestContext, rawSlug: string): Promise<PublicDocumentListResponse> {
+  async documents(
+    ctx: RequestContext,
+    rawSlug: string,
+    rawLocale?: unknown,
+  ): Promise<PublicDocumentListResponse> {
     const slug = SlugSchema.safeParse(rawSlug);
     if (!slug.success || slug.data !== rawSlug) throw new ApiError("NOT_FOUND");
     const site = await this.sites.begin(ctx);
+    const locale = await PublicCatalogService.locale(site, rawLocale);
     const [row] = await PublicCatalogService.live(site, {
       snapshot: { path: ["slug"], equals: slug.data },
     });
-    if (!row) throw new ApiError("NOT_FOUND");
+    // ML-8c: only for a product published in the request's language. The documents themselves
+    // are not translated (ML-9 adds their language; the site labels them English until then).
+    if (!row || !this.liveIn(row, locale)) throw new ApiError("NOT_FOUND");
     const candidates = await site.db.productDocument.findMany({
       where: { productId: row.productId, status: "ACTIVE", accessPolicy: { not: "INTERNAL" } },
       orderBy: [{ type: "asc" }, { title: "asc" }],

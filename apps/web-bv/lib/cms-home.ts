@@ -530,8 +530,13 @@ async function languagesFor(
  * ML-7: the language selector for a page whose navigation is not published (the minimal frame):
  * each public language to its home, the page's own language to the page ("/404" → home).
  */
-export async function siteLanguages(locale: RouteLocale, currentPath: string) {
-  return languagesFor(locale, currentPath === "/404" ? "/" : currentPath);
+export async function siteLanguages(
+  locale: RouteLocale,
+  currentPath: string,
+  /** ML-8c: a catalogue page's counterparts in the other languages. */
+  targets: readonly { locale: string; path: string }[] = [],
+) {
+  return languagesFor(locale, currentPath === "/404" ? "/" : currentPath, targets);
 }
 
 async function withLanguages(
@@ -657,6 +662,8 @@ interface NewsRead {
 async function readNews(
   currentPath = "/news",
   locale: RouteLocale = DEFAULT_LOCALE,
+  /** ML-8c: the language selector targets of a catalogue page (its published counterparts). */
+  catalogueTargets: readonly { locale: string; path: string }[] = [],
 ): Promise<Read<NewsRead>> {
   const config = catalogConfig();
   if (!config) return { ok: false, reason: "unavailable" };
@@ -706,7 +713,11 @@ async function readNews(
     const here = currentPath === "/404" ? "/" : currentPath;
     localized.nav = {
       ...localized.nav,
-      languages: await languagesFor(locale, here, here === "/news" ? alternates : []),
+      languages: await languagesFor(
+        locale,
+        here,
+        here === "/news" ? alternates : catalogueTargets,
+      ),
     };
   }
   return { ok: true, data: { ...localized, alternates } };
@@ -734,11 +745,13 @@ export async function getNews(locale: RouteLocale = DEFAULT_LOCALE): Promise<Rea
 export async function getSiteChrome(
   path: string,
   locale: RouteLocale = DEFAULT_LOCALE,
+  /** ML-8c: the language selector targets of a catalogue page (lib/catalog-alternates.ts). */
+  targets: readonly { locale: string; path: string }[] = [],
 ): Promise<{
   nav: SiteNavContent | null;
   footer: SiteFooterContent | null;
 }> {
-  const res = await readNews(path, locale);
+  const res = await readNews(path, locale, targets);
   return res.ok ? { nav: res.data.nav, footer: res.data.footer } : { nav: null, footer: null };
 }
 

@@ -1,9 +1,10 @@
 /**
  * ML-3 (DP-236): the language of a catalogue or privacy page. Those pages exist only in the
- * languages listed in lib/proxy-routes.ts (`CATALOGUE_LOCALES`, `PRIVACY_LOCALES`): the Dutch
- * catalogue text comes with ML-8c and the Dutch policy with its own approval (ADR-028 D12). The
- * proxy already answers 404 for the others; the pages check again, so English content is never
- * rendered under a Dutch address (D7).
+ * languages listed in lib/proxy-routes.ts (`CATALOGUE_LOCALES`, `PRIVACY_LOCALES`): the catalogue
+ * in every language since ML-8c (each shows only the products published in it, read with the
+ * page's language), the Dutch policy with its own approval (ADR-028 D12). The proxy already
+ * answers 404 for the others; the pages check again, so English content is never rendered under
+ * a Dutch address (D7).
  */
 import { notFound } from "next/navigation";
 
