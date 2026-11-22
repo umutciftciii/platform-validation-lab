@@ -6,8 +6,9 @@
  *    API lists public languages only; the site checks again, so a Dutch address can never reach
  *    the sitemap while `nl` is not public. While the language list cannot be read, only the
  *    default language is listed (fail closed).
- *  - The catalogue (product list, products) only in the languages that have one
- *    (`CATALOGUE_LOCALES`: English until ML-8c).
+ *  - The catalogue (product list, products) in the languages that have routes for it
+ *    (`CATALOGUE_LOCALES`, every language since ML-8c); the API lists a language's products only
+ *    where they are published in it, and its list only while it has one.
  *  - Alternates (`xhtml:link`, hreflang): only counterparts that are themselves listed here, so
  *    every hreflang pair is reciprocal; `x-default` is the English address (lib/hreflang.ts).
  *

@@ -38,10 +38,14 @@
  *    the proxy (`decideRequest`): the same 308 for every address with a slash (the technical ones
  *    match only for it), except that an address whose slash-less form redirects answers that one
  *    redirect directly (`/tr/` → 301 `/en`).
+ *  - ML-8c (DP-239): the catalogue in every public language. `/nl/products/<slug>` is asked to the
+ *    resolve API with `locale=nl` (found only for a product published in Dutch), the Dutch list
+ *    is a 404 while it has no product, and the document form checks the product in its language.
+ *    A language that is not public stays a 404 under its whole prefix, as before.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getProductDocuments } from "@/lib/catalog-api";
+import { getProductDocuments, listProducts } from "@/lib/catalog-api";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { NOT_FOUND_LOCALE_HEADER, NOT_FOUND_TARGET } from "@/lib/not-found";
 import { sitePrivacy } from "@/lib/privacy";
@@ -76,7 +80,12 @@ function deps(): ProxyDeps {
   return {
     resolve: (path, search, locale) => resolvePath(path, undefined, search, locale),
     publicLocales,
-    documents: getProductDocuments,
+    documents: (slug, locale) => getProductDocuments(slug, locale),
+    catalogue: async (locale) => {
+      const list = await listProducts(locale);
+      if (list.ok) return list.data.length > 0 ? "products" : "empty";
+      return list.reason === "not_found" ? "empty" : "unknown";
+    },
     privacyPublished: sitePrivacy().publish,
     onLoop: (trail) =>
       console.error(`proxy: redirect cycle or chain refused (404): ${trail.join(" -> ")}`),

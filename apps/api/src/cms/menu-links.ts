@@ -129,6 +129,9 @@ export interface MenuLocale {
   defaultLocale: string;
 }
 
+/** ML-8c: the catalogue list of every language (stored path). */
+const PRODUCTS_LIST = "/products";
+
 /** How one target shows in a menu of a language, and why it is not a link (admin warning). */
 export interface MenuLinkState {
   href: MenuResolution;
@@ -158,7 +161,10 @@ function splitTarget(path: string): { base: string; tail: string } {
  *    in-page anchors), or the live counterpart of the default language's page at that path
  *    (`/about-us` → `/nl/over-ons`); application routes without content in the language
  *    (`/products`, `/privacy`) are left out;
- *  - products and categories are left out until the catalogue is translated (ML-8c);
+ *  - ML-8c: a product is a link while it is published in the menu's language (its live
+ *    publication has a complete text in it), a category (`/products?category=`) while it or one
+ *    of its sub-categories has such a product, and the product list (`/products`) while the
+ *    language has at least one; otherwise they are left out (never an English or draft page);
  *  - URLs stay as written; "not ready yet" stays a pending text.
  */
 export async function menuLinkStates(
@@ -227,6 +233,13 @@ export async function menuLinkStates(
   }
   const productPath = new Map<string, string>();
   const categoryPath = new Map<string, string>();
+  // ML-8c: the catalogue of the menu's language (another language), read once when a link needs it.
+  const catalogue = !isDefault ? await localeCatalogue(db, siteId, locale, refs, links) : null;
+  if (catalogue) {
+    for (const [productId, slug] of catalogue.products) {
+      productPath.set(productId, at(`/products/${slug}`));
+    }
+  }
   if (isDefault && refs.productIds.length) {
     const rows = await liveProductRows(
       { db: db as SiteScopedClient, siteId },
@@ -261,13 +274,19 @@ export async function menuLinkStates(
         return unknownOr(t.pageId, known, isDefault ? "not_live" : "no_translation");
       }
       case "product": {
-        if (!isDefault) return { href: MENU_HIDDEN, rule: "not_in_language" };
         const path = productPath.get(t.productId);
+        if (!isDefault) {
+          return path ? { href: path, rule: null } : { href: MENU_HIDDEN, rule: "not_in_language" };
+        }
         return path ? { href: path, rule: null } : { href: null, rule: "not_live" };
       }
       case "category": {
-        if (!isDefault) return { href: MENU_HIDDEN, rule: "not_in_language" };
         const path = categoryPath.get(t.categoryId);
+        if (!isDefault) {
+          return path && catalogue?.categoryIds.has(t.categoryId)
+            ? { href: path, rule: null }
+            : { href: MENU_HIDDEN, rule: path ? "not_in_language" : "unknown_target" };
+        }
         return path ? { href: path, rule: null } : { href: null, rule: "unknown_target" };
       }
       case "path": {
@@ -279,6 +298,18 @@ export async function menuLinkStates(
             : base.startsWith(`/${locale}/`)
               ? base.slice(locale.length + 1)
               : base;
+        // ML-8c: the product list (and a category view of it) exists in this language only while
+        // its catalogue has a product; its heading page alone never makes it a link.
+        if (inLocale === PRODUCTS_LIST) {
+          const category = new URLSearchParams(tail.split("#")[0]?.replace(/^\?/, "") ?? "").get(
+            "category",
+          );
+          return catalogue &&
+            catalogue.products.size > 0 &&
+            (category === null || catalogue.categorySlugs.has(category))
+            ? { href: `${at(PRODUCTS_LIST)}${tail}`, rule: null }
+            : { href: MENU_HIDDEN, rule: "not_in_language" };
+        }
         // An in-page anchor of the home page stays relative ("#top"); the site places it.
         if (livePaths.has(inLocale)) {
           return { href: t.path.startsWith("#") ? t.path : `${at(inLocale)}${tail}`, rule: null };
@@ -293,6 +324,64 @@ export async function menuLinkStates(
         return { href: null, rule: null };
     }
   };
+}
+
+interface LocaleCatalogue {
+  /** Live product id → slug, for the products published in the language. */
+  products: Map<string, string>;
+  /** Categories (ids and slugs) that hold such a product, themselves or in a sub-category. */
+  categoryIds: Set<string>;
+  categorySlugs: Set<string>;
+}
+
+/**
+ * ML-8c: the products published in `locale` (complete text in their live snapshot) and the
+ * categories that hold them, or null when no link of the menu points into the catalogue.
+ */
+async function localeCatalogue(
+  db: CmsDb,
+  siteId: string,
+  locale: string,
+  refs: { productIds: string[]; categoryIds: string[] },
+  links: MenuLinkRef[],
+): Promise<LocaleCatalogue | null> {
+  const listLink = links.some(({ link }) => {
+    if (link.target.type !== "path") return false;
+    const { base } = splitTarget(link.target.path);
+    return base === PRODUCTS_LIST || base === `/${locale}${PRODUCTS_LIST}`;
+  });
+  if (!refs.productIds.length && !refs.categoryIds.length && !listLink) return null;
+  const rows = await liveProductRows({ db: db as SiteScopedClient, siteId }, {});
+  const products = new Map<string, string>();
+  const direct = new Set<string>();
+  for (const r of rows) {
+    const s = readSnapshot(r.snapshot, locale);
+    if (!s) continue;
+    products.set(r.productId, s.slug);
+    direct.add(s.category.slug);
+  }
+  const categoryIds = new Set<string>();
+  const categorySlugs = new Set<string>();
+  if (direct.size) {
+    const tree = await db.productCategory.findMany({
+      where: { siteId },
+      select: { id: true, slug: true, parentId: true },
+    });
+    const byId = new Map(tree.map((c) => [c.id, c]));
+    for (const c of tree) {
+      if (!direct.has(c.slug)) continue;
+      // the category and every ancestor (the tree has at most 3 levels)
+      for (
+        let cur: typeof c | undefined = c, i = 0;
+        cur && i < 10;
+        cur = byId.get(cur.parentId ?? ""), i++
+      ) {
+        categoryIds.add(cur.id);
+        categorySlugs.add(cur.slug);
+      }
+    }
+  }
+  return { products, categoryIds, categorySlugs };
 }
 
 /** The visible links of a menu's content (a submenu link of a hidden item is not shown either). */

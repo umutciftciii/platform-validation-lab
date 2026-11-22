@@ -95,7 +95,10 @@ export class WorkflowController {
 export class PublicCatalogController {
   constructor(@Inject(PublicCatalogService) private readonly catalog: PublicCatalogService) {}
 
-  /** ML-8a: `?locale` optional (default language); other languages are 404 until ML-8c. */
+  /**
+   * ML-8a / ML-8c: `?locale` optional (default language); another language only while it is
+   * public on the site, and then only the products published in it (404 otherwise).
+   */
   @Get("products")
   list(
     @Ctx() ctx: RequestContext,
@@ -146,8 +149,9 @@ export class PublicCatalogController {
   crossReferences(
     @Ctx() ctx: RequestContext,
     @Param("slug") slug: string,
+    @Query("locale") locale?: string,
   ): Promise<PublicCrossReferenceListResponse> {
-    return this.catalog.crossReferences(ctx, slug);
+    return this.catalog.crossReferences(ctx, slug, locale);
   }
 
   /** PM-5: documents a live product shows on this site (metadata; downloadable flag). */
@@ -155,8 +159,9 @@ export class PublicCatalogController {
   documents(
     @Ctx() ctx: RequestContext,
     @Param("slug") slug: string,
+    @Query("locale") locale?: string,
   ): Promise<PublicDocumentListResponse> {
-    return this.catalog.documents(ctx, slug);
+    return this.catalog.documents(ctx, slug, locale);
   }
 
   /**

@@ -153,8 +153,10 @@ function fakeDeps(
     publicLocales = ["en"] as readonly string[] | null,
     privacyPublished = true,
     docs = { ok: true, data: [{ id: DOC, requestable: true }] } as DocumentsRead,
+    catalogue = {} as Partial<Record<string, "products" | "empty" | "unknown">>,
   } = {},
-): ProxyDeps & { calls: Call[]; loops: string[][] } {
+): ProxyDeps & { calls: Call[]; loops: string[][]; docCalls: string[] } {
+  const docCalls: string[] = [];
   const calls: Call[] = [];
   const loops: string[][] = [];
   return {
@@ -165,9 +167,14 @@ function fakeDeps(
       return answers[`${locale ?? "en"} ${path}`] ?? { status: "not_found" };
     },
     publicLocales: async () => publicLocales,
-    documents: async () => docs,
+    documents: async (slug, locale) => {
+      docCalls.push(`${locale} ${slug}`);
+      return docs;
+    },
+    catalogue: async (locale) => catalogue[locale] ?? "empty",
     privacyPublished,
     onLoop: (t) => loops.push([...t]),
+    docCalls,
   };
 }
 
@@ -328,15 +335,59 @@ describe("decide", () => {
     assert.deepEqual(await decide("/nl/news", "", deps), { action: "next" });
     // No English content under /nl: an unknown Dutch address is a 404 (no old-site lookup).
     assert.deepEqual(await decide("/nl/about-us", "", deps), { action: "not-found", locale: "nl" });
-    // No Dutch catalogue or policy yet (ML-8c, ADR-028 D12).
-    for (const p of [
-      "/nl/products",
-      "/nl/products/x",
-      `/nl/products/x/documents/${DOC}`,
-      "/nl/privacy",
-    ]) {
+    // ML-8c: no product published in Dutch: no Dutch list or product; no Dutch policy (D12).
+    for (const p of ["/nl/products", "/nl/products/x", "/nl/privacy"]) {
       assert.deepEqual(await decide(p, "", deps), { action: "not-found", locale: "nl" }, p);
     }
+  });
+
+  it("ML-8c: the Dutch catalogue shows exactly what is published in Dutch", async () => {
+    const deps = fakeDeps(
+      { "nl /products/white-oil-15": { status: "found" } },
+      {
+        publicLocales: ["en", "nl"],
+        catalogue: { nl: "products" },
+        docs: { ok: false, reason: "not_found" },
+      },
+    );
+    assert.deepEqual(await decide("/nl/products", "", deps), { action: "next" });
+    assert.deepEqual(await decide("/nl/products", "?category=base-oils&page=2", deps), {
+      action: "next",
+    });
+    // the product is asked with the language (the API answers only a complete Dutch text)
+    assert.deepEqual(await decide("/nl/products/white-oil-15", "", deps), { action: "next" });
+    assert.deepEqual(deps.calls.at(-1), { path: "/products/white-oil-15", search: "", locale: "nl" });
+    // a product without its Dutch text is a 404 under /nl (never the English product)
+    assert.deepEqual(await decide("/nl/products/grease-x", "", deps), {
+      action: "not-found",
+      locale: "nl",
+    });
+    // the Dutch list never asks for English old-site rows
+    assert.equal(
+      deps.calls.some((c) => c.locale === undefined),
+      false,
+    );
+    // the document form checks the product in Dutch
+    assert.deepEqual(await decide(`/nl/products/grease-x/documents/${DOC}`, "", deps), {
+      action: "not-found",
+      locale: "nl",
+    });
+    assert.deepEqual(deps.docCalls, ["nl grease-x"]);
+  });
+
+  it("ML-8c: an empty Dutch catalogue is a 404; an unknown answer renders the page", async () => {
+    const empty = fakeDeps({}, { publicLocales: ["en", "nl"], catalogue: { nl: "empty" } });
+    assert.deepEqual(await decide("/nl/products", "", empty), { action: "not-found", locale: "nl" });
+    const down = fakeDeps({}, { publicLocales: ["en", "nl"], catalogue: { nl: "unknown" } });
+    assert.deepEqual(await decide("/nl/products", "", down), { action: "next" });
+    // English never depends on it
+    assert.deepEqual(await decide("/en/products", "", empty), { action: "next" });
+  });
+
+  it("ML-8c: a Dutch document form follows the Dutch product's documents", async () => {
+    const deps = fakeDeps({}, { publicLocales: ["en", "nl"] });
+    assert.deepEqual(await decide(`/nl/products/x/documents/${DOC}`, "", deps), { action: "next" });
+    assert.deepEqual(deps.docCalls, ["nl x"]);
   });
 
   it("keeps the article's 'no longer available' page and 404s other unpublished content", async () => {
@@ -477,6 +528,7 @@ describe("ML-4: trailing slash (decideRequest)", () => {
     },
     publicLocales: async () => ["en"],
     documents: async () => ({ ok: false, reason: "not_found" }),
+    catalogue: async () => "empty",
     privacyPublished: true,
   };
 
