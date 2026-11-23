@@ -10,6 +10,10 @@ import {
   saveErrorText,
   textProblem,
 } from "../lib/proposal-edit";
+import { createTranslator } from "../lib/i18n/translate";
+
+const en = createTranslator("en");
+const tr = createTranslator("tr");
 
 const saved = { summary: "Group II base oil.", description: null };
 
@@ -42,21 +46,36 @@ describe("proposal text editor rules", () => {
   });
 
   it("explains a text that cannot be saved", () => {
-    expect(textProblem("summary", "x".repeat(500))).toBeNull();
-    expect(textProblem("summary", "x".repeat(501))).toMatch(/500 characters/);
-    expect(textProblem("description", "x".repeat(8000))).toBeNull();
-    expect(textProblem("description", "x".repeat(8001))).toMatch(/8,000 characters/);
-    expect(textProblem("description", "Base oil [CONFIRM: grade]")).toMatch(
+    expect(textProblem("summary", "x".repeat(500), en, "en")).toBeNull();
+    expect(textProblem("summary", "x".repeat(501), en, "en")).toMatch(/500 characters/);
+    expect(textProblem("description", "x".repeat(8000), en, "en")).toBeNull();
+    expect(textProblem("description", "x".repeat(8001), en, "en")).toMatch(/8,000 characters/);
+    expect(textProblem("description", "Base oil [CONFIRM: grade]", en, "en")).toMatch(
       /Missing & Verification/,
     );
   });
 
   it("says plainly what a conflict, a size refusal and a missing permission mean", () => {
-    expect(saveErrorText(409, [{ path: "version", rule: "stale" }], "x")).toMatch(
+    expect(saveErrorText(409, [{ path: "version", rule: "stale" }], "x", en)).toMatch(
       /newer version.*your edits are kept/,
     );
-    expect(saveErrorText(413, [], "x")).toMatch(/too long to send/);
-    expect(saveErrorText(403, [], "x")).toMatch(/not allowed to edit/);
-    expect(saveErrorText(400, [], "fallback")).toBe("fallback");
+    expect(saveErrorText(413, [], "x", en)).toMatch(/too long to send/);
+    expect(saveErrorText(403, [], "x", en)).toMatch(/not allowed to edit/);
+    expect(saveErrorText(400, [], "fallback", en)).toBe("fallback");
+  });
+
+  it("ML-12b: says the same in Turkish, numbers in Turkish format", () => {
+    expect(textProblem("description", "x".repeat(8001), tr, "tr")).toBe(
+      "En fazla 8.000 karakter yazın (şu an 8.001).",
+    );
+    expect(textProblem("summary", "[confirm] x", tr, "tr")).toMatch(/Eksikler ve doğrulama/);
+    expect(saveErrorText(409, [{ path: "version", rule: "stale" }], "x", tr)).toMatch(
+      /daha yeni bir sürümünü/,
+    );
+    expect(saveErrorText(403, [], "x", tr)).toBe("Bu sitede önerileri düzenleme yetkiniz yok.");
+    // the catalogue client's message (already in the console language) is kept as it is
+    expect(saveErrorText(400, [], "Değişiklik kaydedilemedi.", tr)).toBe(
+      "Değişiklik kaydedilemedi.",
+    );
   });
 });

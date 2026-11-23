@@ -32,10 +32,8 @@ import {
   reviewTabLabel,
   type ReviewTabId,
 } from "../../lib/review-tabs";
+import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
-
-const LEAVE_TEXT =
-  "You have unsaved changes to the proposed text. Leave the page and discard them?";
 
 interface TabsState {
   active: ReviewTabId;
@@ -70,6 +68,7 @@ export function ReviewTabs({
   badges: Partial<Record<ReviewTabId, ReviewTabBadge>>;
   children: ReactNode;
 }) {
+  const t = useT();
   const [active, setActive] = useState<ReviewTabId>(initialTab);
   const [lastInitial, setLastInitial] = useState(initialTab);
   if (initialTab !== lastInitial) {
@@ -97,6 +96,7 @@ export function ReviewTabs({
   }, []);
 
   // Leaving with unsaved changes: reload/close, and in-app links (back link, menu, other pages).
+  const leaveText = t("companyReview.tabs.leave");
   useEffect(() => {
     if (!anyUnsaved) return;
     const beforeUnload = (e: BeforeUnloadEvent) => {
@@ -112,7 +112,7 @@ export function ReviewTabs({
       const url = new URL(a.href, window.location.href);
       const here = window.location;
       if (url.pathname === here.pathname && url.search === here.search) return;
-      if (!window.confirm(LEAVE_TEXT)) {
+      if (!window.confirm(leaveText)) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -123,7 +123,7 @@ export function ReviewTabs({
       window.removeEventListener("beforeunload", beforeUnload);
       document.removeEventListener("click", click, true);
     };
-  }, [anyUnsaved]);
+  }, [anyUnsaved, leaveText]);
 
   const select = useCallback(
     (tab: ReviewTabId, section?: string) => {
@@ -192,24 +192,24 @@ export function ReviewTabs({
         <div
           ref={listRef}
           role="tablist"
-          aria-label="Review sections"
+          aria-label={t("companyReview.tabs.label")}
           onKeyDown={onKeyDown}
           className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          {REVIEW_TABS.map((t) => {
-            const selected = t.id === active;
-            const badge = badges[t.id];
-            const dirty = unsavedTabs.has(t.id);
+          {REVIEW_TABS.map((tab) => {
+            const selected = tab.id === active;
+            const badge = badges[tab.id];
+            const dirty = unsavedTabs.has(tab.id);
             return (
               <button
-                key={t.id}
-                id={tabDomId(base, t.id)}
+                key={tab.id}
+                id={tabDomId(base, tab.id)}
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                aria-controls={panelDomId(t.id)}
+                aria-controls={panelDomId(tab.id)}
                 tabIndex={selected ? 0 : -1}
-                onClick={() => select(t.id)}
+                onClick={() => select(tab.id)}
                 className={cx(
                   "relative inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-petrol/40 focus-visible:ring-inset",
                   selected
@@ -217,7 +217,7 @@ export function ReviewTabs({
                     : "border-transparent text-ink-3 hover:border-line-strong hover:text-ink",
                 )}
               >
-                {t.label}
+                {reviewTabLabel(tab.id, t)}
                 {badge?.count !== undefined ? (
                   <span className="tabular rounded-full bg-surface-2 px-1.5 text-xs text-ink-3 ring-1 ring-line">
                     {badge.count}
@@ -232,9 +232,12 @@ export function ReviewTabs({
                   </span>
                 ) : null}
                 {dirty ? (
-                  <span className="inline-flex items-center" title="Unsaved changes">
+                  <span
+                    className="inline-flex items-center"
+                    title={t("companyReview.tabs.unsaved")}
+                  >
                     <span aria-hidden="true" className="size-2 rounded-full bg-amber" />
-                    <span className="sr-only">, unsaved changes</span>
+                    <span className="sr-only">{t("companyReview.tabs.unsavedSr")}</span>
                   </span>
                 ) : null}
               </button>
@@ -249,6 +252,7 @@ export function ReviewTabs({
 
 /** One tab's content; stays mounted (hidden) while another tab is active. */
 export function ReviewTabPanel({ tab, children }: { tab: ReviewTabId; children: ReactNode }) {
+  const t = useT();
   const tabs = useContext(TabsContext);
   const hidden = tabs ? tabs.active !== tab : false;
   return (
@@ -256,7 +260,7 @@ export function ReviewTabPanel({ tab, children }: { tab: ReviewTabId; children: 
       <div
         id={panelDomId(tab)}
         role="tabpanel"
-        aria-label={reviewTabLabel(tab)}
+        aria-label={reviewTabLabel(tab, t)}
         hidden={hidden}
         className="space-y-6 sm:space-y-8"
       >

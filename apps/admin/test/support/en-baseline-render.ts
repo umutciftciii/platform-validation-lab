@@ -3,6 +3,8 @@
 // real React output, and is ALSO compared with the HTML recorded on private main 88251eb (before
 // ML-12a) in test/fixtures/catalog-en/<test file>.json.gz
 // (gzip: the uncompressed HTML is ~5 MB). Set ML12A_RECORD_EN=1 to record.
+// ML-12b: the Company Review EN regression (company-review-en.test.tsx) was recorded the same way on
+// private main 7b543f6 with ML12B_RECORD_EN=1 (run only that file when recording).
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -15,7 +17,7 @@ import { renderToStaticMarkup as reactRender } from "react-dom/server";
 import { afterAll, expect } from "vitest";
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "catalog-en");
-const RECORD = process.env["ML12A_RECORD_EN"] === "1";
+const RECORD = process.env["ML12A_RECORD_EN"] === "1" || process.env["ML12B_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

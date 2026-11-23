@@ -7,13 +7,15 @@
  * technical data), Sources and History. Each piece of data is shown in exactly one tab.
  */
 import type { ProposalSummary, ReviewItemKind } from "@dream/contracts";
+import type { Translate } from "./i18n/types";
 import { COMPANY_REVIEW_PATH } from "./proposals-view";
 
+/** The tabs in order; each label is `companyReview.tabs.<id>` (ML-12b). */
 export const REVIEW_TABS = [
-  { id: "content", label: "Content Review" },
-  { id: "verification", label: "Missing & Verification" },
-  { id: "sources", label: "Sources" },
-  { id: "history", label: "History" },
+  { id: "content" },
+  { id: "verification" },
+  { id: "sources" },
+  { id: "history" },
 ] as const;
 
 export type ReviewTabId = (typeof REVIEW_TABS)[number]["id"];
@@ -28,8 +30,8 @@ export function parseReviewTab(value: string | string[] | undefined): ReviewTabI
   return v && TAB_IDS.has(v) ? (v as ReviewTabId) : DEFAULT_REVIEW_TAB;
 }
 
-export function reviewTabLabel(tab: ReviewTabId): string {
-  return REVIEW_TABS.find((t) => t.id === tab)?.label ?? tab;
+export function reviewTabLabel(tab: ReviewTabId, t: Translate): string {
+  return t(`companyReview.tabs.${tab}`);
 }
 
 /**
@@ -153,5 +155,3 @@ export function reviewAttention(counts: Partial<Record<ReviewItemKind, number>>)
     claimRisks: n("CLAIM_RISK"),
   };
 }
-
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

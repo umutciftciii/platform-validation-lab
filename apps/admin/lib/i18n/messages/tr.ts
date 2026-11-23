@@ -16,6 +16,7 @@ import { taxonomy } from "./catalog/tr/taxonomy";
 import { media } from "./catalog/tr/media";
 import { xrefs } from "./catalog/tr/xrefs";
 import { translations } from "./catalog/tr/translations";
+import { companyReview } from "./company-review/tr";
 
 export const tr: Messages = {
   common: {
@@ -356,4 +357,6 @@ export const tr: Messages = {
     xrefs,
     translations,
   },
+  /** ML-12b (DP-243): the Company Review area (./company-review/). */
+  companyReview,
 };

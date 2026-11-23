@@ -12,18 +12,29 @@ import {
   reviewHref,
   reviewListHref,
   reviewTabForHash,
+  reviewTabLabel,
 } from "../lib/review-tabs";
+import { createTranslator } from "../lib/i18n/translate";
 
 const ID = "0190f2a1-0000-7000-8000-000000000301";
 const CAT = "0190f2a1-0000-7000-8000-000000000501";
 
 describe("review tabs", () => {
   it("has the four tabs in order, Content Review first", () => {
-    expect(REVIEW_TABS.map((t) => t.label)).toEqual([
+    const en = createTranslator("en");
+    expect(REVIEW_TABS.map((t) => reviewTabLabel(t.id, en))).toEqual([
       "Content Review",
       "Missing & Verification",
       "Sources",
       "History",
+    ]);
+    // ML-12b: the same tabs in Turkish; the ids (URL `?tab=`) never change.
+    const tr = createTranslator("tr");
+    expect(REVIEW_TABS.map((t) => reviewTabLabel(t.id, tr))).toEqual([
+      "İçerik incelemesi",
+      "Eksikler ve doğrulama",
+      "Kaynaklar",
+      "Geçmiş",
     ]);
     expect(DEFAULT_REVIEW_TAB).toBe("content");
   });

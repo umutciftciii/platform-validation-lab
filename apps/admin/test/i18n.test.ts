@@ -56,6 +56,11 @@ const SAME_IN_TR = new Set([
   "catalog.list.review.when.known",
   "catalog.media.documents.fields.typeOption",
   "catalog.taxonomy.categories.slug",
+  // ML-12b: technical terms and the word "Site" (the same in Turkish)
+  "companyReview.current.sku",
+  "companyReview.current.slug",
+  "companyReview.detail.sku",
+  "companyReview.list.site",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
@@ -78,10 +83,11 @@ describe("dictionary completeness (EN source, TR)", () => {
 
   it("counts the keys of this release", () => {
     // ML-11 scope: shell, navigation, auth, errors, 404 and the error boundary (ADR-028 D15);
-    // ML-12a adds the Products/Catalog area (catalog.*).
+    // ML-12a adds the Products/Catalog area (catalog.*), ML-12b the Company Review area.
     expect(EN.length).toBe(TR.length);
     expect(EN.length).toBeGreaterThan(200);
     expect(EN.filter(([k]) => k.startsWith("catalog.")).length).toBeGreaterThan(1000);
+    expect(EN.filter(([k]) => k.startsWith("companyReview.")).length).toBeGreaterThan(200);
   });
 
   it("a missing or an extra Turkish key is a compile error", () => {

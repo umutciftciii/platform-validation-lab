@@ -23,10 +23,10 @@ import {
   cx,
 } from "../../../components/ui";
 import { flattenTree } from "../../../lib/catalog-view";
-import { STATUS_META } from "../../../lib/proposals-view";
+import { getTranslator } from "../../../lib/i18n/server";
+import { statusLabel } from "../../../lib/proposals-view";
 import {
   filterProposals,
-  plural,
   readReviewFilters,
   reviewAttention,
   reviewHref,
@@ -39,7 +39,10 @@ const CATALOG = "/api/v1/admin/catalog";
 /** Upper bound of product pages read for the category column and filter (100 per page). */
 const MAX_PRODUCT_PAGES = 20;
 
-export const metadata: Metadata = { title: "Company review" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("companyReview.title") };
+}
 
 /** Every product of the site's catalogue view (optionally of one category), or null on failure. */
 async function readProducts(
@@ -70,15 +73,16 @@ async function readProducts(
  */
 export default async function CompanyReviewPage({ searchParams }: PageProps<"/company-review">) {
   await requireStaffSession();
+  const t = await getTranslator();
   const query = await searchParams;
   const context = await serverRead(`${CATALOG}/proposals/context`, ProposalContextResponseSchema);
   const sites = context.ok ? context.data.sites.filter((s) => s.canRead) : [];
   if (sites.length === 0) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="inbox" title="Company review" />
-        <EmptyState icon="shield" title="No access to the company review">
-          Your roles do not include reading products on any site.
+        <PageHeader icon="inbox" title={t("companyReview.title")} />
+        <EmptyState icon="shield" title={t("companyReview.list.noAccessTitle")}>
+          {t("companyReview.list.noAccessText")}
         </EmptyState>
       </div>
     );
@@ -113,21 +117,14 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="inbox"
-        title="Company review"
+        title={t("companyReview.title")}
         actions={
           site.canReview && site.key === "BV" ? <PreviewLinkButton siteId={site.id} /> : undefined
         }
-        description={
-          <>
-            Proposed English texts for the {site.name} catalogue, prepared from research. Open a
-            product to compare the current site data with the proposal, check the open points, then
-            approve or request changes. An approval neither publishes the product nor approves its
-            technical data.
-          </>
-        }
+        description={<>{t("companyReview.list.description", { site: site.name })}</>}
       />
       {sites.length > 1 ? (
-        <nav aria-label="Site" className="flex flex-wrap gap-2">
+        <nav aria-label={t("companyReview.list.site")} className="flex flex-wrap gap-2">
           {sites.map((s) => (
             <Link
               key={s.id}
@@ -146,26 +143,30 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
         </nav>
       ) : null}
       {!list.ok ? (
-        <ErrorState title="The proposals could not be loaded">
-          Reload the page. If it keeps failing, your role may not include this site.
+        <ErrorState title={t("companyReview.list.loadErrorTitle")}>
+          {t("companyReview.list.loadErrorText")}
         </ErrorState>
       ) : (
         <Panel
-          title="Products"
-          description={`${list.data.counts.REVIEW_PENDING} pending · ${list.data.counts.CHANGES_REQUESTED} with changes requested · ${list.data.counts.APPROVED} approved`}
+          title={t("companyReview.list.products")}
+          description={t("companyReview.list.counts", {
+            pending: list.data.counts.REVIEW_PENDING,
+            changes: list.data.counts.CHANGES_REQUESTED,
+            approved: list.data.counts.APPROVED,
+          })}
           bodyClassName="px-0! pb-2! pt-3!"
         >
           <form
             method="get"
             action="/company-review"
             role="search"
-            aria-label="Filter proposals"
+            aria-label={t("companyReview.list.filterLabel")}
             className="grid grid-cols-1 gap-3 border-b border-line px-5 pb-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto] sm:px-6"
           >
             <input type="hidden" name="site" value={siteKey} />
             {status ? <input type="hidden" name="status" value={status} /> : null}
             <label className="relative block">
-              <span className="sr-only">Search by product name or SKU</span>
+              <span className="sr-only">{t("companyReview.list.searchLabel")}</span>
               <Icon
                 name="search"
                 size={17}
@@ -176,19 +177,19 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
                 name="q"
                 defaultValue={filters.q}
                 maxLength={100}
-                placeholder="Search product name or SKU"
+                placeholder={t("companyReview.list.searchPlaceholder")}
                 className={cx(FIELD, "pl-9")}
               />
             </label>
             <label>
-              <span className="sr-only">Category</span>
+              <span className="sr-only">{t("companyReview.list.category")}</span>
               <select
                 name="category"
                 defaultValue={filters.category}
                 className={FIELD}
                 disabled={tree.length === 0}
               >
-                <option value="">All categories</option>
+                <option value="">{t("companyReview.list.allCategories")}</option>
                 {tree.map(({ category, depth }) => (
                   <option key={category.id} value={category.id}>
                     {`${"  ".repeat(depth)}${category.name}`}
@@ -199,19 +200,19 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
             <div className="flex gap-2">
               <button type="submit" className={cx(buttonStyles.secondary, "flex-1 sm:flex-none")}>
                 <Icon name="search" size={16} />
-                Search
+                {t("companyReview.list.search")}
               </button>
               {narrowed ? (
                 <Link
                   href={reviewListHref(siteKey, { status: status ?? "" })}
                   className={cx(buttonStyles.ghost, "flex-1 sm:flex-none")}
                 >
-                  Clear
+                  {t("companyReview.list.clear")}
                 </Link>
               ) : null}
             </div>
             <nav
-              aria-label="Filter by review status"
+              aria-label={t("companyReview.list.statusFilter")}
               className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] sm:col-span-3 sm:flex-wrap [&::-webkit-scrollbar]:hidden"
             >
               {[undefined, ...ProposalStatusSchema.options].map((s) => {
@@ -230,7 +231,7 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
                         : "text-ink-2 ring-line-strong hover:bg-surface-2",
                     )}
                   >
-                    {s ? STATUS_META[s].label : "All"}
+                    {s ? statusLabel(s, t) : t("companyReview.list.all")}
                     <span className="tabular text-xs opacity-75">{n}</span>
                   </Link>
                 );
@@ -239,19 +240,20 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
           </form>
           {categories.ok && products === null ? (
             <p className="border-b border-line px-5 py-2 text-xs text-ink-3 sm:px-6">
-              Categories of the products could not be loaded; the category filter may be incomplete.
+              {t("companyReview.list.categoriesIncomplete")}
             </p>
           ) : null}
           {narrowed ? (
             <p className="px-5 pt-3 text-sm text-ink-3 sm:px-6" role="status">
-              {`Showing ${plural(shown.length, "product")} of ${list.data.proposals.length}`}
+              {t("companyReview.list.showing", {
+                count: shown.length,
+                total: list.data.proposals.length,
+              })}
             </p>
           ) : null}
           {shown.length === 0 ? (
             <p className="px-5 py-6 text-sm text-ink-3 sm:px-6">
-              {narrowed
-                ? "No product matches this search. Change the search or clear the filters."
-                : "No proposals in this view."}
+              {narrowed ? t("companyReview.list.noMatch") : t("companyReview.list.empty")}
             </p>
           ) : (
             <ul className="divide-y divide-line" data-proposal-list="">
@@ -280,15 +282,19 @@ export default async function CompanyReviewPage({ searchParams }: PageProps<"/co
                           </span>
                         </span>
                         <span className="flex flex-wrap items-center gap-2 md:justify-end">
-                          <ProposalStatusPill status={p.status} />
+                          <ProposalStatusPill status={p.status} t={t} />
                           {!p.hasText ? (
-                            <StatusPill tone="neutral">No text proposed</StatusPill>
+                            <StatusPill tone="neutral">{t("companyReview.list.noText")}</StatusPill>
                           ) : null}
                           {a.conflicts > 0 ? (
-                            <StatusPill tone="danger">{plural(a.conflicts, "conflict")}</StatusPill>
+                            <StatusPill tone="danger">
+                              {t("companyReview.count.conflicts", { count: a.conflicts })}
+                            </StatusPill>
                           ) : null}
                           {a.held > 0 ? (
-                            <StatusPill tone="amber">{plural(a.held, "held value")}</StatusPill>
+                            <StatusPill tone="amber">
+                              {t("companyReview.count.heldValues", { count: a.held })}
+                            </StatusPill>
                           ) : null}
                         </span>
                       </span>
