@@ -111,27 +111,10 @@ const decode = (s: string) =>
     .replaceAll("&#x27;", "'")
     .replaceAll("&nbsp;", " ");
 
-/**
- * The research notes of the site's proposal (components/catalog/proposal-review.tsx ResearchNotes)
- * are Company Review's own component, localised with ML-12b; the product page only hosts them.
- */
-function withoutResearchNotes(html: string): string {
-  const start = html.indexOf("<div", html.indexOf("data-research-notes=") - 60);
-  if (html.indexOf("data-research-notes=") < 0 || start < 0) return html;
-  let depth = 0;
-  const tags = /<\/?div\b[^>]*>/g;
-  tags.lastIndex = start;
-  for (let m = tags.exec(html); m; m = tags.exec(html)) {
-    depth += m[0].startsWith("</") ? -1 : 1;
-    if (depth === 0) return html.slice(0, start) + html.slice(m.index + m[0].length);
-  }
-  return html;
-}
-
 /** Visible texts: text nodes and the attributes people read or hear. */
 function texts(html: string): string[] {
   const out: string[] = [];
-  const body = withoutResearchNotes(html).replace(/<(script|style)[\s\S]*?<\/\1>/g, "");
+  const body = html.replace(/<(script|style)[\s\S]*?<\/\1>/g, "");
   for (const m of body.matchAll(/(?:aria-label|title|placeholder|alt)="([^"]*)"/g))
     out.push(decode(m[1] as string));
   for (const m of body.replace(/<[^>]+>/g, "\u0000").split("\u0000")) out.push(decode(m));

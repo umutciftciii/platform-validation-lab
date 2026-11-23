@@ -11,17 +11,23 @@ import { REVIEW_COMMENT_MAX, type ProposalResponse } from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
+import { createTranslator } from "../../lib/i18n/translate";
+import type { Translate } from "../../lib/i18n/types";
 import { decisionBlockedText } from "../../lib/proposals-view";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, TEXTAREA } from "./parts";
 
 /** The reason a request for changes is refused before it is sent, or null. */
-export function changeRequestProblem(comment: string): string | null {
-  const t = comment.trim();
-  if (t.length < 3) return "Explain what has to change (at least 3 characters).";
-  if (t.length > REVIEW_COMMENT_MAX)
-    return `Keep the explanation under ${REVIEW_COMMENT_MAX} characters.`;
+export function changeRequestProblem(
+  comment: string,
+  t: Translate = createTranslator("en"),
+): string | null {
+  const text = comment.trim();
+  if (text.length < 3) return t("companyReview.decision.explain");
+  if (text.length > REVIEW_COMMENT_MAX)
+    return t("companyReview.decision.tooLong", { max: REVIEW_COMMENT_MAX });
   return null;
 }
 
@@ -37,6 +43,7 @@ export function ProposalDecision({
   decisionBlocked: ProposalResponse["decisionBlocked"];
 }) {
   const router = useRouter();
+  const t = useT();
   const commentId = useId();
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState<"approve" | "changes" | null>(null);
@@ -44,7 +51,7 @@ export function ProposalDecision({
   const [done, setDone] = useState<string | null>(null);
 
   if (!canDecide) {
-    const why = decisionBlockedText(decisionBlocked);
+    const why = decisionBlockedText(decisionBlocked, t);
     return (
       <div
         role="note"
@@ -55,9 +62,7 @@ export function ProposalDecision({
         <div className="min-w-0">
           <p className="font-semibold text-ink">{why.title}</p>
           <p className="mt-1 text-ink-2">{why.body}</p>
-          <p className="mt-2 text-xs text-ink-3">
-            Approve and Request changes are not available to you for this version.
-          </p>
+          <p className="mt-2 text-xs text-ink-3">{t("companyReview.decision.unavailable")}</p>
         </div>
       </div>
     );
@@ -67,7 +72,7 @@ export function ProposalDecision({
     setError(null);
     setDone(null);
     if (kind === "changes") {
-      const problem = changeRequestProblem(comment);
+      const problem = changeRequestProblem(comment, t);
       if (problem) {
         setError(problem);
         return;
@@ -85,7 +90,11 @@ export function ProposalDecision({
       setError(result.message);
       return;
     }
-    setDone(kind === "approve" ? "Proposal approved." : "Changes requested.");
+    setDone(
+      kind === "approve"
+        ? t("companyReview.decision.approved")
+        : t("companyReview.decision.changesRequested"),
+    );
     setComment("");
     router.refresh();
   }
@@ -95,9 +104,9 @@ export function ProposalDecision({
     <div className="space-y-4">
       <div>
         <label htmlFor={commentId} className="mb-1.5 block text-sm font-medium text-ink">
-          Comment
+          {t("companyReview.decision.comment")}
           <span className="ml-1 font-normal text-ink-3">
-            (required to request changes, optional to approve)
+            {t("companyReview.decision.commentHint")}
           </span>
         </label>
         <textarea
@@ -110,7 +119,7 @@ export function ProposalDecision({
           }}
           rows={4}
           className={cx(TEXTAREA, "min-h-24")}
-          placeholder="What has to change, or answers to the questions in Missing & Verification…"
+          placeholder={t("companyReview.decision.commentPlaceholder")}
         />
       </div>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
@@ -123,7 +132,7 @@ export function ProposalDecision({
           className={buttonStyles.primary}
         >
           {pending === "approve" ? <Spinner /> : <Icon name="check" size={17} />}
-          <span>Approve</span>
+          <span>{t("companyReview.decision.approve")}</span>
         </button>
         <button
           type="button"
@@ -132,13 +141,10 @@ export function ProposalDecision({
           className={buttonStyles.secondary}
         >
           {pending === "changes" ? <Spinner /> : <Icon name="edit" size={16} />}
-          <span>Request changes</span>
+          <span>{t("companyReview.decision.requestChanges")}</span>
         </button>
       </div>
-      <p className="text-xs text-ink-3">
-        Approving accepts the proposed text for this product. It does not publish the product and is
-        not a technical approval of its data.
-      </p>
+      <p className="text-xs text-ink-3">{t("companyReview.decision.note")}</p>
     </div>
   );
 }

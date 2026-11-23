@@ -4,6 +4,9 @@
  * the same limits again and decides.
  */
 import { PROPOSAL_DESCRIPTION_MAX, PROPOSAL_SUMMARY_MAX } from "@dream/contracts";
+import type { AdminLocale } from "./i18n/config";
+import { formatNumber } from "./i18n/format";
+import type { Translate } from "./i18n/types";
 
 export const EDIT_FIELDS = ["summary", "description"] as const;
 export type EditField = (typeof EDIT_FIELDS)[number];
@@ -16,10 +19,10 @@ export const EDIT_LIMITS: Readonly<Record<EditField, number>> = {
   description: PROPOSAL_DESCRIPTION_MAX,
 };
 
-export const EDIT_LABELS: Readonly<Record<EditField, string>> = {
-  summary: "Short description",
-  description: "Description",
-};
+/** The label of a field (ML-12b: `companyReview.fields.<field>`). */
+export function editLabel(field: EditField, t: Translate): string {
+  return t(`companyReview.fields.${field}`);
+}
 
 /** Internal review notes never go into customer text (same rule as contracts and database). */
 const REVIEW_MARKER = /\[confirm/i;
@@ -73,15 +76,21 @@ export function hasTextChanges(saved: ProposalText, draft: ProposalDraft): boole
   return Object.keys(changedText(saved, draft)).length > 0;
 }
 
-/** Why a field cannot be saved as it is, or null. */
-export function textProblem(field: EditField, value: string): string | null {
-  const t = value.trim();
-  if (t.length > EDIT_LIMITS[field]) {
-    return `Keep it to ${EDIT_LIMITS[field].toLocaleString("en")} characters (now ${t.length.toLocaleString("en")}).`;
+/** Why a field cannot be saved as it is, or null (numbers in the console language). */
+export function textProblem(
+  field: EditField,
+  value: string,
+  t: Translate,
+  locale: AdminLocale,
+): string | null {
+  const text = value.trim();
+  if (text.length > EDIT_LIMITS[field]) {
+    return t("companyReview.editor.tooLong", {
+      max: formatNumber(EDIT_LIMITS[field], locale),
+      now: formatNumber(text.length, locale),
+    });
   }
-  if (REVIEW_MARKER.test(t)) {
-    return "Review notes ([CONFIRM …]) belong in Missing & Verification, not in customer text.";
-  }
+  if (REVIEW_MARKER.test(text)) return t("companyReview.editor.reviewNotes");
   return null;
 }
 
@@ -99,15 +108,12 @@ export function saveErrorText(
   status: number,
   issues: readonly { path: string; rule: string }[],
   fallback: string,
+  t: Translate,
 ): string {
   if (issues.some((i) => i.path === "version" && i.rule === "stale")) {
-    return "Someone saved a newer version of this proposal meanwhile. It is loaded now and your edits are kept: Save adds them to the newer version, Cancel discards them.";
+    return t("companyReview.editor.stale");
   }
-  if (status === 413) {
-    return "This text is too long to send in one request. Shorten the description and save again.";
-  }
-  if (status === 403) {
-    return "You are not allowed to edit proposals on this site.";
-  }
+  if (status === 413) return t("companyReview.editor.tooLarge");
+  if (status === 403) return t("companyReview.editor.forbidden");
   return fallback;
 }

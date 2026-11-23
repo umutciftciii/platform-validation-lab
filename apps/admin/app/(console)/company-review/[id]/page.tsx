@@ -35,19 +35,23 @@ import {
 } from "../../../../components/catalog/review-tabs";
 import { Icon } from "../../../../components/icons";
 import { ErrorState, Panel } from "../../../../components/ui";
+import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
 import {
   COMPANY_REVIEW_PATH,
   decisionBlockedText,
-  STATUS_META,
+  statusHint,
 } from "../../../../lib/proposals-view";
-import { parseReviewTab, plural, reviewAttention } from "../../../../lib/review-tabs";
+import { parseReviewTab, reviewAttention } from "../../../../lib/review-tabs";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
 const CATALOG = "/api/v1/admin/catalog";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const metadata: Metadata = { title: "Company review" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("companyReview.title") };
+}
 
 /**
  * DP-172 (ADR-022), DP-189: one product in the company review, in four tabs (Content Review,
@@ -64,21 +68,26 @@ export default async function CompanyReviewProductPage({
   searchParams,
 }: PageProps<"/company-review/[id]">) {
   await requireStaffSession();
-  const [{ id }, query] = await Promise.all([params, searchParams]);
+  const [{ id }, query, t, locale] = await Promise.all([
+    params,
+    searchParams,
+    getTranslator(),
+    getAdminLocale(),
+  ]);
   if (!UUID.test(id)) notFound();
   const site = typeof query["site"] === "string" ? query["site"] : undefined;
   const back = {
     href: `${COMPANY_REVIEW_PATH}${site ? `?site=${encodeURIComponent(site)}` : ""}`,
-    label: "All proposals",
+    label: t("companyReview.allProposals"),
   };
   const res = await serverRead(`${CATALOG}/proposals/${id}`, ProposalResponseSchema);
   if (!res.ok && res.status === 404) notFound();
   if (!res.ok) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="inbox" title="Company review" back={back} />
-        <ErrorState title="This proposal could not be loaded">
-          Your role may not include this site. Reload the page to try again.
+        <PageHeader icon="inbox" title={t("companyReview.title")} back={back} />
+        <ErrorState title={t("companyReview.detail.loadErrorTitle")}>
+          {t("companyReview.detail.loadErrorText")}
         </ErrorState>
       </div>
     );
@@ -99,7 +108,7 @@ export default async function CompanyReviewProductPage({
   const specCount = specs.ok ? specs.data.values.length : 0;
   const verificationCount =
     attention.conflicts + attention.questions + attention.held + attention.missingDocuments;
-  const blocked = canDecide ? null : decisionBlockedText(decisionBlocked);
+  const blocked = canDecide ? null : decisionBlockedText(decisionBlocked, t);
   const tab = parseReviewTab(query["tab"]);
 
   return (
@@ -110,16 +119,19 @@ export default async function CompanyReviewProductPage({
         back={back}
         description={
           <span className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="sr-only">SKU </span>
+            <span className="sr-only">{t("companyReview.detail.sku")} </span>
             <span
               data-sku=""
               className="tabular rounded-md bg-surface-2 px-2 py-0.5 font-mono text-ink-2 ring-1 ring-line"
             >
               {proposal.productCode}
             </span>
-            <ProposalStatusPill status={proposal.status} />
+            <ProposalStatusPill status={proposal.status} t={t} />
             <span className="text-ink-3">
-              Version {proposal.version} · {STATUS_META[proposal.status].hint}
+              {t("companyReview.detail.versionHint", {
+                version: proposal.version,
+                hint: statusHint(proposal.status, t),
+              })}
             </span>
           </span>
         }
@@ -132,7 +144,9 @@ export default async function CompanyReviewProductPage({
         badges={{
           verification: {
             count: verificationCount,
-            ...(attention.conflicts > 0 ? { alert: plural(attention.conflicts, "conflict") } : {}),
+            ...(attention.conflicts > 0
+              ? { alert: t("companyReview.count.conflicts", { count: attention.conflicts }) }
+              : {}),
           },
           sources: { count: proposal.reviewData.sources.length },
           history: { count: events.length },
@@ -150,18 +164,19 @@ export default async function CompanyReviewProductPage({
               <span className="min-w-0">
                 <span className="font-medium text-ink">{blocked.title}.</span>{" "}
                 <ReviewTabLink tab="content" section="decision" className="underline">
-                  See why
+                  {t("companyReview.detail.seeWhy")}
                 </ReviewTabLink>
               </span>
             </p>
           ) : null}
-          <OpenPoints attention={attention} />
+          <OpenPoints attention={attention} t={t} />
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
             <div className="min-w-0 space-y-6">
               <CurrentSiteData
                 detail={detail.ok ? detail.data : null}
                 categories={categories.ok ? categories.data.items : []}
                 images={images.ok ? images.data : null}
+                t={t}
               />
               {canRevise && detail.ok ? (
                 <ProposalTextEditor
@@ -177,18 +192,26 @@ export default async function CompanyReviewProductPage({
                   placeholder={proposal.reviewData.items.some((i) => i.kind === "PLACEHOLDER")}
                   tags={
                     <>
-                      <SourceTag kind="site" />
-                      <SourceTag kind="proposal" />
+                      <SourceTag kind="site" t={t} />
+                      <SourceTag kind="proposal" t={t} />
                     </>
                   }
                 />
               ) : (
-                <ContentComparison detail={detail.ok ? detail.data : null} proposal={proposal} />
+                <ContentComparison
+                  detail={detail.ok ? detail.data : null}
+                  proposal={proposal}
+                  t={t}
+                />
               )}
-              <ClaimRisks proposal={proposal} />
+              <ClaimRisks proposal={proposal} t={t} />
             </div>
             <div className="min-w-0 space-y-6 xl:sticky xl:top-32">
-              <Panel title="Decision" id="decision" className="scroll-mt-32">
+              <Panel
+                title={t("companyReview.detail.decision")}
+                id="decision"
+                className="scroll-mt-32"
+              >
                 <ProposalDecision
                   proposalId={proposal.id}
                   version={proposal.version}
@@ -197,10 +220,10 @@ export default async function CompanyReviewProductPage({
                 />
               </Panel>
               <Panel
-                title="Catalogue preview"
+                title={t("companyReview.detail.previewTitle")}
                 id="preview"
                 className="scroll-mt-32"
-                description="This product in the BV catalogue design, with the current data and the proposal apart. Read-only; the link is short-lived."
+                description={t("companyReview.detail.previewText")}
               >
                 <PreviewLinkButton
                   siteId={proposal.siteId}
@@ -215,33 +238,53 @@ export default async function CompanyReviewProductPage({
         <ReviewTabPanel tab="verification">
           <VerificationNav
             groups={[
-              { id: "attention", label: "Conflicts", count: attention.conflicts },
-              { id: "questions", label: "Questions", count: attention.questions },
-              { id: "held", label: "Held values", count: attention.held },
-              { id: "documents", label: "Missing documents", count: attention.missingDocuments },
-              { id: "current-technical", label: "Current technical data", count: specCount },
+              {
+                id: "attention",
+                label: t("companyReview.detail.nav.conflicts"),
+                count: attention.conflicts,
+              },
+              {
+                id: "questions",
+                label: t("companyReview.detail.nav.questions"),
+                count: attention.questions,
+              },
+              { id: "held", label: t("companyReview.detail.nav.held"), count: attention.held },
+              {
+                id: "documents",
+                label: t("companyReview.detail.nav.documents"),
+                count: attention.missingDocuments,
+              },
+              {
+                id: "current-technical",
+                label: t("companyReview.detail.nav.technical"),
+                count: specCount,
+              },
             ]}
+            t={t}
           />
           {verificationCount === 0 ? (
             <p className="rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink-3">
-              The research lists no conflicts, questions, held values or missing documents for this
-              product.
+              {t("companyReview.detail.nothingToVerify")}
             </p>
           ) : null}
-          <ReviewItems proposal={proposal} />
-          <HeldValues proposal={proposal} />
-          <DocumentsCheck proposal={proposal} documents={documents.ok ? documents.data : null} />
-          <CurrentTechnicalData specs={specs.ok ? specs.data : null} />
+          <ReviewItems proposal={proposal} t={t} />
+          <HeldValues proposal={proposal} t={t} />
+          <DocumentsCheck
+            proposal={proposal}
+            documents={documents.ok ? documents.data : null}
+            t={t}
+          />
+          <CurrentTechnicalData specs={specs.ok ? specs.data : null} t={t} locale={locale} />
         </ReviewTabPanel>
 
         {/* 3. Sources of the research. */}
         <ReviewTabPanel tab="sources">
-          <SourcesPanel proposal={proposal} />
+          <SourcesPanel proposal={proposal} t={t} />
         </ReviewTabPanel>
 
         {/* 4. History: authors, decisions, comments and status changes. */}
         <ReviewTabPanel tab="history">
-          <ProposalHistory proposal={proposal} events={events} />
+          <ProposalHistory proposal={proposal} events={events} t={t} locale={locale} />
         </ReviewTabPanel>
       </ReviewTabs>
     </div>
