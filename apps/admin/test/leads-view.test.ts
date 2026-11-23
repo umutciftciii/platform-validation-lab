@@ -6,6 +6,7 @@ import {
   calendarDay,
   countryName,
   exportSummaryText,
+  formLanguageLabel,
   hasLeadFilters,
   leadCount,
   leadExportQuery,
@@ -15,6 +16,7 @@ import {
   STATUS_HINT,
   STATUS_LABEL,
   STATUS_TONE,
+  textLanguageLabel,
 } from "../lib/leads-view";
 
 const SITE = "0190f3a0-0000-7000-8000-00000000000a";
@@ -152,5 +154,21 @@ describe("date range and export", () => {
     expect(exportSummaryText(20001, 20000, false)).toMatch(
       /^20,001 leads match\. One export holds at most 20,000; narrow the filters/,
     );
+  });
+});
+
+describe("ML-10 form and text language labels", () => {
+  it("shows the stored form language; a row from before ML-10 as English, marked not recorded", () => {
+    expect(formLanguageLabel("en")).toBe("English");
+    expect(formLanguageLabel("nl")).toBe("Dutch");
+    expect(formLanguageLabel(null)).toBe("English (not recorded, before ML-10)");
+    expect(formLanguageLabel("pt-BR")).toBe("pt-BR");
+    expect(formLanguageLabel("constructor")).toBe("constructor");
+  });
+
+  it("names the language of a text version (older versions were English)", () => {
+    expect(textLanguageLabel("2026-11-12.en")).toBe("English");
+    expect(textLanguageLabel("2026-11-23.nl")).toBe("Dutch");
+    expect(textLanguageLabel("2026-11-11")).toBe("English");
   });
 });

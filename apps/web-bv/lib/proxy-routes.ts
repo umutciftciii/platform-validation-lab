@@ -27,7 +27,14 @@
  * ML-3 rule `/about-us → /en/about-us`) is answered with the 404 the address would have without
  * the row, and logged. Live content always wins over a row (the API answers it first).
  */
-import { seoLegacyPath, seoRedirectLocation, type PublicDocument } from "@dream/contracts";
+import {
+  LEGAL_TEXTS,
+  legalTextsFor,
+  seoLegacyPath,
+  seoRedirectLocation,
+  type LegalTextRegistry,
+  type PublicDocument,
+} from "@dream/contracts";
 
 import {
   DEFAULT_LOCALE,
@@ -58,7 +65,17 @@ const LANGUAGE_LIKE = /^[a-z]{2}$/;
  * its own approval (ADR-028 D12); until then `/nl/privacy` is a 404.
  */
 export const CATALOGUE_LOCALES: readonly RouteLocale[] = ROUTE_LOCALES;
-export const PRIVACY_LOCALES: readonly RouteLocale[] = ["en"];
+
+/**
+ * ML-10 (DP-241, ADR-028 D12): the policy exists in a language once its legal texts may be offered
+ * (`legalTextsFor`: English, or a translation approved by the DP-095 review). A Dutch draft
+ * under review is never one of them, so `/nl/privacy` stays a 404 until that approval; the
+ * language must also be public (checked before, like every page).
+ */
+export function privacyLocalesOf(registry: LegalTextRegistry = LEGAL_TEXTS): readonly RouteLocale[] {
+  return ROUTE_LOCALES.filter((l) => legalTextsFor(l, registry) !== null);
+}
+export const PRIVACY_LOCALES: readonly RouteLocale[] = privacyLocalesOf();
 
 /** At most this many redirects are followed to find the final address of a chain. */
 export const MAX_HOPS = 4;
@@ -196,6 +213,8 @@ export interface ProxyDeps {
   catalogue(locale: RouteLocale): Promise<"products" | "empty" | "unknown">;
   /** DP-095: whether the privacy policy is published in this environment. */
   privacyPublished: boolean;
+  /** ML-10: the policy's languages (tests only; the site always uses `PRIVACY_LOCALES`). */
+  privacyLocales?: readonly RouteLocale[];
   /** Called when a redirect cycle or an over-long chain was refused (logged by the caller). */
   onLoop?(trail: readonly string[]): void;
 }
@@ -284,7 +303,7 @@ export async function step(
       return { action: "next" };
     }
     case "privacy":
-      return deps.privacyPublished && PRIVACY_LOCALES.includes(locale)
+      return deps.privacyPublished && (deps.privacyLocales ?? PRIVACY_LOCALES).includes(locale)
         ? { action: "next" }
         : { action: "not-found", locale };
     case "document-request": {

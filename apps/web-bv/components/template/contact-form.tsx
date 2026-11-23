@@ -100,6 +100,8 @@ export function ContactForm({ idPrefix, title, countries, notice, privacyHref, l
           subject: String(data.get("subject") ?? ""),
           message: String(data.get("message") ?? ""),
           privacyNoticeVersion: notice.version,
+          // ML-10: the language of the notice shown (the API refuses another language's version).
+          locale,
           website: String(data.get("website") ?? ""),
         }),
       });

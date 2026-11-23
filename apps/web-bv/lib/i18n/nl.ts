@@ -220,6 +220,9 @@ export const nl: Dictionary = {
       "Laat ons weten wie u bent en de pdf wordt direct gedownload. Het exemplaar dat u ontvangt, is voorzien van uw naam, uw bedrijfsnaam en een aanvraagreferentie.",
     validity: "De downloadlink blijft 15 minuten geldig, voor maximaal 3 downloads.",
     newsOptIn: "Productnieuws per e-mail ontvangt u alleen als u het aparte vakje aanvinkt.",
+    notInLanguageTitle: "Documentaanvragen zijn nog niet beschikbaar in het Nederlands",
+    notInLanguageText:
+      "De Nederlandse privacyteksten worden nog beoordeeld. Gebruik voorlopig de Engelse versie van deze pagina.",
   },
 
   leadForm: {
@@ -278,6 +281,8 @@ export const nl: Dictionary = {
     noticeTitle: "Hoe wij uw gegevens gebruiken",
     noticeVersion: "· versie privacyverklaring {version}",
     send: "Bericht versturen",
+    notInLanguage:
+      "Het contactformulier is nog niet beschikbaar in het Nederlands. Bel of e-mail ons, of gebruik de Engelse versie van deze pagina.",
   },
 
   contactSection: {

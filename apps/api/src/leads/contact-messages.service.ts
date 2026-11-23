@@ -13,6 +13,11 @@
  * The message moves the lead's `lastRequestAt` (the retention clock starts at the last contact,
  * as the notice says); `requestCount` keeps counting document requests only.
  *
+ * ML-10 (DP-241, ADR-028 D12): the form names its language (none: English). A language without
+ * a notice that may be offered (a translation under DP-095 review) or that is not public on the
+ * site is refused (404, like the production gate); the notice version must be that language's
+ * current one. The message stores the language.
+ *
  * DP-221 (ADR-026): a lead this form creates has the source CONTACT_FORM (an existing lead keeps
  * its own). The same transaction writes a PENDING staff notification (the outbox the
  * notification sender delivers afterwards), so the visitor's 201 means the message is in the CRM
@@ -20,12 +25,15 @@
  * DUPLICATE_WINDOW_MS is a resend (double click, reload, retry after a lost answer): it answers
  * 201 again without a second message or notification, audited as a duplicate.
  */
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import {
+  LEAD_FORM_DEFAULT_LOCALE,
   LeadContactMessageInputSchema,
   isFreeMailDomain,
+  legalTextsFor,
   privacyPublication,
   type LeadContactMessageResponse,
+  type LegalTextRegistry,
 } from "@dream/contracts";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
@@ -35,7 +43,8 @@ import { PublicSiteService } from "../iam/public-site.js";
 import { PUBLIC_RATE_LIMITS, PublicRateLimitService, ipSubject } from "../iam/public-rate-limit.js";
 import { writeAudit } from "../iam/staff/audit-writer.js";
 import type { Db } from "../iam/db.js";
-import { CONTACT_NOTICE_SHA256, contactNoticeVersionProblem } from "./consent.js";
+import { contactNoticeIssue, evidenceSha256 } from "./consent.js";
+import { LEAD_LEGAL_TEXTS, formLocaleIsPublic, leadLegalTexts } from "./form-locale.js";
 
 /** A resend of the same message within this window is not stored twice (DP-221). */
 export const DUPLICATE_WINDOW_MS = 10 * 60_000;
@@ -51,13 +60,18 @@ export class ContactMessagesService {
     @Inject(PublicRateLimitService) private readonly limits: PublicRateLimitService,
     @Inject(Clock) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Optional() @Inject(LEAD_LEGAL_TEXTS) private readonly legalTexts?: LegalTextRegistry,
   ) {}
 
   async send(ctx: RequestContext, body: unknown): Promise<LeadContactMessageResponse> {
     if (!privacyPublication(this.config.deployEnv).publish) throw new ApiError("NOT_FOUND");
     const input = parseBody(LeadContactMessageInputSchema, body);
-    const problem = contactNoticeVersionProblem(input);
-    if (problem) throw new ApiError("VALIDATION_FAILED", [{ path: problem, rule: "outdated" }]);
+    // ML-10: the notice of the form's language; none may be offered: no form in that language.
+    const locale = input.locale ?? LEAD_FORM_DEFAULT_LOCALE;
+    const texts = legalTextsFor(locale, leadLegalTexts(this.legalTexts));
+    if (!texts) throw new ApiError("NOT_FOUND");
+    const issue = contactNoticeIssue(input, texts);
+    if (issue) throw new ApiError("VALIDATION_FAILED", [issue]);
     const site = await this.sites.begin(ctx);
     await this.limits.consume([
       {
@@ -76,6 +90,8 @@ export class ContactMessagesService {
         ...PUBLIC_RATE_LIMITS.contactMessagePerSite,
       },
     ]);
+    // ML-10 (ADR-028 D14): a language that is not public on this site has no form (fail closed).
+    if (!(await formLocaleIsPublic(site, locale))) throw new ApiError("NOT_FOUND");
 
     const now = this.clock.now();
     const ipPrefixHmac = this.limits.ipPrefixDigest(ctx);
@@ -150,8 +166,9 @@ export class ContactMessagesService {
             phone: input.phone,
             subject: input.subject,
             message: input.message,
-            privacyNoticeVersion: input.privacyNoticeVersion,
-            privacyNoticeSha256: CONTACT_NOTICE_SHA256,
+            privacyNoticeVersion: texts.contactNotice.version,
+            privacyNoticeSha256: evidenceSha256(texts.contactNotice.text),
+            locale,
             ipPrefixHmac,
             requestId: ctx.requestId,
             createdAt: now,
@@ -177,6 +194,9 @@ export class ContactMessagesService {
             newLead: !existing,
             hasPhone: input.phone !== null,
             notificationId: notification.id,
+            // ML-10: the form's language and the notice version stored as evidence.
+            locale,
+            privacyNoticeVersion: texts.contactNotice.version,
           },
           requestId: ctx.requestId,
         });

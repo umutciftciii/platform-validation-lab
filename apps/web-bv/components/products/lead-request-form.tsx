@@ -23,6 +23,9 @@ import { formatTime, plural } from "@/lib/i18n/format";
  * and this site answers LEAD_TEXT_OUTDATED. The form then loads the current texts, unticks both
  * boxes (an earlier tick is never reused for a new text) and asks the visitor to read and confirm
  * again; the other fields keep what was typed.
+ *
+ * ML-10: the texts are those of the page's language (`locale`), the form sends that language,
+ * and newer texts are read for that language only.
  */
 interface Props {
   documentId: string;
@@ -75,10 +78,12 @@ function messageFor(
   return ui.failed;
 }
 
-/** The current texts from this site's server, or null when they cannot be read. */
-async function fetchCurrentTexts(): Promise<LeadFormTexts | null> {
+/** The current texts of the form's language from this site's server, or null when unreadable. */
+async function fetchCurrentTexts(locale: string): Promise<LeadFormTexts | null> {
   try {
-    const res = await fetch("/lead-form/texts", { cache: "no-store" });
+    const res = await fetch(`/lead-form/texts?locale=${encodeURIComponent(locale)}`, {
+      cache: "no-store",
+    });
     if (!res.ok) return null;
     const parsed = LeadFormTextsSchema.safeParse(await res.json());
     return parsed.success ? parsed.data : null;
@@ -105,7 +110,7 @@ export function LeadRequestForm({
   const { privacyNotice, marketingConsent } = texts;
 
   async function refreshTexts() {
-    const current = await fetchCurrentTexts();
+    const current = await fetchCurrentTexts(locale);
     const changed =
       current !== null &&
       (current.privacyNotice.version !== privacyNotice.version ||
@@ -136,6 +141,8 @@ export function LeadRequestForm({
           privacyNoticeAccepted: data.get("privacyNoticeAccepted") === "on",
           marketingConsent: marketing,
           marketingConsentVersion: marketing ? marketingConsent.version : null,
+          // ML-10: the language of the texts shown (the API refuses another language's versions).
+          locale,
           website: String(data.get("website") ?? ""),
         }),
       });
