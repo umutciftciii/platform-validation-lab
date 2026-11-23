@@ -8,6 +8,7 @@
 import type { CatalogPreviewLinkResponse } from "@dream/contracts";
 import { useState } from "react";
 import { callCatalog } from "../../lib/catalog-client";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, Spinner } from "../ui";
 import { FormMessage } from "./parts";
@@ -15,13 +16,14 @@ import { FormMessage } from "./parts";
 export function PreviewLinkButton({
   siteId,
   productSlug,
-  label = "Open catalogue preview",
+  label,
 }: {
   siteId: string;
   productSlug?: string;
-  /** DP-193: the product page calls it "Preview". */
+  /** DP-193: the product page calls it "Preview". Default: "Open catalogue preview". */
   label?: string;
 }) {
+  const t = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function open() {
@@ -57,7 +59,7 @@ export function PreviewLinkButton({
         className={buttonStyles.secondary}
       >
         {pending ? <Spinner /> : <Icon name="eye" size={16} />}
-        <span>{label}</span>
+        <span>{label ?? t("catalog.list.preview.open")}</span>
       </button>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
     </div>

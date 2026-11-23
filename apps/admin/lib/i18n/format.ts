@@ -80,3 +80,23 @@ export function greeting(
   if (hour < 18) return t("time.goodAfternoon");
   return t("time.goodEvening");
 }
+
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * ML-12a: a date formatter with the caller's exact options in the UI language. English is the
+ * en-GB formatter the catalogue screens built before (same options, so the same text); Turkish
+ * uses tr-TR. Pass `timeZone` when the screen did so far: nothing is added to the options.
+ */
+export function dateTimeFormat(
+  locale: AdminLocale,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = `${locale}|${JSON.stringify(options)}`;
+  let f = dateFormats.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(INTL_LOCALE[locale], options);
+    dateFormats.set(key, f);
+  }
+  return f;
+}

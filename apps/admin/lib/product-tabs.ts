@@ -4,13 +4,16 @@
  * the client tab shell, and unit-tested without a browser.
  */
 
+import type { Translate } from "./i18n/types";
+
+/** ML-12a: the labels are in the dictionary (catalog.common.tabs.<id>). */
 export const PRODUCT_TABS = [
-  { id: "content", label: "Content" },
-  { id: "technical", label: "Technical" },
-  { id: "media", label: "Media & Documents" },
+  { id: "content" },
+  { id: "technical" },
+  { id: "media" },
   // DP-209: the product's SEO on the selected site.
-  { id: "seo", label: "SEO" },
-  { id: "publication", label: "Publication" },
+  { id: "seo" },
+  { id: "publication" },
 ] as const;
 
 export type ProductTabId = (typeof PRODUCT_TABS)[number]["id"];
@@ -25,8 +28,8 @@ export function parseProductTab(value: string | string[] | undefined): ProductTa
   return v && TAB_IDS.has(v) ? (v as ProductTabId) : DEFAULT_PRODUCT_TAB;
 }
 
-export function productTabLabel(tab: ProductTabId): string {
-  return PRODUCT_TABS.find((t) => t.id === tab)?.label ?? tab;
+export function productTabLabel(tab: ProductTabId, t: Translate): string {
+  return t(`catalog.common.tabs.${tab}`);
 }
 
 /**
@@ -77,80 +80,80 @@ export interface IssueFix {
  * Where and how a publication or validation issue is fixed (codes of checkPublication and of
  * validateProductData in @dream/contracts). Only explains: the API still decides.
  */
-export function fixForIssue(code: string): IssueFix | null {
+export function fixForIssue(code: string, t: Translate): IssueFix | null {
   switch (code) {
     case "not_approved":
       return {
         tab: "publication",
         section: "review",
-        hint: "Submit the product master for review; another reviewer approves it. An administrator with approval and publishing rights can publish directly.",
+        hint: t("catalog.common.fix.not_approved"),
       };
     case "not_reviewed":
       return {
         tab: "publication",
         section: "review",
-        hint: "Optional: ask a second person to review it first.",
+        hint: t("catalog.common.fix.not_reviewed"),
       };
     case "company_review_pending":
       return {
         tab: "content",
         section: "listing",
-        hint: "Optional: the company can review the proposal under Company Review.",
+        hint: t("catalog.common.fix.company_review_pending"),
         perSite: true,
       };
     case "sensitive_claim":
       return {
         tab: "content",
         section: "listing",
-        hint: "Keep this wording only with a certificate or source document; otherwise remove it from the site texts.",
+        hint: t("catalog.common.fix.sensitive_claim"),
         perSite: true,
       };
     case "archived":
       return {
         tab: "content",
         section: "master",
-        hint: "Restore the product with the button at the top of the page.",
+        hint: t("catalog.common.fix.archived"),
       };
     case "listing_missing":
       return {
         tab: "content",
         section: "listing",
-        hint: "List the product on this site (site listing).",
+        hint: t("catalog.common.fix.listing_missing"),
         perSite: true,
       };
     case "cover_missing":
       return {
         tab: "media",
         section: "images",
-        hint: "Upload an image and make it the cover.",
+        hint: t("catalog.common.fix.cover_missing"),
       };
     case "alt_text_missing":
-      return { tab: "media", section: "images", hint: "Add alt text to every image." };
+      return { tab: "media", section: "images", hint: t("catalog.common.fix.alt_text_missing") };
     // DP-202: the site's own text is the primary place; the shared content is the fallback.
     case "summary_missing":
       return {
         tab: "content",
         section: "listing",
-        hint: "Add a summary to this site's product text (or copy the research proposal).",
+        hint: t("catalog.common.fix.summary_missing"),
         perSite: true,
       };
     case "description_missing":
       return {
         tab: "content",
         section: "listing",
-        hint: "Add a description to this site's product text (or copy the research proposal).",
+        hint: t("catalog.common.fix.description_missing"),
         perSite: true,
       };
     case "required_missing":
       return {
         tab: "technical",
         section: "specs",
-        hint: "Fill in this required specification and save.",
+        hint: t("catalog.common.fix.required_missing"),
       };
     case "specs_missing":
     case "optional_missing":
     case "test_method_missing":
-      return { tab: "technical", section: "specs", hint: "Complete the technical data." };
+      return { tab: "technical", section: "specs", hint: t("catalog.common.fix.complete") };
     case "invalid_type":
     case "invalid_unit":
     case "invalid_range":
@@ -158,7 +161,7 @@ export function fixForIssue(code: string): IssueFix | null {
     case "too_precise":
     case "too_long":
     case "unknown_definition":
-      return { tab: "technical", section: "specs", hint: "Correct this value and save." };
+      return { tab: "technical", section: "specs", hint: t("catalog.common.fix.correct") };
     default:
       return null;
   }

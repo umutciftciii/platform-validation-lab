@@ -10,17 +10,11 @@ import {
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill } from "../ui";
 import { Field, FIELD, FormMessage } from "./parts";
 import { useNotice } from "./notices";
-
-const TYPE_LABEL: Record<SpecDataType, string> = {
-  NUMBER: "Number",
-  RANGE: "Range (min–max)",
-  TEXT: "Text",
-  BOOLEAN: "Yes / no",
-};
 
 /** "mm²/s, cSt" -> ["mm²/s", "cSt"] (trimmed, empty parts dropped). */
 export function splitList(value: string): string[] {
@@ -77,9 +71,14 @@ function DefinitionFields({
 }) {
   const invalid = (p: string) => issues.some((i) => i.path === p) || undefined;
   const numeric = dataType === "NUMBER" || dataType === "RANGE";
+  const t = useT();
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Field label="Name" htmlFor={`${prefix}-name`} className="sm:col-span-2">
+      <Field
+        label={t("catalog.taxonomy.shared.name")}
+        htmlFor={`${prefix}-name`}
+        className="sm:col-span-2"
+      >
         <input
           id={`${prefix}-name`}
           name="name"
@@ -91,9 +90,13 @@ function DefinitionFields({
         />
       </Field>
       <Field
-        label="Key"
+        label={t("catalog.taxonomy.definitions.key")}
         htmlFor={`${prefix}-key`}
-        hint={def ? "Cannot change." : "snake_case, unique."}
+        hint={
+          def
+            ? t("catalog.taxonomy.definitions.cannotChange")
+            : t("catalog.taxonomy.definitions.keyHint")
+        }
       >
         <input
           id={`${prefix}-key`}
@@ -107,7 +110,11 @@ function DefinitionFields({
           className={cx(FIELD, "font-mono")}
         />
       </Field>
-      <Field label="Data type" htmlFor={`${prefix}-type`} hint={def ? "Cannot change." : undefined}>
+      <Field
+        label={t("catalog.taxonomy.definitions.dataType")}
+        htmlFor={`${prefix}-type`}
+        hint={def ? t("catalog.taxonomy.definitions.cannotChange") : undefined}
+      >
         <select
           id={`${prefix}-type`}
           value={dataType}
@@ -115,9 +122,9 @@ function DefinitionFields({
           onChange={(e) => onType?.(e.currentTarget.value as SpecDataType)}
           className={FIELD}
         >
-          {SPEC_DATA_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {TYPE_LABEL[t]}
+          {SPEC_DATA_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {t(`catalog.taxonomy.definitions.types.${type}`)}
             </option>
           ))}
         </select>
@@ -125,9 +132,9 @@ function DefinitionFields({
       {numeric ? (
         <>
           <Field
-            label="Units"
+            label={t("catalog.taxonomy.definitions.units")}
             htmlFor={`${prefix}-units`}
-            hint="Comma separated; first is the default."
+            hint={t("catalog.taxonomy.definitions.unitsHint")}
             className="sm:col-span-2"
           >
             <input
@@ -138,7 +145,7 @@ function DefinitionFields({
               className={FIELD}
             />
           </Field>
-          <Field label="Minimum" htmlFor={`${prefix}-min`}>
+          <Field label={t("catalog.taxonomy.definitions.minimum")} htmlFor={`${prefix}-min`}>
             <input
               id={`${prefix}-min`}
               name="minValue"
@@ -148,7 +155,7 @@ function DefinitionFields({
               className={cx(FIELD, "tabular")}
             />
           </Field>
-          <Field label="Maximum" htmlFor={`${prefix}-max`}>
+          <Field label={t("catalog.taxonomy.definitions.maximum")} htmlFor={`${prefix}-max`}>
             <input
               id={`${prefix}-max`}
               name="maxValue"
@@ -158,7 +165,11 @@ function DefinitionFields({
               className={cx(FIELD, "tabular")}
             />
           </Field>
-          <Field label="Decimals" htmlFor={`${prefix}-dec`} hint="0–6, empty: any.">
+          <Field
+            label={t("catalog.taxonomy.definitions.decimals")}
+            htmlFor={`${prefix}-dec`}
+            hint={t("catalog.taxonomy.definitions.decimalsHint")}
+          >
             <input
               id={`${prefix}-dec`}
               name="decimals"
@@ -171,7 +182,7 @@ function DefinitionFields({
         </>
       ) : null}
       {dataType === "TEXT" ? (
-        <Field label="Max length" htmlFor={`${prefix}-len`}>
+        <Field label={t("catalog.taxonomy.definitions.maxLength")} htmlFor={`${prefix}-len`}>
           <input
             id={`${prefix}-len`}
             name="maxLength"
@@ -183,9 +194,9 @@ function DefinitionFields({
         </Field>
       ) : null}
       <Field
-        label="Test methods"
+        label={t("catalog.taxonomy.definitions.testMethods")}
         htmlFor={`${prefix}-methods`}
-        hint="Recommended, comma separated (e.g. ASTM D445, ISO 3104)."
+        hint={t("catalog.taxonomy.definitions.testMethodsHint")}
         className="sm:col-span-2"
       >
         <input
@@ -196,7 +207,7 @@ function DefinitionFields({
           className={FIELD}
         />
       </Field>
-      <Field label="Sort order" htmlFor={`${prefix}-sort`}>
+      <Field label={t("catalog.taxonomy.shared.sortOrder")} htmlFor={`${prefix}-sort`}>
         <input
           id={`${prefix}-sort`}
           name="sortOrder"
@@ -214,7 +225,7 @@ function DefinitionFields({
             defaultChecked={def?.required ?? false}
             className="size-4 accent-[var(--petrol)]"
           />
-          Required for publication
+          {t("catalog.taxonomy.definitions.requiredForPublication")}
         </label>
         {def ? (
           <label className="inline-flex items-center gap-2">
@@ -224,7 +235,7 @@ function DefinitionFields({
               defaultChecked={def.archived}
               className="size-4 accent-[var(--petrol)]"
             />
-            Archived (hidden for new values)
+            {t("catalog.taxonomy.definitions.archivedHidden")}
           </label>
         ) : null}
       </div>
@@ -241,6 +252,7 @@ export function SpecDefinitionManager({
 }) {
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
   const [creating, setCreating] = useState(false);
   const [newType, setNewType] = useState<SpecDataType>("NUMBER");
   const [editing, setEditing] = useState<string | null>(null);
@@ -265,7 +277,7 @@ export function SpecDefinitionManager({
     }
     setCreating(false);
     setIssues([]);
-    notify?.(`Specification “${r.data.definition.name}” created.`);
+    notify?.(t("catalog.taxonomy.definitions.created", { name: r.data.definition.name }));
     router.refresh();
   }
 
@@ -294,12 +306,13 @@ export function SpecDefinitionManager({
     }
     setEditing(null);
     setIssues([]);
-    notify?.(`Specification “${def.name}” saved.`);
+    notify?.(t("catalog.taxonomy.definitions.saved", { name: def.name }));
     router.refresh();
   }
 
   async function remove(def: SpecDefinition) {
-    if (!window.confirm(`Delete the specification “${def.name}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("catalog.taxonomy.definitions.confirmDelete", { name: def.name })))
+      return;
     setBusy(def.id);
     const r = await callCatalog("DELETE", `/spec-definitions/${def.id}`);
     setBusy(null);
@@ -307,7 +320,7 @@ export function SpecDefinitionManager({
       setError(r.message);
       return;
     }
-    notify?.(`Specification “${def.name}” deleted.`);
+    notify?.(t("catalog.taxonomy.definitions.deleted", { name: def.name }));
     router.refresh();
   }
 
@@ -319,10 +332,10 @@ export function SpecDefinitionManager({
         </div>
       ) : null}
       {items.length === 0 ? (
-        <EmptyState icon="list" title="No specifications defined yet">
+        <EmptyState icon="list" title={t("catalog.taxonomy.definitions.emptyTitle")}>
           {canEdit
-            ? "Define the technical properties you track for products, e.g. kinematic viscosity at 100 °C."
-            : "The platform product team defines the specifications."}
+            ? t("catalog.taxonomy.definitions.emptyEditor")
+            : t("catalog.taxonomy.definitions.emptyReader")}
         </EmptyState>
       ) : (
         <ul className="divide-y divide-line border-y border-line">
@@ -335,15 +348,25 @@ export function SpecDefinitionManager({
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-ink">{def.name}</span>
-                      {def.required ? <StatusPill tone="amber">Required</StatusPill> : null}
-                      {def.archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
+                      {def.required ? (
+                        <StatusPill tone="amber">
+                          {t("catalog.taxonomy.shared.required")}
+                        </StatusPill>
+                      ) : null}
+                      {def.archived ? (
+                        <StatusPill tone="neutral">
+                          {t("catalog.taxonomy.shared.archived")}
+                        </StatusPill>
+                      ) : null}
                     </span>
                     <span className="block text-xs text-ink-3">
-                      <span className="font-mono">{def.key}</span> · {TYPE_LABEL[def.dataType]}
-                      {def.units.length ? ` · ${def.units.join(", ")}` : ""}
-                      {def.testMethods.length ? ` · ${def.testMethods.join(", ")}` : ""} ·{" "}
-                      {def.valueCount} product
-                      {def.valueCount === 1 ? "" : "s"}
+                      <span className="font-mono">{def.key}</span>
+                      {` · ${t(`catalog.taxonomy.definitions.types.${def.dataType}`)}${
+                        def.units.length ? ` · ${def.units.join(", ")}` : ""
+                      }${def.testMethods.length ? ` · ${def.testMethods.join(", ")}` : ""} · ${t(
+                        "catalog.taxonomy.shared.products",
+                        { count: def.valueCount },
+                      )}`}
                     </span>
                   </span>
                   {canEdit ? (
@@ -361,18 +384,30 @@ export function SpecDefinitionManager({
                         className={buttonStyles.ghost}
                       >
                         <Icon name="edit" size={16} />
-                        <span className="hidden sm:inline">{isEditing ? "Close" : "Edit"}</span>
-                        <span className="sr-only sm:hidden">Edit {def.name}</span>
+                        <span className="hidden sm:inline">
+                          {isEditing
+                            ? t("catalog.taxonomy.shared.close")
+                            : t("catalog.taxonomy.shared.edit")}
+                        </span>
+                        <span className="sr-only sm:hidden">
+                          {t("catalog.taxonomy.shared.editName", { name: def.name })}
+                        </span>
                       </button>
                       <button
                         type="button"
                         onClick={() => remove(def)}
                         disabled={busy !== null || def.valueCount > 0}
-                        title={def.valueCount > 0 ? "In use: archive it instead" : "Delete"}
+                        title={
+                          def.valueCount > 0
+                            ? t("catalog.taxonomy.definitions.deleteBlocked")
+                            : t("catalog.taxonomy.shared.delete")
+                        }
                         className={cx(buttonStyles.icon, "hover:text-danger")}
                       >
                         <Icon name="trash" size={16} />
-                        <span className="sr-only">Delete {def.name}</span>
+                        <span className="sr-only">
+                          {t("catalog.taxonomy.shared.deleteName", { name: def.name })}
+                        </span>
                       </button>
                     </span>
                   ) : null}
@@ -395,14 +430,14 @@ export function SpecDefinitionManager({
                         onClick={() => setEditing(null)}
                         className={buttonStyles.secondary}
                       >
-                        Cancel
+                        {t("catalog.taxonomy.shared.cancel")}
                       </button>
                       <button
                         type="submit"
                         disabled={busy !== null}
                         className={buttonStyles.primary}
                       >
-                        Save specification
+                        {t("catalog.taxonomy.definitions.save")}
                       </button>
                     </div>
                   </form>
@@ -420,7 +455,9 @@ export function SpecDefinitionManager({
               noValidate
               className="space-y-3 rounded-xl border border-line p-4"
             >
-              <h3 className="text-sm font-semibold text-ink">New specification</h3>
+              <h3 className="text-sm font-semibold text-ink">
+                {t("catalog.taxonomy.definitions.newTitle")}
+              </h3>
               <DefinitionFields
                 prefix="new"
                 def={null}
@@ -434,11 +471,11 @@ export function SpecDefinitionManager({
                   onClick={() => setCreating(false)}
                   className={buttonStyles.secondary}
                 >
-                  Cancel
+                  {t("catalog.taxonomy.shared.cancel")}
                 </button>
                 <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
                   {busy === "create" ? <Spinner /> : <Icon name="plus" size={17} />}
-                  <span>Create specification</span>
+                  <span>{t("catalog.taxonomy.definitions.create")}</span>
                 </button>
               </div>
             </form>
@@ -454,7 +491,7 @@ export function SpecDefinitionManager({
               className={buttonStyles.secondary}
             >
               <Icon name="plus" size={17} />
-              New specification
+              {t("catalog.taxonomy.definitions.newTitle")}
             </button>
           )}
         </div>

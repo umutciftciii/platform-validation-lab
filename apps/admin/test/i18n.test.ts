@@ -49,6 +49,13 @@ const SAME_IN_TR = new Set([
   "shell.environments.production",
   "nav.items.seo.label",
   "auth.logoAlt",
+  // ML-12a: a name, technical terms, or a message made only of parameters
+  "catalog.common.site",
+  "catalog.common.tabs.seo",
+  "catalog.issues.spec.invalid_range",
+  "catalog.list.review.when.known",
+  "catalog.media.documents.fields.typeOption",
+  "catalog.taxonomy.categories.slug",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
@@ -70,9 +77,11 @@ describe("dictionary completeness (EN source, TR)", () => {
   });
 
   it("counts the keys of this release", () => {
-    // ML-11 scope: shell, navigation, auth, errors, 404 and the error boundary (ADR-028 D15).
+    // ML-11 scope: shell, navigation, auth, errors, 404 and the error boundary (ADR-028 D15);
+    // ML-12a adds the Products/Catalog area (catalog.*).
     expect(EN.length).toBe(TR.length);
     expect(EN.length).toBeGreaterThan(200);
+    expect(EN.filter(([k]) => k.startsWith("catalog.")).length).toBeGreaterThan(1000);
   });
 
   it("a missing or an extra Turkish key is a compile error", () => {

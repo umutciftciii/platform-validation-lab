@@ -7,6 +7,18 @@
  * ML-11 covers the shell, navigation, sign-in, enrolment, password reset, session errors, 404 and
  * the error boundary. The modules' own screens follow per area in ML-12a–e (DP-243).
  */
+import { common } from "./catalog/en/common";
+import { rules } from "./catalog/en/rules";
+import { issues } from "./catalog/en/issues";
+import { api } from "./catalog/en/api";
+import { list } from "./catalog/en/list";
+import { detail } from "./catalog/en/detail";
+import { workflow } from "./catalog/en/workflow";
+import { taxonomy } from "./catalog/en/taxonomy";
+import { media } from "./catalog/en/media";
+import { xrefs } from "./catalog/en/xrefs";
+import { translations } from "./catalog/en/translations";
+
 export const en = {
   common: {
     tryAgain: "Try again",
@@ -322,5 +334,19 @@ export const en = {
     formLabel: "Reset password",
     lengthRule: "12 to 128 characters",
     changePassword: "Change password",
+  },
+  /** ML-12a (DP-243): the Products/Catalog area, one file per part (./catalog/en/). */
+  catalog: {
+    common,
+    rules,
+    issues,
+    api,
+    list,
+    detail,
+    workflow,
+    taxonomy,
+    media,
+    xrefs,
+    translations,
   },
 } as const;

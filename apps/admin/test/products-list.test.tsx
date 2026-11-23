@@ -4,12 +4,17 @@
 // (stacked list); filters, sorting and links unchanged. The page renders on the server with real
 // response shapes; the admin API and the session are fixtures.
 import type { ProductListItem, ProductStatus } from "@dream/contracts";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "./support/en-baseline-render";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listRowStatus, type SiteDisplayStatus } from "../lib/publication-status";
 
 const reads = new Map<string, unknown>();
 
+// ML-12a: the pages read the console language from the cookie (none here: English).
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, has: () => false }),
+  headers: async () => new Headers(),
+}));
 vi.mock("../lib/server-api", () => ({
   serverRead: async (path: string, schema: { parse(v: unknown): unknown }) => {
     if (!reads.has(path)) return { ok: false, status: 404, code: "NOT_FOUND" };

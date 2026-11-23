@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
 import { seoView, type SiteSeoDefaults } from "../../lib/seo-view";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { SeoFields, seoValues, type SeoValues } from "../seo/seo-fields";
 import { SeoPreview } from "../seo/seo-preview";
@@ -60,6 +61,7 @@ export function ProductSeoForm({
   const imageSrc = (id: string) => `${CATALOG_API}/images/${id}/display`;
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
   const [values, setValues] = useState<SeoValues>(() => seoValues(listing.seo));
   const [ogImageId, setOgImageId] = useState(listing.seo.ogImageId ?? "");
   const [dirty, setDirty] = useState(false);
@@ -113,7 +115,7 @@ export function ProductSeoForm({
       return;
     }
     setDirty(false);
-    if (notify) notify(`${siteName} SEO saved. Publish the product to show it on the site.`);
+    if (notify) notify(t("catalog.detail.seo.saved", { site: siteName }));
     router.refresh();
   }
 
@@ -144,13 +146,15 @@ export function ProductSeoForm({
           pathPrefix=""
           titleFallback={`“${fallbackTitle}”`}
           descriptionFallback={
-            productSummary ? "the product summary" : "the site's default description"
+            productSummary
+              ? t("catalog.detail.seo.fallbackSummary")
+              : t("catalog.detail.seo.fallbackSiteDescription")
           }
           ogImage={
             <Field
-              label="Open Graph image"
+              label={t("catalog.detail.seo.ogImage.label")}
               htmlFor={`product-seo-${siteId.slice(0, 8)}-og-image`}
-              hint="One of the product's public images. Empty: the cover, then the site's default image."
+              hint={t("catalog.detail.seo.ogImage.hint")}
             >
               <select
                 id={`product-seo-${siteId.slice(0, 8)}-og-image`}
@@ -163,7 +167,7 @@ export function ProductSeoForm({
                 }}
                 className={FIELD}
               >
-                <option value="">Cover image (default)</option>
+                <option value="">{t("catalog.detail.seo.ogImage.cover")}</option>
                 {images.map((i) => (
                   <option key={i.id} value={i.id}>
                     {i.label}
@@ -178,7 +182,7 @@ export function ProductSeoForm({
           <div className="flex flex-wrap items-center gap-2">
             <button type="submit" disabled={pending} className={buttonStyles.primary}>
               {pending ? <Spinner key="spin" /> : <Icon key="icon" name="check" size={17} />}
-              <span>Save SEO</span>
+              <span>{t("catalog.detail.seo.save")}</span>
             </button>
             <button
               type="button"
@@ -186,15 +190,17 @@ export function ProductSeoForm({
               onClick={discard}
               className={buttonStyles.secondary}
             >
-              <span>Discard changes</span>
+              <span>{t("catalog.detail.seo.discard")}</span>
             </button>
             <span className={cx("text-xs", dirty ? "text-amber-ink" : "text-ink-3")}>
-              {dirty ? "Unsaved changes" : `Listing version ${listing.version}`}
+              {dirty
+                ? t("catalog.detail.seo.unsaved")
+                : t("catalog.detail.seo.version", { version: listing.version })}
             </span>
           </div>
         ) : (
           <p className="rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2">
-            Read only for you on this site.
+            {t("catalog.detail.seo.readOnly")}
           </p>
         )}
       </div>

@@ -9,6 +9,7 @@ import {
   PRODUCT_STATUSES,
   type Category,
 } from "@dream/contracts";
+import { type AdminLocale, INTL_LOCALE } from "./i18n/config";
 
 export interface TreeRow {
   category: Category;
@@ -133,9 +134,18 @@ export function pageCount(total: number, pageSize: number): number {
   return Math.max(1, Math.ceil(total / pageSize));
 }
 
-/** "2.4 MB", "830 KB", "512 B". */
-export function formatBytes(bytes: number): string {
+/** "2.4 MB", "830 KB", "512 B"; ML-12a: Turkish "2,4 MB" (decimal comma, same units). */
+export function formatBytes(bytes: number, locale: AdminLocale = "en"): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const mb = bytes / (1024 * 1024);
+  const text =
+    locale === "en"
+      ? mb.toFixed(1)
+      : mb.toLocaleString(INTL_LOCALE[locale], {
+          minimumFractionDigits: 1,
+          maximumFractionDigits: 1,
+          useGrouping: false,
+        });
+  return `${text} MB`;
 }

@@ -42,10 +42,11 @@ import {
   localeLabel,
   localeShort,
   missingLabel,
-  TRANSLATION_STATE_HINTS,
   TRANSLATION_STATE_TONES,
+  translationStateHint,
   translationStateLabel,
 } from "../../lib/translations";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner, StatusPill } from "../ui";
 import { FIELD, FormMessage, TEXTAREA } from "./parts";
@@ -55,10 +56,13 @@ import { useUnsavedChanges } from "./product-tabs";
 // --- tabs ----------------------------------------------------------------------------------------
 
 export function TranslationStatePill({ state }: { state: TranslationState | null }) {
+  const t = useT();
   if (!state) return null;
   return (
-    <span title={TRANSLATION_STATE_HINTS[state]} data-translation-state={state}>
-      <StatusPill tone={TRANSLATION_STATE_TONES[state]}>{translationStateLabel(state)}</StatusPill>
+    <span title={translationStateHint(state, t)} data-translation-state={state}>
+      <StatusPill tone={TRANSLATION_STATE_TONES[state]}>
+        {translationStateLabel(state, t)}
+      </StatusPill>
     </span>
   );
 }
@@ -87,6 +91,7 @@ export function LanguageTabs({
     shown.some((l) => l.locale === initial) ? initial : (shown[0]?.locale ?? initial),
   );
   const base = useId();
+  const t = useT();
   // One language (or none known, e.g. no listing yet): the default editor alone, no tabs.
   if (shown.length <= 1) return <>{panels[shown[0]?.locale ?? initial] ?? null}</>;
 
@@ -142,22 +147,22 @@ export function LanguageTabs({
               )}
             >
               <span className="font-mono text-xs">{localeShort(l.locale)}</span>
-              <span>{localeLabel(l.locale)}</span>
+              <span>{localeLabel(l.locale, t)}</span>
               {l.isDefault ? (
                 <span key="source" className="text-xs font-normal text-ink-3">
-                  source
+                  {t("catalog.translations.tabs.source")}
                 </span>
               ) : null}
               {state ? (
                 <span key={`state-${state}`} className="sr-only">
-                  {`, ${translationStateLabel(state)}`}
+                  {`, ${translationStateLabel(state, t)}`}
                 </span>
               ) : null}
               {state && !l.isDefault ? (
                 <span
                   key={`dot-${state}`}
                   aria-hidden="true"
-                  title={translationStateLabel(state)}
+                  title={translationStateLabel(state, t)}
                   className={cx(
                     "size-2 rounded-full",
                     state === "PUBLISHED"
@@ -202,6 +207,7 @@ const SourceContext = createContext<{ show: boolean; locale: string }>({
 /** The English source of one field, next to (wide) or below (phone) the translation. */
 function SourceText({ text, shared }: { text: string | null; shared?: boolean }) {
   const { show, locale } = useContext(SourceContext);
+  const t = useT();
   if (!show) return null;
   return (
     <div
@@ -210,7 +216,12 @@ function SourceText({ text, shared }: { text: string | null; shared?: boolean })
       data-source-text=""
     >
       <p className="type-eyebrow mb-1 text-ink-3">
-        {`${localeLabel(locale)} source${shared ? " · shared product text" : ""}`}
+        {t(
+          shared
+            ? "catalog.translations.source.headingShared"
+            : "catalog.translations.source.heading",
+          { name: localeLabel(locale, t) },
+        )}
       </p>
       {text ? (
         <p key="text" className="whitespace-pre-line break-words">
@@ -218,7 +229,7 @@ function SourceText({ text, shared }: { text: string | null; shared?: boolean })
         </p>
       ) : (
         <p key="none" className="text-ink-3">
-          No text in the source language.
+          {t("catalog.translations.source.none")}
         </p>
       )}
     </div>
@@ -244,6 +255,7 @@ function TranslationField({
   hint?: string;
   children: ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 lg:gap-4" data-field={id}>
       <div className="min-w-0">
@@ -259,7 +271,7 @@ function TranslationField({
               className="rounded-full bg-amber-soft px-2 text-xs font-medium text-amber-ink ring-1 ring-inset ring-amber/30"
               data-missing=""
             >
-              Missing
+              {t("catalog.translations.field.missing")}
             </span>
           ) : null}
         </label>
@@ -278,7 +290,8 @@ const missingRing = (missing: boolean) =>
 
 /** What the language needs and where it stands, at the top of its panel. */
 export function LanguageSummary({ data }: { data: ProductTranslationsResponse }) {
-  const name = localeLabel(data.locale);
+  const t = useT();
+  const name = localeLabel(data.locale, t);
   const specs = Object.fromEntries(
     data.specs.map((s) => [s.key, s.name.source ?? s.key]),
   ) as Record<string, string>;
@@ -294,66 +307,65 @@ export function LanguageSummary({ data }: { data: ProductTranslationsResponse })
       data-language-summary=""
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-medium text-ink">{`${name} on this site`}</span>
+        <span className="font-medium text-ink">
+          {t("catalog.translations.summary.onSite", { name })}
+        </span>
         {data.public ? (
           <StatusPill key="public" tone="success">
-            Public
+            {t("catalog.translations.summary.public")}
           </StatusPill>
         ) : (
           <StatusPill key="not-public" tone="neutral">
-            Not public yet
+            {t("catalog.translations.summary.notPublic")}
           </StatusPill>
         )}
         {data.live.hasLocale ? (
           <span key="live" className="text-ink-3">
-            {`The live version has ${name} texts.`}
+            {t("catalog.translations.summary.liveHas", { name })}
           </span>
         ) : (
           <span key="not-live" className="text-ink-3">
             {data.live.published
-              ? `The live version has no ${name} texts yet.`
-              : "The product is not live on this site."}
+              ? t("catalog.translations.summary.liveHasNot", { name })
+              : t("catalog.translations.summary.notLive")}
           </span>
         )}
       </div>
       {!data.public ? (
         <p key="not-public-note" className="text-xs text-ink-3">
-          {`Visitors cannot open ${name} pages yet. Saved and published ${name} texts stay visible to staff only until the language is made public.`}
+          {t("catalog.translations.summary.notPublicNote", { name })}
         </p>
       ) : null}
       {data.requiredMissing.length ? (
         <div key="required" className="space-y-1" data-required-missing="">
           <p className="text-xs font-semibold text-danger">
-            {`Needed before ${name} can be published:`}
+            {t("catalog.translations.summary.requiredHeading", { name })}
           </p>
           <ul className="list-disc space-y-0.5 pl-5 text-xs text-ink-2">
             {data.requiredMissing.map((m) => (
-              <li key={m}>{missingLabel(m, { specs, images })}</li>
+              <li key={m}>{missingLabel(m, t, { specs, images })}</li>
             ))}
           </ul>
         </div>
       ) : (
         <p key="complete" className="flex items-center gap-1.5 text-xs font-medium text-success">
           <Icon name="check" size={13} />
-          <span>{`Complete enough to publish in ${name}.`}</span>
+          <span>{t("catalog.translations.summary.complete", { name })}</span>
         </p>
       )}
       {optional.length ? (
         <details key="optional" className="text-xs">
           <summary className="cursor-pointer font-medium text-amber-ink">
-            {`${optional.length} optional text${optional.length === 1 ? "" : "s"} not translated yet`}
+            {t("catalog.translations.summary.optional", { count: optional.length })}
           </summary>
           <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-2">
             {optional.map((m) => (
-              <li key={m}>{missingLabel(m, { specs, images })}</li>
+              <li key={m}>{missingLabel(m, t, { specs, images })}</li>
             ))}
           </ul>
         </details>
       ) : null}
-      <p className="text-xs text-ink-3">
-        No text is translated or copied automatically: empty fields stay empty until you write them.
-        Saving never publishes.
-      </p>
+      <p className="text-xs text-ink-3">{t("catalog.translations.summary.noAutomatic")}</p>
     </div>
   );
 }
@@ -361,6 +373,7 @@ export function LanguageSummary({ data }: { data: ProductTranslationsResponse })
 /** Folds the source column of every editor inside it. */
 export function SourceToggle({ locale, children }: { locale: string; children: ReactNode }) {
   const [show, setShow] = useState(true);
+  const t = useT();
   return (
     <SourceContext.Provider value={{ show, locale }}>
       <div className="flex justify-end">
@@ -372,7 +385,9 @@ export function SourceToggle({ locale, children }: { locale: string; children: R
         >
           <Icon name="eye" size={14} />
           <span key={String(show)}>
-            {show ? `Hide ${localeLabel(locale)} source` : `Show ${localeLabel(locale)} source`}
+            {show
+              ? t("catalog.translations.toggle.hide", { name: localeLabel(locale, t) })
+              : t("catalog.translations.toggle.show", { name: localeLabel(locale, t) })}
           </span>
         </button>
       </div>
@@ -448,6 +463,7 @@ function FormButtons({
   saveLabel: string;
   readOnlyText: string;
 }) {
+  const t = useT();
   if (!canEdit) {
     return (
       <p className="flex items-center gap-2 text-sm text-ink-3">
@@ -467,7 +483,7 @@ function FormButtons({
           className={buttonStyles.secondary}
         >
           <Icon name="check" size={16} />
-          <span>Still correct: mark as checked</span>
+          <span>{t("catalog.translations.buttons.confirm")}</span>
         </button>
       ) : null}
       {dirty ? (
@@ -478,12 +494,12 @@ function FormButtons({
           onClick={onDiscard}
           className={buttonStyles.ghost}
         >
-          Discard changes
+          {t("catalog.translations.buttons.discard")}
         </button>
       ) : null}
       <button type="submit" disabled={pending || !dirty} className={buttonStyles.primary}>
         {pending ? <Spinner key="spin" /> : <Icon key="icon" name="edit" size={17} />}
-        <span>{pending ? "Saving…" : saveLabel}</span>
+        <span>{pending ? t("catalog.translations.buttons.saving") : saveLabel}</span>
       </button>
     </div>
   );
@@ -506,10 +522,12 @@ export function ListingTranslationForm({
   const listing = data.listing;
   const editable = canEdit && data.enabled && listing !== null;
   const f = useTranslationForm(formRef, editable);
-  const name = localeLabel(data.locale);
+  const t = useT();
+  const name = localeLabel(data.locale, t);
+  // i18n-ignore: DOM element id, not UI text
   const id = (n: string) => `tr-${data.locale}-listing-${n}`;
   if (!listing) {
-    return <p className="text-sm text-ink-3">List the product on this site first (English tab).</p>;
+    return <p className="text-sm text-ink-3">{t("catalog.translations.listing.noListing")}</p>;
   }
   const body = (form: FormData | null) => ({
     version: listing.version,
@@ -531,7 +549,7 @@ export function ListingTranslationForm({
     if (!editable) return;
     await f.save(
       [{ path, body: body(new FormData(e.currentTarget)) }],
-      `${name} product text saved.`,
+      t("catalog.translations.listing.saved", { name }),
     );
   }
   const miss = (n: "title" | "summary" | "description") => data.missing.includes(n);
@@ -545,14 +563,14 @@ export function ListingTranslationForm({
       className="space-y-4"
     >
       <fieldset disabled={!editable} className="space-y-4">
-        <legend className="sr-only">{`${name} product text`}</legend>
+        <legend className="sr-only">{t("catalog.translations.listing.legend", { name })}</legend>
         <TranslationField
           id={id("title")}
-          label={`Title (${name})`}
+          label={t("catalog.translations.listing.title", { name })}
           source={listing.title.source}
           shared={listing.sharedSource.title}
           missing={miss("title")}
-          hint="Left empty, the product name is used (names and codes are not translated)."
+          hint={t("catalog.translations.listing.titleHint")}
         >
           <input
             id={id("title")}
@@ -565,7 +583,7 @@ export function ListingTranslationForm({
         </TranslationField>
         <TranslationField
           id={id("summary")}
-          label={`Summary (${name})`}
+          label={t("catalog.translations.listing.summary", { name })}
           source={listing.summary.source}
           shared={listing.sharedSource.summary}
           missing={miss("summary")}
@@ -586,7 +604,7 @@ export function ListingTranslationForm({
         </TranslationField>
         <TranslationField
           id={id("description")}
-          label={`Description (${name})`}
+          label={t("catalog.translations.listing.description", { name })}
           source={listing.description.source}
           shared={listing.sharedSource.description}
           missing={miss("description")}
@@ -614,13 +632,16 @@ export function ListingTranslationForm({
         outdated={listing.state === "OUTDATED"}
         onDiscard={f.discard}
         onConfirm={() =>
-          void f.save([{ path, body: body(null) }], `${name} product text marked as checked.`)
+          void f.save(
+            [{ path, body: body(null) }],
+            t("catalog.translations.listing.checked", { name }),
+          )
         }
-        saveLabel={`Save ${name} text`}
+        saveLabel={t("catalog.translations.listing.save", { name })}
         readOnlyText={
           data.enabled
-            ? "Read only: editing this site's listings needs product:edit on the site."
-            : `${name} is not enabled on this site.`
+            ? t("catalog.translations.listing.readOnly")
+            : t("catalog.translations.notEnabled", { name })
         }
       />
     </form>
@@ -629,21 +650,12 @@ export function ListingTranslationForm({
 
 // --- SEO texts ---------------------------------------------------------------------------------
 
+/** The label of each is catalog.translations.seo.fields.<key>. */
 const SEO_FIELDS = [
-  { key: "title", label: "SEO title", max: SEO_TEXT_LIMITS.title.max, area: false },
-  {
-    key: "description",
-    label: "SEO description",
-    max: SEO_TEXT_LIMITS.description.max,
-    area: true,
-  },
-  { key: "ogTitle", label: "Link preview title", max: SEO_TEXT_LIMITS.ogTitle.max, area: false },
-  {
-    key: "ogDescription",
-    label: "Link preview description",
-    max: SEO_TEXT_LIMITS.ogDescription.max,
-    area: true,
-  },
+  { key: "title", max: SEO_TEXT_LIMITS.title.max, area: false },
+  { key: "description", max: SEO_TEXT_LIMITS.description.max, area: true },
+  { key: "ogTitle", max: SEO_TEXT_LIMITS.ogTitle.max, area: false },
+  { key: "ogDescription", max: SEO_TEXT_LIMITS.ogDescription.max, area: true },
 ] as const;
 
 export function ListingSeoTranslationForm({
@@ -659,9 +671,10 @@ export function ListingSeoTranslationForm({
   const listing = data.listing;
   const editable = canEdit && data.enabled && listing !== null;
   const f = useTranslationForm(formRef, editable);
-  const name = localeLabel(data.locale);
+  const t = useT();
+  const name = localeLabel(data.locale, t);
   if (!listing) {
-    return <p className="text-sm text-ink-3">List the product on this site first (Content tab).</p>;
+    return <p className="text-sm text-ink-3">{t("catalog.translations.seo.noListing")}</p>;
   }
   const body = (form: FormData | null) => ({
     version: listing.version,
@@ -678,7 +691,10 @@ export function ListingSeoTranslationForm({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!editable) return;
-    await f.save([{ path, body: body(new FormData(e.currentTarget)) }], `${name} SEO texts saved.`);
+    await f.save(
+      [{ path, body: body(new FormData(e.currentTarget)) }],
+      t("catalog.translations.seo.saved", { name }),
+    );
   }
   return (
     <form
@@ -690,16 +706,14 @@ export function ListingSeoTranslationForm({
       className="space-y-4"
     >
       <div className="flex flex-wrap items-center gap-2 text-sm text-ink-2">
-        <span>{`${name} SEO texts`}</span>
+        <span>{t("catalog.translations.seo.heading", { name })}</span>
         <TranslationStatePill state={listing.seoState} />
       </div>
-      <p className="text-xs text-ink-3">
-        Canonical path, indexing and the link preview image are the same in every language (English
-        tab). Empty fields fall back to the {name} product title and summary on the site.
-      </p>
+      <p className="text-xs text-ink-3">{t("catalog.translations.seo.note", { name })}</p>
       <fieldset disabled={!editable} className="space-y-4">
-        <legend className="sr-only">{`${name} SEO texts`}</legend>
+        <legend className="sr-only">{t("catalog.translations.seo.heading", { name })}</legend>
         {SEO_FIELDS.map((s) => {
+          // i18n-ignore: DOM element id, not UI text
           const fid = `tr-${data.locale}-seo-${s.key}`;
           const miss = data.missing.includes(`seo.${s.key}`);
           const value = listing.seo[s.key].value ?? "";
@@ -707,10 +721,10 @@ export function ListingSeoTranslationForm({
             <TranslationField
               key={s.key}
               id={fid}
-              label={`${s.label} (${name})`}
+              label={t(`catalog.translations.seo.fields.${s.key}`, { name })}
               source={listing.seo[s.key].source}
               missing={miss}
-              hint={`At most ${s.max} characters.`}
+              hint={t("catalog.translations.seo.maxHint", { max: s.max })}
             >
               {s.area ? (
                 <textarea
@@ -746,13 +760,13 @@ export function ListingSeoTranslationForm({
         outdated={listing.seoState === "OUTDATED"}
         onDiscard={f.discard}
         onConfirm={() =>
-          void f.save([{ path, body: body(null) }], `${name} SEO texts marked as checked.`)
+          void f.save([{ path, body: body(null) }], t("catalog.translations.seo.checked", { name }))
         }
-        saveLabel={`Save ${name} SEO`}
+        saveLabel={t("catalog.translations.seo.save", { name })}
         readOnlyText={
           data.enabled
-            ? "Read only: editing this site's SEO needs product:edit on the site."
-            : `${name} is not enabled on this site.`
+            ? t("catalog.translations.seo.readOnly")
+            : t("catalog.translations.notEnabled", { name })
         }
       />
     </form>
@@ -783,7 +797,8 @@ export function CategoryTranslationForm({
   const formRef = useRef<HTMLFormElement>(null);
   const editable = canEdit && enabled;
   const f = useTranslationForm(formRef, editable);
-  const name = localeLabel(locale);
+  const t = useT();
+  const name = localeLabel(locale, t);
   const id = (n: string) => `${idPrefix}-${n}`;
   const path = `/categories/${category.id}/texts/${locale}`;
   const missName = category.name.value === null && category.name.source !== null;
@@ -801,7 +816,9 @@ export function CategoryTranslationForm({
           body: { version: category.version, name: n || null, description: n ? d || null : null },
         },
       ],
-      n ? `${name} category name saved.` : `${name} category name removed.`,
+      n
+        ? t("catalog.translations.category.savedName", { name })
+        : t("catalog.translations.category.removedName", { name }),
     );
   }
   return (
@@ -814,10 +831,10 @@ export function CategoryTranslationForm({
       className="space-y-3"
     >
       <fieldset disabled={!editable} className="space-y-3">
-        <legend className="sr-only">{`${name} category`}</legend>
+        <legend className="sr-only">{t("catalog.translations.category.legend", { name })}</legend>
         <TranslationField
           id={id("name")}
-          label={`Category name (${name})`}
+          label={t("catalog.translations.category.name", { name })}
           source={category.name.source}
           missing={missName}
         >
@@ -831,10 +848,10 @@ export function CategoryTranslationForm({
         </TranslationField>
         <TranslationField
           id={id("description")}
-          label={`Category description (${name})`}
+          label={t("catalog.translations.category.description", { name })}
           source={category.description.source}
           missing={missDesc}
-          hint="Needs a name; removing the name removes the translation."
+          hint={t("catalog.translations.category.descriptionHint")}
         >
           <textarea
             id={id("description")}
@@ -869,14 +886,14 @@ export function CategoryTranslationForm({
                 },
               },
             ],
-            `${name} category marked as checked.`,
+            t("catalog.translations.category.checked", { name }),
           )
         }
-        saveLabel={`Save ${name} category`}
+        saveLabel={t("catalog.translations.category.save", { name })}
         readOnlyText={
           enabled
-            ? "Read only: category texts need product:edit on the site."
-            : `${name} is not enabled on this site.`
+            ? t("catalog.translations.category.readOnly")
+            : t("catalog.translations.notEnabled", { name })
         }
       />
     </form>
@@ -900,7 +917,7 @@ export function SpecNamesTranslationForm({
   enabled,
   canEdit,
   idPrefix,
-  emptyText = "This product has no technical values yet.",
+  emptyText,
 }: {
   rows: readonly SpecNameRow[];
   locale: string;
@@ -912,8 +929,12 @@ export function SpecNamesTranslationForm({
   const formRef = useRef<HTMLFormElement>(null);
   const editable = canEdit && enabled;
   const f = useTranslationForm(formRef, editable);
-  const name = localeLabel(locale);
-  if (rows.length === 0) return <p className="text-sm text-ink-3">{emptyText}</p>;
+  const t = useT();
+  const name = localeLabel(locale, t);
+  if (rows.length === 0)
+    return (
+      <p className="text-sm text-ink-3">{emptyText ?? t("catalog.translations.specs.empty")}</p>
+    );
   const outdated = rows.filter((r) => r.state === "OUTDATED");
   const call = (r: SpecNameRow, value: string | null) => ({
     path: `/spec-definitions/${r.id}/texts/${locale}`,
@@ -928,10 +949,7 @@ export function SpecNamesTranslationForm({
       .filter(({ r, v }) => v !== r.name.value)
       .map(({ r, v }) => call(r, v));
     if (calls.length)
-      await f.save(
-        calls,
-        `${calls.length} ${name} specification name${calls.length === 1 ? "" : "s"} saved.`,
-      );
+      await f.save(calls, t("catalog.translations.specs.saved", { count: calls.length, name }));
   }
   return (
     <form
@@ -943,7 +961,7 @@ export function SpecNamesTranslationForm({
       className="space-y-3"
     >
       <fieldset disabled={!editable} className="space-y-3">
-        <legend className="sr-only">{`${name} specification names`}</legend>
+        <legend className="sr-only">{t("catalog.translations.specs.legend", { name })}</legend>
         {rows.map((r) => {
           const fid = `${idPrefix}-spec-${r.id}`;
           const miss = r.name.value === null && r.name.source !== null;
@@ -955,7 +973,7 @@ export function SpecNamesTranslationForm({
               </div>
               <TranslationField
                 id={fid}
-                label={`Name (${name})`}
+                label={t("catalog.translations.specs.name", { name })}
                 source={r.name.source}
                 missing={miss}
               >
@@ -971,10 +989,7 @@ export function SpecNamesTranslationForm({
           );
         })}
       </fieldset>
-      <p className="text-xs text-ink-3">
-        Specification names are shared by every product and site. Units, values, test methods and
-        standards are never translated.
-      </p>
+      <p className="text-xs text-ink-3">{t("catalog.translations.specs.note")}</p>
       {f.error ? <FormMessage kind="error">{f.error}</FormMessage> : null}
       <FormButtons
         pending={f.pending}
@@ -985,14 +1000,14 @@ export function SpecNamesTranslationForm({
         onConfirm={() =>
           void f.save(
             outdated.map((r) => call(r, r.name.value)),
-            `${outdated.length} ${name} name${outdated.length === 1 ? "" : "s"} marked as checked.`,
+            t("catalog.translations.specs.checked", { count: outdated.length, name }),
           )
         }
-        saveLabel={`Save ${name} names`}
+        saveLabel={t("catalog.translations.specs.save", { name })}
         readOnlyText={
           enabled
-            ? "Read only: specification names need product master edit rights."
-            : `${name} is not enabled on any of your sites.`
+            ? t("catalog.translations.specs.readOnly")
+            : t("catalog.translations.notEnabledAnySite", { name })
         }
       />
     </form>
@@ -1011,9 +1026,10 @@ export function ImageAltTranslationForm({
   const formRef = useRef<HTMLFormElement>(null);
   const editable = canEdit && data.enabled;
   const f = useTranslationForm(formRef, editable);
-  const name = localeLabel(data.locale);
+  const t = useT();
+  const name = localeLabel(data.locale, t);
   if (data.images.length === 0)
-    return <p className="text-sm text-ink-3">This product has no images.</p>;
+    return <p className="text-sm text-ink-3">{t("catalog.translations.images.empty")}</p>;
   const outdated = data.images.filter((i) => i.state === "OUTDATED");
   const call = (i: ProductTranslationsResponse["images"][number], value: string | null) => ({
     path: `/images/${i.id}/texts/${data.locale}`,
@@ -1028,10 +1044,7 @@ export function ImageAltTranslationForm({
       .filter(({ i, v }) => v !== i.altText.value)
       .map(({ i, v }) => call(i, v));
     if (calls.length)
-      await f.save(
-        calls,
-        `${calls.length} ${name} alt text${calls.length === 1 ? "" : "s"} saved.`,
-      );
+      await f.save(calls, t("catalog.translations.images.saved", { count: calls.length, name }));
   }
   return (
     <form
@@ -1043,8 +1056,9 @@ export function ImageAltTranslationForm({
       className="space-y-3"
     >
       <fieldset disabled={!editable} className="space-y-3">
-        <legend className="sr-only">{`${name} image alt texts`}</legend>
+        <legend className="sr-only">{t("catalog.translations.images.legend", { name })}</legend>
         {data.images.map((i) => {
+          // i18n-ignore: DOM element id, not UI text
           const fid = `tr-${data.locale}-alt-${i.id}`;
           const miss = data.missing.includes(`image:${i.id}`);
           return (
@@ -1053,14 +1067,14 @@ export function ImageAltTranslationForm({
                 <span className="break-all">{i.originalFilename}</span>
                 {i.isPublic ? null : (
                   <span key="hidden" className="rounded bg-surface-2 px-1.5 ring-1 ring-line">
-                    hidden
+                    {t("catalog.translations.images.hidden")}
                   </span>
                 )}
                 <TranslationStatePill state={i.state} />
               </div>
               <TranslationField
                 id={fid}
-                label={`Alt text (${name})`}
+                label={t("catalog.translations.images.alt", { name })}
                 source={i.altText.source}
                 missing={miss}
               >
@@ -1076,10 +1090,7 @@ export function ImageAltTranslationForm({
           );
         })}
       </fieldset>
-      <p className="text-xs text-ink-3">
-        Alt texts belong to the shared product: changing one resets an approval of the product
-        master, as an English alt text does.
-      </p>
+      <p className="text-xs text-ink-3">{t("catalog.translations.images.note")}</p>
       {f.error ? <FormMessage kind="error">{f.error}</FormMessage> : null}
       <FormButtons
         pending={f.pending}
@@ -1090,14 +1101,14 @@ export function ImageAltTranslationForm({
         onConfirm={() =>
           void f.save(
             outdated.map((i) => call(i, i.altText.value)),
-            `${outdated.length} ${name} alt text${outdated.length === 1 ? "" : "s"} marked as checked.`,
+            t("catalog.translations.images.checked", { count: outdated.length, name }),
           )
         }
-        saveLabel={`Save ${name} alt texts`}
+        saveLabel={t("catalog.translations.images.save", { name })}
         readOnlyText={
           data.enabled
-            ? "Read only: alt texts need product master edit rights."
-            : `${name} is not enabled on this site.`
+            ? t("catalog.translations.images.readOnly")
+            : t("catalog.translations.notEnabled", { name })
         }
       />
     </form>

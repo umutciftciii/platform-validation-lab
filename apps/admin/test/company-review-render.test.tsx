@@ -5,13 +5,18 @@
 // values never appear in the product's specification table; a placeholder shows no proposed text;
 // the decision form needs a reason to request changes, and a user who cannot decide is told why;
 // a review-only user is limited to the company review.
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "./support/en-baseline-render";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { changeRequestProblem } from "../components/catalog/proposal-decision";
 import { reviewOnlyAllows } from "../lib/proposals-view";
 
 const reads = new Map<string, unknown>();
 
+// ML-12a: the pages read the console language from the cookie (none here: English).
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, has: () => false }),
+  headers: async () => new Headers(),
+}));
 vi.mock("../lib/server-api", () => ({
   serverRead: async (path: string, schema: { parse(v: unknown): unknown }) => {
     if (!reads.has(path)) return { ok: false, status: 404, code: "NOT_FOUND" };

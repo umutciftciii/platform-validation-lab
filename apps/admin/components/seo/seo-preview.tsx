@@ -1,8 +1,15 @@
+"use client";
+
+import { seoLengthText } from "../../lib/catalog-issues";
 import { displayUrl, type SeoView } from "../../lib/seo-view";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { cx } from "../ui";
 
 /**
+ * ML-12a: a client component (its texts follow the console language via useT); every prop is
+ * plain data, so the SEO overview (a server page) still renders it.
+ *
  * DP-209: how a page may look in a search result and in a link preview, from the values the
  * editor is typing (the BV site's fallbacks applied, lib/seo-view.ts). An approximation: search
  * engines decide themselves how much they show. Length notes are warnings only.
@@ -21,11 +28,14 @@ export function SeoPreview({
   noindex: boolean;
   className?: string;
 }) {
+  const t = useT();
   const { host, origin, crumbs } = displayUrl(view.canonical.url, view.canonical.path);
   return (
     <div className={cx("space-y-4", className)}>
-      <section aria-label="Search result preview" className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">Search result</p>
+      <section aria-label={t("catalog.detail.seoPreview.searchAria")} className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+          {t("catalog.detail.seoPreview.search")}
+        </p>
         <div className="rounded-xl border border-line bg-white p-4 text-left shadow-sm">
           <div className="flex items-center gap-2">
             <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-[#f1f3f4] text-[11px] font-semibold text-[#4d5156]">
@@ -42,19 +52,21 @@ export function SeoPreview({
             {view.title}
           </p>
           <p className="mt-1 line-clamp-2 break-words text-[13px] leading-[1.58] text-[#4d5156] sm:text-[14px]">
-            {view.description ?? "No description: the search engine picks text from the page."}
+            {view.description ?? t("catalog.detail.seoPreview.noDescription")}
           </p>
         </div>
         {noindex ? (
           <p className="flex items-start gap-2 text-xs text-amber-ink">
             <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
-            <span>Hidden from search engines (noindex): this result is not shown.</span>
+            <span>{t("catalog.detail.seoPreview.noindex")}</span>
           </p>
         ) : null}
       </section>
 
-      <section aria-label="Link preview" className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">Link preview</p>
+      <section aria-label={t("catalog.detail.seoPreview.link")} className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+          {t("catalog.detail.seoPreview.link")}
+        </p>
         <div className="overflow-hidden rounded-xl border border-line bg-white text-left shadow-sm">
           <div className="relative aspect-[1.91/1] w-full bg-[#e9ecef]">
             {imageSrc ? (
@@ -70,7 +82,7 @@ export function SeoPreview({
                 key="og-placeholder"
                 className="absolute inset-0 flex items-center justify-center text-xs text-[#6b7280]"
               >
-                Image shown on the site
+                {t("catalog.detail.seoPreview.imagePlaceholder")}
               </span>
             )}
           </div>
@@ -86,26 +98,29 @@ export function SeoPreview({
         </div>
       </section>
 
-      <section aria-label="Canonical address" className="space-y-1">
-        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">Canonical URL</p>
+      <section aria-label={t("catalog.detail.seoPreview.canonicalAria")} className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
+          {t("catalog.detail.seoPreview.canonical")}
+        </p>
         <p className="break-all font-mono text-xs text-ink-2">
-          {view.canonical.url ?? `${view.canonical.path} (no public address configured here)`}
+          {view.canonical.url ??
+            t("catalog.detail.seoPreview.noPublicAddress", { path: view.canonical.path })}
         </p>
         <p className="text-xs text-ink-3">
           {view.canonical.invalid
-            ? "The canonical path is not valid; the page's own address is used."
+            ? t("catalog.detail.seoPreview.canonicalInvalid")
             : view.canonical.override
-              ? "Points search engines to another address: this page stays out of the sitemap."
-              : "The page's own address."}
+              ? t("catalog.detail.seoPreview.canonicalOverride")
+              : t("catalog.detail.seoPreview.canonicalOwn")}
         </p>
       </section>
 
       {view.warnings.length ? (
-        <ul aria-label="Length notes" className="space-y-1">
+        <ul aria-label={t("catalog.detail.seoPreview.lengthNotes")} className="space-y-1">
           {view.warnings.map((w) => (
             <li key={w.field} className="flex items-start gap-2 text-xs text-amber-ink">
               <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
-              <span>{`${FIELD_LABEL[w.field]}: ${w.text}`}</span>
+              <span>{`${t(`catalog.detail.seoPreview.fields.${w.field}`)}: ${seoLengthText(w.text, t)}`}</span>
             </li>
           ))}
         </ul>
@@ -113,10 +128,3 @@ export function SeoPreview({
     </div>
   );
 }
-
-const FIELD_LABEL = {
-  title: "SEO title",
-  description: "Meta description",
-  ogTitle: "Open Graph title",
-  ogDescription: "Open Graph description",
-} as const;

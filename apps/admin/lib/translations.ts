@@ -3,22 +3,19 @@
  * server pages and the client editors, unit-tested without a browser. They only explain the
  * API's answers (translation states, missing units, the publication rules); the API decides.
  */
-import {
-  TRANSLATION_STATE_LABELS,
-  type SiteLanguagePublication,
-  type SiteLocale,
-  type TranslationState,
-} from "@dream/contracts";
+import type { SiteLanguagePublication, SiteLocale, TranslationState } from "@dream/contracts";
 import type { PillTone } from "../components/ui";
+import { en } from "./i18n/messages/en";
+import type { Translate } from "./i18n/types";
 
-const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
-  en: "English",
-  nl: "Dutch",
-};
-
-/** "English", "Dutch"; any other tag in capitals ("DE"). */
-export function localeLabel(locale: string): string {
-  return LANGUAGE_NAMES[locale] ?? locale.toUpperCase();
+/**
+ * "English", "Dutch" (TR "İngilizce", "Felemenkçe"): the content language as a word of the console
+ * (ML-12a); any other tag in capitals ("DE").
+ */
+export function localeLabel(locale: string, t: Translate): string {
+  return locale in en.catalog.common.languages
+    ? t(`catalog.common.languages.${locale as keyof typeof en.catalog.common.languages}`)
+    : locale.toUpperCase();
 }
 
 /** The short tab label: "EN", "NL". */
@@ -31,15 +28,13 @@ export const TRANSLATION_STATE_TONES: Readonly<Record<TranslationState, PillTone
   OUTDATED: "amber",
 };
 
-export const translationStateLabel = (s: TranslationState): string => TRANSLATION_STATE_LABELS[s];
+/** The state's word (English = contracts TRANSLATION_STATE_LABELS). */
+export const translationStateLabel = (s: TranslationState, t: Translate): string =>
+  t(`catalog.common.translationState.${s}`);
 
 /** What each state means, in one sentence (the pill's title and the legend). */
-export const TRANSLATION_STATE_HINTS: Readonly<Record<TranslationState, string>> = {
-  MISSING: "No text in this language yet.",
-  DRAFT: "Saved, not published in this language yet (or changed since).",
-  PUBLISHED: "Exactly what the live site carries in this language.",
-  OUTDATED: "The English source changed after this text was saved: check it and save again.",
-};
+export const translationStateHint = (s: TranslationState, t: Translate): string =>
+  t(`catalog.common.translationStateHint.${s}`);
 
 /** The enabled languages of a site for the tabs, default first (the API's order). */
 export function tabLocales(locales: readonly SiteLocale[]): SiteLocale[] {
@@ -59,34 +54,36 @@ export function parseLang(value: string | string[] | undefined, locales: readonl
  */
 export function missingLabel(
   unit: string,
+  t: Translate,
   names: {
     specs?: Readonly<Record<string, string>>;
     images?: Readonly<Record<string, string>>;
   } = {},
 ): string {
-  if (unit === "listing") return "Product text (title, summary or description)";
-  if (unit === "category" || unit === "category.name") return "Category name";
-  if (unit === "category.description") return "Category description";
-  if (unit === "title") return "Title";
-  if (unit === "summary") return "Summary";
-  if (unit === "description") return "Description";
+  if (unit === "listing") return t("catalog.common.missing.listing");
+  if (unit === "category" || unit === "category.name")
+    return t("catalog.common.missing.categoryName");
+  if (unit === "category.description") return t("catalog.common.missing.categoryDescription");
+  if (unit === "title") return t("catalog.common.missing.title");
+  if (unit === "summary") return t("catalog.common.missing.summary");
+  if (unit === "description") return t("catalog.common.missing.description");
   if (unit.startsWith("seo.")) {
     const k = unit.slice(4);
-    const seo: Record<string, string> = {
-      title: "SEO title",
-      description: "SEO description",
-      ogTitle: "Link preview title",
-      ogDescription: "Link preview description",
-    };
-    return seo[k] ?? unit;
+    if (k === "title") return t("catalog.common.missing.seoTitle");
+    if (k === "description") return t("catalog.common.missing.seoDescription");
+    if (k === "ogTitle") return t("catalog.common.missing.ogTitle");
+    if (k === "ogDescription") return t("catalog.common.missing.ogDescription");
+    return unit;
   }
   if (unit.startsWith("spec:")) {
     const key = unit.slice(5);
-    return `Specification name: ${names.specs?.[key] ?? key}`;
+    return t("catalog.common.missing.specName", { name: names.specs?.[key] ?? key });
   }
   if (unit.startsWith("image:")) {
     const id = unit.slice(6);
-    return `Image alt text: ${names.images?.[id] ?? "image"}`;
+    return t("catalog.common.missing.imageAlt", {
+      name: names.images?.[id] ?? t("catalog.common.missing.image"),
+    });
   }
   return unit;
 }
@@ -107,13 +104,14 @@ export interface LanguagePlanOption {
  */
 export function languageOptions(
   languages: readonly SiteLanguagePublication[],
+  t: Translate,
 ): LanguagePlanOption[] {
   return languages
     .filter((l) => !l.isDefault)
     .map((l) => ({
       locale: l.locale,
       selectable: l.hasText && l.requiredMissing.length === 0,
-      blockers: l.requiredMissing.map((u) => missingLabel(u)),
+      blockers: l.requiredMissing.map((u) => missingLabel(u, t)),
       needsManualReview: l.claimScan === "MANUAL",
     }));
 }

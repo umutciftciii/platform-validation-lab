@@ -12,18 +12,23 @@ import {
   SpecNamesTranslationForm,
 } from "../../../../components/catalog/translation-editor";
 import { localeLabel } from "../../../../lib/translations";
+import { getTranslator } from "../../../../lib/i18n/server";
 import { PageHeader } from "../../../../components/catalog/parts";
 import { SpecDefinitionManager } from "../../../../components/catalog/spec-definitions";
 import { EmptyState, ErrorState, Panel } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Specifications" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("catalog.taxonomy.specificationsPage.title") };
+}
 
 export default async function SpecificationsPage({
   searchParams,
 }: PageProps<"/products/specifications">) {
   await requireStaffSession();
+  const t = await getTranslator();
   const query = await searchParams;
   // ML-8b: `?lang=` another enabled language (the specification names next to English).
   const rawLang = typeof query["lang"] === "string" ? query["lang"] : undefined;
@@ -32,9 +37,9 @@ export default async function SpecificationsPage({
   if (!context.ok || context.data.sites.length === 0) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="list" title="Specifications" />
-        <EmptyState icon="shield" title="No access to the product catalogue">
-          Your roles do not include reading products on any site.
+        <PageHeader icon="list" title={t("catalog.taxonomy.specificationsPage.title")} />
+        <EmptyState icon="shield" title={t("catalog.taxonomy.shared.noAccessTitle")}>
+          {t("catalog.taxonomy.shared.noAccessBody")}
         </EmptyState>
       </div>
     );
@@ -55,11 +60,12 @@ export default async function SpecificationsPage({
       <div className="space-y-6 sm:space-y-8">
         <PageHeader
           icon="list"
-          title="Specifications"
-          back={{ href: "/products", label: "All products" }}
-          description="Technical properties tracked for every product master: type, units, test methods and limits. Defined once for the whole platform."
+          title={t("catalog.taxonomy.specificationsPage.title")}
+          back={{ href: "/products", label: t("catalog.taxonomy.shared.allProducts") }}
+          description={t("catalog.taxonomy.specificationsPage.description")}
         />
         <LanguageNav
+          label={t("catalog.list.language.label")}
           locales={locales}
           current={lang}
           sourceLocale={source}
@@ -70,8 +76,10 @@ export default async function SpecificationsPage({
         {translated ? (
           <Panel
             id="definitions-translation"
-            title={`${localeLabel(lang)} specification names`}
-            description={`Shared by every product and site. Keys, units, test methods and limits are the same in every language.`}
+            title={t("catalog.taxonomy.specificationsPage.translationTitle", {
+              language: localeLabel(lang, t),
+            })}
+            description={t("catalog.taxonomy.specificationsPage.translationDescription")}
           >
             <SourceToggle locale={source}>
               <SpecNamesTranslationForm
@@ -81,22 +89,27 @@ export default async function SpecificationsPage({
                 enabled={translated.enabled}
                 canEdit={translated.canEdit}
                 idPrefix={`defs-${lang}`}
-                emptyText="No specifications are defined yet."
+                emptyText={t("catalog.taxonomy.specificationsPage.translationEmpty")}
               />
             </SourceToggle>
           </Panel>
         ) : (
           <Panel
             id="definitions"
-            title="Specification definitions"
-            description={list.ok ? `${list.data.items.length} defined` : undefined}
+            title={t("catalog.taxonomy.specificationsPage.panelTitle")}
+            description={
+              list.ok
+                ? t("catalog.taxonomy.specificationsPage.defined", { n: list.data.items.length })
+                : undefined
+            }
+            // i18n-ignore: CSS class list
             bodyClassName="px-0! pb-5! pt-3!"
           >
             {list.ok ? (
               <SpecDefinitionManager items={list.data.items} canEdit={context.data.canEditMaster} />
             ) : (
-              <ErrorState title="The specifications could not be loaded">
-                Try again in a moment.
+              <ErrorState title={t("catalog.taxonomy.specificationsPage.loadErrorTitle")}>
+                {t("catalog.taxonomy.specificationsPage.loadErrorBody")}
               </ErrorState>
             )}
           </Panel>
