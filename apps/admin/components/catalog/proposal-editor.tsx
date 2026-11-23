@@ -22,8 +22,8 @@ import { callCatalog } from "../../lib/catalog-client";
 import {
   draftOf,
   EDIT_FIELDS,
-  EDIT_LABELS,
   EDIT_LIMITS,
+  editLabel,
   hasTextChanges,
   normalizeText,
   rebaseDraft,
@@ -34,6 +34,8 @@ import {
   type ProposalDraft,
   type ProposalText,
 } from "../../lib/proposal-edit";
+import { formatNumber } from "../../lib/i18n/format";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { FormMessage, TEXTAREA } from "./parts";
@@ -61,6 +63,8 @@ export function ProposalTextEditor({
   tags: ReactNode;
 }) {
   const router = useRouter();
+  const t = useT();
+  const locale = useAdminLocale();
   const ids = { summary: useId(), description: useId() };
   const [saved, setSaved] = useState<ProposalText>(text);
   const [base, setBase] = useState({ version, status });
@@ -83,7 +87,7 @@ export function ProposalTextEditor({
   useReviewUnsaved(dirty);
 
   const problems = Object.fromEntries(
-    EDIT_FIELDS.map((f) => [f, textProblem(f, draft[f])]),
+    EDIT_FIELDS.map((f) => [f, textProblem(f, draft[f], t, locale)]),
   ) as Record<EditField, string | null>;
   const blocked = EDIT_FIELDS.some((f) => problems[f] !== null);
 
@@ -111,7 +115,7 @@ export function ProposalTextEditor({
     );
     setPending(false);
     if (!result.ok) {
-      setError(saveErrorText(result.status, result.issues, result.message));
+      setError(saveErrorText(result.status, result.issues, result.message, t));
       // A newer version exists: load it, keeping the typed text (see above).
       if (result.status === 409) router.refresh();
       return;
@@ -122,7 +126,7 @@ export function ProposalTextEditor({
     setDraft(draftOf(next));
     setBase({ version: p.version, status: p.status });
     setLastProps({ version: p.version, text: next });
-    setNotice(`Saved as version ${p.version}.`);
+    setNotice(t("companyReview.editor.savedAs", { version: p.version }));
     router.refresh();
   }
 
@@ -139,12 +143,9 @@ export function ProposalTextEditor({
             id="proposal-title"
             className="type-display text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink"
           >
-            Proposed text
+            {t("companyReview.editor.title")}
           </h2>
-          <p className="mt-0.5 text-sm text-ink-3">
-            Edit the proposed customer text next to the current site text. The site itself changes
-            only in a later, separate step.
-          </p>
+          <p className="mt-0.5 text-sm text-ink-3">{t("companyReview.editor.description")}</p>
         </div>
         <span className="flex flex-wrap gap-2">{tags}</span>
       </header>
@@ -155,11 +156,7 @@ export function ProposalTextEditor({
             className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-3 text-sm text-ink-2"
           >
             <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-            <span>
-              The research proposes no text: this product is not defined well enough to describe.
-              Write a text only from information the company has confirmed (see Missing &amp;
-              Verification).
-            </span>
+            <span>{t("companyReview.editor.placeholderNote")}</span>
           </div>
         ) : null}
         <div
@@ -167,8 +164,8 @@ export function ProposalTextEditor({
           className="hidden gap-4 text-xs font-semibold text-ink-3 lg:grid lg:grid-cols-[9rem_1fr_1fr]"
         >
           <span />
-          <span>Current site</span>
-          <span>Proposed text</span>
+          <span>{t("companyReview.currentSite")}</span>
+          <span>{t("companyReview.editor.title")}</span>
         </div>
         {EDIT_FIELDS.map((f) => {
           const length = draft[f].trim().length;
@@ -177,11 +174,11 @@ export function ProposalTextEditor({
           return (
             <div key={f} className="grid gap-2 lg:grid-cols-[9rem_1fr_1fr] lg:gap-4">
               <label htmlFor={ids[f]} className="text-sm font-medium text-ink-2 lg:pt-2.5">
-                {EDIT_LABELS[f]}
+                {editLabel(f, t)}
                 {changed ? (
                   <span className="ml-1.5 inline-flex items-center gap-1 text-xs font-normal text-amber-ink">
                     <span aria-hidden="true" className="size-1.5 rounded-full bg-amber" />
-                    edited
+                    {t("companyReview.editor.edited")}
                   </span>
                 ) : null}
               </label>
@@ -189,14 +186,18 @@ export function ProposalTextEditor({
                 data-compare="site"
                 className="min-w-0 rounded-xl bg-surface-2 px-3 py-2.5 text-sm ring-1 ring-line"
               >
-                <p className="mb-1 text-xs font-semibold text-ink-3 lg:hidden">Current site</p>
+                <p className="mb-1 text-xs font-semibold text-ink-3 lg:hidden">
+                  {t("companyReview.currentSite")}
+                </p>
                 <div className="whitespace-pre-line break-words text-ink">
-                  {current[f] ?? <span className="text-ink-3">Not provided</span>}
+                  {current[f] ?? (
+                    <span className="text-ink-3">{t("companyReview.notProvided")}</span>
+                  )}
                 </div>
               </div>
               <div className="min-w-0">
                 <p className="mb-1 text-xs font-semibold text-ink-3 lg:hidden" aria-hidden="true">
-                  Proposed text
+                  {t("companyReview.editor.title")}
                 </p>
                 <textarea
                   id={ids[f]}
@@ -205,7 +206,11 @@ export function ProposalTextEditor({
                   onChange={(e) => change(f, e.currentTarget.value)}
                   rows={f === "summary" ? 3 : 8}
                   disabled={pending}
-                  placeholder={placeholder ? "No text yet" : "Not provided"}
+                  placeholder={
+                    placeholder
+                      ? t("companyReview.editor.noTextYet")
+                      : t("companyReview.notProvided")
+                  }
                   aria-invalid={problem ? true : undefined}
                   aria-describedby={`${ids[f]}-count`}
                   className={cx(TEXTAREA, f === "summary" ? "min-h-20" : "min-h-44")}
@@ -217,9 +222,11 @@ export function ProposalTextEditor({
                     problem ? "text-danger" : "text-ink-3",
                   )}
                 >
-                  <span>{problem ?? (length === 0 ? "Empty: saved as no text." : "")}</span>
+                  <span>
+                    {problem ?? (length === 0 ? t("companyReview.editor.emptySaved") : "")}
+                  </span>
                   <span className="tabular">
-                    {length.toLocaleString("en")} / {EDIT_LIMITS[f].toLocaleString("en")}
+                    {formatNumber(length, locale)} / {formatNumber(EDIT_LIMITS[f], locale)}
                   </span>
                 </p>
               </div>
@@ -234,13 +241,15 @@ export function ProposalTextEditor({
           <p className="text-xs text-ink-3" data-editor-state={dirty ? "unsaved" : "saved"}>
             {dirty ? (
               <>
-                <span className="font-medium text-amber-ink">Unsaved changes.</span>{" "}
+                <span className="font-medium text-amber-ink">
+                  {t("companyReview.editor.unsaved")}
+                </span>{" "}
                 {base.status === "APPROVED"
-                  ? "Saving creates a new version; the company's approval covers the earlier one."
-                  : `Saving creates version ${base.version + 1}.`}
+                  ? t("companyReview.editor.savingApproved")
+                  : t("companyReview.editor.savingCreates", { version: base.version + 1 })}
               </>
             ) : (
-              `Version ${base.version} saved. Every version is kept in History.`
+              t("companyReview.editor.saved", { version: base.version })
             )}
           </p>
           <div className="flex gap-2 sm:shrink-0">
@@ -250,7 +259,7 @@ export function ProposalTextEditor({
               disabled={!dirty || pending}
               className={cx(buttonStyles.secondary, "flex-1 sm:flex-none")}
             >
-              Cancel
+              {t("companyReview.editor.cancel")}
             </button>
             <button
               type="submit"
@@ -258,7 +267,9 @@ export function ProposalTextEditor({
               className={cx(buttonStyles.primary, "flex-1 sm:flex-none")}
             >
               {pending ? <Spinner /> : <Icon name="check" size={17} />}
-              <span>{pending ? "Saving…" : "Save"}</span>
+              <span>
+                {pending ? t("companyReview.editor.saving") : t("companyReview.editor.save")}
+              </span>
             </button>
           </div>
         </div>

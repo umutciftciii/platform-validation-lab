@@ -8,6 +8,10 @@
  *   3. "Internal review — never published": review items, with held (DP-002) and withheld values
  *      in a block of their own, marked as not verified and never shown as product specifications.
  *
+ * ML-12b: every text comes from the dictionary (`companyReview.*`). These are server components
+ * rendered by server pages, so each takes the page's `t` (and `locale` for dates and numbers) as
+ * a prop; data (research items, sources, names, codes, values) is never translated.
+ *
  * DP-189 places them in four tabs, each piece of data in exactly one of them:
  *   - Content Review: the product on the current site, its text against the proposal, claim risks
  *     in the wording, the catalogue preview and the decision;
@@ -31,47 +35,49 @@ import type {
 import { CATALOG_API } from "@dream/contracts";
 import type { ReactNode } from "react";
 import { categoryPath } from "../../lib/catalog-view";
+import { ADMIN_TIME_ZONE, type AdminLocale } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
+import type { Translate } from "../../lib/i18n/types";
 import {
   fieldLabel,
   formatSpecValue,
   HELD_KINDS,
   itemsOf,
-  KIND_META,
+  KIND_TONE,
+  kindLabel,
   REVIEW_SECTIONS,
-  SOURCE_LEVEL_TEXT,
+  sectionText,
+  sourceLevelText,
   sourcesFor,
-  STATUS_META,
+  statusLabel,
+  STATUS_TONE,
+  type ReviewSectionId,
 } from "../../lib/proposals-view";
-import { plural, type ReviewAttention } from "../../lib/review-tabs";
+import type { ReviewAttention } from "../../lib/review-tabs";
 import { Icon } from "../icons";
 import { cx, Panel, StatusPill } from "../ui";
 import { ReviewTabLink } from "./review-tabs";
 
-const DATE_TIME = new Intl.DateTimeFormat("en-GB", {
+const DATE_TIME: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
-const when = (iso: string) => DATE_TIME.format(new Date(iso));
+  timeZone: ADMIN_TIME_ZONE,
+};
+const when = (iso: string, locale: AdminLocale) =>
+  dateTimeFormat(locale, DATE_TIME).format(new Date(iso));
 
 type Proposal = ProposalResponse["proposal"];
 
-export function ProposalStatusPill({ status }: { status: ProposalStatus }) {
-  const m = STATUS_META[status];
-  return <StatusPill tone={m.tone}>{m.label}</StatusPill>;
+export function ProposalStatusPill({ status, t }: { status: ProposalStatus; t: Translate }) {
+  return <StatusPill tone={STATUS_TONE[status]}>{statusLabel(status, t)}</StatusPill>;
 }
 
 /** The provenance tag every section carries. */
-export function SourceTag({ kind }: { kind: "site" | "proposal" | "review" }) {
-  const text =
-    kind === "site"
-      ? "From current site"
-      : kind === "proposal"
-        ? "Research proposal — not published"
-        : "Internal review — never published";
+export function SourceTag({ kind, t }: { kind: "site" | "proposal" | "review"; t: Translate }) {
+  const text = t(`companyReview.tag.${kind}`);
   const tone =
     kind === "site"
       ? "bg-surface-2 text-ink-2 ring-line-strong"
@@ -100,7 +106,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const Missing = ({ children = "Not provided" }: { children?: ReactNode }) => (
+const Missing = ({ children }: { children: ReactNode }) => (
   <span className="text-ink-3">{children}</span>
 );
 
@@ -115,6 +121,7 @@ function Group({
   extra,
   description,
   tag,
+  t,
   children,
 }: {
   id: string;
@@ -123,6 +130,7 @@ function Group({
   extra?: string | undefined;
   description: ReactNode;
   tag: "site" | "proposal" | "review";
+  t: Translate;
   children: ReactNode;
 }) {
   return (
@@ -148,7 +156,7 @@ function Group({
             </span>
             {extra ? <span className="text-xs text-ink-3">{extra}</span> : null}
           </span>
-          <SourceTag kind={tag} />
+          <SourceTag kind={tag} t={t} />
         </span>
       </summary>
       <div className="space-y-3 px-5 pb-5 sm:px-6">
@@ -166,10 +174,12 @@ export function CurrentSiteData({
   detail,
   categories,
   images,
+  t,
 }: {
   detail: ProductDetailResponse | null;
   categories: readonly Category[];
   images: ProductImageListResponse | null;
+  t: Translate;
 }) {
   const product = detail?.product;
   const listing = detail?.listing;
@@ -177,13 +187,13 @@ export function CurrentSiteData({
   return (
     <Panel
       id="current"
-      title="Current site data"
-      description="The product as it is in the catalogue today. Nothing here is changed by this review."
-      action={<SourceTag kind="site" />}
+      title={t("companyReview.current.title")}
+      description={t("companyReview.current.description")}
+      action={<SourceTag kind="site" t={t} />}
       className="scroll-mt-32"
     >
       {!product ? (
-        <p className="text-sm text-ink-3">The product data could not be loaded.</p>
+        <p className="text-sm text-ink-3">{t("companyReview.current.loadError")}</p>
       ) : (
         <div className="flex flex-col gap-5 sm:flex-row">
           {cover ? (
@@ -197,18 +207,20 @@ export function CurrentSiteData({
             />
           ) : null}
           <dl className="min-w-0 flex-1 divide-y divide-line">
-            <Row label="Product name">{product.name}</Row>
-            <Row label="SKU">
+            <Row label={t("companyReview.current.productName")}>{product.name}</Row>
+            <Row label={t("companyReview.current.sku")}>
               <span className="font-mono">{product.code}</span>
             </Row>
-            <Row label="Slug">
+            <Row label={t("companyReview.current.slug")}>
               <span className="font-mono">{product.slug}</span>
             </Row>
-            <Row label="Category">
+            <Row label={t("companyReview.current.category")}>
               {listing ? (
-                categoryPath(categories, listing.categoryId) || <Missing />
+                categoryPath(categories, listing.categoryId) || (
+                  <Missing>{t("companyReview.notProvided")}</Missing>
+                )
               ) : (
-                <Missing>Not listed</Missing>
+                <Missing>{t("companyReview.notListed")}</Missing>
               )}
             </Row>
           </dl>
@@ -218,7 +230,15 @@ export function CurrentSiteData({
   );
 }
 
-function CompareCell({ kind, children }: { kind: "site" | "proposal"; children: ReactNode }) {
+function CompareCell({
+  kind,
+  t,
+  children,
+}: {
+  kind: "site" | "proposal";
+  t: Translate;
+  children: ReactNode;
+}) {
   return (
     <div
       data-compare={kind}
@@ -228,7 +248,7 @@ function CompareCell({ kind, children }: { kind: "site" | "proposal"; children: 
       )}
     >
       <p className="mb-1 text-xs font-semibold text-ink-3 lg:hidden">
-        {kind === "site" ? "Current site" : "Research proposal"}
+        {kind === "site" ? t("companyReview.currentSite") : t("companyReview.researchProposal")}
       </p>
       <div className="whitespace-pre-line break-words text-ink">{children}</div>
     </div>
@@ -242,21 +262,25 @@ function CompareCell({ kind, children }: { kind: "site" | "proposal"; children: 
 export function ContentComparison({
   detail,
   proposal,
+  t,
 }: {
   detail: ProductDetailResponse | null;
   proposal: Proposal;
+  t: Translate;
 }) {
   const product = detail?.product;
   const listing = detail?.listing;
   const empty = proposal.summary === null && proposal.description === null;
   const fields = [
     {
-      label: "Short description",
+      key: "summary",
+      label: t("companyReview.fields.summary"),
       current: listing?.text?.summary ?? product?.summary ?? null,
       proposed: proposal.summary,
     },
     {
-      label: "Description",
+      key: "description",
+      label: t("companyReview.fields.description"),
       current: listing?.text?.description ?? product?.description ?? null,
       proposed: proposal.description,
     },
@@ -273,24 +297,20 @@ export function ContentComparison({
             id="proposal-title"
             className="type-display text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink"
           >
-            Research proposal against the current text
+            {t("companyReview.comparison.title")}
           </h2>
-          <p className="mt-0.5 text-sm text-ink-3">
-            Proposed customer text. It is applied to the site only in a later, separate step after
-            approval.
-          </p>
+          <p className="mt-0.5 text-sm text-ink-3">{t("companyReview.comparison.description")}</p>
         </div>
         <span className="flex flex-wrap gap-2">
-          <SourceTag kind="site" />
-          <SourceTag kind="proposal" />
+          <SourceTag kind="site" t={t} />
+          <SourceTag kind="proposal" t={t} />
         </span>
       </header>
       <div className="space-y-4 px-5 pb-5 pt-4 sm:px-6">
         {empty ? (
           <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-3 text-sm text-ink-2">
             <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-            No text is proposed for this product: it is not defined well enough to describe. It
-            awaits the company&apos;s confirmation (see Missing &amp; Verification).
+            {t("companyReview.comparison.empty")}
           </div>
         ) : null}
         <div
@@ -298,17 +318,25 @@ export function ContentComparison({
           className="hidden gap-4 text-xs font-semibold text-ink-3 lg:grid lg:grid-cols-[9rem_1fr_1fr]"
         >
           <span />
-          <span>Current site</span>
-          <span>Research proposal</span>
+          <span>{t("companyReview.currentSite")}</span>
+          <span>{t("companyReview.researchProposal")}</span>
         </div>
         <dl className="space-y-4">
           {fields.map((f) => (
-            <div key={f.label} className="grid gap-2 lg:grid-cols-[9rem_1fr_1fr] lg:gap-4">
+            <div key={f.key} className="grid gap-2 lg:grid-cols-[9rem_1fr_1fr] lg:gap-4">
               <dt className="text-sm font-medium text-ink-2 lg:pt-2.5">{f.label}</dt>
               <dd className="contents">
-                <CompareCell kind="site">{f.current ?? <Missing />}</CompareCell>
-                <CompareCell kind="proposal">
-                  {f.proposed ?? <Missing>{empty ? "No text proposed" : "Not provided"}</Missing>}
+                <CompareCell kind="site" t={t}>
+                  {f.current ?? <Missing>{t("companyReview.notProvided")}</Missing>}
+                </CompareCell>
+                <CompareCell kind="proposal" t={t}>
+                  {f.proposed ?? (
+                    <Missing>
+                      {empty
+                        ? t("companyReview.comparison.noTextProposed")
+                        : t("companyReview.notProvided")}
+                    </Missing>
+                  )}
                 </CompareCell>
               </dd>
             </div>
@@ -320,17 +348,17 @@ export function ContentComparison({
 }
 
 /** One line pointing to the open points in Missing & Verification (counts only, no data). */
-export function OpenPoints({ attention }: { attention: ReviewAttention }) {
+export function OpenPoints({ attention, t }: { attention: ReviewAttention; t: Translate }) {
   const parts = [
-    { n: attention.conflicts, one: "conflict", section: "attention", danger: true },
-    { n: attention.questions, one: "question", section: "questions", danger: false },
-    { n: attention.held, one: "held value", section: "held", danger: false },
-    { n: attention.missingDocuments, one: "missing document", section: "documents", danger: false },
+    { n: attention.conflicts, key: "conflicts", section: "attention", danger: true },
+    { n: attention.questions, key: "questions", section: "questions", danger: false },
+    { n: attention.held, key: "heldValues", section: "held", danger: false },
+    { n: attention.missingDocuments, key: "missingDocuments", section: "documents", danger: false },
   ].filter((p) => p.n > 0);
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-line bg-surface px-4 py-3 text-sm">
-      <span className="font-medium text-ink">Open points in the research:</span>
+      <span className="font-medium text-ink">{t("companyReview.openPoints")}</span>
       {parts.map((p) => (
         <ReviewTabLink
           key={p.section}
@@ -341,18 +369,21 @@ export function OpenPoints({ attention }: { attention: ReviewAttention }) {
             p.danger ? "font-semibold text-danger" : "text-ink-2",
           )}
         >
-          {plural(p.n, p.one)}
+          {t(
+            `companyReview.count.${p.key as "conflicts" | "questions" | "heldValues" | "missingDocuments"}`,
+            { count: p.n },
+          )}
         </ReviewTabLink>
       ))}
     </div>
   );
 }
 
-function SourceLinks({ sources }: { sources: readonly ReviewSource[] }) {
+function SourceLinks({ sources, t }: { sources: readonly ReviewSource[]; t: Translate }) {
   if (sources.length === 0) return null;
   return (
     <p className="mt-1 text-xs text-ink-3">
-      Sources:{" "}
+      {t("companyReview.sources")}{" "}
       {sources.map((s, i) => (
         <span key={s.id}>
           {i > 0 ? <span>{"; "}</span> : null}
@@ -368,9 +399,11 @@ function SourceLinks({ sources }: { sources: readonly ReviewSource[] }) {
 function ItemList({
   items,
   sources,
+  t,
 }: {
   items: readonly ReviewItem[];
   sources: readonly ReviewSource[];
+  t: Translate;
 }) {
   return (
     <ul className="space-y-3">
@@ -381,28 +414,29 @@ function ItemList({
           className="rounded-lg border border-line px-3 py-2.5"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <StatusPill tone={KIND_META[item.kind].tone}>{KIND_META[item.kind].label}</StatusPill>
+            <StatusPill tone={KIND_TONE[item.kind]}>{kindLabel(item.kind, t)}</StatusPill>
             {fieldLabel(item.field) ? (
               <span className="text-xs text-ink-3">{fieldLabel(item.field)}</span>
             ) : null}
           </div>
           <p className="mt-1.5 text-sm text-ink">{item.text}</p>
-          <SourceLinks sources={sourcesFor(item, sources)} />
+          <SourceLinks sources={sourcesFor(item, sources)} t={t} />
         </li>
       ))}
     </ul>
   );
 }
 
-function section(id: string) {
+function section(id: ReviewSectionId, t: Translate) {
   const s = REVIEW_SECTIONS.find((x) => x.id === id);
+  // i18n-ignore: a programming error, never shown to a person
   if (!s) throw new Error(`unknown review section ${id}`);
-  return s;
+  return { ...s, ...sectionText(id, t) };
 }
 
 /** Claim risks: wording of the proposal that needs evidence (Content Review tab). */
-export function ClaimRisks({ proposal }: { proposal: Proposal }) {
-  const s = section("claims");
+export function ClaimRisks({ proposal, t }: { proposal: Proposal; t: Translate }) {
+  const s = section("claims", t);
   const list = itemsOf(proposal.reviewData.items, s.kinds);
   if (list.length === 0) return null;
   return (
@@ -412,8 +446,9 @@ export function ClaimRisks({ proposal }: { proposal: Proposal }) {
       count={list.length}
       description={s.description}
       tag="review"
+      t={t}
     >
-      <ItemList items={list} sources={proposal.reviewData.sources} />
+      <ItemList items={list} sources={proposal.reviewData.sources} t={t} />
     </Group>
   );
 }
@@ -427,11 +462,17 @@ export interface VerificationGroup {
 }
 
 /** Jump links to the groups of the verification tab (shown when there is more than one). */
-export function VerificationNav({ groups }: { groups: readonly VerificationGroup[] }) {
+export function VerificationNav({
+  groups,
+  t,
+}: {
+  groups: readonly VerificationGroup[];
+  t: Translate;
+}) {
   const shown = groups.filter((g) => g.count > 0);
   if (shown.length < 2) return null;
   return (
-    <nav aria-label="Verification groups" className="flex flex-wrap gap-2">
+    <nav aria-label={t("companyReview.verification.navLabel")} className="flex flex-wrap gap-2">
       {shown.map((g) => (
         <ReviewTabLink
           key={g.id}
@@ -448,10 +489,10 @@ export function VerificationNav({ groups }: { groups: readonly VerificationGroup
 }
 
 /** Conflicts and placeholders, and questions to confirm. */
-export function ReviewItems({ proposal }: { proposal: Proposal }) {
+export function ReviewItems({ proposal, t }: { proposal: Proposal; t: Translate }) {
   const { items, sources } = proposal.reviewData;
   const groups = (["attention", "questions"] as const)
-    .map((id) => ({ s: section(id), list: itemsOf(items, section(id).kinds) }))
+    .map((id) => ({ s: section(id, t), list: itemsOf(items, section(id, t).kinds) }))
     .filter((g) => g.list.length > 0);
   if (groups.length === 0) return null;
   return (
@@ -464,8 +505,9 @@ export function ReviewItems({ proposal }: { proposal: Proposal }) {
           count={list.length}
           description={s.description}
           tag="review"
+          t={t}
         >
-          <ItemList items={list} sources={sources} />
+          <ItemList items={list} sources={sources} t={t} />
         </Group>
       ))}
     </div>
@@ -473,7 +515,15 @@ export function ReviewItems({ proposal }: { proposal: Proposal }) {
 }
 
 /** DP-002 held values and rows withheld at import: never product specifications. */
-export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?: string }) {
+export function HeldValues({
+  proposal,
+  t,
+  id = "held",
+}: {
+  proposal: Proposal;
+  t: Translate;
+  id?: string;
+}) {
   // Conflicting values first: they need an answer most. Otherwise the research order.
   const held = itemsOf(proposal.reviewData.items, HELD_KINDS)
     .map((item, i) => ({ item, i, c: item.heldValue?.conflict ? 1 : 0 }))
@@ -482,15 +532,20 @@ export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?:
   if (held.length === 0) return null;
   const conflicts = held.filter((h) => h.heldValue?.conflict).length;
   const statusText = (item: ReviewItem) =>
-    item.kind === "DP002_HELD" ? "Unverified (DP-002)" : "Not imported";
+    item.kind === "DP002_HELD"
+      ? t("companyReview.verification.unverified")
+      : t("companyReview.verification.notImported");
   return (
     <Group
       id={id}
-      title="Held for verification — not product data"
+      title={t("companyReview.verification.heldTitle")}
       count={held.length}
-      extra={conflicts > 0 ? `${plural(conflicts, "conflict")}, listed first` : undefined}
+      extra={
+        conflicts > 0 ? t("companyReview.verification.heldExtra", { count: conflicts }) : undefined
+      }
       tag="review"
-      description="Values shown on the current site that were not imported: DP-002 held values (unverified or conflicting) and rows without a test method or temperature. They are not verified specifications and are not part of the product."
+      t={t}
+      description={t("companyReview.verification.heldDescription")}
     >
       <div data-held-values="">
         {/* Phones: one card per value. */}
@@ -502,8 +557,10 @@ export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?:
               className="rounded-lg border border-line px-3 py-2.5 text-sm"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <StatusPill tone={KIND_META[item.kind].tone}>{statusText(item)}</StatusPill>
-                {item.heldValue?.conflict ? <StatusPill tone="danger">Conflict</StatusPill> : null}
+                <StatusPill tone={KIND_TONE[item.kind]}>{statusText(item)}</StatusPill>
+                {item.heldValue?.conflict ? (
+                  <StatusPill tone="danger">{t("companyReview.verification.conflict")}</StatusPill>
+                ) : null}
               </div>
               <p className="mt-1.5 break-words text-ink">{item.heldValue?.raw ?? item.text}</p>
               {item.heldValue?.finding ? (
@@ -516,24 +573,28 @@ export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?:
         <table className="hidden w-full text-sm md:table">
           <thead>
             <tr className="border-b border-line text-left text-ink-3">
-              <th className="py-2 pr-4 font-medium">Status</th>
-              <th className="py-2 pr-4 font-medium">Value as printed on the source</th>
-              <th className="py-2 pr-4 font-medium">Conflict</th>
-              <th className="py-2 font-medium">Finding</th>
+              <th className="py-2 pr-4 font-medium">{t("companyReview.verification.status")}</th>
+              <th className="py-2 pr-4 font-medium">
+                {t("companyReview.verification.valueAsPrinted")}
+              </th>
+              <th className="py-2 pr-4 font-medium">{t("companyReview.verification.conflict")}</th>
+              <th className="py-2 font-medium">{t("companyReview.verification.finding")}</th>
             </tr>
           </thead>
           <tbody>
             {held.map((item, i) => (
               <tr key={i} className="border-b border-line/60 align-top">
                 <td className="py-2 pr-4">
-                  <StatusPill tone={KIND_META[item.kind].tone}>{statusText(item)}</StatusPill>
+                  <StatusPill tone={KIND_TONE[item.kind]}>{statusText(item)}</StatusPill>
                 </td>
                 <td className="py-2 pr-4 text-ink">{item.heldValue?.raw ?? item.text}</td>
                 <td className="py-2 pr-4">
                   {item.heldValue?.conflict ? (
-                    <StatusPill tone="danger">Conflict</StatusPill>
+                    <StatusPill tone="danger">
+                      {t("companyReview.verification.conflict")}
+                    </StatusPill>
                   ) : (
-                    <span className="text-ink-3">No</span>
+                    <span className="text-ink-3">{t("companyReview.verification.no")}</span>
                   )}
                 </td>
                 <td className="py-2 text-ink-2">{item.heldValue?.finding ?? "—"}</td>
@@ -550,11 +611,13 @@ export function HeldValues({ proposal, id = "held" }: { proposal: Proposal; id?:
 export function DocumentsCheck({
   proposal,
   documents,
+  t,
 }: {
   proposal: Proposal;
   documents: ProductDocumentListResponse | null;
+  t: Translate;
 }) {
-  const s = section("documents");
+  const s = section("documents", t);
   const missing = itemsOf(proposal.reviewData.items, s.kinds);
   const onFile = documents?.items ?? [];
   return (
@@ -563,17 +626,20 @@ export function DocumentsCheck({
       title={s.title}
       count={missing.length}
       tag="review"
+      t={t}
       description={s.description}
     >
       {missing.length > 0 ? (
-        <ItemList items={missing} sources={proposal.reviewData.sources} />
+        <ItemList items={missing} sources={proposal.reviewData.sources} t={t} />
       ) : (
-        <p className="text-sm text-ink-3">The research lists no missing documents.</p>
+        <p className="text-sm text-ink-3">{t("companyReview.verification.noMissingDocuments")}</p>
       )}
       <div className="rounded-xl bg-surface-2 px-3 py-3 ring-1 ring-line">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-ink">Documents on file in the catalogue</h3>
-          <SourceTag kind="site" />
+          <h3 className="text-sm font-semibold text-ink">
+            {t("companyReview.verification.documentsOnFile")}
+          </h3>
+          <SourceTag kind="site" t={t} />
         </div>
         {onFile.length > 0 ? (
           <ul className="space-y-1.5 text-sm">
@@ -582,18 +648,18 @@ export function DocumentsCheck({
                 <Icon name="document" size={16} className="shrink-0 text-ink-3" />
                 <span className="min-w-0 break-words text-ink">{d.title}</span>
                 <StatusPill tone="neutral">
-                  {d.type === "OTHER" ? "Site-generated summary" : d.type}
+                  {d.type === "OTHER" ? t("companyReview.verification.siteSummary") : d.type}
                 </StatusPill>
                 {d.type === "OTHER" ? (
-                  <span className="text-xs text-ink-3">— not an original TDS/COA</span>
+                  <span className="text-xs text-ink-3">
+                    {t("companyReview.verification.notOriginal")}
+                  </span>
                 ) : null}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-ink-3">
-            No documents. No original TDS, SDS or COA is on file.
-          </p>
+          <p className="text-sm text-ink-3">{t("companyReview.verification.noDocuments")}</p>
         )}
       </div>
     </Group>
@@ -601,46 +667,61 @@ export function DocumentsCheck({
 }
 
 /** The technical data the current site shows: what the held values are checked against. */
-export function CurrentTechnicalData({ specs }: { specs: ProductSpecsResponse | null }) {
+export function CurrentTechnicalData({
+  specs,
+  t,
+  locale,
+}: {
+  specs: ProductSpecsResponse | null;
+  t: Translate;
+  locale: AdminLocale;
+}) {
   const defs = new Map((specs?.definitions ?? []).map((d) => [d.id, d]));
   const values = specs?.values ?? [];
   return (
     <Group
       id="current-technical"
-      title="Technical data on the current site"
+      title={t("companyReview.verification.technicalTitle")}
       count={values.length}
       tag="site"
-      description="Transcribed from documents supplied for the current site; not cross-checked against an original technical data sheet."
+      t={t}
+      description={t("companyReview.verification.technicalDescription")}
     >
       {values.length > 0 ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[30rem] text-sm" data-current-specs="">
             <thead>
               <tr className="border-b border-line text-left text-ink-3">
-                <th className="py-2 pr-4 font-medium">Property</th>
-                <th className="py-2 pr-4 font-medium">Value</th>
-                <th className="py-2 pr-4 font-medium">Basis</th>
-                <th className="py-2 font-medium">Test method</th>
+                <th className="py-2 pr-4 font-medium">
+                  {t("companyReview.verification.property")}
+                </th>
+                <th className="py-2 pr-4 font-medium">{t("companyReview.verification.value")}</th>
+                <th className="py-2 pr-4 font-medium">{t("companyReview.verification.basis")}</th>
+                <th className="py-2 font-medium">{t("companyReview.verification.testMethod")}</th>
               </tr>
             </thead>
             <tbody>
               {values.map((v) => (
                 <tr key={`${v.definitionId}-${v.basis}`} className="border-b border-line/60">
                   <td className="py-2 pr-4 text-ink">{defs.get(v.definitionId)?.name ?? "—"}</td>
-                  <td className="py-2 pr-4 text-ink">{formatSpecValue(v.value, v.unit)}</td>
-                  <td className="py-2 pr-4 text-ink-2">
-                    {v.basis === "TYPICAL" ? "Typical" : "Specification"}
+                  <td className="py-2 pr-4 text-ink">
+                    {formatSpecValue(v.value, v.unit, t, locale)}
                   </td>
-                  <td className="py-2 text-ink-2">{v.testMethod ?? <Missing>None</Missing>}</td>
+                  <td className="py-2 pr-4 text-ink-2">
+                    {v.basis === "TYPICAL"
+                      ? t("companyReview.verification.typical")
+                      : t("companyReview.verification.specification")}
+                  </td>
+                  <td className="py-2 text-ink-2">
+                    {v.testMethod ?? <Missing>{t("companyReview.verification.none")}</Missing>}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : (
-        <p className="text-sm text-ink-3">
-          The current site shows no technical data for this product.
-        </p>
+        <p className="text-sm text-ink-3">{t("companyReview.verification.noTechnical")}</p>
       )}
     </Group>
   );
@@ -648,24 +729,33 @@ export function CurrentTechnicalData({ specs }: { specs: ProductSpecsResponse | 
 
 // --- Sources -----------------------------------------------------------------------------------
 
-export function SourcesPanel({ proposal, id = "sources" }: { proposal: Proposal; id?: string }) {
+export function SourcesPanel({
+  proposal,
+  t,
+  id = "sources",
+}: {
+  proposal: Proposal;
+  t: Translate;
+  id?: string;
+}) {
   const { sources, items, family } = proposal.reviewData;
   const cited = (id: string) => items.filter((i) => i.sourceIds.includes(id)).length;
   return (
     <Panel
       id={id}
-      title="Research sources"
-      description="The documents the research relied on. The level says how much weight a source carries; only level A is the manufacturer's own document."
-      action={<SourceTag kind="review" />}
+      title={t("companyReview.researchSources.title")}
+      description={t("companyReview.researchSources.description")}
+      action={<SourceTag kind="review" t={t} />}
       className="scroll-mt-32"
     >
       {family ? (
         <p className="mb-4 text-sm text-ink-2">
-          Research family: <span className="font-medium text-ink">{family}</span>
+          {t("companyReview.researchSources.family")}{" "}
+          <span className="font-medium text-ink">{family}</span>
         </p>
       ) : null}
       {sources.length === 0 ? (
-        <p className="text-sm text-ink-3">The research lists no sources for this product.</p>
+        <p className="text-sm text-ink-3">{t("companyReview.researchSources.none")}</p>
       ) : (
         <ul className="divide-y divide-line text-sm">
           {sources.map((s) => {
@@ -691,9 +781,11 @@ export function SourcesPanel({ proposal, id = "sources" }: { proposal: Proposal;
                   <span className="text-ink">{s.title}</span>
                 )}
                 <span className="block text-xs text-ink-3">
-                  {s.level ? SOURCE_LEVEL_TEXT[s.level] : "Level not given"}
+                  {s.level
+                    ? sourceLevelText(s.level, t)
+                    : t("companyReview.researchSources.levelNotGiven")}
                   {s.documentDate ? ` · ${s.documentDate}` : ""}
-                  {n > 0 ? ` · cited by ${plural(n, "review item")}` : ""}
+                  {n > 0 ? t("companyReview.researchSources.citedBy", { count: n }) : ""}
                 </span>
               </li>
             );
@@ -705,13 +797,6 @@ export function SourcesPanel({ proposal, id = "sources" }: { proposal: Proposal;
 }
 
 // --- History -----------------------------------------------------------------------------------
-
-const ACTION_TEXT: Readonly<Record<ProposalEvent["action"], string>> = {
-  CREATED: "Proposal created",
-  REVISED: "Revised and sent for review",
-  APPROVED: "Approved",
-  CHANGES_REQUESTED: "Changes requested",
-};
 
 const ACTION_DOT: Readonly<Record<ProposalEvent["action"], string>> = {
   CREATED: "bg-ink-3",
@@ -731,18 +816,26 @@ function previousOf(events: readonly ProposalEvent[], e: ProposalEvent): Proposa
  * the previous event's is only named; a text written before DP-191 that could not be verified
  * is marked as not recorded (never guessed).
  */
-function EventText({ event, previous }: { event: ProposalEvent; previous: ProposalEvent | null }) {
+function EventText({
+  event,
+  previous,
+  t,
+}: {
+  event: ProposalEvent;
+  previous: ProposalEvent | null;
+  t: Translate;
+}) {
   if (!event.textRecorded) {
     return (
       <p className="mt-1.5 text-xs text-ink-3" data-event-text="unrecorded">
-        Text of this version not recorded (saved before the history kept texts).
+        {t("companyReview.history.textUnrecorded")}
       </p>
     );
   }
   if (previous && previous.contentSha256 === event.contentSha256) {
     return (
       <p className="mt-1.5 text-xs text-ink-3" data-event-text="unchanged">
-        Text unchanged.
+        {t("companyReview.history.textUnchanged")}
       </p>
     );
   }
@@ -750,19 +843,21 @@ function EventText({ event, previous }: { event: ProposalEvent; previous: Propos
     <details className="group mt-1.5" data-event-text="recorded">
       <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-petrol-strong underline-offset-2 hover:underline [&::-webkit-details-marker]:hidden">
         <Icon name="chevron" size={14} className="transition-transform group-open:rotate-90" />
-        Text of version {event.proposalVersion}
+        {t("companyReview.history.textOfVersion", { version: event.proposalVersion })}
       </summary>
       <dl className="mt-2 space-y-2 rounded-lg bg-surface-2 px-3 py-2.5 text-sm ring-1 ring-line">
         <div>
-          <dt className="text-xs font-semibold text-ink-3">Short description</dt>
+          <dt className="text-xs font-semibold text-ink-3">{t("companyReview.fields.summary")}</dt>
           <dd className="mt-0.5 whitespace-pre-line break-words text-ink">
-            {event.summary ?? <Missing>No text</Missing>}
+            {event.summary ?? <Missing>{t("companyReview.noText")}</Missing>}
           </dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold text-ink-3">Description</dt>
+          <dt className="text-xs font-semibold text-ink-3">
+            {t("companyReview.fields.description")}
+          </dt>
           <dd className="mt-0.5 whitespace-pre-line break-words text-ink">
-            {event.description ?? <Missing>No text</Missing>}
+            {event.description ?? <Missing>{t("companyReview.noText")}</Missing>}
           </dd>
         </div>
       </dl>
@@ -773,38 +868,42 @@ function EventText({ event, previous }: { event: ProposalEvent; previous: Propos
 export function ProposalHistory({
   proposal,
   events,
+  t,
+  locale,
 }: {
   proposal: Proposal;
   events: readonly ProposalEvent[];
+  t: Translate;
+  locale: AdminLocale;
 }) {
   return (
     <Panel
       id="history"
-      title="History"
-      description="Versions, decisions and comments, newest first."
+      title={t("companyReview.history.title")}
+      description={t("companyReview.history.description")}
       className="scroll-mt-32"
     >
       <dl className="mb-5 divide-y divide-line">
-        <Row label="Current version">
-          {proposal.version} · {STATUS_META[proposal.status].label}
+        <Row label={t("companyReview.history.currentVersion")}>
+          {proposal.version} · {statusLabel(proposal.status, t)}
         </Row>
-        <Row label="Written by">
+        <Row label={t("companyReview.history.writtenBy")}>
           {proposal.authors.length > 0 ? (
             proposal.authors.map((a) => a.name).join(", ")
           ) : (
-            <Missing />
+            <Missing>{t("companyReview.notProvided")}</Missing>
           )}
         </Row>
-        <Row label="Last decision">
+        <Row label={t("companyReview.history.lastDecision")}>
           {proposal.decidedBy && proposal.decidedAt ? (
-            `${proposal.decidedBy.name} · ${when(proposal.decidedAt)}`
+            `${proposal.decidedBy.name} · ${when(proposal.decidedAt, locale)}`
           ) : (
-            <Missing>No decision yet</Missing>
+            <Missing>{t("companyReview.history.noDecision")}</Missing>
           )}
         </Row>
       </dl>
       {events.length === 0 ? (
-        <p className="text-sm text-ink-3">No history yet.</p>
+        <p className="text-sm text-ink-3">{t("companyReview.history.none")}</p>
       ) : (
         <ol className="space-y-4 border-l border-line pl-5" data-history="">
           {[...events].reverse().map((e) => (
@@ -817,18 +916,19 @@ export function ProposalHistory({
                 )}
               />
               <p className="text-ink">
-                <span className="font-medium">{ACTION_TEXT[e.action]}</span> · version{" "}
-                {e.proposalVersion}
+                <span className="font-medium">{t(`companyReview.history.action.${e.action}`)}</span>
+                {" · "}
+                {t("companyReview.history.version", { version: e.proposalVersion })}
               </p>
               <p className="text-xs text-ink-3">
-                {e.actor.name} · {when(e.createdAt)}
+                {e.actor.name} · {when(e.createdAt, locale)}
               </p>
               {e.comment ? (
                 <p className="mt-1.5 whitespace-pre-line rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
                   {e.comment}
                 </p>
               ) : null}
-              <EventText event={e} previous={previousOf(events, e)} />
+              <EventText event={e} previous={previousOf(events, e)} t={t} />
             </li>
           ))}
         </ol>
@@ -851,16 +951,18 @@ export function ProposalHistory({
 export function ResearchNotes({
   proposal,
   reviewHref,
+  t,
 }: {
   proposal: Proposal;
   reviewHref: string;
+  t: Translate;
 }) {
   const { items, sources } = proposal.reviewData;
   const groups = [
-    { s: section("questions"), title: "Questions for the company" },
-    { s: section("documents"), title: "Missing documents" },
-    { s: section("attention"), title: "Technical conflicts" },
-    { s: section("claims"), title: "Claim risks" },
+    { s: section("questions", t), title: t("companyReview.notes.questions") },
+    { s: section("documents", t), title: t("companyReview.notes.documents") },
+    { s: section("attention", t), title: t("companyReview.notes.conflicts") },
+    { s: section("claims", t), title: t("companyReview.notes.claims") },
   ]
     .map((g) => ({ ...g, list: itemsOf(items, g.s.kinds) }))
     .filter((g) => g.list.length > 0);
@@ -869,14 +971,16 @@ export function ResearchNotes({
     <div className="space-y-4" data-research-notes={proposal.id} data-review-total={items.length}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-ink-2">
-          {plural(items.length, "review item")} and {plural(sources.length, "source")} from the
-          research for this product. Read only; nothing here is published or used as product data.
+          {t("companyReview.notes.intro", {
+            items: t("companyReview.count.reviewItems", { count: items.length }),
+            sources: t("companyReview.count.sources", { count: sources.length }),
+          })}
         </p>
         <a
           href={reviewHref}
           className="inline-flex items-center gap-1.5 text-sm font-medium text-petrol-strong underline underline-offset-2"
         >
-          Open in Company Review
+          {t("companyReview.notes.open")}
           <Icon name="chevron" size={14} />
         </a>
       </div>
@@ -886,8 +990,9 @@ export function ResearchNotes({
           className="flex items-start gap-2 rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/30"
         >
           <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-          {plural(held, "technical value")} held for verification: not verified, not in the
-          specifications above and never published.
+          {t("companyReview.notes.held", {
+            values: t("companyReview.count.technicalValues", { count: held }),
+          })}
         </p>
       ) : null}
       {groups.map(({ s, title, list }) => (
@@ -898,12 +1003,13 @@ export function ResearchNotes({
           count={list.length}
           description={s.description}
           tag="review"
+          t={t}
         >
-          <ItemList items={list} sources={sources} />
+          <ItemList items={list} sources={sources} t={t} />
         </Group>
       ))}
-      <HeldValues proposal={proposal} id="research-held" />
-      <SourcesPanel proposal={proposal} id="research-sources" />
+      <HeldValues proposal={proposal} t={t} id="research-held" />
+      <SourcesPanel proposal={proposal} t={t} id="research-sources" />
     </div>
   );
 }

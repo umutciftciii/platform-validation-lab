@@ -584,6 +584,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <ResearchNotes
                   proposal={research.data.proposal}
                   reviewHref={reviewHref(siteProposal.id, sp, "verification")}
+                  t={t}
                 />
               ) : (
                 <ErrorState title={t("catalog.detail.page.research.loadError")}>

@@ -18,6 +18,7 @@ import { taxonomy } from "./catalog/en/taxonomy";
 import { media } from "./catalog/en/media";
 import { xrefs } from "./catalog/en/xrefs";
 import { translations } from "./catalog/en/translations";
+import { companyReview } from "./company-review/en";
 
 export const en = {
   common: {
@@ -349,4 +350,6 @@ export const en = {
     xrefs,
     translations,
   },
+  /** ML-12b (DP-243): the Company Review area (./company-review/). */
+  companyReview,
 } as const;
