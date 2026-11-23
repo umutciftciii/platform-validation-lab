@@ -1556,9 +1556,14 @@ model LeadDocumentRequest {
   ipPrefixHmac            String?  @db.Char(64)
   requestId               String?  @db.VarChar(100)
   createdAt               DateTime @default(now()) @db.Timestamptz(3)
+  /// ML-10 (ADR-028 D12): the language of the form, a language of the site (foreign key to
+  /// SiteLocale). Null: stored before ML-10, read as English, never rewritten. The text versions
+  /// name the same language (CHECK), so the consent language is not stored twice.
+  locale                  String?  @db.VarChar(35)
 
   lead      Lead                    @relation(fields: [leadId], references: [id], onDelete: Restrict)
   site      Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  siteLocale SiteLocale?            @relation(fields: [siteId, locale], references: [siteId, locale], onDelete: Restrict)
   product   Product                 @relation(fields: [productId], references: [id], onDelete: Restrict)
   document  ProductDocument         @relation(fields: [documentId], references: [id], onDelete: Restrict)
   revision  ProductDocumentRevision @relation(fields: [revisionId, documentId], references: [id, documentId], onDelete: Restrict)
@@ -1594,9 +1599,14 @@ model LeadContactMessage {
   requestId            String?   @db.VarChar(100)
   createdAt            DateTime  @default(now()) @db.Timestamptz(3)
   redactedAt           DateTime? @db.Timestamptz(3)
+  /// ML-10 (ADR-028 D12): the language of the form, a language of the site (foreign key to
+  /// SiteLocale). Null: stored before ML-10, read as English, never rewritten. The notice version
+  /// names the same language (CHECK).
+  locale               String?   @db.VarChar(35)
 
   lead         Lead              @relation(fields: [leadId], references: [id], onDelete: Restrict)
   site         Site              @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  siteLocale   SiteLocale?       @relation(fields: [siteId, locale], references: [siteId, locale], onDelete: Restrict)
   notification LeadNotification?
 
   @@index([siteId, createdAt])
@@ -1999,6 +2009,9 @@ model SiteLocale {
   /// ML-8a: catalogue texts written in this language.
   productListingTexts  ProductListingText[]
   productCategoryTexts ProductCategoryText[]
+  /// ML-10: forms sent in this language.
+  leadDocumentRequests LeadDocumentRequest[]
+  leadContactMessages  LeadContactMessage[]
 
   @@id([siteId, locale])
   @@unique([siteId], map: "SiteLocale_default_siteId_key", where: raw("\"isDefault\""))

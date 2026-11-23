@@ -196,7 +196,14 @@ export function ArticlePage({ view }: { view: ArticleView }) {
         ) : null}
         <div className="news-article-body">
           {view.sections.map((s) => (
-            <Section key={s.id} section={s} first={false} contact={null} locale={view.locale} />
+            <Section
+              key={s.id}
+              section={s}
+              first={false}
+              contact={null}
+              locale={view.locale}
+              preview={view.preview}
+            />
           ))}
         </div>
       </article>

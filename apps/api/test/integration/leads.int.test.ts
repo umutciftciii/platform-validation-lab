@@ -45,6 +45,9 @@ import {
   LEAD_EXPORT_MAX_ROWS,
   LEAD_EXPORT_PATH,
   LeadExportSummaryResponseSchema,
+  LEGAL_TEXTS,
+  type LegalTextRegistry,
+  type LegalTextSet,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -4231,5 +4234,469 @@ describe("ML-9 document language and the lead flow", () => {
       where: { request: { documentId: nlLead } },
     });
     expect(grant.downloadCount).toBe(1);
+  });
+});
+
+describe("ML-10 form language, legal texts and consent evidence", () => {
+  const NL = LEGAL_TEXTS["nl"] as LegalTextSet;
+  const APPROVED: LegalTextRegistry = { ...LEGAL_TEXTS, nl: { ...NL, review: "approved" } };
+  const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
+  let doc: string;
+  let reader: Staff;
+  let comReader: Staff;
+  const setNlPublic = (value: boolean) =>
+    owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { public: value },
+    });
+  const contact = (input: Record<string, unknown> = {}) => ({
+    fullName: "Grace Hopper",
+    company: "Compiler Works BV",
+    email: "ml10-contact@compiler.example",
+    country: "NL",
+    phone: "",
+    subject: "Base oil supply",
+    message: "We are looking for Group III base oil.",
+    privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    website: "",
+    ...input,
+  });
+  async function send(body: Record<string, unknown>, ip: string | null = freshIp()): Promise<Res> {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": KEY.bv,
+      origin: BV_ORIGIN,
+      "content-type": "application/json",
+    };
+    if (ip) headers["x-dp-client-ip"] = ip;
+    return parse(
+      await fetch(`${base}/api/v1/public/leads/contact-messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+  const counts = async () => ({
+    leads: await owner.lead.count(),
+    requests: await owner.leadDocumentRequest.count(),
+    messages: await owner.leadContactMessage.count(),
+  });
+
+  beforeAll(async () => {
+    const product = await completeProduct("ml10", "LEAD-ML10");
+    await publishOn(product, BV, bvPublisher);
+    doc = await shownDoc(
+      product,
+      "LEAD_REQUIRED",
+      [{ siteId: BV, publisher: bvPublisher }],
+      "SDS ML-10",
+    );
+    reader = await staff("ml10-reader", [], root.userId, undefined, { memberships: [BV] });
+    await assignRole(reader, "sales_crm_user", BV);
+    comReader = await staff("ml10-com-reader", [], root.userId, undefined, { memberships: [COM] });
+    await assignRole(comReader, "sales_crm_user", COM);
+  });
+
+  afterAll(async () => {
+    await setNlPublic(false);
+  });
+
+  it("an English form without a language (older site) stores locale en with the same evidence", async () => {
+    const res = await requestLead(
+      "bv",
+      form({ documentId: doc, email: "ml10-default@engines.example" }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const r = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { documentId: doc, lead: { email: "ml10-default@engines.example" } },
+    });
+    expect(r).toMatchObject({
+      locale: "en",
+      privacyNoticeVersion: LEAD_PRIVACY_NOTICE.version,
+      privacyNoticeSha256: sha(LEAD_PRIVACY_NOTICE.text),
+      marketingConsent: false,
+      marketingConsentVersion: null,
+      marketingConsentSha256: null,
+    });
+    const audit = await lastAudit("leads.document_request_created");
+    expect(audit?.metadata).toMatchObject({
+      locale: "en",
+      privacyNoticeVersion: LEAD_PRIVACY_NOTICE.version,
+      marketingConsentVersion: null,
+    });
+    expect(JSON.stringify(audit)).not.toMatch(/ml10-default|Lovelace|Analytical/i);
+  });
+
+  it("an explicit English form with optional marketing consent stores both English versions", async () => {
+    const res = await requestLead(
+      "bv",
+      form({
+        documentId: doc,
+        email: "ml10-en@engines.example",
+        locale: "en",
+        marketingConsent: true,
+        marketingConsentVersion: LEAD_MARKETING_CONSENT.version,
+      }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const r = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { documentId: doc, lead: { email: "ml10-en@engines.example" } },
+    });
+    expect(r).toMatchObject({
+      locale: "en",
+      marketingConsentVersion: LEAD_MARKETING_CONSENT.version,
+      marketingConsentSha256: sha(LEAD_MARKETING_CONSENT.text),
+    });
+  });
+
+  it("the contact form stores its language (en by default) with the English notice", async () => {
+    expect((await send(contact())).status).toBe(201);
+    const m = await owner.leadContactMessage.findFirstOrThrow({
+      where: { lead: { email: "ml10-contact@compiler.example" } },
+    });
+    expect(m).toMatchObject({
+      locale: "en",
+      privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+      privacyNoticeSha256: sha(LEAD_CONTACT_NOTICE.text),
+    });
+    expect((await lastAudit("leads.contact_message_created"))?.metadata).toMatchObject({
+      locale: "en",
+      privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    });
+  });
+
+  it("refuses an older version (D-T7 outdated) and another language's version (locale_mismatch)", async () => {
+    const before = await counts();
+    expectError(
+      await requestLead("bv", form({ documentId: doc, privacyNoticeVersion: "2026-11-11" })),
+      400,
+      "VALIDATION_FAILED",
+      { path: "privacyNoticeVersion", rule: "outdated" },
+    );
+    expectError(
+      await requestLead(
+        "bv",
+        form({ documentId: doc, privacyNoticeVersion: NL.privacyNotice.version }),
+      ),
+      400,
+      "VALIDATION_FAILED",
+      { path: "privacyNoticeVersion", rule: "locale_mismatch" },
+    );
+    expectError(
+      await requestLead(
+        "bv",
+        form({
+          documentId: doc,
+          locale: "en",
+          marketingConsent: true,
+          marketingConsentVersion: NL.marketingConsent.version,
+        }),
+      ),
+      400,
+      "VALIDATION_FAILED",
+      { path: "marketingConsentVersion", rule: "locale_mismatch" },
+    );
+    expectError(
+      await send(contact({ privacyNoticeVersion: NL.contactNotice.version })),
+      400,
+      "VALIDATION_FAILED",
+      { path: "privacyNoticeVersion", rule: "locale_mismatch" },
+    );
+    expectError(
+      await requestLead("bv", form({ documentId: doc, locale: "EN" })),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expect(await counts()).toEqual(before);
+  });
+
+  it("Dutch drafts are never accepted: 404 while nl is closed AND while it is public", async () => {
+    const before = await counts();
+    const nlDoc = form({
+      documentId: doc,
+      email: "ml10-nl@engines.example",
+      locale: "nl",
+      privacyNoticeVersion: NL.privacyNotice.version,
+    });
+    const nlMsg = contact({ locale: "nl", privacyNoticeVersion: NL.contactNotice.version });
+    expectError(await requestLead("bv", nlDoc), 404, "NOT_FOUND");
+    expectError(await send(nlMsg), 404, "NOT_FOUND");
+    await setNlPublic(true);
+    try {
+      expectError(await requestLead("bv", nlDoc), 404, "NOT_FOUND");
+      expectError(await send(nlMsg), 404, "NOT_FOUND");
+      // English versions under a Dutch form: still no form in Dutch (texts not offered).
+      expectError(
+        await requestLead("bv", form({ documentId: doc, locale: "nl" })),
+        404,
+        "NOT_FOUND",
+      );
+    } finally {
+      await setNlPublic(false);
+    }
+    // A language without texts, and one the site does not have.
+    expectError(await requestLead("bv", form({ documentId: doc, locale: "de" })), 404, "NOT_FOUND");
+    expect(await counts()).toEqual(before);
+  });
+
+  it("the database refuses a language/version mix, a language of no site and a changed language", async () => {
+    const r = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { documentId: doc, locale: "en" },
+    });
+    const base = {
+      reference: "MK10PRB0",
+      leadId: r.leadId,
+      siteId: r.siteId,
+      productId: r.productId,
+      documentId: r.documentId,
+      revisionId: r.revisionId,
+      fullName: "Probe",
+      company: "Probe",
+      country: "NL",
+      privacyNoticeVersion: LEAD_PRIVACY_NOTICE.version,
+      privacyNoticeSha256: "a".repeat(64),
+      marketingConsent: false,
+    };
+    // English form with Dutch texts / Dutch form with English texts: CHECK.
+    await rejectsDb(
+      owner.leadDocumentRequest.create({
+        data: { ...base, privacyNoticeVersion: "2026-11-23.nl", locale: "en" },
+      }),
+      /LeadDocumentRequest_text_locale/,
+    );
+    await rejectsDb(
+      owner.leadDocumentRequest.create({ data: { ...base, locale: "nl" } }),
+      /LeadDocumentRequest_text_locale/,
+    );
+    await rejectsDb(
+      owner.leadDocumentRequest.create({
+        data: {
+          ...base,
+          marketingConsent: true,
+          marketingConsentVersion: "2026-11-23.nl",
+          marketingConsentSha256: "b".repeat(64),
+          locale: "en",
+        },
+      }),
+      /LeadDocumentRequest_text_locale/,
+    );
+    // A language that is no language of the site: foreign key to SiteLocale.
+    await rejectsDb(
+      owner.leadDocumentRequest.create({
+        data: { ...base, privacyNoticeVersion: "2026-11-23.fr", locale: "fr" },
+      }),
+      /LeadDocumentRequest_siteId_locale_fkey|foreign key/i,
+    );
+    await rejectsDb(
+      owner.leadDocumentRequest.create({ data: { ...base, locale: "EN" } }),
+      /LeadDocumentRequest_locale_format|LeadDocumentRequest_siteId_locale_fkey/,
+    );
+    // Evidence never changes (guard trigger), the language included; dp_app cannot update at all.
+    await rejectsDb(
+      owner.leadDocumentRequest.update({ where: { id: r.id }, data: { locale: null } }),
+      /cannot change|evidence|insufficient_privilege|retention may only/i,
+    );
+    await rejectsDb(
+      appIn({ site: BV, email: "ml10-default@engines.example" }, (tx) =>
+        tx.leadDocumentRequest.update({ where: { id: r.id }, data: { locale: "nl" } }),
+      ),
+      /permission denied|42501/i,
+    );
+    const m = await owner.leadContactMessage.findFirstOrThrow({ where: { locale: "en" } });
+    await rejectsDb(
+      owner.leadContactMessage.create({
+        data: {
+          leadId: m.leadId,
+          siteId: m.siteId,
+          fullName: "Probe",
+          company: "Probe",
+          country: "NL",
+          message: "A probe message for the check.",
+          privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+          privacyNoticeSha256: "a".repeat(64),
+          locale: "nl",
+        },
+      }),
+      /LeadContactMessage_text_locale/,
+    );
+  });
+
+  it("row-level security: the language is visible only where the row is (DP-103)", async () => {
+    // No context: nothing, whatever the language filter.
+    const none = await appIn({ site: null }, (tx) =>
+      tx.leadDocumentRequest.count({ where: { locale: "en" } }),
+    );
+    expect(none).toBe(0);
+    // The visitor's own context (site + e-mail): only their requests, with the language.
+    const own = await appIn({ site: BV, email: "ml10-default@engines.example" }, (tx) =>
+      tx.leadDocumentRequest.findMany({ select: { locale: true, siteId: true } }),
+    );
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((x) => x.locale === "en" && x.siteId === BV)).toBe(true);
+    // The other site's key in the same e-mail context sees nothing.
+    const other = await appIn({ site: COM, email: "ml10-default@engines.example" }, (tx) =>
+      tx.leadDocumentRequest.count({ where: { locale: "en" } }),
+    );
+    expect(other).toBe(0);
+    // Staff of the other site: the lead (with its languages) is a 404.
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { email: "ml10-default@engines.example" },
+    });
+    expectError(await comReader.leads(`/${lead.id}`), 404, "NOT_FOUND");
+  });
+
+  it("the admin detail shows each form's stored language; legacy rows stay null (read as English)", async () => {
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { email: "ml10-default@engines.example" },
+    });
+    // A request stored before ML-10: no language. Written as dp_owner, the API never writes null.
+    const r = await owner.leadDocumentRequest.findFirstOrThrow({ where: { leadId: lead.id } });
+    const legacy = await owner.leadDocumentRequest.create({
+      data: {
+        reference: "MK10KGCY",
+        leadId: r.leadId,
+        siteId: r.siteId,
+        productId: r.productId,
+        documentId: r.documentId,
+        revisionId: r.revisionId,
+        fullName: r.fullName,
+        company: r.company,
+        country: r.country,
+        privacyNoticeVersion: "2026-11-11",
+        privacyNoticeSha256: "c".repeat(64),
+        marketingConsent: false,
+        createdAt: new Date(r.createdAt.getTime() - 60_000),
+      },
+    });
+    expect(legacy.locale).toBeNull();
+    const res = await reader.leads(`/${lead.id}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const detail = LeadDetailResponseSchema.parse(res.body);
+    const byId = new Map(detail.requests.map((x) => [x.id, x]));
+    expect(byId.get(r.id)?.locale).toBe("en");
+    expect(byId.get(legacy.id)?.locale).toBeNull();
+    // Reading never rewrites the stored row.
+    expect(
+      (await owner.leadDocumentRequest.findUniqueOrThrow({ where: { id: legacy.id } })).locale,
+    ).toBeNull();
+    const cLead = await owner.lead.findFirstOrThrow({
+      where: { email: "ml10-contact@compiler.example" },
+    });
+    const c = LeadDetailResponseSchema.parse((await reader.leads(`/${cLead.id}`)).body);
+    expect(c.contactMessages[0]?.locale).toBe("en");
+  });
+
+  it("an APPROVED Dutch translation (isolated: a test registry, never the shipped one) stores nl evidence", async () => {
+    // The shipped services stay as they are; the same classes are built with a registry in which
+    // Dutch is approved. Nothing in the running API can switch this on.
+    const docsMod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/leads/lead-requests.service.js")).href
+    )) as {
+      LeadRequestsService: new (...a: unknown[]) => {
+        request(ctx: unknown, body: unknown): Promise<{ reference: string }>;
+      };
+    };
+    const msgMod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/leads/contact-messages.service.js")).href
+    )) as {
+      ContactMessagesService: new (...a: unknown[]) => {
+        send(ctx: unknown, body: unknown): Promise<unknown>;
+      };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shipped = (app as any).get(docsMod.LeadRequestsService);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shippedMsg = (app as any).get(msgMod.ContactMessagesService);
+    expect(shipped.legalTexts).toBe(LEGAL_TEXTS);
+    const docs = new docsMod.LeadRequestsService(
+      shipped.sites,
+      shipped.limits,
+      shipped.clock,
+      shipped.config,
+      APPROVED,
+    );
+    const msgs = new msgMod.ContactMessagesService(
+      shippedMsg.sites,
+      shippedMsg.limits,
+      shippedMsg.clock,
+      shippedMsg.config,
+      APPROVED,
+    );
+    const ctx = (n: number) => ({
+      app: "WEB_BV",
+      slot: "current",
+      requestId: `ml10-approved-${n}`,
+      clientIp: `10.199.${n}.9`,
+      ipPrefix: `10.199.${n}.0/24`,
+      userAgent: null,
+      cookies: new Map(),
+    });
+    const nlForm = form({
+      documentId: doc,
+      fullName: "Anna de Vries",
+      email: "ml10-approved@engines.example",
+      locale: "nl",
+      privacyNoticeVersion: NL.privacyNotice.version,
+      marketingConsent: true,
+      marketingConsentVersion: NL.marketingConsent.version,
+    });
+    const nlMsg = contact({
+      email: "ml10-approved@compiler.example",
+      locale: "nl",
+      privacyNoticeVersion: NL.contactNotice.version,
+    });
+    // Approved but nl not public: still no form (fail closed on the site's language).
+    await expect(docs.request(ctx(1), nlForm)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(msgs.send(ctx(2), nlMsg)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await setNlPublic(true);
+    try {
+      // English texts under the approved Dutch form: refused, never stored.
+      await expect(
+        docs.request(ctx(3), { ...nlForm, privacyNoticeVersion: LEAD_PRIVACY_NOTICE.version }),
+      ).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        details: [{ path: "privacyNoticeVersion", rule: "locale_mismatch" }],
+      });
+      const out = await docs.request(ctx(4), nlForm);
+      expect(out.reference).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
+      await msgs.send(ctx(5), nlMsg);
+    } finally {
+      await setNlPublic(false);
+    }
+    const r = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { lead: { email: "ml10-approved@engines.example" } },
+    });
+    expect(r).toMatchObject({
+      locale: "nl",
+      privacyNoticeVersion: "2026-11-23.nl",
+      privacyNoticeSha256: sha(NL.privacyNotice.text),
+      marketingConsent: true,
+      marketingConsentVersion: "2026-11-23.nl",
+      marketingConsentSha256: sha(NL.marketingConsent.text),
+    });
+    expect(r.privacyNoticeSha256).not.toBe(sha(LEAD_PRIVACY_NOTICE.text));
+    const audit = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "leads.document_request_created", resourceId: r.id },
+    });
+    expect(audit.metadata).toMatchObject({
+      locale: "nl",
+      privacyNoticeVersion: "2026-11-23.nl",
+      marketingConsentVersion: "2026-11-23.nl",
+    });
+    const m = await owner.leadContactMessage.findFirstOrThrow({
+      where: { lead: { email: "ml10-approved@compiler.example" } },
+    });
+    expect(m).toMatchObject({
+      locale: "nl",
+      privacyNoticeVersion: "2026-11-23.nl",
+      privacyNoticeSha256: sha(NL.contactNotice.text),
+    });
+    // The shipped API still refuses Dutch while it is public (draft texts).
+    await setNlPublic(true);
+    try {
+      expectError(await send(nlMsg), 404, "NOT_FOUND");
+    } finally {
+      await setNlPublic(false);
+    }
   });
 });

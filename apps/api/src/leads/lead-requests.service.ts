@@ -10,16 +10,24 @@
  *
  * DP-095 (D-T3, D-T5): in production the form is refused like an unknown document while the
  * privacy texts are drafts (`privacyBlockers()`, e.g. the owner's controller details are missing).
+ *
+ * ML-10 (DP-241, ADR-028 D12): the form names its language (none: English, as older sites send).
+ * A language without texts that may be offered (a translation still under DP-095 review) or that
+ * is not public on the site is refused like an unknown document (404); the versions must be that
+ * language's current ones (consent.ts). The request stores the language; its texts' language is
+ * the one their version names (a database CHECK keeps the two equal).
  */
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import {
   DOWNLOAD_GRANT_MAX_DOWNLOADS,
   DOWNLOAD_GRANT_TTL_MINUTES,
-  LEAD_MARKETING_CONSENT,
+  LEAD_FORM_DEFAULT_LOCALE,
   LeadDocumentRequestInputSchema,
   isFreeMailDomain,
+  legalTextsFor,
   privacyPublication,
   type LeadDocumentRequestResponse,
+  type LegalTextRegistry,
 } from "@dream/contracts";
 import { API_CONFIG, type ApiConfig } from "../iam/http/api-config.js";
 import { generateToken, hashToken } from "../iam/auth/tokens.js";
@@ -31,12 +39,8 @@ import { PUBLIC_RATE_LIMITS, PublicRateLimitService, ipSubject } from "../iam/pu
 import { writeAudit } from "../iam/staff/audit-writer.js";
 import type { Db } from "../iam/db.js";
 import { leadDocumentOnSite } from "../catalog/live.js";
-import {
-  MARKETING_CONSENT_SHA256,
-  PRIVACY_NOTICE_SHA256,
-  consentVersionProblem,
-  newRequestReference,
-} from "./consent.js";
+import { consentIssue, evidenceSha256, newRequestReference } from "./consent.js";
+import { LEAD_LEGAL_TEXTS, formLocaleIsPublic, leadLegalTexts } from "./form-locale.js";
 
 function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "P2002";
@@ -49,13 +53,18 @@ export class LeadRequestsService {
     @Inject(PublicRateLimitService) private readonly limits: PublicRateLimitService,
     @Inject(Clock) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Optional() @Inject(LEAD_LEGAL_TEXTS) private readonly legalTexts?: LegalTextRegistry,
   ) {}
 
   async request(ctx: RequestContext, body: unknown): Promise<LeadDocumentRequestResponse> {
     if (!privacyPublication(this.config.deployEnv).publish) throw new ApiError("NOT_FOUND");
     const input = parseBody(LeadDocumentRequestInputSchema, body);
-    const problem = consentVersionProblem(input);
-    if (problem) throw new ApiError("VALIDATION_FAILED", [{ path: problem, rule: "outdated" }]);
+    // ML-10: the texts of the form's language; none may be offered: no form in that language.
+    const locale = input.locale ?? LEAD_FORM_DEFAULT_LOCALE;
+    const texts = legalTextsFor(locale, leadLegalTexts(this.legalTexts));
+    if (!texts) throw new ApiError("NOT_FOUND");
+    const issue = consentIssue(input, texts);
+    if (issue) throw new ApiError("VALIDATION_FAILED", [issue]);
     const site = await this.sites.begin(ctx);
     await this.limits.consume([
       { name: "lead_request_ip", subject: ipSubject(ctx), ...PUBLIC_RATE_LIMITS.leadRequestPerIp },
@@ -66,6 +75,8 @@ export class LeadRequestsService {
       },
       { name: "lead_request_site", subject: site.siteId, ...PUBLIC_RATE_LIMITS.leadRequestPerSite },
     ]);
+    // ML-10 (ADR-028 D14): a language that is not public on this site has no form (fail closed).
+    if (!(await formLocaleIsPublic(site, locale))) throw new ApiError("NOT_FOUND");
     const target = await leadDocumentOnSite(site, input.documentId.toLowerCase());
     if (!target) throw new ApiError("NOT_FOUND");
 
@@ -116,11 +127,14 @@ export class LeadRequestsService {
             fullName: input.fullName,
             company: input.company,
             country: input.country,
-            privacyNoticeVersion: input.privacyNoticeVersion,
-            privacyNoticeSha256: PRIVACY_NOTICE_SHA256,
+            privacyNoticeVersion: texts.privacyNotice.version,
+            privacyNoticeSha256: evidenceSha256(texts.privacyNotice.text),
             marketingConsent: input.marketingConsent,
-            marketingConsentVersion: input.marketingConsent ? LEAD_MARKETING_CONSENT.version : null,
-            marketingConsentSha256: input.marketingConsent ? MARKETING_CONSENT_SHA256 : null,
+            marketingConsentVersion: input.marketingConsent ? texts.marketingConsent.version : null,
+            marketingConsentSha256: input.marketingConsent
+              ? evidenceSha256(texts.marketingConsent.text)
+              : null,
+            locale,
             ipPrefixHmac,
             requestId: ctx.requestId,
             createdAt: now,
@@ -152,6 +166,10 @@ export class LeadRequestsService {
             grantId: grant.id,
             newLead: !existing,
             marketingConsent: input.marketingConsent,
+            // ML-10: the form's language and the text versions stored as evidence (no personal data).
+            locale,
+            privacyNoticeVersion: texts.privacyNotice.version,
+            marketingConsentVersion: input.marketingConsent ? texts.marketingConsent.version : null,
           },
           requestId: ctx.requestId,
         });

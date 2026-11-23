@@ -147,6 +147,11 @@ export const EN_BEFORE_ML6: Record<string, string> = {
   "documentRequest.intro": "Tell us who you are and the PDF downloads right away. The copy you receive is marked with your name, your company and a request reference.",
   "documentRequest.validity": "The download link stays valid for 15 minutes, for up to 3 downloads.",
   "documentRequest.newsOptIn": "Product news by e-mail only if you tick the separate box.",
+  // ML-10 (DP-241): new strings, shown only where a language's privacy texts are not approved
+  // (never on an English page: the English texts are the source and always offered).
+  "documentRequest.notInLanguageTitle": "Document requests are not available in this language yet",
+  "documentRequest.notInLanguageText":
+    "The privacy texts in this language are still being reviewed. Please use the English version of this page.",
   "leadForm.fullName": "Full name",
   "leadForm.company": "Company",
   "leadForm.email": "Work e-mail",
@@ -191,6 +196,8 @@ export const EN_BEFORE_ML6: Record<string, string> = {
   "contactForm.noticeTitle": "How we use your details",
   "contactForm.noticeVersion": "· notice version {version}",
   "contactForm.send": "Send message",
+  "contactForm.notInLanguage":
+    "The contact form is not available in this language yet. Please call or e-mail us, or use the English version of this page.",
   "contactSection.phone": "Phone",
   "contactSection.email": "E-mail",
   "contactSection.office": "Office",

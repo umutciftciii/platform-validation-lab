@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { COUNTRY_CODES, LEAD_CONTACT_NOTICE, cmsAsset } from "@dream/contracts";
+import { COUNTRY_CODES, cmsAsset } from "@dream/contracts";
 import type { ReactNode } from "react";
 
 import { PreviewBanner } from "@/components/home/home-page";
@@ -12,7 +12,8 @@ import type { SiteFooterContent } from "@/content/site-footer";
 import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
 import { contactFormUi, countryOptions, dictionary } from "@/lib/i18n";
-import type { RouteLocale } from "@/lib/locale-routing";
+import { formLegalTexts } from "@/lib/form-texts";
+import { DEFAULT_LOCALE, type RouteLocale } from "@/lib/locale-routing";
 import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
 
 /**
@@ -36,6 +37,7 @@ export function TemplatePage({ view }: { view: TemplatePageView }) {
             first={i === 0}
             contact={view.footer?.contact ?? null}
             locale={view.locale}
+            preview={view.preview}
           />
         ))}
       </main>
@@ -53,12 +55,15 @@ export function Section({
   first,
   contact,
   locale,
+  preview = false,
 }: {
   section: TemplateSection;
   first: boolean;
   contact: ContactDetails | null;
   /** ML-3/DP-250: the page's language, for fixed links (the policy link of the contact form). */
   locale: RouteLocale;
+  /** ML-10: a signed preview (its language may not be public: no working form there). */
+  preview?: boolean;
 }) {
   switch (section.type) {
     case "hero":
@@ -200,7 +205,9 @@ export function Section({
         </section>
       );
     case "contact":
-      return <ContactSection section={section} contact={contact} locale={locale} />;
+      return (
+        <ContactSection section={section} contact={contact} locale={locale} preview={preview} />
+      );
   }
 }
 
@@ -225,8 +232,10 @@ function ContactSection({
   section,
   contact,
   locale,
+  preview,
 }: {
   locale: RouteLocale;
+  preview: boolean;
   section: Extract<TemplateSection, { type: "contact" }>;
   contact: ContactDetails | null;
 }) {
@@ -234,8 +243,15 @@ function ContactSection({
   // DP-151: the working form where the privacy texts may be shown (DP-095 D-T5); elsewhere (in
   // production while they are drafts) the disabled form and the CMS note, never a form that
   // looks like it works.
-  const live = sitePrivacy().publish;
+  // ML-10 (ADR-028 D12): and only with the notice of the page's language where it may be offered
+  // (English, or an approved translation). A public page is served only in a public language (the
+  // proxy checked it); a preview proves nothing, so another language counts as not public there.
+  const legal = formLegalTexts(locale, preview || locale === DEFAULT_LOCALE ? [] : [locale]);
+  const live = sitePrivacy().publish && legal !== null;
   const ui = dictionary(locale);
+  // Where the privacy texts may be published but not in this language: say so in this language
+  // (the CMS note describes the production gate, not a missing translation).
+  const note = sitePrivacy().publish && !legal ? ui.contactForm.notInLanguage : section.formNote;
   return (
     <section id={section.id} className="tp-contact">
       <div className="tp-inner tp-contact-grid">
@@ -279,12 +295,12 @@ function ContactSection({
             </dl>
           ) : null}
         </div>
-        {live ? (
+        {live && legal ? (
           <ContactForm
             idPrefix={section.id}
             title={section.formTitle}
             countries={countryOptions(locale, COUNTRY_CODES)}
-            notice={{ version: LEAD_CONTACT_NOTICE.version, text: LEAD_CONTACT_NOTICE.text }}
+            notice={{ version: legal.contactNotice.version, text: legal.contactNotice.text }}
             privacyHref={privacyPolicyHref(locale)}
             locale={locale}
             ui={contactFormUi(locale)}
@@ -293,7 +309,7 @@ function ContactSection({
           <div className="tp-contact-form">
             <h3 className="tp-contact-form-title">{section.formTitle}</h3>
             <p id={noteId} className="tp-contact-form-note" role="note">
-              {section.formNote}
+              {note}
             </p>
             {/* No action and no submit: nothing can be sent until DP-151. */}
             <form className="tp-contact-fields" aria-describedby={noteId} noValidate>

@@ -9,13 +9,7 @@ import { dictionary, interpolate } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { localizeHref } from "@/lib/locale-routing";
 import { sitePrivacy } from "@/lib/privacy";
-import {
-  LEAD_MARKETING_CONSENT,
-  LEAD_PRIVACY_NOTICE,
-  PRIVACY_POLICY_SECTIONS,
-  PRIVACY_POLICY_VERSION,
-  fillPrivacyText,
-} from "@dream/contracts";
+import { PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, fillPrivacyText, legalTextsFor } from "@dream/contracts";
 
 /** ML-6: the title in the page's language. */
 export async function generateMetadata(): Promise<Metadata> {
@@ -30,7 +24,10 @@ export async function generateMetadata(): Promise<Metadata> {
  * DP-095 D-T5: the privacy policy of this site. Rendered per request: the gate reads the env.
  * ML-3: English only (`/en/privacy`); the Dutch policy needs its own approval (ADR-028 D12).
  * ML-6: the page's own labels come from the site UI dictionary; the policy text itself is the
- * versioned text of @dream/contracts (its Dutch version is ML-10).
+ * versioned text of @dream/contracts.
+ * ML-10: the policy and the form texts of the page's language (`legalTextsFor`). A language whose
+ * translation is still under DP-095 review has no page (`PRIVACY_LOCALES`, 404); the English
+ * policy is never shown under another language's address.
  */
 export default async function PrivacyPage() {
   const locale = await privacyLocale();
@@ -51,6 +48,12 @@ async function PrivacyPolicy({ locale }: { locale: RouteLocale }) {
   await connection();
   const gate = sitePrivacy();
   if (!gate.publish) notFound();
+  const texts = legalTextsFor(locale);
+  // PRIVACY_LOCALES already holds only languages with texts; checked again (fail closed).
+  if (!texts || texts.locale !== locale) notFound();
+  const policy = texts.privacyPolicy;
+  const fill = (t: string) =>
+    fillPrivacyText(t, PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, policy.labels);
   const ui = dictionary(locale).privacy;
   return (
     <article className="mx-auto max-w-3xl pt-6 lg:pt-10">
@@ -69,19 +72,19 @@ async function PrivacyPolicy({ locale }: { locale: RouteLocale }) {
       <h1 className="mt-3 text-[clamp(1.75rem,4vw,2.75rem)] font-medium leading-[1.08] [font-stretch:115%]">
         {ui.title}
       </h1>
-      <p className="mt-3 text-sm text-steel">{interpolate(ui.version, { version: PRIVACY_POLICY_VERSION })}</p>
-      {PRIVACY_POLICY_SECTIONS.map((section) => (
+      <p className="mt-3 text-sm text-steel">{interpolate(ui.version, { version: policy.version })}</p>
+      {policy.sections.map((section) => (
         <section key={section.id} id={section.id} className="mt-10">
           <h2 className="text-xl font-medium text-glass">{section.title}</h2>
           {section.paragraphs.map((p) => (
             <p key={p} className="mt-3 leading-relaxed text-glass/90">
-              {fillPrivacyText(p)}
+              {fill(p)}
             </p>
           ))}
           {section.list ? (
             <ul className="mt-3 list-disc space-y-1 pl-5 leading-relaxed text-glass/90">
               {section.list.map((item) => (
-                <li key={item}>{fillPrivacyText(item)}</li>
+                <li key={item}>{fill(item)}</li>
               ))}
             </ul>
           ) : null}
@@ -90,16 +93,16 @@ async function PrivacyPolicy({ locale }: { locale: RouteLocale }) {
       <section id="form-texts" className="mt-10">
         <h2 className="text-xl font-medium text-glass">{ui.formTextsTitle}</h2>
         <p className="mt-3 text-sm text-steel">
-          {interpolate(ui.noticeVersion, { version: LEAD_PRIVACY_NOTICE.version })}
+          {interpolate(ui.noticeVersion, { version: texts.privacyNotice.version })}
         </p>
         <blockquote className="mt-2 border-l-2 border-amber/50 pl-4 leading-relaxed text-glass/90">
-          {LEAD_PRIVACY_NOTICE.text}
+          {texts.privacyNotice.text}
         </blockquote>
         <p className="mt-5 text-sm text-steel">
-          {interpolate(ui.consentVersion, { version: LEAD_MARKETING_CONSENT.version })}
+          {interpolate(ui.consentVersion, { version: texts.marketingConsent.version })}
         </p>
         <blockquote className="mt-2 border-l-2 border-amber/50 pl-4 leading-relaxed text-glass/90">
-          {LEAD_MARKETING_CONSENT.text}
+          {texts.marketingConsent.text}
         </blockquote>
       </section>
     </article>

@@ -6,12 +6,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import { LEGAL_TEXTS } from "@dream/contracts";
+
 import {
+  PRIVACY_LOCALES,
   TECHNICAL_PREFIXES,
   classifyPath,
   decide,
   decideRequest,
   documentRequestStatus,
+  privacyLocalesOf,
   type DocumentsRead,
   type ProxyDeps,
   type ResolveAnswer,
@@ -339,6 +343,25 @@ describe("decide", () => {
     for (const p of ["/nl/products", "/nl/products/x", "/nl/privacy"]) {
       assert.deepEqual(await decide(p, "", deps), { action: "not-found", locale: "nl" }, p);
     }
+  });
+
+  it("ML-10: /nl/privacy stays a 404 while the Dutch texts are under review, even with NL public", async () => {
+    assert.deepEqual(PRIVACY_LOCALES, ["en"]);
+    const deps = fakeDeps({}, { publicLocales: ["en", "nl"] });
+    assert.deepEqual(await decide("/nl/privacy", "", deps), { action: "not-found", locale: "nl" });
+    assert.deepEqual(await decide("/en/privacy", "", deps), { action: "next" });
+  });
+
+  it("ML-10: an approved Dutch policy (isolated registry) is served only while NL is public", async () => {
+    const approved = { ...LEGAL_TEXTS, nl: { ...LEGAL_TEXTS["nl"]!, review: "approved" as const } };
+    const locales = privacyLocalesOf(approved);
+    assert.deepEqual(locales, ["en", "nl"]);
+    const open = { ...fakeDeps({}, { publicLocales: ["en", "nl"] }), privacyLocales: locales };
+    assert.deepEqual(await decide("/nl/privacy", "", open), { action: "next" });
+    const closed = { ...fakeDeps({}, { publicLocales: ["en"] }), privacyLocales: locales };
+    assert.deepEqual(await decide("/nl/privacy", "", closed), { action: "not-found", locale: "nl" });
+    const gated = { ...fakeDeps({}, { publicLocales: ["en", "nl"], privacyPublished: false }), privacyLocales: locales };
+    assert.deepEqual(await decide("/nl/privacy", "", gated), { action: "not-found", locale: "nl" });
   });
 
   it("ML-8c: the Dutch catalogue shows exactly what is published in Dutch", async () => {

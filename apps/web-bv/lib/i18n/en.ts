@@ -221,6 +221,10 @@ export const en = {
       "Tell us who you are and the PDF downloads right away. The copy you receive is marked with your name, your company and a request reference.",
     validity: "The download link stays valid for 15 minutes, for up to 3 downloads.",
     newsOptIn: "Product news by e-mail only if you tick the separate box.",
+    /** ML-10: no form where the privacy texts of the page's language are not approved yet. */
+    notInLanguageTitle: "Document requests are not available in this language yet",
+    notInLanguageText:
+      "The privacy texts in this language are still being reviewed. Please use the English version of this page.",
   },
 
   /** DP-042: the request form of a lead-gated document. */
@@ -281,6 +285,9 @@ export const en = {
     noticeTitle: "How we use your details",
     noticeVersion: "· notice version {version}",
     send: "Send message",
+    /** ML-10: shown with the disabled form where the notice of the page's language is not approved. */
+    notInLanguage:
+      "The contact form is not available in this language yet. Please call or e-mail us, or use the English version of this page.",
   },
 
   contactSection: {

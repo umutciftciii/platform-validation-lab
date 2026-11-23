@@ -4105,6 +4105,24 @@ describe("20. header and footer menus (DP-219)", () => {
 });
 
 /** ML-8b: the rollback statements of migration 40 from its header comment (before ML-8a's). */
+/**
+ * ML-10: the rollback statements of migration 42 from its header comment. Migration 42 adds
+ * foreign keys from LeadDocumentRequest and LeadContactMessage to SiteLocale, so ML-1's rollback
+ * runs after it.
+ */
+function ml10RollbackStatements(): string[] {
+  const sql = readFileSync(
+    path.join(API_DIR, "prisma/migrations/20261215090000_ml_10_form_locale/migration.sql"),
+    "utf8",
+  );
+  return sql
+    .split("-- Rollback")[1]!
+    .split("-- ===")[0]!
+    .split("\n")
+    .filter((l) => l.startsWith("--   ") && !l.startsWith("--   ("))
+    .map((l) => l.slice(5).trim().replace(/;$/, ""));
+}
+
 function ml8bRollbackStatements(): string[] {
   const sql = readFileSync(
     path.join(API_DIR, "prisma/migrations/20261213090000_ml_8b_translation_source/migration.sql"),
@@ -4372,8 +4390,14 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     const sitesBefore = await owner.site.findMany({ orderBy: { key: "asc" } });
     const pagesBefore = await owner.cmsPage.count();
     await rolledBack(async (tx) => {
-      // ML-8b (40) first (its columns live on ML-8a's tables), then ML-8a, then ML-2: their
-      // foreign keys to SiteLocale depend on the table.
+      // ML-10 (42) first (lead language foreign keys), then ML-8b (40) (its columns live on
+      // ML-8a's tables), then ML-8a, then ML-2: their foreign keys to SiteLocale depend on the table.
+      const ml10 = ml10RollbackStatements();
+      expect(ml10).toEqual([
+        'ALTER TABLE "LeadContactMessage" DROP COLUMN "locale"',
+        'ALTER TABLE "LeadDocumentRequest" DROP COLUMN "locale"',
+      ]);
+      for (const stmt of ml10) await tx.$executeRawUnsafe(stmt);
       const ml8b = ml8bRollbackStatements();
       expect(ml8b).toHaveLength(4);
       for (const stmt of ml8b) await tx.$executeRawUnsafe(stmt);

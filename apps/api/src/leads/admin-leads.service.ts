@@ -430,6 +430,8 @@ export class AdminLeadsService {
         message: m.message,
         privacyNoticeVersion: m.privacyNoticeVersion,
         privacyNoticeSha256: m.privacyNoticeSha256,
+        // ML-10: as stored (null before ML-10: read as English by the console, never rewritten).
+        locale: m.locale,
         redactedAt: m.redactedAt?.toISOString() ?? null,
         notification: (() => {
           const n = notificationOf.get(m.id);
@@ -468,6 +470,7 @@ export class AdminLeadsService {
           privacyNoticeSha256: r.privacyNoticeSha256,
           marketingConsent: r.marketingConsent,
           marketingConsentVersion: r.marketingConsentVersion,
+          locale: r.locale,
           grant: g
             ? {
                 expiresAt: g.expiresAt.toISOString(),

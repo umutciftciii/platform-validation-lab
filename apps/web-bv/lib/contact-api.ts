@@ -8,6 +8,8 @@
 import {
   ErrorBodySchema,
   LEAD_TEXT_FIELDS,
+  LEAD_TEXT_LOCALE_MISMATCH,
+  LEAD_TEXT_LOCALE_MISMATCH_CODE,
   LEAD_TEXT_OUTDATED,
   LeadContactMessageResponseSchema,
   PUBLIC_LEADS_API,
@@ -93,6 +95,10 @@ export async function handleContactMessage(request: Request): Promise<Response> 
   );
   if (res.status === 400 && outdated.length > 0) {
     return json(409, { code: LEAD_TEXT_OUTDATED, fields: outdated.map((d) => d.path) });
+  }
+  // ML-10: a notice of another language than the form's: refused, nothing stored (fail closed).
+  if (res.status === 400 && details.some((d) => d.rule === LEAD_TEXT_LOCALE_MISMATCH)) {
+    return json(400, { code: LEAD_TEXT_LOCALE_MISMATCH_CODE, fields: [] });
   }
   const status = [400, 403, 404, 413, 429].includes(res.status) ? res.status : 502;
   const retryAfter = res.headers.get("retry-after");

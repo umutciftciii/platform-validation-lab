@@ -6,6 +6,7 @@
 import {
   LEAD_SOURCES,
   LEAD_STATUSES,
+  legalTextVersionLocale,
   type LeadContactChannel,
   type LeadNotificationStatus,
   type LeadSource,
@@ -216,4 +217,25 @@ export function exportSummaryText(count: number, maxRows: number, filtered: bool
     return `${leadCount(count)} match. One export holds at most ${NUMBER.format(maxRows)}; narrow the filters (for example the dates) to export.`;
   }
   return `${leadCount(count)} ${filtered ? "match these filters" : "in total"} and will be exported.`;
+}
+
+/** ML-10: language names of the forms (the admin console is English until ML-11). */
+const LANGUAGE_NAME: Readonly<Record<string, string>> = { en: "English", nl: "Dutch" };
+
+function languageName(tag: string): string {
+  return Object.hasOwn(LANGUAGE_NAME, tag) ? (LANGUAGE_NAME[tag] as string) : tag;
+}
+
+/**
+ * ML-10 (ADR-028 D12): the language a form was sent in, as stored. A request or message stored
+ * before ML-10 has none: it is shown as English (the only language then) and marked as not
+ * recorded; the stored row is never changed.
+ */
+export function formLanguageLabel(locale: string | null): string {
+  return locale === null ? "English (not recorded, before ML-10)" : languageName(locale);
+}
+
+/** ML-10: the language of the legal text a version names (`<date>.<locale>`; older: English). */
+export function textLanguageLabel(version: string): string {
+  return languageName(legalTextVersionLocale(version));
 }
