@@ -3,7 +3,6 @@
 import {
   ALT_TEXT_MAX,
   CATALOG_API,
-  DEFAULT_ERROR_MESSAGES,
   ErrorBodySchema,
   IMAGE_MAX_BYTES,
   IMAGE_MIME_TYPES,
@@ -16,6 +15,9 @@ import { useRouter } from "next/navigation";
 import { useRef, useState, type DragEvent, type FormEvent } from "react";
 import { callCatalog } from "../../lib/catalog-client";
 import { formatBytes } from "../../lib/catalog-view";
+import { createTranslator } from "../../lib/i18n/translate";
+import type { Translate } from "../../lib/i18n/types";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill } from "../ui";
 import { FIELD } from "./parts";
@@ -30,35 +32,51 @@ interface Upload {
   error?: string;
 }
 
-const UPLOAD_RULES: Readonly<Record<string, string>> = {
-  unsupported_type: "Not a JPEG, PNG or WebP image.",
-  type_mismatch: "The file's content does not match its type.",
-  too_small: `Too small: at least ${IMAGE_MIN_WIDTH}×${IMAGE_MIN_HEIGHT} pixels.`,
-  too_many_pixels: "Too large: at most 25 megapixels and 10 000 px per side.",
-  corrupt: "The image is damaged or cannot be read.",
-  empty: "The file is empty.",
-  too_many_images: "This product already has the maximum number of images.",
-  archived: "Archived products cannot get new images.",
-};
+/** English, for callers without a console language (tests). */
+const EN: Translate = createTranslator("en");
+
+/** API rule codes with their own wording (catalog.media.images.uploadRules). */
+const UPLOAD_RULES = [
+  "unsupported_type",
+  "type_mismatch",
+  "too_many_pixels",
+  "corrupt",
+  "too_many_images",
+  "archived",
+] as const;
+type UploadRule = (typeof UPLOAD_RULES)[number];
+
+/** The wording of one API rule code, or undefined for a code without its own text. */
+function ruleMessage(rule: string, t: Translate): string | undefined {
+  if (rule === "too_small") {
+    return t("catalog.media.images.tooSmall", { width: IMAGE_MIN_WIDTH, height: IMAGE_MIN_HEIGHT });
+  }
+  if (rule === "empty") return t("catalog.media.upload.empty");
+  if ((UPLOAD_RULES as readonly string[]).includes(rule)) {
+    return t(`catalog.media.images.uploadRules.${rule as UploadRule}`);
+  }
+  return undefined;
+}
 
 /** Message for a failed upload answer (status + error body). */
-export function uploadMessage(status: number, body: unknown): string {
-  if (status === 413) return "Too large: at most 10 MB per file.";
-  if (status === 0) return "The upload was interrupted.";
+export function uploadMessage(status: number, body: unknown, t: Translate = EN): string {
+  if (status === 413) return t("catalog.media.images.tooLarge");
+  if (status === 0) return t("catalog.media.upload.interrupted");
   const parsed = ErrorBodySchema.safeParse(body);
-  if (!parsed.success) return "The upload failed. Try again.";
+  if (!parsed.success) return t("catalog.media.upload.failed");
   for (const d of parsed.data.error.details) {
-    if (typeof d === "object" && UPLOAD_RULES[d.rule]) return UPLOAD_RULES[d.rule] as string;
+    const message = typeof d === "object" ? ruleMessage(d.rule, t) : undefined;
+    if (message) return message;
   }
-  return DEFAULT_ERROR_MESSAGES[parsed.data.error.code];
+  return t(`errors.${parsed.data.error.code}`);
 }
 
 /** Checks the browser can make before uploading (the API checks the real content again). */
-export function precheck(file: { type: string; size: number }): string | null {
+export function precheck(file: { type: string; size: number }, t: Translate = EN): string | null {
   if (!(IMAGE_MIME_TYPES as readonly string[]).includes(file.type))
-    return UPLOAD_RULES["unsupported_type"] as string;
-  if (file.size === 0) return UPLOAD_RULES["empty"] as string;
-  if (file.size > IMAGE_MAX_BYTES) return "Too large: at most 10 MB per file.";
+    return t("catalog.media.images.uploadRules.unsupported_type");
+  if (file.size === 0) return t("catalog.media.upload.empty");
+  if (file.size > IMAGE_MAX_BYTES) return t("catalog.media.images.tooLarge");
   return null;
 }
 
@@ -87,6 +105,8 @@ export function ImageManager({
 }) {
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
+  const locale = useAdminLocale();
   const [images, setImages] = useState<ProductImage[]>([...initial]);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -105,8 +125,10 @@ export function ImageManager({
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/catalog-upload/${productId}`);
+      // i18n-ignore: HTTP header name
       xhr.setRequestHeader("Content-Type", file.type);
       xhr.setRequestHeader(UPLOAD_FILENAME_HEADER, encodeURIComponent(file.name).slice(0, 1024));
+      // i18n-ignore: HTTP header name
       xhr.setRequestHeader("Accept", "application/json");
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) patchUpload(id, { progress: e.loaded / e.total });
@@ -122,12 +144,12 @@ export function ImageManager({
           patchUpload(id, { state: "done", progress: 1 });
           resolve((body as { image: ProductImage }).image);
         } else {
-          patchUpload(id, { state: "failed", error: uploadMessage(xhr.status, body) });
+          patchUpload(id, { state: "failed", error: uploadMessage(xhr.status, body, t) });
           resolve(null);
         }
       };
       xhr.onerror = () => {
-        patchUpload(id, { state: "failed", error: uploadMessage(0, null) });
+        patchUpload(id, { state: "failed", error: uploadMessage(0, null, t) });
         resolve(null);
       };
       patchUpload(id, { state: "uploading" });
@@ -141,7 +163,7 @@ export function ImageManager({
     const fresh: Upload[] = [];
     for (const file of Array.from(files)) {
       const id = ++seq.current;
-      const problem = precheck(file);
+      const problem = precheck(file, t);
       fresh.push({
         id,
         name: file.name,
@@ -165,7 +187,7 @@ export function ImageManager({
       }
     }
     if (added) {
-      notify?.(`${added} image${added === 1 ? "" : "s"} uploaded.`);
+      notify?.(t("catalog.media.images.notices.uploaded", { count: added }));
       router.refresh();
     }
   }
@@ -203,7 +225,7 @@ export function ImageManager({
           version: img.version,
         }),
       (d) => setImages(d.items),
-      "Cover image changed.",
+      t("catalog.media.images.notices.coverChanged"),
     );
 
   // DP-166: hide from (or show again on) the sites; the image stays here, nothing is deleted.
@@ -217,17 +239,18 @@ export function ImageManager({
         }),
       (d) => setImages(d.items),
       isPublic
-        ? "Image shown on the sites again (after the next publication)."
-        : "Image hidden from the sites (after the next publication). It stays here.",
+        ? t("catalog.media.images.notices.shownAgain")
+        : t("catalog.media.images.notices.hidden"),
     );
 
   const remove = (img: ProductImage) => {
-    if (!window.confirm(`Remove “${img.originalFilename}”? The file is deleted.`)) return;
+    if (!window.confirm(t("catalog.media.images.removeConfirm", { name: img.originalFilename })))
+      return;
     void act(
       img.id,
       () => callCatalog<undefined>("DELETE", `/images/${img.id}`),
       () => setImages((list) => list.filter((i) => i.id !== img.id)),
-      "Image removed.",
+      t("catalog.media.images.notices.removed"),
     );
   };
 
@@ -240,7 +263,7 @@ export function ImageManager({
           imageIds: next.map((i) => i.id),
         }),
       (d) => setImages(d.items),
-      "Gallery order saved.",
+      t("catalog.media.images.notices.orderSaved"),
     );
   };
 
@@ -255,7 +278,7 @@ export function ImageManager({
           version: img.version,
         }),
       (d) => setImages((list) => list.map((i) => (i.id === img.id ? d.image : i))),
-      "Alt text saved.",
+      t("catalog.media.images.notices.altSaved"),
     );
   }
 
@@ -281,7 +304,7 @@ export function ImageManager({
             className="mx-auto max-h-80 w-auto max-w-full object-contain"
           />
           <figcaption className="flex flex-wrap items-center gap-2 border-t border-line bg-surface px-4 py-2 text-xs text-ink-3">
-            <StatusPill tone="petrol">Cover</StatusPill>
+            <StatusPill tone="petrol">{t("catalog.media.images.cover")}</StatusPill>
             <span className="min-w-0 truncate">{cover.originalFilename}</span>
           </figcaption>
         </figure>
@@ -303,17 +326,17 @@ export function ImageManager({
         >
           <Icon name="upload" size={24} className="text-ink-3" />
           <p className="text-sm text-ink-2">
-            Drag images here, or{" "}
+            {t("catalog.media.images.dropBefore")}
             <button
               type="button"
               onClick={() => input.current?.click()}
               className="font-medium text-petrol-strong underline-offset-2 hover:underline"
             >
-              choose files
+              {t("catalog.media.images.chooseFiles")}
             </button>
           </p>
           <p className="text-xs text-ink-3">
-            JPEG, PNG or WebP · up to 10 MB · at least {IMAGE_MIN_WIDTH}×{IMAGE_MIN_HEIGHT} px
+            {t("catalog.media.images.rules", { width: IMAGE_MIN_WIDTH, height: IMAGE_MIN_HEIGHT })}
           </p>
           <input
             ref={input}
@@ -322,7 +345,7 @@ export function ImageManager({
             accept={IMAGE_MIME_TYPES.join(",")}
             className="sr-only"
             tabIndex={-1}
-            aria-label="Choose image files"
+            aria-label={t("catalog.media.images.inputLabel")}
             onChange={(e) => {
               if (e.currentTarget.files?.length) void addFiles(e.currentTarget.files);
               e.currentTarget.value = "";
@@ -332,12 +355,14 @@ export function ImageManager({
       ) : null}
 
       {uploads.length ? (
-        <ul className="space-y-2" aria-label="Uploads">
+        <ul className="space-y-2" aria-label={t("catalog.media.images.uploadsLabel")}>
           {uploads.map((u) => (
             <li key={u.id} className="rounded-lg border border-line px-3 py-2 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="min-w-0 truncate text-ink">{u.name}</span>
-                <span className="tabular shrink-0 text-xs text-ink-3">{formatBytes(u.size)}</span>
+                <span className="tabular shrink-0 text-xs text-ink-3">
+                  {formatBytes(u.size, locale)}
+                </span>
               </div>
               {u.state === "failed" ? (
                 <p role="alert" className="mt-1 flex items-center gap-1.5 text-xs text-danger">
@@ -347,7 +372,7 @@ export function ImageManager({
               ) : (
                 <div
                   role="progressbar"
-                  aria-label={`Uploading ${u.name}`}
+                  aria-label={t("catalog.media.images.uploadingLabel", { name: u.name })}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={Math.round(u.progress * 100)}
@@ -368,15 +393,15 @@ export function ImageManager({
       ) : null}
 
       {images.length === 0 ? (
-        <EmptyState icon="image" title="No images yet">
+        <EmptyState icon="image" title={t("catalog.media.images.emptyTitle")}>
           {editable
-            ? "The first image you upload becomes the cover."
-            : "No image has been uploaded for this product."}
+            ? t("catalog.media.images.emptyEditable")
+            : t("catalog.media.images.emptyReadOnly")}
         </EmptyState>
       ) : (
         <ol
           className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
-          aria-label="Gallery, in display order"
+          aria-label={t("catalog.media.images.galleryLabel")}
         >
           {images.map((img, index) => (
             <li
@@ -410,8 +435,14 @@ export function ImageManager({
                   <span className="tabular rounded-md bg-surface/90 px-1.5 py-0.5 text-xs font-medium text-ink ring-1 ring-line">
                     {index + 1}
                   </span>
-                  {img.isCover ? <StatusPill tone="petrol">Cover</StatusPill> : null}
-                  {!img.isPublic ? <StatusPill tone="neutral">Hidden from site</StatusPill> : null}
+                  {img.isCover ? (
+                    <StatusPill tone="petrol">{t("catalog.media.images.cover")}</StatusPill>
+                  ) : null}
+                  {!img.isPublic ? (
+                    <StatusPill tone="neutral">
+                      {t("catalog.media.images.hiddenFromSite")}
+                    </StatusPill>
+                  ) : null}
                 </span>
                 {editable ? (
                   <Icon
@@ -427,18 +458,24 @@ export function ImageManager({
                   {img.originalFilename}
                 </p>
                 <p className="tabular text-xs text-ink-3">
-                  {img.width}×{img.height} · {formatBytes(img.byteSize)} ·{" "}
+                  {img.width}×{img.height} · {formatBytes(img.byteSize, locale)} ·{" "}
                   {img.mimeType.replace("image/", "").toUpperCase()}
                 </p>
                 <form onSubmit={(e) => saveAlt(e, img)} className="flex gap-2">
                   <label className="min-w-0 flex-1">
-                    <span className="sr-only">Alt text of image {index + 1}</span>
+                    <span className="sr-only">
+                      {t("catalog.media.images.altLabel", { number: index + 1 })}
+                    </span>
                     <input
                       name="altText"
                       defaultValue={img.altText ?? ""}
                       maxLength={ALT_TEXT_MAX}
                       readOnly={!editable}
-                      placeholder={editable ? "Describe the image (alt text)" : "No alt text"}
+                      placeholder={
+                        editable
+                          ? t("catalog.media.images.altPlaceholder")
+                          : t("catalog.media.images.altPlaceholderReadOnly")
+                      }
                       aria-invalid={!img.altText || undefined}
                       className={cx(FIELD, "h-9 text-sm")}
                     />
@@ -449,15 +486,17 @@ export function ImageManager({
                       disabled={busy !== null}
                       className={cx(buttonStyles.secondary, "h-9 px-3")}
                     >
-                      Save
-                      <span className="sr-only"> alt text of image {index + 1}</span>
+                      {t("catalog.media.images.save")}
+                      <span className="sr-only">
+                        {t("catalog.media.images.saveSr", { number: index + 1 })}
+                      </span>
                     </button>
                   ) : null}
                 </form>
                 {!img.altText ? (
                   <p className="flex items-center gap-1.5 text-xs text-amber-ink">
                     <Icon name="alert" size={13} />
-                    Alt text missing
+                    {t("catalog.media.images.altMissing")}
                   </p>
                 ) : null}
                 {editable ? (
@@ -471,8 +510,10 @@ export function ImageManager({
                         className={buttonStyles.ghost}
                       >
                         <Icon name="star" size={16} />
-                        Make cover
-                        <span className="sr-only"> (image {index + 1})</span>
+                        {t("catalog.media.images.makeCover")}
+                        <span className="sr-only">
+                          {t("catalog.media.images.imageSr", { number: index + 1 })}
+                        </span>
                       </button>
                     ) : null}
                     {!img.isCover ? (
@@ -483,8 +524,12 @@ export function ImageManager({
                         className={buttonStyles.ghost}
                       >
                         <Icon name="eye" size={16} />
-                        {img.isPublic ? "Hide from site" : "Show on site"}
-                        <span className="sr-only"> (image {index + 1})</span>
+                        {img.isPublic
+                          ? t("catalog.media.images.hide")
+                          : t("catalog.media.images.show")}
+                        <span className="sr-only">
+                          {t("catalog.media.images.imageSr", { number: index + 1 })}
+                        </span>
                       </button>
                     ) : null}
                     <span className="ml-auto flex">
@@ -495,7 +540,9 @@ export function ImageManager({
                         className={buttonStyles.icon}
                       >
                         <Icon name="back" size={16} />
-                        <span className="sr-only">Move image {index + 1} earlier</span>
+                        <span className="sr-only">
+                          {t("catalog.media.images.moveEarlier", { number: index + 1 })}
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -504,7 +551,9 @@ export function ImageManager({
                         className={buttonStyles.icon}
                       >
                         <Icon name="chevron" size={16} />
-                        <span className="sr-only">Move image {index + 1} later</span>
+                        <span className="sr-only">
+                          {t("catalog.media.images.moveLater", { number: index + 1 })}
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -513,7 +562,9 @@ export function ImageManager({
                         className={cx(buttonStyles.icon, "hover:text-danger")}
                       >
                         <Icon name="trash" size={16} />
-                        <span className="sr-only">Remove image {index + 1}</span>
+                        <span className="sr-only">
+                          {t("catalog.media.images.remove", { number: index + 1 })}
+                        </span>
                       </button>
                     </span>
                   </div>
@@ -524,9 +575,7 @@ export function ImageManager({
         </ol>
       )}
       {!editable && canEdit && archived ? (
-        <p className="text-sm text-ink-3">
-          This product is archived. Restore it to change its images.
-        </p>
+        <p className="text-sm text-ink-3">{t("catalog.media.images.productArchived")}</p>
       ) : null}
     </div>
   );

@@ -6,18 +6,23 @@ import { PageHeader } from "../../../../components/catalog/parts";
 import { EmptyState, ErrorState, Panel } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
+import { getTranslator } from "../../../../lib/i18n/server";
 
-export const metadata: Metadata = { title: "Global brands" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("catalog.xrefs.brandsPage.title") };
+}
 
 export default async function GlobalBrandsPage() {
   await requireStaffSession();
+  const t = await getTranslator();
   const context = await serverRead("/api/v1/admin/catalog/context", CatalogContextResponseSchema);
   if (!context.ok || context.data.sites.length === 0) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="list" title="Global brands" />
-        <EmptyState icon="shield" title="No access to the product catalogue">
-          Your roles do not include reading products on any site.
+        <PageHeader icon="list" title={t("catalog.xrefs.brandsPage.title")} />
+        <EmptyState icon="shield" title={t("catalog.xrefs.brandsPage.noAccessTitle")}>
+          {t("catalog.xrefs.brandsPage.noAccessText")}
         </EmptyState>
       </div>
     );
@@ -31,14 +36,14 @@ export default async function GlobalBrandsPage() {
       <div className="space-y-6 sm:space-y-8">
         <PageHeader
           icon="list"
-          title="Global brands"
-          back={{ href: "/products", label: "All products" }}
-          description="Other manufacturers' brands and products (with grade) that our products are cross-referenced with. Shared by both sites; archived, never deleted."
+          title={t("catalog.xrefs.brandsPage.title")}
+          back={{ href: "/products", label: t("catalog.xrefs.brandsPage.back") }}
+          description={t("catalog.xrefs.brandsPage.description")}
         />
         <Panel
           id="brands"
-          title="Brands"
-          description="Search, add and maintain brands; open a brand to manage its products."
+          title={t("catalog.xrefs.brandsPage.panelTitle")}
+          description={t("catalog.xrefs.brandsPage.panelDescription")}
         >
           {list.ok ? (
             <GlobalCatalogManager
@@ -47,8 +52,8 @@ export default async function GlobalBrandsPage() {
               canEdit={list.data.canEdit}
             />
           ) : (
-            <ErrorState title="The global brands could not be loaded">
-              Try again in a moment.
+            <ErrorState title={t("catalog.xrefs.brandsPage.loadError")}>
+              {t("catalog.xrefs.brandsPage.tryAgain")}
             </ErrorState>
           )}
         </Panel>

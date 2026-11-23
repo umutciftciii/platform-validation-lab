@@ -2,7 +2,9 @@
 
 import { SEO_TEXT_LIMITS } from "@dream/contracts";
 import type { ReactNode } from "react";
+import type { Translate } from "../../lib/i18n/types";
 import { Field, FIELD, TEXTAREA } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
 
 /** DP-209: the SEO fields an editor fills (CMS pages and articles, BV product listings). */
@@ -33,8 +35,8 @@ export function seoValues(seo: {
   };
 }
 
-const count = (v: string, recommended: number, max: number) =>
-  `${v.trim().length}/${max} · about ${recommended} show.`;
+const count = (t: Translate, v: string, recommended: number, max: number) =>
+  t("catalog.detail.seoFields.counter", { length: v.trim().length, max, recommended });
 
 /**
  * The fields themselves; lengths are counted, never enforced below the stored maximum (the
@@ -63,14 +65,18 @@ export function SeoFields({
   /** The Open Graph image chooser (a site asset for pages, a product image for products). */
   ogImage: ReactNode;
 }) {
+  const t = useT();
   const id = (name: string) => `${idPrefix}-${name}`;
   const L = SEO_TEXT_LIMITS;
   return (
     <div className="space-y-4">
       <Field
-        label="SEO title"
+        label={t("catalog.detail.seoFields.title.label")}
         htmlFor={id("title")}
-        hint={`${count(values.title, L.title.recommended, L.title.max)} Empty: ${titleFallback}.`}
+        hint={t("catalog.detail.seoFields.title.hint", {
+          counter: count(t, values.title, L.title.recommended, L.title.max),
+          fallback: titleFallback,
+        })}
       >
         <input
           id={id("title")}
@@ -83,9 +89,12 @@ export function SeoFields({
         />
       </Field>
       <Field
-        label="Meta description"
+        label={t("catalog.detail.seoFields.description.label")}
         htmlFor={id("description")}
-        hint={`${count(values.description, L.description.recommended, L.description.max)} Empty: ${descriptionFallback}.`}
+        hint={t("catalog.detail.seoFields.description.hint", {
+          counter: count(t, values.description, L.description.recommended, L.description.max),
+          fallback: descriptionFallback,
+        })}
       >
         <textarea
           id={id("description")}
@@ -99,9 +108,9 @@ export function SeoFields({
         />
       </Field>
       <Field
-        label="Canonical path"
+        label={t("catalog.detail.seoFields.canonical.label")}
         htmlFor={id("canonical")}
-        hint="Optional. A path of this site such as /about-us; empty: the page's own address."
+        hint={t("catalog.detail.seoFields.canonical.hint")}
       >
         <input
           id={id("canonical")}
@@ -124,18 +133,22 @@ export function SeoFields({
           className="mt-0.5 size-4 accent-petrol"
         />
         <span>
-          <span className="block">Hide from search engines (noindex)</span>
+          <span className="block">{t("catalog.detail.seoFields.noindex.label")}</span>
           <span className="block text-xs text-ink-3">
-            Adds noindex and leaves the page out of the sitemap once published.
+            {t("catalog.detail.seoFields.noindex.hint")}
           </span>
         </span>
       </label>
       <fieldset className="space-y-4 rounded-lg border border-line p-3">
-        <legend className="px-1 text-sm font-medium text-ink">Link preview (Open Graph)</legend>
+        <legend className="px-1 text-sm font-medium text-ink">
+          {t("catalog.detail.seoFields.og.legend")}
+        </legend>
         <Field
-          label="Open Graph title"
+          label={t("catalog.detail.seoFields.og.title")}
           htmlFor={id("og-title")}
-          hint={`${count(values.ogTitle, L.ogTitle.recommended, L.ogTitle.max)} Empty: the SEO title.`}
+          hint={t("catalog.detail.seoFields.og.titleHint", {
+            counter: count(t, values.ogTitle, L.ogTitle.recommended, L.ogTitle.max),
+          })}
         >
           <input
             id={id("og-title")}
@@ -148,9 +161,16 @@ export function SeoFields({
           />
         </Field>
         <Field
-          label="Open Graph description"
+          label={t("catalog.detail.seoFields.og.description")}
           htmlFor={id("og-description")}
-          hint={`${count(values.ogDescription, L.ogDescription.recommended, L.ogDescription.max)} Empty: the meta description.`}
+          hint={t("catalog.detail.seoFields.og.descriptionHint", {
+            counter: count(
+              t,
+              values.ogDescription,
+              L.ogDescription.recommended,
+              L.ogDescription.max,
+            ),
+          })}
         >
           <textarea
             id={id("og-description")}

@@ -19,6 +19,7 @@ import {
   type GlobalProduct,
 } from "@dream/contracts";
 import { callCatalog } from "../../lib/catalog-client";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, StatusPill } from "../ui";
 import { useNotice } from "./notices";
@@ -44,6 +45,7 @@ export function GlobalCatalogManager({
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState("");
   const notify = useNotice();
+  const t = useT();
 
   const put = (b: GlobalBrand, message: string) => {
     setBrands((list) =>
@@ -61,18 +63,18 @@ export function GlobalCatalogManager({
   return (
     <div className="space-y-4">
       <p className="text-sm text-ink-3" aria-live="polite">
-        {brands.length} {brands.length === 1 ? "brand" : "brands"}
-        {term ? ` · ${shown.length} shown` : ""}
+        {t("catalog.xrefs.brands.count", { count: brands.length })}
+        {term ? t("catalog.xrefs.brands.shown", { n: shown.length }) : ""}
       </p>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-sm">
           <label htmlFor="brand-filter" className="sr-only">
-            Filter brands
+            {t("catalog.xrefs.brands.filter")}
           </label>
           <input
             id="brand-filter"
             className={cx(FIELD, "pl-9")}
-            placeholder="Filter by brand or manufacturer"
+            placeholder={t("catalog.xrefs.brands.filterPlaceholder")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -85,27 +87,29 @@ export function GlobalCatalogManager({
         {canEdit && !adding ? (
           <button type="button" className={buttonStyles.primary} onClick={() => setAdding(true)}>
             <Icon name="plus" size={17} />
-            New brand
+            {t("catalog.xrefs.brands.newBrand")}
           </button>
         ) : null}
       </div>
       {adding ? (
         <BrandForm
           initial={emptyBrand}
-          submitLabel="Create brand"
+          submitLabel={t("catalog.xrefs.brands.createBrand")}
           onCancel={() => setAdding(false)}
           onSubmit={async (d) => {
             const r = await callCatalog<{ brand: GlobalBrand }>("POST", "/global-brands", d);
             if (!r.ok) return r.message;
             setAdding(false);
-            put(r.data.brand, `Brand ${r.data.brand.name} created.`);
+            put(r.data.brand, t("catalog.xrefs.brands.created", { name: r.data.brand.name }));
             return null;
           }}
         />
       ) : null}
       {shown.length === 0 ? (
         <p className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-sm text-ink-3">
-          {brands.length === 0 ? "No global brands yet." : "No brand matches the filter."}
+          {brands.length === 0
+            ? t("catalog.xrefs.brands.empty")
+            : t("catalog.xrefs.brands.noMatch")}
         </p>
       ) : (
         <ul className="space-y-3">
@@ -130,6 +134,7 @@ function BrandForm({
   onCancel: () => void;
 }) {
   const id = useId();
+  const t = useT();
   const [d, setD] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -150,7 +155,7 @@ function BrandForm({
       onSubmit={submit}
       className="grid gap-4 rounded-xl border border-line bg-surface p-4 shadow-raised sm:grid-cols-2"
     >
-      <Field label="Brand name" htmlFor={`${id}-n`}>
+      <Field label={t("catalog.xrefs.brands.brandName")} htmlFor={`${id}-n`}>
         <input
           id={`${id}-n`}
           className={FIELD}
@@ -160,7 +165,7 @@ function BrandForm({
           onChange={(e) => setD({ ...d, name: e.target.value })}
         />
       </Field>
-      <Field label="Manufacturer" htmlFor={`${id}-m`}>
+      <Field label={t("catalog.xrefs.brands.manufacturer")} htmlFor={`${id}-m`}>
         <input
           id={`${id}-m`}
           className={FIELD}
@@ -170,7 +175,11 @@ function BrandForm({
           onChange={(e) => setD({ ...d, manufacturer: e.target.value })}
         />
       </Field>
-      <Field label="Country (ISO code)" htmlFor={`${id}-c`} hint="Two letters, e.g. NL, GB, US.">
+      <Field
+        label={t("catalog.xrefs.brands.country")}
+        htmlFor={`${id}-c`}
+        hint={t("catalog.xrefs.brands.countryHint")}
+      >
         <input
           id={`${id}-c`}
           className={cx(FIELD, "uppercase")}
@@ -180,7 +189,7 @@ function BrandForm({
           onChange={(e) => setD({ ...d, country: e.target.value })}
         />
       </Field>
-      <Field label="Notes (internal)" htmlFor={`${id}-o`} className="sm:col-span-2">
+      <Field label={t("catalog.xrefs.brands.notes")} htmlFor={`${id}-o`} className="sm:col-span-2">
         <textarea
           id={`${id}-o`}
           className={cx(TEXTAREA, "min-h-20")}
@@ -196,7 +205,7 @@ function BrandForm({
       ) : null}
       <div className="flex flex-wrap justify-end gap-2 sm:col-span-2">
         <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-          Cancel
+          {t("catalog.xrefs.brands.cancel")}
         </button>
         <button type="submit" className={buttonStyles.primary} disabled={busy}>
           {submitLabel}
@@ -218,6 +227,7 @@ function BrandCard({
   const id = useId();
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [products, setProducts] = useState<GlobalProduct[] | null>(null);
@@ -255,12 +265,7 @@ function BrandCard({
   };
 
   async function setArchived(archive: boolean) {
-    if (
-      archive &&
-      !window.confirm(
-        `Archive ${brand.name}? Its products can no longer be cross-referenced or shown, and verified cross-references to them become stale.`,
-      )
-    )
+    if (archive && !window.confirm(t("catalog.xrefs.brands.archiveConfirm", { name: brand.name })))
       return;
     const r = await callCatalog<{ brand: GlobalBrand }>(
       "POST",
@@ -272,7 +277,10 @@ function BrandCard({
       router.refresh();
       return;
     }
-    onChange(r.data.brand, archive ? "Brand archived." : "Brand restored.");
+    onChange(
+      r.data.brand,
+      archive ? t("catalog.xrefs.brands.archived") : t("catalog.xrefs.brands.restored"),
+    );
   }
 
   return (
@@ -286,12 +294,14 @@ function BrandCard({
             <h3 id={`${id}-t`} className="text-base font-semibold text-ink">
               {brand.name}
             </h3>
-            {archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
+            {archived ? (
+              <StatusPill tone="neutral">{t("catalog.xrefs.brands.archivedPill")}</StatusPill>
+            ) : null}
           </div>
           <p className="text-sm text-ink-3">
             {brand.manufacturer}
-            {brand.country ? ` · ${brand.country}` : ""} · {count}{" "}
-            {count === 1 ? "product" : "products"}
+            {brand.country ? ` · ${brand.country}` : ""}
+            {t("catalog.xrefs.brands.productCount", { count })}
           </p>
           {brand.notes ? <p className="mt-1 text-sm text-ink-2">{brand.notes}</p> : null}
         </div>
@@ -303,12 +313,12 @@ function BrandCard({
             onClick={() => setOpen((o) => !o)}
           >
             <Icon name="list" size={16} />
-            {open ? "Hide products" : "Products"}
+            {open ? t("catalog.xrefs.brands.hideProducts") : t("catalog.xrefs.brands.products")}
           </button>
           {canEdit && !archived ? (
             <button type="button" className={buttonStyles.ghost} onClick={() => setEditing(true)}>
               <Icon name="edit" size={16} />
-              Edit
+              {t("catalog.xrefs.brands.edit")}
             </button>
           ) : null}
           {canEdit ? (
@@ -318,7 +328,7 @@ function BrandCard({
               onClick={() => void setArchived(!archived)}
             >
               <Icon name={archived ? "refresh" : "archive"} size={16} />
-              {archived ? "Restore" : "Archive"}
+              {archived ? t("catalog.xrefs.brands.restore") : t("catalog.xrefs.brands.archive")}
             </button>
           ) : null}
         </div>
@@ -332,7 +342,7 @@ function BrandCard({
               country: brand.country ?? "",
               notes: brand.notes ?? "",
             }}
-            submitLabel="Save brand"
+            submitLabel={t("catalog.xrefs.brands.saveBrand")}
             onCancel={() => setEditing(false)}
             onSubmit={async (d) => {
               const r = await callCatalog<{ brand: GlobalBrand }>(
@@ -342,7 +352,7 @@ function BrandCard({
               );
               if (!r.ok) return r.message;
               setEditing(false);
-              onChange(r.data.brand, "Brand saved.");
+              onChange(r.data.brand, t("catalog.xrefs.brands.savedBrand"));
               return null;
             }}
           />
@@ -351,9 +361,9 @@ function BrandCard({
       {open ? (
         <div className="space-y-3 border-t border-line bg-surface-2/50 p-4">
           {products === null ? (
-            <p className="text-sm text-ink-3">Loading…</p>
+            <p className="text-sm text-ink-3">{t("catalog.xrefs.brands.loading")}</p>
           ) : products.length === 0 ? (
-            <p className="text-sm text-ink-3">No products of this brand yet.</p>
+            <p className="text-sm text-ink-3">{t("catalog.xrefs.brands.noProducts")}</p>
           ) : (
             <ul className="divide-y divide-line rounded-lg border border-line bg-surface">
               {products.map((p) => (
@@ -364,7 +374,7 @@ function BrandCard({
           {canEdit && !archived ? (
             addingProduct ? (
               <ProductForm
-                submitLabel="Add product"
+                submitLabel={t("catalog.xrefs.brands.addProduct")}
                 onCancel={() => setAddingProduct(false)}
                 onSubmit={async (d) => {
                   const r = await callCatalog<{ product: GlobalProduct }>(
@@ -374,7 +384,10 @@ function BrandCard({
                   );
                   if (!r.ok) return r.message;
                   setAddingProduct(false);
-                  putProduct(r.data.product, `${r.data.product.name} added.`);
+                  putProduct(
+                    r.data.product,
+                    t("catalog.xrefs.brands.productAdded", { name: r.data.product.name }),
+                  );
                   return null;
                 }}
               />
@@ -385,7 +398,7 @@ function BrandCard({
                 onClick={() => setAddingProduct(true)}
               >
                 <Icon name="plus" size={16} />
-                Add product
+                {t("catalog.xrefs.brands.addProduct")}
               </button>
             )
           ) : null}
@@ -407,6 +420,7 @@ function ProductForm({
   onCancel: () => void;
 }) {
   const id = useId();
+  const t = useT();
   const [d, setD] = useState(initial ?? { name: "", grade: "", description: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -426,7 +440,7 @@ function ProductForm({
       }}
       className="grid gap-3 rounded-lg border border-line bg-surface p-3 sm:grid-cols-2"
     >
-      <Field label="Product name" htmlFor={`${id}-n`}>
+      <Field label={t("catalog.xrefs.brands.productName")} htmlFor={`${id}-n`}>
         <input
           id={`${id}-n`}
           className={FIELD}
@@ -436,7 +450,11 @@ function ProductForm({
           onChange={(e) => setD({ ...d, name: e.target.value })}
         />
       </Field>
-      <Field label="Grade" htmlFor={`${id}-g`} hint="e.g. SAE 5W-30, ISO VG 46, Group III.">
+      <Field
+        label={t("catalog.xrefs.brands.grade")}
+        htmlFor={`${id}-g`}
+        hint={t("catalog.xrefs.brands.gradeHint")}
+      >
         <input
           id={`${id}-g`}
           className={FIELD}
@@ -445,7 +463,11 @@ function ProductForm({
           onChange={(e) => setD({ ...d, grade: e.target.value })}
         />
       </Field>
-      <Field label="Description (internal)" htmlFor={`${id}-d`} className="sm:col-span-2">
+      <Field
+        label={t("catalog.xrefs.brands.description")}
+        htmlFor={`${id}-d`}
+        className="sm:col-span-2"
+      >
         <textarea
           id={`${id}-d`}
           className={cx(TEXTAREA, "min-h-20")}
@@ -461,7 +483,7 @@ function ProductForm({
       ) : null}
       <div className="flex flex-wrap justify-end gap-2 sm:col-span-2">
         <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-          Cancel
+          {t("catalog.xrefs.brands.cancel")}
         </button>
         <button type="submit" className={buttonStyles.primary} disabled={busy}>
           {submitLabel}
@@ -481,6 +503,7 @@ function ProductRow({
   onChange: (p: GlobalProduct, message: string) => void;
 }) {
   const notify = useNotice();
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const archived = p.status === "ARCHIVED";
   async function setArchived(archive: boolean) {
@@ -493,14 +516,19 @@ function ProductRow({
       notify?.(r.message, "error");
       return;
     }
-    onChange(r.data.product, archive ? "Product archived." : "Product restored.");
+    onChange(
+      r.data.product,
+      archive
+        ? t("catalog.xrefs.brands.productArchived")
+        : t("catalog.xrefs.brands.productRestored"),
+    );
   }
   if (editing) {
     return (
       <li className="p-3">
         <ProductForm
           initial={{ name: p.name, grade: p.grade ?? "", description: p.description ?? "" }}
-          submitLabel="Save product"
+          submitLabel={t("catalog.xrefs.brands.saveProduct")}
           onCancel={() => setEditing(false)}
           onSubmit={async (d) => {
             const r = await callCatalog<{ product: GlobalProduct }>(
@@ -510,10 +538,7 @@ function ProductRow({
             );
             if (!r.ok) return r.message;
             setEditing(false);
-            onChange(
-              r.data.product,
-              "Product saved. Verified cross-references to it need a new verification.",
-            );
+            onChange(r.data.product, t("catalog.xrefs.brands.productSaved"));
             return null;
           }}
         />
@@ -526,7 +551,9 @@ function ProductRow({
         <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
           {p.name}
           {p.grade ? <span className="font-normal text-ink-3">· {p.grade}</span> : null}
-          {archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
+          {archived ? (
+            <StatusPill tone="neutral">{t("catalog.xrefs.brands.archivedPill")}</StatusPill>
+          ) : null}
         </span>
         {p.description ? <span className="block text-xs text-ink-3">{p.description}</span> : null}
       </span>
@@ -535,7 +562,7 @@ function ProductRow({
           {!archived ? (
             <button type="button" className={buttonStyles.ghost} onClick={() => setEditing(true)}>
               <Icon name="edit" size={16} />
-              Edit
+              {t("catalog.xrefs.brands.edit")}
             </button>
           ) : null}
           <button
@@ -543,7 +570,7 @@ function ProductRow({
             className={buttonStyles.ghost}
             onClick={() => void setArchived(!archived)}
           >
-            {archived ? "Restore" : "Archive"}
+            {archived ? t("catalog.xrefs.brands.restore") : t("catalog.xrefs.brands.archive")}
           </button>
         </span>
       ) : null}

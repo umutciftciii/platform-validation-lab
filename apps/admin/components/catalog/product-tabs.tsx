@@ -35,11 +35,10 @@ import {
   tabForHash,
   type ProductTabId,
 } from "../../lib/product-tabs";
+import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
 import { NoticeScope, type NoticeOrigin } from "./notices";
 import { SiteSwitcher } from "./parts";
-
-const LEAVE_TEXT = "You have unsaved changes on this product. Leave the page and discard them?";
 
 interface TabsState {
   active: ProductTabId;
@@ -89,6 +88,7 @@ export function ProductTabs({
   const topRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const base = useId();
+  const t = useT();
   const anyUnsaved = Object.keys(unsaved).length > 0;
 
   const setUnsaved = useCallback((id: string, tab: ProductTabId | null, value: boolean) => {
@@ -167,7 +167,7 @@ export function ProductTabs({
       const url = new URL(a.href, window.location.href);
       const here = window.location;
       if (url.pathname === here.pathname && url.search === here.search) return;
-      if (!window.confirm(LEAVE_TEXT)) {
+      if (!window.confirm(t("catalog.detail.tabs.leave"))) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -178,12 +178,12 @@ export function ProductTabs({
       window.removeEventListener("beforeunload", beforeUnload);
       document.removeEventListener("click", click, true);
     };
-  }, [anyUnsaved]);
+  }, [anyUnsaved, t]);
 
   const unsavedTabs = new Set(Object.values(unsaved));
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    const i = PRODUCT_TABS.findIndex((t) => t.id === active);
+    const i = PRODUCT_TABS.findIndex((item) => item.id === active);
     let next = -1;
     if (e.key === "ArrowRight") next = (i + 1) % PRODUCT_TABS.length;
     else if (e.key === "ArrowLeft") next = (i - 1 + PRODUCT_TABS.length) % PRODUCT_TABS.length;
@@ -208,24 +208,24 @@ export function ProductTabs({
         <div
           ref={listRef}
           role="tablist"
-          aria-label="Product sections"
+          aria-label={t("catalog.detail.tabs.sections")}
           onKeyDown={onKeyDown}
           className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          {PRODUCT_TABS.map((t) => {
-            const selected = t.id === active;
-            const badge = badges[t.id];
-            const dirty = unsavedTabs.has(t.id);
+          {PRODUCT_TABS.map((item) => {
+            const selected = item.id === active;
+            const badge = badges[item.id];
+            const dirty = unsavedTabs.has(item.id);
             return (
               <button
-                key={t.id}
-                id={tabDomId(base, t.id)}
+                key={item.id}
+                id={tabDomId(base, item.id)}
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                aria-controls={panelDomId(t.id)}
+                aria-controls={panelDomId(item.id)}
                 tabIndex={selected ? 0 : -1}
-                onClick={() => select(t.id)}
+                onClick={() => select(item.id)}
                 className={cx(
                   "relative inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-petrol/40 focus-visible:ring-inset",
                   selected
@@ -233,7 +233,7 @@ export function ProductTabs({
                     : "border-transparent text-ink-3 hover:border-line-strong hover:text-ink",
                 )}
               >
-                {t.label}
+                {productTabLabel(item.id, t)}
                 {badge?.count !== undefined ? (
                   <span className="tabular rounded-full bg-surface-2 px-1.5 text-xs text-ink-3 ring-1 ring-line">
                     {badge.count}
@@ -248,9 +248,12 @@ export function ProductTabs({
                   </span>
                 ) : null}
                 {dirty ? (
-                  <span className="inline-flex items-center" title="Unsaved changes">
+                  <span
+                    className="inline-flex items-center"
+                    title={t("catalog.detail.tabs.unsaved")}
+                  >
                     <span aria-hidden="true" className="size-2 rounded-full bg-amber" />
-                    <span className="sr-only">, unsaved changes</span>
+                    <span className="sr-only">{t("catalog.detail.tabs.unsavedSr")}</span>
                   </span>
                 ) : null}
               </button>
@@ -265,11 +268,11 @@ export function ProductTabs({
         >
           <span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-amber" />
           <span>
-            Unsaved changes in{" "}
-            {PRODUCT_TABS.filter((t) => unsavedTabs.has(t.id))
-              .map((t) => t.label)
-              .join(", ")}
-            . They are kept while you switch tabs; save each form to keep them for good.
+            {t("catalog.detail.tabs.unsavedIn", {
+              tabs: PRODUCT_TABS.filter((item) => unsavedTabs.has(item.id))
+                .map((item) => productTabLabel(item.id, t))
+                .join(", "),
+            })}
           </span>
         </p>
       ) : null}
@@ -281,10 +284,11 @@ export function ProductTabs({
 /** One tab's content; stays mounted (hidden) while another tab is active. */
 export function ProductTabPanel({ tab, children }: { tab: ProductTabId; children: ReactNode }) {
   const tabs = useContext(TabsContext);
+  const t = useT();
   const select = tabs?.select;
   const origin = useMemo<NoticeOrigin>(
-    () => ({ label: productTabLabel(tab), ...(select ? { open: () => select(tab) } : {}) }),
-    [tab, select],
+    () => ({ label: productTabLabel(tab, t), ...(select ? { open: () => select(tab) } : {}) }),
+    [tab, select, t],
   );
   const hidden = tabs ? tabs.active !== tab : false;
   return (
@@ -293,7 +297,7 @@ export function ProductTabPanel({ tab, children }: { tab: ProductTabId; children
         <div
           id={panelDomId(tab)}
           role="tabpanel"
-          aria-label={productTabLabel(tab)}
+          aria-label={productTabLabel(tab, t)}
           hidden={hidden}
           className="space-y-6 sm:space-y-8"
         >
@@ -394,12 +398,14 @@ export function ProductSiteSwitcher({
   current: string;
 }) {
   const tabs = useContext(TabsContext);
+  const t = useT();
   const tab = tabs?.active ?? "content";
   const productId = tabs?.productId ?? "";
   return (
     <SiteSwitcher
       sites={sites}
       current={current}
+      label={t("catalog.common.site")}
       hrefFor={(s) => productHref(productId, s.key.toLowerCase(), tab)}
     />
   );

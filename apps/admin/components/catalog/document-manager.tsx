@@ -2,14 +2,12 @@
 
 import {
   CATALOG_API,
-  DEFAULT_ERROR_MESSAGES,
   DOCUMENT_ACCESS_POLICIES,
   DOCUMENT_DEFAULT_LANGUAGE,
   DOCUMENT_DESCRIPTION_MAX,
   DOCUMENT_MAX_BYTES,
   DOCUMENT_MIME_TYPE,
   DOCUMENT_TITLE_MAX,
-  DOCUMENT_TYPE_LABELS,
   DOCUMENT_TYPES,
   ErrorBodySchema,
   REVISION_NOTE_HEADER,
@@ -27,6 +25,11 @@ import { useRouter } from "next/navigation";
 import { useId, useRef, useState, type FormEvent } from "react";
 import { callCatalog } from "../../lib/catalog-client";
 import { formatBytes } from "../../lib/catalog-view";
+import { ADMIN_TIME_ZONE, type AdminLocale, INTL_LOCALE } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
+import { createTranslator } from "../../lib/i18n/translate";
+import type { Translate } from "../../lib/i18n/types";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill, type PillTone } from "../ui";
 import { Field, FIELD, SITE_SHORT, TEXTAREA } from "./parts";
@@ -34,54 +37,62 @@ import { useNotice } from "./notices";
 
 // --- wording ----------------------------------------------------------------------------------
 
-export const POLICY_TEXT: Readonly<
-  Record<DocumentAccessPolicy, { label: string; tone: PillTone; help: string }>
-> = {
-  PUBLIC: {
-    label: "Public",
-    tone: "success",
-    help: "Anyone can download it on a site that shows it, while the product is published there.",
-  },
-  MEMBERS_ONLY: {
-    label: "Members only",
-    tone: "amber",
-    help: "Listed on the site, but not downloadable until member accounts exist (DP-039).",
-  },
-  LEAD_REQUIRED: {
-    label: "Lead required",
-    tone: "amber",
-    help: "Listed on the site; downloaded after the short request form, with a watermark naming the requester (DP-042, DP-043).",
-  },
-  INTERNAL: {
-    label: "Internal",
-    tone: "neutral",
-    help: "Staff only. Never listed or served on a public site.",
-  },
+/** English, for callers without a console language (tests). */
+const EN: Translate = createTranslator("en");
+
+const POLICY_TONE: Readonly<Record<DocumentAccessPolicy, PillTone>> = {
+  PUBLIC: "success",
+  MEMBERS_ONLY: "amber",
+  LEAD_REQUIRED: "amber",
+  INTERNAL: "neutral",
 };
 
-export const SITE_STATE_TEXT: Readonly<
-  Record<DocumentSiteState, { label: string; tone: PillTone }>
-> = {
-  served: { label: "Downloadable", tone: "success" },
-  served_on_request: { label: "Downloadable after request form", tone: "success" },
-  hidden: { label: "Not shown", tone: "neutral" },
-  internal: { label: "Internal only", tone: "neutral" },
-  archived: { label: "Archived", tone: "neutral" },
-  no_file: { label: "No file yet", tone: "amber" },
-  product_not_live: { label: "Waits for publication", tone: "amber" },
-  awaiting_membership: { label: "Listed, download closed", tone: "amber" },
-  awaiting_lead_capture: { label: "Listed, download closed", tone: "amber" },
-  language_not_public: { label: "Waits for its language to be public", tone: "amber" },
+/** Label, tone and explanation of an access policy, in the console language. */
+export function policyText(
+  policy: DocumentAccessPolicy,
+  t: Translate = EN,
+): { label: string; tone: PillTone; help: string } {
+  return {
+    label: t(`catalog.media.documents.policy.${policy}.label`),
+    tone: POLICY_TONE[policy],
+    help: t(`catalog.media.documents.policy.${policy}.help`),
+  };
+}
+
+const SITE_STATE_TONE: Readonly<Record<DocumentSiteState, PillTone>> = {
+  served: "success",
+  served_on_request: "success",
+  hidden: "neutral",
+  internal: "neutral",
+  archived: "neutral",
+  no_file: "amber",
+  product_not_live: "amber",
+  awaiting_membership: "amber",
+  awaiting_lead_capture: "amber",
+  language_not_public: "amber",
 };
+
+/** Label and tone of what a site does with a document, in the console language. */
+export function siteStateText(
+  state: DocumentSiteState,
+  t: Translate = EN,
+): { label: string; tone: PillTone } {
+  return { label: t(`catalog.media.documents.siteState.${state}`), tone: SITE_STATE_TONE[state] };
+}
 
 /** ML-9: the languages a document can have (SiteLocale of the caller's sites). */
 export type DocumentLanguageOption = ProductDocumentListResponse["languages"][number];
 
-/** ML-9: "English (en)", "Dutch (nl)": the admin names a language in English, with its tag. */
-export function documentLanguageName(tag: string): string {
+/**
+ * ML-9: "English (en)", "Dutch (nl)": the admin names a language in the console language, with its
+ * tag (ML-12a; TR "İngilizce (en)"). English keeps the plain "en" names of before.
+ */
+export function documentLanguageName(tag: string, locale: AdminLocale = "en"): string {
   let name: string | undefined;
   try {
-    name = new Intl.DisplayNames(["en"], { type: "language" }).of(tag);
+    name = new Intl.DisplayNames([locale === "en" ? "en" : INTL_LOCALE[locale]], {
+      type: "language",
+    }).of(tag);
   } catch {
     name = undefined;
   }
@@ -105,68 +116,84 @@ export function documentLanguageOptions(
   return out;
 }
 
-const UPLOAD_RULES: Readonly<Record<string, string>> = {
-  not_pdf: "Not a PDF file (the content was checked, not the name).",
-  empty: "The file is empty.",
-  encrypted: "Password-protected or encrypted PDFs are not accepted. Save an unprotected copy.",
-  active_content:
-    "The PDF contains active content (JavaScript, embedded files, launch or form actions). Export or print it to a plain PDF and try again.",
-  too_complex: "The PDF could not be inspected safely. Export or print it to a plain PDF again.",
-  too_many_revisions: "This document already has the maximum number of revisions.",
-  document_archived: "Archived documents cannot get new revisions. Restore it first.",
-  archived: "Documents of an archived product cannot change.",
-  busy: "File processing is busy. Try again in a moment.",
-  too_long: "The change note is too long.",
-};
+/** API rule codes with their own wording (catalog.media.documents.uploadRules). */
+const UPLOAD_RULES = [
+  "not_pdf",
+  "encrypted",
+  "active_content",
+  "too_complex",
+  "too_many_revisions",
+  "document_archived",
+  "archived",
+  "busy",
+  "too_long",
+] as const;
+type UploadRule = (typeof UPLOAD_RULES)[number];
+
+/** The wording of one API rule code, or undefined for a code without its own text. */
+function ruleMessage(rule: string, t: Translate): string | undefined {
+  if (rule === "empty") return t("catalog.media.upload.empty");
+  if ((UPLOAD_RULES as readonly string[]).includes(rule)) {
+    return t(`catalog.media.documents.uploadRules.${rule as UploadRule}`);
+  }
+  return undefined;
+}
 
 /** Message for a failed upload answer (status + error body). */
-export function documentUploadMessage(status: number, body: unknown): string {
-  if (status === 413) return "Too large: at most 20 MB per PDF.";
-  if (status === 0) return "The upload was interrupted.";
+export function documentUploadMessage(status: number, body: unknown, t: Translate = EN): string {
+  if (status === 413) return t("catalog.media.documents.tooLarge");
+  if (status === 0) return t("catalog.media.upload.interrupted");
   const parsed = ErrorBodySchema.safeParse(body);
-  if (!parsed.success) return "The upload failed. Try again.";
+  if (!parsed.success) return t("catalog.media.upload.failed");
   for (const d of parsed.data.error.details) {
-    if (typeof d === "object" && UPLOAD_RULES[d.rule]) return UPLOAD_RULES[d.rule] as string;
+    const message = typeof d === "object" ? ruleMessage(d.rule, t) : undefined;
+    if (message) return message;
   }
-  return DEFAULT_ERROR_MESSAGES[parsed.data.error.code];
+  return t(`errors.${parsed.data.error.code}`);
 }
 
 /** Checks the browser can make before uploading (the API checks the real content again). */
-export function documentPrecheck(file: {
-  name: string;
-  type: string;
-  size: number;
-}): string | null {
+export function documentPrecheck(
+  file: {
+    name: string;
+    type: string;
+    size: number;
+  },
+  t: Translate = EN,
+): string | null {
   const pdfType =
     file.type === DOCUMENT_MIME_TYPE || (file.type === "" && /\.pdf$/i.test(file.name));
-  if (!pdfType) return UPLOAD_RULES["not_pdf"] as string;
-  if (file.size === 0) return UPLOAD_RULES["empty"] as string;
-  if (file.size > DOCUMENT_MAX_BYTES) return "Too large: at most 20 MB per PDF.";
+  if (!pdfType) return t("catalog.media.documents.uploadRules.not_pdf");
+  if (file.size === 0) return t("catalog.media.upload.empty");
+  if (file.size > DOCUMENT_MAX_BYTES) return t("catalog.media.documents.tooLarge");
   return null;
 }
 
 export const revisionHref = (id: string, disposition: "inline" | "attachment") =>
   `${CATALOG_API}/document-revisions/${id}/${disposition}`;
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 function sendPdf(
   documentId: string,
   file: File,
   note: string,
   onProgress: (p: number) => void,
+  t: Translate,
 ): Promise<{ ok: true; document: ProductDocument } | { ok: false; message: string }> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/document-upload/${documentId}`);
+    // i18n-ignore: HTTP header name
     xhr.setRequestHeader("Content-Type", DOCUMENT_MIME_TYPE);
     xhr.setRequestHeader(UPLOAD_FILENAME_HEADER, encodeURIComponent(file.name).slice(0, 1024));
     if (note.trim()) xhr.setRequestHeader(REVISION_NOTE_HEADER, encodeURIComponent(note.trim()));
+    // i18n-ignore: HTTP header name
     xhr.setRequestHeader("Accept", "application/json");
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
@@ -181,10 +208,10 @@ function sendPdf(
       if (xhr.status === 201) {
         resolve({ ok: true, document: (body as { document: ProductDocument }).document });
       } else {
-        resolve({ ok: false, message: documentUploadMessage(xhr.status, body) });
+        resolve({ ok: false, message: documentUploadMessage(xhr.status, body, t) });
       }
     };
-    xhr.onerror = () => resolve({ ok: false, message: documentUploadMessage(0, null) });
+    xhr.onerror = () => resolve({ ok: false, message: documentUploadMessage(0, null, t) });
     xhr.send(file);
   });
 }
@@ -192,9 +219,10 @@ function sendPdf(
 // --- small parts ------------------------------------------------------------------------------
 
 function TypeBadge({ type }: { type: DocumentType }) {
+  const t = useT();
   return (
     <span
-      title={DOCUMENT_TYPE_LABELS[type]}
+      title={t(`catalog.media.documents.types.${type}`)}
       className="inline-flex h-10 w-12 shrink-0 items-center justify-center rounded-lg bg-petrol-soft font-mono text-xs font-semibold tracking-wide text-petrol-strong ring-1 ring-petrol/20"
     >
       {type === "OTHER" ? "PDF" : type}
@@ -203,7 +231,7 @@ function TypeBadge({ type }: { type: DocumentType }) {
 }
 
 function PolicyPill({ policy }: { policy: DocumentAccessPolicy }) {
-  const p = POLICY_TEXT[policy];
+  const p = policyText(policy, useT());
   return <StatusPill tone={p.tone}>{p.label}</StatusPill>;
 }
 
@@ -236,6 +264,8 @@ function FilePicker({
   onFile: (f: File | null) => void;
   error: string | null;
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   return (
@@ -260,11 +290,12 @@ function FilePicker({
         <Icon name="document" size={22} className="text-ink-3" />
         {file ? (
           <p key="file" className="max-w-full truncate text-sm font-medium text-ink">
-            {file.name} <span className="font-normal text-ink-3">· {formatBytes(file.size)}</span>
+            {file.name}{" "}
+            <span className="font-normal text-ink-3">· {formatBytes(file.size, locale)}</span>
           </p>
         ) : (
           <p key="empty" className="text-sm text-ink-2">
-            Drag a PDF here, or
+            {t("catalog.media.documents.picker.dropHere")}
           </p>
         )}
         <button
@@ -272,11 +303,11 @@ function FilePicker({
           onClick={() => input.current?.click()}
           className="text-sm font-medium text-petrol-strong underline-offset-2 hover:underline"
         >
-          {file ? "Choose another file" : "choose a file"}
+          {file
+            ? t("catalog.media.documents.picker.chooseAnother")
+            : t("catalog.media.documents.picker.choose")}
         </button>
-        <p className="text-xs text-ink-3">
-          PDF · up to 20 MB · no passwords, JavaScript or embedded files
-        </p>
+        <p className="text-xs text-ink-3">{t("catalog.media.documents.picker.rules")}</p>
         <input
           ref={input}
           id={id}
@@ -284,7 +315,7 @@ function FilePicker({
           accept="application/pdf,.pdf"
           className="sr-only"
           tabIndex={-1}
-          aria-label="Choose a PDF file"
+          aria-label={t("catalog.media.documents.picker.inputLabel")}
           onChange={(e) => {
             onFile(e.currentTarget.files?.[0] ?? null);
             e.currentTarget.value = "";
@@ -324,35 +355,50 @@ function DetailsFields({
   languageLocked?: boolean;
 }) {
   const id = useId();
+  const t = useT();
+  const locale = useAdminLocale();
   const options = documentLanguageOptions(languages, value.language);
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-      <Field label="Type" htmlFor={`${id}-type`}>
+      <Field label={t("catalog.media.documents.fields.type")} htmlFor={`${id}-type`}>
         <select
           id={`${id}-type`}
           value={value.type}
           onChange={(e) => onChange({ ...value, type: e.target.value as DocumentType })}
           className={FIELD}
         >
-          {DOCUMENT_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t === "OTHER" ? "Other (general PDF)" : `${t} · ${DOCUMENT_TYPE_LABELS[t]}`}
+          {DOCUMENT_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {type === "OTHER"
+                ? t("catalog.media.documents.fields.typeOther")
+                : t("catalog.media.documents.fields.typeOption", {
+                    code: type,
+                    label: t(`catalog.media.documents.types.${type}`),
+                  })}
             </option>
           ))}
         </select>
       </Field>
-      <Field label="Title" htmlFor={`${id}-title`} className="sm:col-span-2">
+      <Field
+        label={t("catalog.media.documents.fields.title")}
+        htmlFor={`${id}-title`}
+        className="sm:col-span-2"
+      >
         <input
           id={`${id}-title`}
           required
           maxLength={DOCUMENT_TITLE_MAX}
           value={value.title}
           onChange={(e) => onChange({ ...value, title: e.target.value })}
-          placeholder="e.g. ICCSYN 6 technical data sheet (EN)"
+          placeholder={t("catalog.media.documents.fields.titlePlaceholder")}
           className={FIELD}
         />
       </Field>
-      <Field label="Description (optional)" htmlFor={`${id}-desc`} className="sm:col-span-3">
+      <Field
+        label={t("catalog.media.documents.fields.description")}
+        htmlFor={`${id}-desc`}
+        className="sm:col-span-3"
+      >
         <textarea
           id={`${id}-desc`}
           maxLength={DOCUMENT_DESCRIPTION_MAX}
@@ -362,13 +408,13 @@ function DetailsFields({
         />
       </Field>
       <Field
-        label="Language of the file"
+        label={t("catalog.media.documents.fields.language")}
         htmlFor={`${id}-language`}
         className="sm:col-span-3"
         hint={
           languageLocked
-            ? "Shown on a site: hide it on every site first to change the language. A file in another language is a new document."
-            : "The language the PDF is written in. Files are not translated here: upload a Dutch file as its own document."
+            ? t("catalog.media.documents.fields.languageLockedHint")
+            : t("catalog.media.documents.fields.languageHint")
         }
       >
         <select
@@ -380,14 +426,16 @@ function DetailsFields({
         >
           {options.map((l) => (
             <option key={l.locale} value={l.locale}>
-              {documentLanguageName(l.locale)}
-              {l.public ? "" : " · not public on any site yet"}
+              {documentLanguageName(l.locale, locale)}
+              {l.public ? "" : t("catalog.media.documents.fields.notPublic")}
             </option>
           ))}
         </select>
       </Field>
       <fieldset className="sm:col-span-3">
-        <legend className="mb-1.5 text-sm font-medium text-ink">Access on public sites</legend>
+        <legend className="mb-1.5 text-sm font-medium text-ink">
+          {t("catalog.media.documents.fields.access")}
+        </legend>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {DOCUMENT_ACCESS_POLICIES.map((p) => (
             <label
@@ -408,9 +456,11 @@ function DetailsFields({
                 className="mt-1 accent-[var(--petrol)]"
               />
               <span className="min-w-0">
-                <span className="block text-sm font-medium text-ink">{POLICY_TEXT[p].label}</span>
+                <span className="block text-sm font-medium text-ink">
+                  {t(`catalog.media.documents.policy.${p}.label`)}
+                </span>
                 <span className="block text-xs leading-relaxed text-ink-3">
-                  {POLICY_TEXT[p].help}
+                  {t(`catalog.media.documents.policy.${p}.help`)}
                 </span>
               </span>
             </label>
@@ -433,6 +483,7 @@ function NewDocumentForm({
   onCancel: () => void;
 }) {
   const id = useId();
+  const t = useT();
   const [value, setValue] = useState<DetailsValue>({
     type: "TDS",
     title: "",
@@ -450,7 +501,9 @@ function NewDocumentForm({
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const problem = file ? documentPrecheck(file) : "Choose the PDF file.";
+    const problem = file
+      ? documentPrecheck(file, t)
+      : t("catalog.media.documents.create.chooseFile");
     setFileError(problem);
     if (problem || !file) return;
     setBusy(true);
@@ -470,12 +523,12 @@ function NewDocumentForm({
       setError(created.message);
       return;
     }
-    const up = await sendPdf(created.data.document.id, file, note, setProgress);
+    const up = await sendPdf(created.data.document.id, file, note, setProgress, t);
     setBusy(false);
     if (!up.ok) {
       // The document exists without a file: keep it and say what to do next.
       onCreated(created.data.document, false);
-      setError(`The document was created, but the file was refused: ${up.message}`);
+      setError(t("catalog.media.documents.create.fileRefused", { message: up.message }));
       return;
     }
     onCreated(up.document, true);
@@ -488,7 +541,7 @@ function NewDocumentForm({
       className="space-y-5 rounded-xl border border-line bg-surface-2/40 p-4 sm:p-5"
     >
       <h3 id={`${id}-heading`} className="text-base font-semibold text-ink">
-        New document
+        {t("catalog.media.documents.create.heading")}
       </h3>
       <DetailsFields value={value} onChange={setValue} languages={languages} />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -497,26 +550,28 @@ function NewDocumentForm({
           file={file}
           onFile={(f) => {
             setFile(f);
-            setFileError(f ? documentPrecheck(f) : null);
+            setFileError(f ? documentPrecheck(f, t) : null);
           }}
           error={fileError}
         />
         <Field
-          label="Change note (optional)"
+          label={t("catalog.media.documents.fields.noteLabel")}
           htmlFor={`${id}-note`}
-          hint="Stored with revision 1. Revisions can never be edited later."
+          hint={t("catalog.media.documents.create.noteHint")}
         >
           <textarea
             id={`${id}-note`}
             maxLength={REVISION_NOTE_MAX}
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. First issue, English"
+            placeholder={t("catalog.media.documents.create.notePlaceholder")}
             className={cx(TEXTAREA, "min-h-24")}
           />
         </Field>
       </div>
-      {busy ? <ProgressBar value={progress} label="Uploading the PDF" /> : null}
+      {busy ? (
+        <ProgressBar value={progress} label={t("catalog.media.documents.picker.uploading")} />
+      ) : null}
       {error ? (
         <p role="alert" className="flex items-start gap-1.5 text-sm text-danger">
           <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
@@ -525,11 +580,11 @@ function NewDocumentForm({
       ) : null}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <button type="button" onClick={onCancel} disabled={busy} className={buttonStyles.secondary}>
-          Cancel
+          {t("catalog.media.documents.create.cancel")}
         </button>
         <button type="submit" disabled={busy} className={buttonStyles.primary}>
           {busy ? <Spinner /> : <Icon name="upload" size={18} />}
-          <span>Create and upload</span>
+          <span>{t("catalog.media.documents.create.submit")}</span>
         </button>
       </div>
     </form>
@@ -539,16 +594,28 @@ function NewDocumentForm({
 // --- one document -----------------------------------------------------------------------------
 
 function RevisionMeta({ rev }: { rev: DocumentRevision }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const parts = {
+    number: rev.revisionNumber,
+    size: formatBytes(rev.byteSize, locale),
+    date: dateTimeFormat(locale, DATE_OPTIONS).format(new Date(rev.createdAt)),
+    by: rev.uploadedBy.displayName ?? t("catalog.media.documents.revision.staff"),
+  };
   return (
     <span className="tabular text-xs text-ink-3">
-      Rev {rev.revisionNumber} · {formatBytes(rev.byteSize)}
-      {rev.pageCount ? ` · ${rev.pageCount} page${rev.pageCount === 1 ? "" : "s"}` : ""} ·{" "}
-      {DATE.format(new Date(rev.createdAt))} · {rev.uploadedBy.displayName ?? "staff"}
+      {rev.pageCount
+        ? t("catalog.media.documents.revision.metaWithPages", {
+            ...parts,
+            pages: t("catalog.media.documents.revision.pages", { count: rev.pageCount }),
+          })
+        : t("catalog.media.documents.revision.meta", parts)}
     </span>
   );
 }
 
 function FileLinks({ rev, compact = false }: { rev: DocumentRevision; compact?: boolean }) {
+  const t = useT();
   return (
     <span className="flex shrink-0 gap-1">
       <a
@@ -558,8 +625,12 @@ function FileLinks({ rev, compact = false }: { rev: DocumentRevision; compact?: 
         className={compact ? buttonStyles.icon : buttonStyles.ghost}
       >
         <Icon name="eye" size={16} />
-        <span className={compact ? "sr-only" : undefined}>Preview</span>
-        <span className="sr-only"> revision {rev.revisionNumber} (opens in a new tab)</span>
+        <span className={compact ? "sr-only" : undefined}>
+          {t("catalog.media.documents.revision.preview")}
+        </span>
+        <span className="sr-only">
+          {t("catalog.media.documents.revision.previewSr", { number: rev.revisionNumber })}
+        </span>
       </a>
       <a
         href={revisionHref(rev.id, "attachment")}
@@ -567,8 +638,12 @@ function FileLinks({ rev, compact = false }: { rev: DocumentRevision; compact?: 
         className={compact ? buttonStyles.icon : buttonStyles.ghost}
       >
         <Icon name="download" size={16} />
-        <span className={compact ? "sr-only" : undefined}>Download</span>
-        <span className="sr-only"> revision {rev.revisionNumber}</span>
+        <span className={compact ? "sr-only" : undefined}>
+          {t("catalog.media.documents.revision.download")}
+        </span>
+        <span className="sr-only">
+          {t("catalog.media.documents.revision.downloadSr", { number: rev.revisionNumber })}
+        </span>
       </a>
     </span>
   );
@@ -587,7 +662,8 @@ function SiteRow({
   onToggle: (site: DocumentSite) => void;
   onRepin: (site: DocumentSite) => void;
 }) {
-  const state = SITE_STATE_TEXT[site.state];
+  const t = useT();
+  const state = siteStateText(site.state, t);
   const blocked =
     doc.status === "ARCHIVED" || doc.accessPolicy === "INTERNAL" || !doc.activeRevision;
   return (
@@ -599,12 +675,16 @@ function SiteRow({
         <StatusPill tone={state.tone}>{state.label}</StatusPill>
         {site.pinnedRevision ? (
           <span className="text-xs text-ink-3">
-            Serves revision {site.pinnedRevision.revisionNumber}
+            {t("catalog.media.documents.site.serves", {
+              number: site.pinnedRevision.revisionNumber,
+            })}
           </span>
         ) : null}
         {site.updateAvailable && doc.activeRevision ? (
           <StatusPill tone="amber">
-            Revision {doc.activeRevision.revisionNumber} awaits the publisher
+            {t("catalog.media.documents.site.awaits", {
+              number: doc.activeRevision.revisionNumber,
+            })}
           </StatusPill>
         ) : null}
       </span>
@@ -616,7 +696,10 @@ function SiteRow({
             onClick={() => onRepin(site)}
             className={cx(buttonStyles.primary, "h-9 px-3 text-sm")}
           >
-            Publish revision {doc.activeRevision.revisionNumber} on {SITE_SHORT[site.siteKey]}
+            {t("catalog.media.documents.site.publish", {
+              number: doc.activeRevision.revisionNumber,
+              site: SITE_SHORT[site.siteKey],
+            })}
           </button>
         ) : null}
         {site.canPublish ? (
@@ -627,11 +710,7 @@ function SiteRow({
             disabled={busy || (!site.enabled && blocked)}
             onClick={() => onToggle(site)}
             className={cx(buttonStyles.secondary, "h-9 px-3 text-sm")}
-            title={
-              !site.enabled && blocked
-                ? "Only an active, non-internal document with a file can be shown on a site."
-                : undefined
-            }
+            title={!site.enabled && blocked ? t("catalog.media.documents.site.blocked") : undefined}
           >
             <span
               aria-hidden="true"
@@ -647,11 +726,15 @@ function SiteRow({
                 )}
               />
             </span>
-            {site.enabled ? "Shown" : "Show"} on {SITE_SHORT[site.siteKey]}
+            {site.enabled
+              ? t("catalog.media.documents.site.shownOn", { site: SITE_SHORT[site.siteKey] })
+              : t("catalog.media.documents.site.showOn", { site: SITE_SHORT[site.siteKey] })}
           </button>
         ) : (
           <span className="text-xs text-ink-3">
-            {site.enabled ? "Shown by the site publisher" : "Not shown"}
+            {site.enabled
+              ? t("catalog.media.documents.site.shownByPublisher")
+              : t("catalog.media.documents.site.notShown")}
           </span>
         )}
       </span>
@@ -673,6 +756,8 @@ function DocumentCard({
   onChange: (doc: ProductDocument, message: string) => void;
 }) {
   const id = useId();
+  const t = useT();
+  const locale = useAdminLocale();
   const router = useRouter();
   const notify = useNotice();
   const [mode, setMode] = useState<"view" | "edit" | "upload">("view");
@@ -723,17 +808,19 @@ function DocumentCard({
           language: details.language,
           version: doc.version,
         }),
-      "Document details saved.",
+      t("catalog.media.documents.notices.detailsSaved"),
     );
   }
 
   async function upload(e: FormEvent) {
     e.preventDefault();
-    const problem = file ? documentPrecheck(file) : "Choose the PDF file.";
+    const problem = file
+      ? documentPrecheck(file, t)
+      : t("catalog.media.documents.create.chooseFile");
     setFileError(problem);
     if (problem || !file) return;
     setBusy("upload");
-    const r = await sendPdf(doc.id, file, note, setProgress);
+    const r = await sendPdf(doc.id, file, note, setProgress, t);
     setBusy(null);
     if (!r.ok) {
       setFileError(r.message);
@@ -744,8 +831,10 @@ function DocumentCard({
     onChange(
       r.document,
       r.document.sites.some((x) => x.updateAvailable)
-        ? `Revision ${r.document.revisionCount} uploaded and active. Sites keep their published revision until their publisher confirms the new one.`
-        : `Revision ${r.document.revisionCount} uploaded and active.`,
+        ? t("catalog.media.documents.notices.uploadedPending", {
+            number: r.document.revisionCount,
+          })
+        : t("catalog.media.documents.notices.uploaded", { number: r.document.revisionCount }),
     );
     setMode("view");
   }
@@ -763,8 +852,11 @@ function DocumentCard({
               { visible: true, version: doc.version, revisionId: doc.activeRevision?.id },
         ),
       site.enabled
-        ? `Hidden on ${SITE_SHORT[site.siteKey]}.`
-        : `Shown on ${SITE_SHORT[site.siteKey]} with revision ${doc.activeRevision?.revisionNumber ?? ""}.`,
+        ? t("catalog.media.documents.notices.hidden", { site: SITE_SHORT[site.siteKey] })
+        : t("catalog.media.documents.notices.shown", {
+            site: SITE_SHORT[site.siteKey],
+            number: doc.activeRevision?.revisionNumber ?? "",
+          }),
     );
 
   /** DP-086: the publisher's explicit approval of the new active revision for one site. */
@@ -777,15 +869,16 @@ function DocumentCard({
           `/documents/${doc.id}/sites/${site.siteId}`,
           { visible: true, version: doc.version, revisionId: doc.activeRevision?.id },
         ),
-      `${SITE_SHORT[site.siteKey]} now serves revision ${doc.activeRevision?.revisionNumber ?? ""}.`,
+      t("catalog.media.documents.notices.repinned", {
+        site: SITE_SHORT[site.siteKey],
+        number: doc.activeRevision?.revisionNumber ?? "",
+      }),
     );
 
   const setArchived = (archive: boolean) => {
     if (
       archive &&
-      !window.confirm(
-        `Archive “${doc.title}”? It disappears from every site at once. Its revisions are kept and it can be restored.`,
-      )
+      !window.confirm(t("catalog.media.documents.card.archiveConfirm", { title: doc.title }))
     )
       return;
     void run(
@@ -796,7 +889,9 @@ function DocumentCard({
           `/documents/${doc.id}/${archive ? "archive" : "restore"}`,
           { version: doc.version },
         ),
-      archive ? "Document archived." : "Document restored.",
+      archive
+        ? t("catalog.media.documents.notices.archived")
+        : t("catalog.media.documents.notices.restored"),
     );
   };
 
@@ -811,7 +906,7 @@ function DocumentCard({
             version: doc.version,
           },
         ),
-      `Revision ${rev.revisionNumber} is now the active revision.`,
+      t("catalog.media.documents.notices.activated", { number: rev.revisionNumber }),
     );
 
   return (
@@ -833,8 +928,10 @@ function DocumentCard({
               {doc.title}
             </h3>
             <PolicyPill policy={doc.accessPolicy} />
-            <StatusPill tone="neutral">{documentLanguageName(doc.language)}</StatusPill>
-            {archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
+            <StatusPill tone="neutral">{documentLanguageName(doc.language, locale)}</StatusPill>
+            {archived ? (
+              <StatusPill tone="neutral">{t("catalog.media.documents.card.archived")}</StatusPill>
+            ) : null}
           </div>
           {doc.description ? <p className="text-sm text-ink-2">{doc.description}</p> : null}
           {doc.activeRevision ? (
@@ -842,7 +939,7 @@ function DocumentCard({
           ) : (
             <p className="flex items-center gap-1.5 text-xs text-amber-ink">
               <Icon name="alert" size={13} />
-              No file uploaded yet
+              {t("catalog.media.documents.card.noFile")}
             </p>
           )}
         </div>
@@ -860,7 +957,7 @@ function DocumentCard({
 
       {doc.sites.length ? (
         <div className="border-t border-line px-4 py-1">
-          <h4 className="sr-only">Sites</h4>
+          <h4 className="sr-only">{t("catalog.media.documents.card.sites")}</h4>
           <ul className="divide-y divide-line">
             {doc.sites.map((s) => (
               <SiteRow
@@ -890,11 +987,11 @@ function DocumentCard({
               className={buttonStyles.secondary}
               onClick={() => setMode("view")}
             >
-              Cancel
+              {t("catalog.media.documents.card.cancel")}
             </button>
             <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
               {busy === "details" ? <Spinner /> : <Icon name="check" size={18} />}
-              <span>Save details</span>
+              <span>{t("catalog.media.documents.card.saveDetails")}</span>
             </button>
           </div>
         </form>
@@ -903,8 +1000,7 @@ function DocumentCard({
       {mode === "upload" ? (
         <form onSubmit={upload} className="space-y-4 border-t border-line p-4">
           <p className="text-sm text-ink-2">
-            The new file becomes revision {doc.revisionCount + 1} and the active revision. Earlier
-            revisions stay unchanged and can be made active again.
+            {t("catalog.media.documents.card.uploadIntro", { number: doc.revisionCount + 1 })}
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FilePicker
@@ -912,33 +1008,35 @@ function DocumentCard({
               file={file}
               onFile={(f) => {
                 setFile(f);
-                setFileError(f ? documentPrecheck(f) : null);
+                setFileError(f ? documentPrecheck(f, t) : null);
               }}
               error={fileError}
             />
-            <Field label="Change note (optional)" htmlFor={`${id}-note`}>
+            <Field label={t("catalog.media.documents.fields.noteLabel")} htmlFor={`${id}-note`}>
               <textarea
                 id={`${id}-note`}
                 maxLength={REVISION_NOTE_MAX}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="e.g. Section 8 updated"
+                placeholder={t("catalog.media.documents.card.notePlaceholder")}
                 className={cx(TEXTAREA, "min-h-24")}
               />
             </Field>
           </div>
-          {busy === "upload" ? <ProgressBar value={progress} label="Uploading the PDF" /> : null}
+          {busy === "upload" ? (
+            <ProgressBar value={progress} label={t("catalog.media.documents.picker.uploading")} />
+          ) : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button
               type="button"
               className={buttonStyles.secondary}
               onClick={() => setMode("view")}
             >
-              Cancel
+              {t("catalog.media.documents.card.cancel")}
             </button>
             <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
               {busy === "upload" ? <Spinner /> : <Icon name="upload" size={18} />}
-              <span>Upload revision</span>
+              <span>{t("catalog.media.documents.card.uploadRevision")}</span>
             </button>
           </div>
         </form>
@@ -949,7 +1047,7 @@ function DocumentCard({
           <details className="group w-full sm:w-auto sm:flex-1">
             <summary className="inline-flex h-9 cursor-pointer list-none items-center gap-2 rounded-lg px-2 text-sm font-medium text-ink-2 hover:bg-surface-2 hover:text-ink">
               <Icon name="history" size={16} />
-              Revision history
+              {t("catalog.media.documents.card.history")}
               <span className="tabular rounded-full bg-surface-2 px-1.5 text-xs text-ink-3 ring-1 ring-line">
                 {doc.revisions.length}
               </span>
@@ -959,7 +1057,10 @@ function DocumentCard({
                 className="transition-transform group-open:rotate-90"
               />
             </summary>
-            <ol className="mt-1 space-y-1 px-2 pb-2" aria-label={`Revisions of ${doc.title}`}>
+            <ol
+              className="mt-1 space-y-1 px-2 pb-2"
+              aria-label={t("catalog.media.documents.card.historyLabel", { title: doc.title })}
+            >
               {doc.revisions.map((rev) => (
                 <li
                   key={rev.id}
@@ -971,9 +1072,15 @@ function DocumentCard({
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-ink">
-                        Revision {rev.revisionNumber}
+                        {t("catalog.media.documents.card.revision", {
+                          number: rev.revisionNumber,
+                        })}
                       </span>
-                      {rev.isActive ? <StatusPill tone="petrol">Active</StatusPill> : null}
+                      {rev.isActive ? (
+                        <StatusPill tone="petrol">
+                          {t("catalog.media.documents.card.active")}
+                        </StatusPill>
+                      ) : null}
                     </span>
                     <span
                       className="block truncate text-xs text-ink-3"
@@ -997,7 +1104,7 @@ function DocumentCard({
                         className={cx(buttonStyles.ghost, "h-8")}
                       >
                         {busy === `rev-${rev.id}` ? <Spinner /> : <Icon name="check" size={15} />}
-                        <span>Make active</span>
+                        <span>{t("catalog.media.documents.card.makeActive")}</span>
                       </button>
                     ) : null}
                     <FileLinks rev={rev} compact />
@@ -1006,7 +1113,7 @@ function DocumentCard({
               ))}
             </ol>
             <p className="px-2 pb-2 text-xs text-ink-3">
-              Revisions are immutable: they are never edited or deleted.
+              {t("catalog.media.documents.card.immutable")}
             </p>
           </details>
         ) : (
@@ -1022,7 +1129,7 @@ function DocumentCard({
               className={buttonStyles.ghost}
             >
               <Icon name="upload" size={16} />
-              New revision
+              {t("catalog.media.documents.card.newRevision")}
             </button>
             <button
               type="button"
@@ -1032,7 +1139,7 @@ function DocumentCard({
               className={buttonStyles.ghost}
             >
               <Icon name="edit" size={16} />
-              Details
+              {t("catalog.media.documents.card.details")}
             </button>
             <button
               type="button"
@@ -1041,7 +1148,7 @@ function DocumentCard({
               className={cx(buttonStyles.ghost, "hover:text-danger")}
             >
               <Icon name="archive" size={16} />
-              Archive
+              {t("catalog.media.documents.card.archive")}
             </button>
           </span>
         ) : canEdit && archived && !productArchived ? (
@@ -1052,7 +1159,7 @@ function DocumentCard({
             className={cx(buttonStyles.ghost, "ml-auto")}
           >
             <Icon name="refresh" size={16} />
-            Restore
+            {t("catalog.media.documents.card.restore")}
           </button>
         ) : null}
       </div>
@@ -1076,6 +1183,7 @@ export function DocumentManager({
   /** ML-9: the languages a document can have (`ProductDocumentListResponse.languages`). */
   languages?: readonly DocumentLanguageOption[];
 }) {
+  const t = useT();
   const router = useRouter();
   const notify = useNotice();
   const [docs, setDocs] = useState<ProductDocument[]>([...initial]);
@@ -1108,9 +1216,11 @@ export function DocumentManager({
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-xl bg-surface-2/60 px-4 py-3 text-sm text-ink-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-3xl">
-          A site serves a document only when its publisher shows it there <em>and</em> the product
-          is published on that site. New documents are <strong>Internal</strong> until you choose
-          otherwise.
+          {t("catalog.media.documents.section.introBefore")}
+          <em>{t("catalog.media.documents.section.introAnd")}</em>
+          {t("catalog.media.documents.section.introMiddle")}
+          <strong>{t("catalog.media.documents.section.introInternal")}</strong>
+          {t("catalog.media.documents.section.introAfter")}
         </p>
         {canEdit && !productArchived && !creating ? (
           <button
@@ -1119,7 +1229,7 @@ export function DocumentManager({
             className={cx(buttonStyles.primary, "shrink-0")}
           >
             <Icon name="plus" size={18} />
-            New document
+            {t("catalog.media.documents.section.newDocument")}
           </button>
         ) : null}
       </div>
@@ -1132,7 +1242,9 @@ export function DocumentManager({
           onCreated={(doc, uploaded) => {
             replace(
               doc,
-              uploaded ? "Document created with revision 1." : "Document created without a file.",
+              uploaded
+                ? t("catalog.media.documents.notices.created")
+                : t("catalog.media.documents.notices.createdNoFile"),
             );
             if (uploaded) setCreating(false);
           }}
@@ -1140,13 +1252,13 @@ export function DocumentManager({
       ) : null}
 
       {active.length === 0 && !creating ? (
-        <EmptyState icon="list" title="No documents yet">
+        <EmptyState icon="list" title={t("catalog.media.documents.section.emptyTitle")}>
           {canEdit && !productArchived
-            ? "Add the technical data sheet, safety data sheet or a certificate of analysis as PDF."
-            : "No technical document has been added to this product."}
+            ? t("catalog.media.documents.section.emptyEditable")
+            : t("catalog.media.documents.section.emptyReadOnly")}
         </EmptyState>
       ) : (
-        <ul className="space-y-3" aria-label="Documents">
+        <ul className="space-y-3" aria-label={t("catalog.media.documents.section.listLabel")}>
           {active.map(card)}
         </ul>
       )}
@@ -1155,7 +1267,7 @@ export function DocumentManager({
         <details className="group rounded-xl border border-line">
           <summary className="flex h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-ink-2 hover:text-ink">
             <Icon name="archive" size={16} />
-            Archived documents
+            {t("catalog.media.documents.section.archivedTitle")}
             <span className="tabular rounded-full bg-surface-2 px-1.5 text-xs text-ink-3 ring-1 ring-line">
               {archived.length}
             </span>
@@ -1165,16 +1277,17 @@ export function DocumentManager({
               className="ml-auto transition-transform group-open:rotate-90"
             />
           </summary>
-          <ul className="space-y-3 p-3" aria-label="Archived documents">
+          <ul
+            className="space-y-3 p-3"
+            aria-label={t("catalog.media.documents.section.archivedTitle")}
+          >
             {archived.map(card)}
           </ul>
         </details>
       ) : null}
 
       {canEdit && productArchived ? (
-        <p className="text-sm text-ink-3">
-          This product is archived. Restore it to change its documents.
-        </p>
+        <p className="text-sm text-ink-3">{t("catalog.media.documents.section.productArchived")}</p>
       ) : null}
     </div>
   );

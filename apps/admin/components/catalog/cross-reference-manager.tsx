@@ -11,9 +11,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import {
   CATALOG_API,
-  CROSS_REFERENCE_STATUS_LABELS,
   GlobalProductListResponseSchema,
-  VERIFICATION_STALE_TEXT,
   XREF_COMMENT_MAX,
   XREF_PUBLICATION_ACK_TEXT,
   XREF_PUBLICATION_ACK_VERSION,
@@ -25,6 +23,9 @@ import {
   type ProductCrossReference,
 } from "@dream/contracts";
 import { callCatalog } from "../../lib/catalog-client";
+import type { AdminLocale } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, StatusPill, type PillTone } from "../ui";
 import { revisionHref } from "./document-manager";
@@ -44,36 +45,26 @@ const STATUS_TONE: Readonly<Record<CrossReferenceStatus, PillTone>> = {
   REMOVED: "neutral",
 };
 
-const SITE_TEXT: Readonly<Record<CrossReferenceSite["state"], { label: string; tone: PillTone }>> =
-  {
-    shown: { label: "Shown", tone: "success" },
-    hidden: { label: "Not shown", tone: "neutral" },
-    not_publishable: { label: "Cannot be shown", tone: "neutral" },
-    verification_stale: { label: "Hidden: verification stale", tone: "danger" },
-    product_not_live: { label: "Product not live", tone: "amber" },
-  };
-
-const ACTION_TEXT: Readonly<Record<ProductCrossReference["events"][number]["action"], string>> = {
-  CREATED: "Created",
-  UPDATED: "Changed",
-  VERIFICATION_REQUESTED: "Verification requested",
-  VERIFIED: "Verified",
-  VERIFICATION_REJECTED: "Verification rejected",
-  MARKED_SIMILAR: "Marked similar",
-  VERIFICATION_RESET: "Changed (verification reset)",
-  REMOVED: "Removed",
-  RESTORED: "Restored",
+/** Labels: catalog.xrefs.siteState.<state>. */
+const SITE_TONE: Readonly<Record<CrossReferenceSite["state"], PillTone>> = {
+  shown: "success",
+  hidden: "neutral",
+  not_publishable: "neutral",
+  verification_stale: "danger",
+  product_not_live: "amber",
 };
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+  // i18n-ignore: IANA time zone
   timeZone: "Europe/Amsterdam",
-});
-const when = (iso: string | null) => (iso ? DATE.format(new Date(iso)) : "");
+};
+const when = (iso: string | null, locale: AdminLocale) =>
+  iso ? dateTimeFormat(locale, DATE_OPTIONS).format(new Date(iso)) : "";
 
 const productLabel = (p: Pick<GlobalProduct, "name" | "grade">) =>
   p.grade ? `${p.name} · ${p.grade}` : p.name;
@@ -98,6 +89,7 @@ export function CrossReferenceManager({
   const [items, setItems] = useState(initial);
   const [adding, setAdding] = useState(false);
   const notify = useNotice();
+  const t = useT();
 
   const replace = (x: ProductCrossReference, message: string) => {
     setItems((list) => {
@@ -115,20 +107,20 @@ export function CrossReferenceManager({
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-3xl">
-          <strong className="text-ink">Similar</strong> is a staff judgement.{" "}
-          <strong className="text-ink">Verified</strong> needs a technical comparison, a source
-          document of this product and a second person who may approve. A site shows a
-          cross-reference only when its publisher enables it; a stale verification is never shown.
+          <strong className="text-ink">{t("catalog.xrefs.manager.introSimilar")}</strong>
+          {t("catalog.xrefs.manager.introSimilarText")}{" "}
+          <strong className="text-ink">{t("catalog.xrefs.manager.introVerified")}</strong>
+          {t("catalog.xrefs.manager.introVerifiedText")}
         </p>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Link href="/products/brands" className={buttonStyles.secondary}>
             <Icon name="list" size={17} />
-            Global brands
+            {t("catalog.xrefs.manager.globalBrands")}
           </Link>
           {editable && !adding ? (
             <button type="button" className={buttonStyles.primary} onClick={() => setAdding(true)}>
               <Icon name="plus" size={17} />
-              Add cross-reference
+              {t("catalog.xrefs.manager.add")}
             </button>
           ) : null}
         </div>
@@ -143,7 +135,10 @@ export function CrossReferenceManager({
             setAdding(false);
             replace(
               x,
-              `Cross-reference to ${x.globalProduct.brand.name} ${x.globalProduct.name} added as similar.`,
+              t("catalog.xrefs.manager.added", {
+                brand: x.globalProduct.brand.name,
+                product: x.globalProduct.name,
+              }),
             );
           }}
         />
@@ -151,10 +146,8 @@ export function CrossReferenceManager({
 
       {live.length === 0 && !adding ? (
         <p className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-sm text-ink-3">
-          No cross-references yet.
-          {editable ? (
-            <span>{" Add one to relate this product to another brand's product."}</span>
-          ) : null}
+          {t("catalog.xrefs.manager.empty")}
+          {editable ? <span>{t("catalog.xrefs.manager.emptyHint")}</span> : null}
         </p>
       ) : (
         <ul className="space-y-3">
@@ -174,7 +167,7 @@ export function CrossReferenceManager({
       {removed.length ? (
         <details className="rounded-xl border border-line px-4 py-3">
           <summary className="cursor-pointer text-sm font-medium text-ink-2">
-            Removed ({removed.length})
+            {t("catalog.xrefs.manager.removed", { n: removed.length })}
           </summary>
           <ul className="mt-3 space-y-3">
             {removed.map((x) => (
@@ -208,6 +201,7 @@ function AddForm({
   onCreated: (x: ProductCrossReference) => void;
 }) {
   const id = useId();
+  const t = useT();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<GlobalProduct[]>([]);
   const [searching, setSearching] = useState(false);
@@ -221,7 +215,7 @@ function AddForm({
     const term = q.trim();
     if (term.length < 2) return;
     const ctrl = new AbortController();
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       setSearching(true);
       try {
         const res = await fetch(`${CATALOG_API}/global-products?q=${encodeURIComponent(term)}`, {
@@ -238,7 +232,7 @@ function AddForm({
       }
     }, 250);
     return () => {
-      clearTimeout(t);
+      clearTimeout(timer);
       ctrl.abort();
     };
   }, [q]);
@@ -246,7 +240,7 @@ function AddForm({
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!picked) {
-      setError("Choose the global product first.");
+      setError(t("catalog.xrefs.addForm.chooseFirst"));
       return;
     }
     setBusy(true);
@@ -270,12 +264,12 @@ function AddForm({
       aria-labelledby={`${id}-h`}
     >
       <h3 id={`${id}-h`} className="text-base font-semibold text-ink">
-        Add cross-reference
+        {t("catalog.xrefs.addForm.title")}
       </h3>
       <Field
-        label="Global product"
+        label={t("catalog.xrefs.addForm.globalProduct")}
         htmlFor={`${id}-q`}
-        hint="Search by brand, manufacturer, product or grade. Missing? Add it under Global brands."
+        hint={t("catalog.xrefs.addForm.globalProductHint")}
       >
         <div className="relative">
           <input
@@ -286,7 +280,7 @@ function AddForm({
               setQ(e.target.value);
               setPicked(null);
             }}
-            placeholder="e.g. Example Base 6"
+            placeholder={t("catalog.xrefs.addForm.placeholder")}
             autoComplete="off"
           />
           <Icon
@@ -298,9 +292,13 @@ function AddForm({
       </Field>
       {q.trim().length >= 2 ? (
         <fieldset className="space-y-1" aria-busy={searching}>
-          <legend className="sr-only">Search results</legend>
+          <legend className="sr-only">{t("catalog.xrefs.addForm.results")}</legend>
           {results.length === 0 ? (
-            <p className="text-sm text-ink-3">{searching ? "Searching…" : "No match."}</p>
+            <p className="text-sm text-ink-3">
+              {searching
+                ? t("catalog.xrefs.addForm.searching")
+                : t("catalog.xrefs.addForm.noMatch")}
+            </p>
           ) : (
             results.map((p) => {
               const taken = existing.includes(p.id);
@@ -329,7 +327,7 @@ function AddForm({
                     </span>
                     <span className="block text-xs text-ink-3">
                       {p.brand.manufacturer}
-                      {taken ? " · already cross-referenced" : ""}
+                      {taken ? t("catalog.xrefs.addForm.taken") : ""}
                     </span>
                   </span>
                 </label>
@@ -338,7 +336,7 @@ function AddForm({
           )}
         </fieldset>
       ) : null}
-      <Field label="Explanation (internal)" htmlFor={`${id}-d`}>
+      <Field label={t("catalog.xrefs.fields.explanation")} htmlFor={`${id}-d`}>
         <textarea
           id={`${id}-d`}
           className={TEXTAREA}
@@ -348,9 +346,9 @@ function AddForm({
         />
       </Field>
       <Field
-        label="Technical comparison (internal)"
+        label={t("catalog.xrefs.fields.comparison")}
         htmlFor={`${id}-c`}
-        hint="Required before verification: properties, values and test methods you compared."
+        hint={t("catalog.xrefs.fields.comparisonHint")}
       >
         <textarea
           id={`${id}-c`}
@@ -363,10 +361,10 @@ function AddForm({
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-          Cancel
+          {t("catalog.xrefs.card.cancel")}
         </button>
         <button type="submit" className={buttonStyles.primary} disabled={busy}>
-          Add as similar
+          {t("catalog.xrefs.addForm.submit")}
         </button>
       </div>
     </form>
@@ -380,20 +378,6 @@ type Mode =
   | { kind: "edit" }
   | { kind: "request" }
   | { kind: "reason"; action: "reject" | "mark-similar" | "remove" };
-
-const REASON_TEXT = {
-  reject: { title: "Reject the verification", button: "Reject", done: "Verification rejected." },
-  "mark-similar": {
-    title: "Mark as similar again",
-    button: "Mark similar",
-    done: "Marked as similar.",
-  },
-  remove: {
-    title: "Remove the cross-reference",
-    button: "Remove",
-    done: "Cross-reference removed.",
-  },
-} as const;
 
 function XrefCard({
   x,
@@ -410,6 +394,8 @@ function XrefCard({
 }) {
   const id = useId();
   const router = useRouter();
+  const t = useT();
+  const locale = useAdminLocale();
   const [mode, setMode] = useState<Mode>({ kind: "view" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -441,7 +427,9 @@ function XrefCard({
     void run(
       `/cross-references/${x.id}`,
       { description: description || null, comparison: comparison || null },
-      x.status === "SIMILAR" ? "Cross-reference saved." : "Saved; the relation is similar again.",
+      x.status === "SIMILAR"
+        ? t("catalog.xrefs.card.saved")
+        : t("catalog.xrefs.card.savedSimilarAgain"),
     );
   };
 
@@ -457,12 +445,14 @@ function XrefCard({
               {x.globalProduct.brand.name} — {productLabel(x.globalProduct)}
             </h3>
             <StatusPill tone={STATUS_TONE[x.status]}>
-              {CROSS_REFERENCE_STATUS_LABELS[x.status]}
+              {t(`catalog.xrefs.status.${x.status}`)}
             </StatusPill>
-            {v.state === "stale" ? <StatusPill tone="danger">Verification stale</StatusPill> : null}
+            {v.state === "stale" ? (
+              <StatusPill tone="danger">{t("catalog.xrefs.card.staleVerification")}</StatusPill>
+            ) : null}
             {x.globalProduct.status === "ARCHIVED" ||
             x.globalProduct.brand.status === "ARCHIVED" ? (
-              <StatusPill tone="neutral">Global product archived</StatusPill>
+              <StatusPill tone="neutral">{t("catalog.xrefs.card.globalArchived")}</StatusPill>
             ) : null}
           </div>
           <p className="text-xs text-ink-3">{x.globalProduct.brand.manufacturer}</p>
@@ -473,7 +463,7 @@ function XrefCard({
       {x.comparison ? (
         <details className="border-t border-line px-4 py-3">
           <summary className="cursor-pointer text-sm font-medium text-ink-2">
-            Technical comparison
+            {t("catalog.xrefs.card.comparison")}
           </summary>
           <p className="mt-2 whitespace-pre-wrap text-sm text-ink-2">{x.comparison}</p>
         </details>
@@ -484,10 +474,13 @@ function XrefCard({
           {v.source ? (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-2">
               <Icon name="document" size={16} className="text-ink-3" />
-              Source: {v.source.documentType} · {v.source.documentTitle} · revision{" "}
-              {v.source.revisionNumber}
+              {t("catalog.xrefs.card.source", {
+                type: v.source.documentType,
+                title: v.source.documentTitle,
+                revision: v.source.revisionNumber,
+              })}
               {v.source.isActiveRevision ? null : (
-                <span className="text-danger">(no longer the active revision)</span>
+                <span className="text-danger">{t("catalog.xrefs.card.notActiveRevision")}</span>
               )}
               <a
                 href={revisionHref(v.source.revisionId, "inline")}
@@ -495,39 +488,49 @@ function XrefCard({
                 rel="noopener noreferrer"
                 className="font-medium text-petrol-strong underline-offset-2 hover:underline"
               >
-                Preview<span className="sr-only"> the source document (opens in a new tab)</span>
+                {t("catalog.xrefs.card.preview")}
+                <span className="sr-only">{t("catalog.xrefs.card.previewSr")}</span>
               </a>
             </p>
           ) : null}
           {v.requestedBy ? (
             <p className="text-ink-3">
-              Requested by {v.requestedBy.name} · {when(v.requestedAt)}
+              {t("catalog.xrefs.card.requestedBy", {
+                name: v.requestedBy.name,
+                date: when(v.requestedAt, locale),
+              })}
             </p>
           ) : null}
           {v.verifiedBy ? (
             <p className="text-ink-3">
-              Verified by {v.verifiedBy.name} · {when(v.verifiedAt)}
+              {t("catalog.xrefs.card.verifiedBy", {
+                name: v.verifiedBy.name,
+                date: when(v.verifiedAt, locale),
+              })}
             </p>
           ) : null}
           {v.staleReasons.length ? (
             <ul className="list-disc space-y-0.5 pl-5 text-danger">
               {v.staleReasons.map((r) => (
-                <li key={r}>{VERIFICATION_STALE_TEXT[r]}</li>
+                <li key={r}>{t(`catalog.xrefs.staleReason.${r}`)}</li>
               ))}
             </ul>
           ) : null}
           {x.status === "PENDING_VERIFICATION" && !x.canVerify ? (
             <p className="text-xs text-ink-3">
               {x.verifyBlockedReason === "own_change"
-                ? "You requested or changed this relation, so another approver must decide."
-                : "Waiting for a person who may approve product data."}
+                ? t("catalog.xrefs.card.ownChange")
+                : t("catalog.xrefs.card.waitingApprover")}
             </p>
           ) : null}
         </div>
       ) : null}
 
       {!removed ? (
-        <ul className="divide-y divide-line border-t border-line px-4" aria-label="Sites">
+        <ul
+          className="divide-y divide-line border-t border-line px-4"
+          aria-label={t("catalog.xrefs.card.sites")}
+        >
           {x.sites.map((s) => (
             <SiteRow key={s.siteId} x={x} site={s} busy={busy} run={run} />
           ))}
@@ -537,11 +540,9 @@ function XrefCard({
       {mode.kind === "edit" ? (
         <form onSubmit={save} className="space-y-3 border-t border-line p-4">
           {x.status !== "SIMILAR" ? (
-            <FormMessage kind="error">
-              Saving a change makes this relation similar again; it needs a new verification.
-            </FormMessage>
+            <FormMessage kind="error">{t("catalog.xrefs.card.editWarning")}</FormMessage>
           ) : null}
-          <Field label="Explanation (internal)" htmlFor={`${id}-d`}>
+          <Field label={t("catalog.xrefs.fields.explanation")} htmlFor={`${id}-d`}>
             <textarea
               id={`${id}-d`}
               className={TEXTAREA}
@@ -550,7 +551,7 @@ function XrefCard({
               onChange={(e) => setDescription(e.target.value)}
             />
           </Field>
-          <Field label="Technical comparison (internal)" htmlFor={`${id}-c`}>
+          <Field label={t("catalog.xrefs.fields.comparison")} htmlFor={`${id}-c`}>
             <textarea
               id={`${id}-c`}
               className={TEXTAREA}
@@ -559,7 +560,11 @@ function XrefCard({
               onChange={(e) => setComparison(e.target.value)}
             />
           </Field>
-          <FormButtons busy={busy} label="Save" onCancel={() => setMode({ kind: "view" })} />
+          <FormButtons
+            busy={busy}
+            label={t("catalog.xrefs.card.save")}
+            onCancel={() => setMode({ kind: "view" })}
+          />
         </form>
       ) : null}
 
@@ -570,21 +575,18 @@ function XrefCard({
             void run(
               `/cross-references/${x.id}/request-verification`,
               { sourceRevisionId: source, comment: comment || null },
-              "Verification requested.",
+              t("catalog.xrefs.card.requested"),
             );
           }}
           className="space-y-3 border-t border-line p-4"
         >
           {sources.length === 0 ? (
-            <FormMessage kind="error">
-              Upload a technical document for this product first (Documents section): the
-              verification needs its active revision as evidence.
-            </FormMessage>
+            <FormMessage kind="error">{t("catalog.xrefs.card.noSources")}</FormMessage>
           ) : (
             <Field
-              label="Source document"
+              label={t("catalog.xrefs.card.sourceDocument")}
               htmlFor={`${id}-s`}
-              hint="The active revision is recorded; a newer revision later makes the verification stale."
+              hint={t("catalog.xrefs.card.sourceDocumentHint")}
             >
               <select
                 id={`${id}-s`}
@@ -600,7 +602,7 @@ function XrefCard({
               </select>
             </Field>
           )}
-          <Field label="Note for the approver (optional)" htmlFor={`${id}-n`}>
+          <Field label={t("catalog.xrefs.card.note")} htmlFor={`${id}-n`}>
             <textarea
               id={`${id}-n`}
               className={cx(TEXTAREA, "min-h-20")}
@@ -611,11 +613,11 @@ function XrefCard({
           </Field>
           <FormButtons
             busy={busy || sources.length === 0 || !x.comparison}
-            label="Request verification"
+            label={t("catalog.xrefs.card.requestVerification")}
             onCancel={() => setMode({ kind: "view" })}
           />
           {!x.comparison ? (
-            <p className="text-xs text-ink-3">Add the technical comparison first (Edit).</p>
+            <p className="text-xs text-ink-3">{t("catalog.xrefs.card.comparisonFirst")}</p>
           ) : null}
         </form>
       ) : null}
@@ -627,12 +629,17 @@ function XrefCard({
             void run(
               `/cross-references/${x.id}/${mode.action}`,
               { comment },
-              REASON_TEXT[mode.action].done,
+              t(`catalog.xrefs.reason.${mode.action}.done`),
             );
           }}
           className="space-y-3 border-t border-line p-4"
         >
-          <Field label={`${REASON_TEXT[mode.action].title}: reason`} htmlFor={`${id}-r`}>
+          <Field
+            label={t("catalog.xrefs.reason.label", {
+              title: t(`catalog.xrefs.reason.${mode.action}.title`),
+            })}
+            htmlFor={`${id}-r`}
+          >
             <textarea
               id={`${id}-r`}
               className={cx(TEXTAREA, "min-h-20")}
@@ -644,7 +651,7 @@ function XrefCard({
           </Field>
           <FormButtons
             busy={busy}
-            label={REASON_TEXT[mode.action].button}
+            label={t(`catalog.xrefs.reason.${mode.action}.button`)}
             danger={mode.action !== "mark-similar"}
             onCancel={() => setMode({ kind: "view" })}
           />
@@ -668,18 +675,22 @@ function XrefCard({
                   className={buttonStyles.primary}
                   disabled={busy}
                   onClick={() =>
-                    void run(`/cross-references/${x.id}/verify`, {}, "Cross-reference verified.")
+                    void run(
+                      `/cross-references/${x.id}/verify`,
+                      {},
+                      t("catalog.xrefs.card.verified"),
+                    )
                   }
                 >
                   <Icon name="check" size={16} />
-                  Verify
+                  {t("catalog.xrefs.card.verify")}
                 </button>
                 <button
                   type="button"
                   className={buttonStyles.secondary}
                   onClick={() => setMode({ kind: "reason", action: "reject" })}
                 >
-                  Reject
+                  {t("catalog.xrefs.card.reject")}
                 </button>
               </>
             ) : null}
@@ -690,7 +701,9 @@ function XrefCard({
                 onClick={() => setMode({ kind: "request" })}
               >
                 <Icon name="shield" size={16} />
-                {x.status === "VERIFIED" ? "Verify again" : "Request verification"}
+                {x.status === "VERIFIED"
+                  ? t("catalog.xrefs.card.verifyAgain")
+                  : t("catalog.xrefs.card.requestVerification")}
               </button>
             ) : null}
             {(canEdit || canApprove) &&
@@ -700,7 +713,7 @@ function XrefCard({
                 className={buttonStyles.ghost}
                 onClick={() => setMode({ kind: "reason", action: "mark-similar" })}
               >
-                Mark similar
+                {t("catalog.xrefs.card.markSimilar")}
               </button>
             ) : null}
             {canEdit && !removed ? (
@@ -711,7 +724,7 @@ function XrefCard({
                   onClick={() => setMode({ kind: "edit" })}
                 >
                   <Icon name="edit" size={16} />
-                  Edit
+                  {t("catalog.xrefs.card.edit")}
                 </button>
                 <button
                   type="button"
@@ -719,7 +732,7 @@ function XrefCard({
                   onClick={() => setMode({ kind: "reason", action: "remove" })}
                 >
                   <Icon name="trash" size={16} />
-                  Remove
+                  {t("catalog.xrefs.card.remove")}
                 </button>
               </>
             ) : null}
@@ -729,11 +742,15 @@ function XrefCard({
                 className={buttonStyles.ghost}
                 disabled={busy}
                 onClick={() =>
-                  void run(`/cross-references/${x.id}/restore`, {}, "Restored as similar.")
+                  void run(
+                    `/cross-references/${x.id}/restore`,
+                    {},
+                    t("catalog.xrefs.card.restored"),
+                  )
                 }
               >
                 <Icon name="refresh" size={16} />
-                Restore
+                {t("catalog.xrefs.card.restore")}
               </button>
             ) : null}
           </div>
@@ -754,10 +771,11 @@ function FormButtons({
   danger?: boolean;
   onCancel: () => void;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-wrap justify-end gap-2">
       <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-        Cancel
+        {t("catalog.xrefs.card.cancel")}
       </button>
       <button
         type="submit"
@@ -782,22 +800,25 @@ function SiteRow({
   run: (path: string, body: Record<string, unknown>, message: string) => Promise<boolean>;
 }) {
   const id = useId();
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const [accepted, setAccepted] = useState(false);
-  const text = SITE_TEXT[site.state];
+  const siteName = SITE_SHORT[site.siteKey];
   const blocked = site.state === "not_publishable" || site.state === "verification_stale";
   const path = `/cross-references/${x.id}/sites/${site.siteId}`;
   return (
     <li className="py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="w-36 shrink-0 text-sm font-medium text-ink sm:w-44">
-            {SITE_SHORT[site.siteKey]}
-          </span>
-          <StatusPill tone={text.tone}>{text.label}</StatusPill>
+          <span className="w-36 shrink-0 text-sm font-medium text-ink sm:w-44">{siteName}</span>
+          <StatusPill tone={SITE_TONE[site.state]}>
+            {t(`catalog.xrefs.siteState.${site.state}`)}
+          </StatusPill>
           {site.shownAs ? (
             <span className="text-xs text-ink-3">
-              as {site.shownAs === "VERIFIED" ? "verified" : "similar"}
+              {site.shownAs === "VERIFIED"
+                ? t("catalog.xrefs.site.shownAs.VERIFIED")
+                : t("catalog.xrefs.site.shownAs.SIMILAR")}
             </span>
           ) : null}
         </span>
@@ -809,10 +830,14 @@ function SiteRow({
               disabled={busy}
               className={cx(buttonStyles.secondary, "h-9 px-3 text-sm")}
               onClick={() =>
-                void run(path, { visible: false }, `Hidden on ${SITE_SHORT[site.siteKey]}.`)
+                void run(
+                  path,
+                  { visible: false },
+                  t("catalog.xrefs.site.hidden", { site: siteName }),
+                )
               }
             >
-              Hide on {SITE_SHORT[site.siteKey]}
+              {t("catalog.xrefs.site.hide", { site: siteName })}
             </button>
           ) : confirming ? null : (
             <button
@@ -826,12 +851,14 @@ function SiteRow({
                 setConfirming(true);
               }}
             >
-              Show on {SITE_SHORT[site.siteKey]}…
+              {t("catalog.xrefs.site.show", { site: siteName })}
             </button>
           )
         ) : (
           <span className="text-xs text-ink-3">
-            {site.enabled ? "Enabled by the site publisher" : "Not enabled"}
+            {site.enabled
+              ? t("catalog.xrefs.site.enabledByPublisher")
+              : t("catalog.xrefs.site.notEnabled")}
           </span>
         )}
       </div>
@@ -848,13 +875,13 @@ function SiteRow({
                 visible: true,
                 acknowledgement: { version: XREF_PUBLICATION_ACK_VERSION, accepted: true },
               },
-              `Shown on ${SITE_SHORT[site.siteKey]}; your confirmation is recorded.`,
+              t("catalog.xrefs.site.shownDone", { site: siteName }),
             );
             if (ok) setConfirming(false);
           }}
         >
           <p id={`${id}-ack`} className="text-sm font-medium text-ink">
-            Publishing responsibility
+            {t("catalog.xrefs.site.responsibility")}
           </p>
           <label className="flex items-start gap-2 text-sm text-ink-2">
             <input
@@ -866,8 +893,7 @@ function SiteRow({
             <span>{XREF_PUBLICATION_ACK_TEXT}</span>
           </label>
           <p className="text-xs text-ink-3">
-            Your name, the time and the statement version ({XREF_PUBLICATION_ACK_VERSION}) are
-            recorded in the audit trail.
+            {t("catalog.xrefs.site.recorded", { version: XREF_PUBLICATION_ACK_VERSION })}
           </p>
           <div className="flex flex-wrap justify-end gap-2">
             <button
@@ -875,10 +901,10 @@ function SiteRow({
               className={buttonStyles.secondary}
               onClick={() => setConfirming(false)}
             >
-              Cancel
+              {t("catalog.xrefs.card.cancel")}
             </button>
             <button type="submit" className={buttonStyles.primary} disabled={busy || !accepted}>
-              Confirm and show on {SITE_SHORT[site.siteKey]}
+              {t("catalog.xrefs.site.confirm", { site: siteName })}
             </button>
           </div>
         </form>
@@ -888,17 +914,19 @@ function SiteRow({
 }
 
 function History({ x }: { x: ProductCrossReference }) {
+  const t = useT();
+  const locale = useAdminLocale();
   return (
     <details className="text-sm">
       <summary className="inline-flex cursor-pointer items-center gap-1.5 font-medium text-ink-2">
         <Icon name="history" size={16} />
-        History ({x.events.length})
+        {t("catalog.xrefs.card.history", { n: x.events.length })}
       </summary>
       <ol className="mt-2 space-y-2">
         {x.events.map((e) => (
           <li key={e.id} className="text-ink-2">
-            <span className="font-medium text-ink">{ACTION_TEXT[e.action]}</span> · {e.actor.name} ·{" "}
-            <span className="text-ink-3">{when(e.createdAt)}</span>
+            <span className="font-medium text-ink">{t(`catalog.xrefs.action.${e.action}`)}</span> ·{" "}
+            {e.actor.name} · <span className="text-ink-3">{when(e.createdAt, locale)}</span>
             {e.comment ? <span className="block text-ink-3">“{e.comment}”</span> : null}
           </li>
         ))}

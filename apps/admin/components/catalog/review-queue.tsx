@@ -7,21 +7,36 @@
 import Link from "next/link";
 import type { ReviewQueueItem } from "@dream/contracts";
 import { relativeTime } from "../../lib/format";
+import type { AdminLocale } from "../../lib/i18n/config";
+import type { PlainKey } from "../../lib/i18n/types";
+import { Msg, MsgP } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { Avatar, StatusPill } from "../ui";
 
-const REASON: Record<string, string> = {
-  own_change: "Your change",
-  no_permission: "Reviewer needed",
+/** Reasons with their own text; any other reason shows "Waiting". */
+const REASON: Record<string, PlainKey> = {
+  own_change: "catalog.list.review.reason.own_change",
+  no_permission: "catalog.list.review.reason.no_permission",
 };
 
 function Decision({ item }: { item: ReviewQueueItem }) {
   if (item.blockingCount > 0) {
-    return <StatusPill tone="danger">{item.blockingCount} blocking</StatusPill>;
+    return (
+      <StatusPill tone="danger">
+        <MsgP k="catalog.list.review.blocking" params={{ n: item.blockingCount }} />
+      </StatusPill>
+    );
   }
-  if (item.canReview) return <StatusPill tone="petrol">Ready for you</StatusPill>;
+  if (item.canReview)
+    return (
+      <StatusPill tone="petrol">
+        <Msg k="catalog.list.review.ready" />
+      </StatusPill>
+    );
   return (
-    <StatusPill tone="neutral">{REASON[item.reviewBlockedReason ?? ""] ?? "Waiting"}</StatusPill>
+    <StatusPill tone="neutral">
+      <Msg k={REASON[item.reviewBlockedReason ?? ""] ?? "catalog.list.review.waiting"} />
+    </StatusPill>
   );
 }
 
@@ -29,31 +44,37 @@ export function ReviewQueueList({
   items,
   now,
   siteParam,
+  locale = "en",
 }: {
   items: readonly ReviewQueueItem[];
   now: Date;
   siteParam?: string;
+  /** ML-12a: the UI language of the relative times (the page reads it on the server). */
+  locale?: AdminLocale;
 }) {
   const href = (i: ReviewQueueItem) =>
+    // i18n-ignore: query string of the product link
     `/products/${i.productId}?${siteParam ? `site=${siteParam}&` : ""}tab=publication#review`;
   return (
     <>
       <div className="hidden md:block">
         <table className="w-full border-collapse text-left text-sm">
-          <caption className="sr-only">Product masters waiting for review</caption>
+          <caption className="sr-only">
+            <Msg k="catalog.list.review.table.caption" />
+          </caption>
           <thead>
             <tr className="type-eyebrow border-y border-line bg-surface-2 text-ink-3">
               <th scope="col" className="py-2.5 pl-6 pr-3 font-semibold">
-                Product
+                <Msg k="catalog.list.review.table.product" />
               </th>
               <th scope="col" className="px-3 py-2.5 font-semibold">
-                Submitted by
+                <Msg k="catalog.list.review.table.submitter" />
               </th>
               <th scope="col" className="px-3 py-2.5 font-semibold">
-                Waiting
+                <Msg k="catalog.list.review.table.waiting" />
               </th>
               <th scope="col" className="py-2.5 pl-3 pr-6 font-semibold">
-                Decision
+                <Msg k="catalog.list.review.table.decision" />
               </th>
             </tr>
           </thead>
@@ -72,7 +93,10 @@ export function ReviewQueueList({
                       {i.name}
                     </span>
                     <span className="tabular block font-mono text-xs text-ink-3">
-                      {i.code} · version {i.version}
+                      <MsgP
+                        k="catalog.list.review.version"
+                        params={{ code: i.code, version: i.version }}
+                      />
                     </span>
                     {i.comment ? (
                       <span className="mt-1 line-clamp-1 block text-xs text-ink-2">
@@ -84,11 +108,13 @@ export function ReviewQueueList({
                 <td className="px-3 py-3.5">
                   <span className="flex items-center gap-2.5 text-ink-2">
                     <Avatar name={i.submittedBy?.name ?? "?"} size="sm" />
-                    <span className="truncate">{i.submittedBy?.name ?? "Unknown"}</span>
+                    <span className="truncate">
+                      {i.submittedBy?.name ?? <Msg k="catalog.list.review.unknown" />}
+                    </span>
                   </span>
                 </td>
                 <td className="tabular whitespace-nowrap px-3 py-3.5 text-ink-2">
-                  {relativeTime(new Date(i.submittedAt), now)}
+                  {relativeTime(new Date(i.submittedAt), now, locale)}
                 </td>
                 <td className="py-3.5 pl-3 pr-6">
                   <span className="flex items-center justify-between gap-2">
@@ -96,7 +122,10 @@ export function ReviewQueueList({
                       <Decision item={i} />
                       {i.warningCount > 0 ? (
                         <span className="text-xs text-amber-ink">
-                          {i.warningCount} warning{i.warningCount === 1 ? "" : "s"}
+                          <MsgP
+                            k="catalog.list.review.warnings"
+                            params={{ count: i.warningCount }}
+                          />
                         </span>
                       ) : null}
                     </span>
@@ -122,7 +151,20 @@ export function ReviewQueueList({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium text-ink">{i.name}</span>
                 <span className="mt-0.5 block text-xs text-ink-3">
-                  {i.submittedBy?.name ?? "Unknown"}, {relativeTime(new Date(i.submittedAt), now)}
+                  {i.submittedBy ? (
+                    <MsgP
+                      k="catalog.list.review.when.known"
+                      params={{
+                        name: i.submittedBy.name,
+                        time: relativeTime(new Date(i.submittedAt), now, locale),
+                      }}
+                    />
+                  ) : (
+                    <MsgP
+                      k="catalog.list.review.when.unknown"
+                      params={{ time: relativeTime(new Date(i.submittedAt), now, locale) }}
+                    />
+                  )}
                 </span>
               </span>
               <Decision item={i} />
