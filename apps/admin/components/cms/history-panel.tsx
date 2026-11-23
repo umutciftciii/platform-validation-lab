@@ -4,19 +4,22 @@ import type { CmsHistoryResponse, CmsPageResponse, CmsRestoreRequest } from "@dr
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { callCms } from "../../lib/cms-client";
+import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { FormMessage } from "../catalog/parts";
 import { useNotice } from "../catalog/notices";
 import { Panel, StatusPill } from "../ui";
 import { ConfirmBox } from "./publication-panel";
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 /**
  * DP-020: the publication history of a page (one immutable revision per publication, newest
@@ -36,6 +39,9 @@ export function HistoryPanel({
   canEdit: boolean;
   history: CmsHistoryResponse | null;
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const router = useRouter();
   const notify = useNotice();
   const [confirm, setConfirm] = useState<number | null>(null);
@@ -50,7 +56,7 @@ export function HistoryPanel({
     setPending(false);
     setConfirm(null);
     if (!res.ok) return setError(res.message);
-    if (notify) notify(`Revision ${revisionNumber} restored into the draft. Publish to show it.`);
+    if (notify) notify(t("content.editor.history.restored", { n: revisionNumber }));
     router.refresh();
   }
 
@@ -58,25 +64,32 @@ export function HistoryPanel({
   return (
     <Panel
       id="history"
-      title="Publication history"
-      description="Every publication is kept as a revision."
+      title={t("content.editor.history.title")}
+      description={t("content.editor.history.description")}
     >
       <div className="space-y-3 text-sm">
         {!history ? (
-          <p className="text-ink-3">The history could not be loaded. Try again in a moment.</p>
+          <p className="text-ink-3">{t("content.editor.history.loadFailed")}</p>
         ) : revisions.length === 0 ? (
-          <p className="text-ink-3">Not published yet. Each publication adds a revision here.</p>
+          <p className="text-ink-3">{t("content.editor.history.empty")}</p>
         ) : (
-          <ol className="divide-y divide-line" aria-label="Revisions, newest first">
+          <ol className="divide-y divide-line" aria-label={t("content.editor.history.list")}>
             {revisions.map((r) => (
               <li key={r.revisionNumber} className="space-y-1.5 py-2.5 first:pt-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-ink">Revision {r.revisionNumber}</span>
-                  {r.live ? <StatusPill tone="success">Live</StatusPill> : null}
+                  <span className="font-medium text-ink">
+                    {t("content.editor.history.revision", { n: r.revisionNumber })}
+                  </span>
+                  {r.live ? (
+                    <StatusPill tone="success">{t("content.editor.history.live")}</StatusPill>
+                  ) : null}
                 </div>
                 <p className="text-ink-3">
-                  {DATE.format(new Date(r.publishedAt))} by {r.publishedBy.name} · draft version{" "}
-                  {r.pageVersion}
+                  {t("content.editor.history.meta", {
+                    date: DATE.format(new Date(r.publishedAt)),
+                    name: r.publishedBy.name,
+                    version: r.pageVersion,
+                  })}
                 </p>
                 <p className="truncate text-ink-2" title={r.title}>
                   {r.title}
@@ -87,8 +100,8 @@ export function HistoryPanel({
                 {canEdit ? (
                   confirm === r.revisionNumber ? (
                     <ConfirmBox
-                      text={`Replace the current draft with revision ${r.revisionNumber}? The site does not change until you publish.`}
-                      action="Restore into draft"
+                      text={t("content.editor.history.confirm", { n: r.revisionNumber })}
+                      action={t("content.editor.history.restore")}
                       pending={pending}
                       onConfirm={() => restore(r.revisionNumber)}
                       onCancel={() => setConfirm(null)}
@@ -100,7 +113,7 @@ export function HistoryPanel({
                       disabled={dirty || pending}
                       className="text-sm font-medium text-petrol-strong hover:underline disabled:cursor-not-allowed disabled:text-ink-3 disabled:no-underline"
                     >
-                      Restore into draft
+                      {t("content.editor.history.restore")}
                     </button>
                   )
                 ) : null}
@@ -109,7 +122,7 @@ export function HistoryPanel({
           </ol>
         )}
         {dirty && revisions.length ? (
-          <p className="text-xs text-ink-3">Save the draft before restoring a revision.</p>
+          <p className="text-xs text-ink-3">{t("content.editor.history.saveFirst")}</p>
         ) : null}
         {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       </div>

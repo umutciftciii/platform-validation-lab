@@ -10,6 +10,7 @@ import { useState, type FormEvent } from "react";
 import { callCms, type FieldIssue } from "../../lib/cms-client";
 import { slugify } from "../catalog/product-master-form";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 
@@ -29,6 +30,7 @@ export function PageCreateForm({
   template?: "standard" | "article";
 }) {
   const article = template === "article";
+  const t = useT();
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,12 +62,16 @@ export function PageCreateForm({
   return (
     <form onSubmit={submit} noValidate className="space-y-4">
       <Field
-        label={article ? "Article title" : "Page title"}
+        label={
+          article
+            ? t("content.pages.createForm.articleTitle")
+            : t("content.pages.createForm.pageTitle")
+        }
         htmlFor="title"
         hint={
           article
-            ? "The headline of the article on the site and in the news list."
-            : "The name of the page in the admin and its default heading."
+            ? t("content.pages.createForm.articleTitleHint")
+            : t("content.pages.createForm.pageTitleHint")
         }
       >
         <input
@@ -82,12 +88,12 @@ export function PageCreateForm({
         />
       </Field>
       <Field
-        label="Address"
+        label={t("content.pages.createForm.address")}
         htmlFor="slug"
         hint={
           article
-            ? "Lower case and hyphens, for example why-oil-prices-fell."
-            : "Lower case and hyphens. Products, privacy, news and two-letter codes are reserved."
+            ? t("content.pages.createForm.articleSlugHint")
+            : t("content.pages.createForm.pageSlugHint")
         }
       >
         <div className="flex items-center rounded-lg">
@@ -111,14 +117,15 @@ export function PageCreateForm({
         </div>
       </Field>
       <p className="text-sm text-ink-3">
-        The {article ? "article" : "page"} is created as a draft on {siteLabel}. Nothing is shown on
-        the site until it is published.
+        {article
+          ? t("content.pages.createForm.articleDraftNote", { site: siteLabel })
+          : t("content.pages.createForm.pageDraftNote", { site: siteLabel })}
       </p>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       <div className="flex justify-end">
         <button type="submit" disabled={pending} className={buttonStyles.primary}>
           {pending ? <Spinner /> : <Icon name="plus" size={17} />}
-          <span>Create draft</span>
+          <span>{t("content.pages.createForm.create")}</span>
         </button>
       </div>
     </form>

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCms, type FieldIssue } from "../../lib/cms-client";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
 
 /**
@@ -36,6 +37,7 @@ export function TranslationActions({
   missing: { locale: string; label: string; proposal?: boolean }[];
   outdated: { latest: number } | null;
 }) {
+  const t = useT();
   const router = useRouter();
   const [locale, setLocale] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -89,7 +91,9 @@ export function TranslationActions({
             className={cx(buttonStyles.secondary, "h-9")}
           >
             {pending ? <Spinner /> : null}
-            <span>{`Mark as up to date with revision ${outdated.latest}`}</span>
+            <span>
+              {t("content.editor.translationActions.markUpToDate", { n: outdated.latest })}
+            </span>
           </button>
         </div>
       ) : null}
@@ -103,7 +107,7 @@ export function TranslationActions({
               onClick={() => setLocale(m.locale)}
               className={cx(buttonStyles.secondary, "h-9")}
             >
-              <span>{`Create ${m.label} translation`}</span>
+              <span>{t("content.editor.translationActions.create", { language: m.label })}</span>
             </button>
           ))}
         </div>
@@ -111,9 +115,7 @@ export function TranslationActions({
 
       {locale !== null ? (
         <form key="create-form" onSubmit={create} noValidate className="space-y-3">
-          <p className="text-sm text-ink-2">
-            {`The new page copies the sections, images and links of this page with empty texts. It is created as a draft; nothing is published.`}
-          </p>
+          <p className="text-sm text-ink-2">{t("content.editor.translationActions.copyNote")}</p>
           {offersProposal ? (
             <label key="proposal" className="flex items-start gap-2 text-sm text-ink-2">
               <input
@@ -122,12 +124,10 @@ export function TranslationActions({
                 defaultChecked
                 className="mt-0.5 h-4 w-4 rounded border-line-strong"
               />
-              <span>
-                {`Fill the texts with the prepared translation proposal (written by hand, not machine translated; texts without a proposal stay empty). The draft still needs a language review before it is published. Company name, address, telephone and e-mail stay as they are.`}
-              </span>
+              <span>{t("content.editor.translationActions.proposal")}</span>
             </label>
           ) : null}
-          <Field label="Translated title" htmlFor="translation-title">
+          <Field label={t("content.editor.translationActions.title")} htmlFor="translation-title">
             <input
               id="translation-title"
               name="title"
@@ -140,9 +140,9 @@ export function TranslationActions({
           </Field>
           {slugEditable ? (
             <Field
-              label="Address in this language"
+              label={t("content.editor.translationActions.slug")}
               htmlFor="translation-slug"
-              hint="Lower case and hyphens. The same address as the source is allowed."
+              hint={t("content.editor.translationActions.slugHint")}
             >
               <div className="flex items-center rounded-lg">
                 <span className="inline-flex h-10 items-center rounded-l-lg border border-r-0 border-line-strong bg-surface-2 px-3 font-mono text-sm text-ink-3">
@@ -164,7 +164,7 @@ export function TranslationActions({
           <div className="flex flex-wrap gap-2">
             <button type="submit" disabled={pending} className={buttonStyles.primary}>
               {pending ? <Spinner /> : null}
-              <span>Create draft translation</span>
+              <span>{t("content.editor.translationActions.submit")}</span>
             </button>
             <button
               type="button"
@@ -176,7 +176,7 @@ export function TranslationActions({
               }}
               className={cx(buttonStyles.secondary, "h-10")}
             >
-              <span>Cancel</span>
+              <span>{t("content.editor.translationActions.cancel")}</span>
             </button>
           </div>
         </form>

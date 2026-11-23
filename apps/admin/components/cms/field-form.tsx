@@ -8,7 +8,10 @@
  */
 import { CMS_STATIC_ASSETS, type CmsField } from "@dream/contracts";
 import type { ReactNode } from "react";
+import { cmsText } from "../../lib/cms-text";
+import { INTL_LOCALE } from "../../lib/i18n/config";
 import { Field, FIELD, TEXTAREA } from "../catalog/parts";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx } from "../ui";
 
@@ -109,12 +112,18 @@ export function Fields({
   onChange: (values: ItemValue) => void;
   site?: "BV" | "CORPORATE";
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const lower = (s: string) => s.toLocaleLowerCase(INTL_LOCALE[locale]);
   const set = (key: string, v: Value) => onChange({ ...values, [key]: v });
   return (
     <>
       {fields.map((f) => {
         const id = `${idPrefix}-${f.key}`;
         const fieldPath = `${path}.${f.key}`;
+        // ML-12c: labels and hints come from @dream/contracts (content.contract).
+        const label = cmsText(f.label, t);
+        const fieldHint = cmsText(f.hint, t);
         if (f.type === "text") {
           const v = (values[f.key] as string) ?? "";
           // DP-020: a field required together with a sibling (an image's alt text) is never
@@ -122,16 +131,16 @@ export function Fields({
           const requiredNow = f.requiredWith ? Boolean(values[f.requiredWith]) : false;
           const optional = !f.required && !f.format && !f.requiredWith;
           const hint =
-            f.hint ??
+            fieldHint ??
             (f.format === "href"
-              ? "Optional. /page, #section, https://…, mailto: or tel:"
+              ? t("content.editor.fields.hrefHint")
               : f.multiline
                 ? `${v.length}/${f.max}`
                 : undefined);
           return (
             <Field
               key={f.key}
-              label={optional ? `${f.label} (optional)` : f.label}
+              label={optional ? t("content.editor.fields.optional", { label }) : label}
               htmlFor={id}
               hint={hint}
             >
@@ -172,13 +181,16 @@ export function Fields({
           return (
             <Field
               key={f.key}
-              label={f.label}
+              label={label}
               htmlFor={id}
               hint={
-                f.hint ??
+                fieldHint ??
                 (chosen
-                  ? `${chosen.width} × ${chosen.height} px · registered site asset`
-                  : "Choose a registered site asset (uploads arrive with the media library).")
+                  ? t("content.editor.fields.assetChosen", {
+                      width: chosen.width,
+                      height: chosen.height,
+                    })
+                  : t("content.editor.fields.assetChoose"))
               }
             >
               <select
@@ -189,9 +201,11 @@ export function Fields({
                 onChange={(e) => set(f.key, e.currentTarget.value)}
                 className={cx(FIELD, "font-mono text-sm")}
               >
-                {f.required === false ? <option value="">No image</option> : null}
+                {f.required === false ? (
+                  <option value="">{t("content.editor.fields.noImage")}</option>
+                ) : null}
                 {!chosen && !(f.required === false && !v) ? (
-                  <option value={v}>{v || "Choose…"}</option>
+                  <option value={v}>{v || t("content.editor.fields.choose")}</option>
                 ) : null}
                 {options.map((a) => (
                   <option key={a.src} value={a.src}>
@@ -207,10 +221,10 @@ export function Fields({
           return (
             <fieldset key={f.key} className="rounded-lg border border-line p-3">
               <legend className="px-1 text-sm font-medium text-ink">
-                {f.required ? f.label : `${f.label} (optional)`}
+                {f.required ? label : t("content.editor.fields.optional", { label })}
               </legend>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
-                <Field label="Label" htmlFor={`${id}-label`}>
+                <Field label={t("content.editor.fields.linkLabel")} htmlFor={`${id}-label`}>
                   <input
                     id={`${id}-label`}
                     maxLength={80}
@@ -225,9 +239,9 @@ export function Fields({
                   />
                 </Field>
                 <Field
-                  label="Link"
+                  label={t("content.editor.fields.link")}
                   htmlFor={`${id}-href`}
-                  hint="/page, #section, https://…, mailto: or tel:"
+                  hint={t("content.editor.fields.linkHint")}
                 >
                   <input
                     id={`${id}-href`}
@@ -257,8 +271,8 @@ export function Fields({
                 invalid(fieldPath) ? "border-danger/50" : "border-line",
               )}
             >
-              <legend className="px-1 text-sm font-medium text-ink">{f.label}</legend>
-              {f.hint ? <p className="text-xs text-ink-3">{f.hint}</p> : null}
+              <legend className="px-1 text-sm font-medium text-ink">{label}</legend>
+              {fieldHint ? <p className="text-xs text-ink-3">{fieldHint}</p> : null}
               <Fields
                 fields={f.fields}
                 values={v}
@@ -275,18 +289,25 @@ export function Fields({
         const items = (values[f.key] as ItemValue[]) ?? [];
         const setItems = (next: ItemValue[]) => set(f.key, next);
         const fixed = f.min === f.max;
+        const itemLabel = cmsText(f.itemLabel, t);
+        const item = lower(itemLabel);
         return (
           <fieldset key={f.key} className="space-y-3">
             <legend className="text-sm font-medium text-ink">
-              {f.label}{" "}
+              {label}{" "}
               <span className="font-normal text-ink-3">
-                ({items.length}
-                {fixed ? `, exactly ${f.min}` : `, ${f.min}–${f.max}`})
+                {fixed
+                  ? t("content.editor.fields.listCountExact", { n: items.length, min: f.min })
+                  : t("content.editor.fields.listCountRange", {
+                      n: items.length,
+                      min: f.min,
+                      max: f.max,
+                    })}
               </span>
             </legend>
-            {f.hint ? <p className="text-xs text-ink-3">{f.hint}</p> : null}
+            {fieldHint ? <p className="text-xs text-ink-3">{fieldHint}</p> : null}
             <ol className="space-y-3">
-              {items.map((item, j) => (
+              {items.map((entry, j) => (
                 <li
                   key={j}
                   className={cx(
@@ -296,19 +317,19 @@ export function Fields({
                 >
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-ink-3">
-                      {f.itemLabel} {j + 1}
+                      {t("content.editor.fields.item", { item: itemLabel, n: j + 1 })}
                     </span>
                     {!readOnly ? (
                       <div className="flex items-center gap-1">
                         <IconButton
-                          label={`Move ${f.itemLabel.toLowerCase()} ${j + 1} up`}
+                          label={t("content.editor.fields.moveUp", { item, n: j + 1 })}
                           disabled={j === 0}
                           onClick={() => setItems(move(items, j, j - 1))}
                         >
                           <Icon name="chevron" size={15} className="-rotate-90" />
                         </IconButton>
                         <IconButton
-                          label={`Move ${f.itemLabel.toLowerCase()} ${j + 1} down`}
+                          label={t("content.editor.fields.moveDown", { item, n: j + 1 })}
                           disabled={j === items.length - 1}
                           onClick={() => setItems(move(items, j, j + 1))}
                         >
@@ -316,7 +337,7 @@ export function Fields({
                         </IconButton>
                         {!fixed ? (
                           <IconButton
-                            label={`Remove ${f.itemLabel.toLowerCase()} ${j + 1}`}
+                            label={t("content.editor.fields.remove", { item, n: j + 1 })}
                             disabled={items.length <= f.min}
                             onClick={() => setItems(items.filter((_, k) => k !== j))}
                           >
@@ -329,7 +350,7 @@ export function Fields({
                   <div className="space-y-3">
                     <Fields
                       fields={f.fields}
-                      values={item}
+                      values={entry}
                       path={`${fieldPath}.${j}`}
                       idPrefix={`${id}-${j}`}
                       readOnly={readOnly}
@@ -349,7 +370,7 @@ export function Fields({
                 className={buttonStyles.secondary}
               >
                 <Icon name="plus" size={16} />
-                Add {f.itemLabel.toLowerCase()}
+                {t("content.editor.fields.add", { item })}
               </button>
             ) : null}
           </fieldset>
