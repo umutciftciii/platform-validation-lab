@@ -25,5 +25,6 @@ export * from "./admin/seo-admin.js";
 export * from "./admin/seo-redirects.js";
 export * from "./leads.js";
 export * from "./privacy.js";
+export * from "./legal-texts.js";
 export * from "./seo.js";
 export * from "./site-locales.js";

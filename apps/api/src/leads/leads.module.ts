@@ -16,6 +16,8 @@ import {
 } from "./lead-notification-sender.service.js";
 import { LeadNotificationSettingsService } from "./lead-notification-settings.service.js";
 import { LeadRequestsService } from "./lead-requests.service.js";
+import { LEAD_LEGAL_TEXTS } from "./form-locale.js";
+import { LEGAL_TEXTS } from "@dream/contracts";
 import { LeadRetentionReportService } from "./retention-report.service.js";
 
 // Lead-gated document downloads (DP-042, DP-043; ADR-016): public short form with consent
@@ -37,6 +39,8 @@ import { LeadRetentionReportService } from "./retention-report.service.js";
     LeadRetentionReportService,
     LeadNotificationSender,
     LeadNotificationSettingsService,
+    // ML-10: the legal texts per language, exactly as @dream/contracts ships them.
+    { provide: LEAD_LEGAL_TEXTS, useValue: LEGAL_TEXTS },
     // Tests and operators reach the sender by name (runOnce).
     { provide: LEAD_NOTIFICATION_SENDER, useExisting: LeadNotificationSender },
   ],

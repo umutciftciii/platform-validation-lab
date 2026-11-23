@@ -375,11 +375,13 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     revision: { model: "ProductDocumentRevision", list: false },
     grant: { model: "DocumentDownloadGrant", list: false },
     downloads: { model: "LeadDocumentDownload", list: true },
+    siteLocale: { model: "SiteLocale", list: false },
   },
   LeadContactMessage: {
     lead: { model: "Lead", list: false },
     site: { model: "Site", list: false },
     notification: { model: "LeadNotification", list: false },
+    siteLocale: { model: "SiteLocale", list: false },
   },
   LeadNotification: {
     site: { model: "Site", list: false },
@@ -459,6 +461,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     cmsPages: { model: "CmsPage", list: true },
     productListingTexts: { model: "ProductListingText", list: true },
     productCategoryTexts: { model: "ProductCategoryText", list: true },
+    leadDocumentRequests: { model: "LeadDocumentRequest", list: true },
+    leadContactMessages: { model: "LeadContactMessage", list: true },
   },
 };
 

@@ -11,9 +11,11 @@ import { getProduct, getProductDocuments } from "@/lib/catalog-api";
 import { catalogLocale } from "@/lib/catalog-locale";
 import { countryOptions, dictionary, leadFormUi } from "@/lib/i18n";
 import { documentLang } from "@/lib/document-language";
-import { localizeHref } from "@/lib/locale-routing";
+import { formLegalTexts } from "@/lib/form-texts";
+import { DEFAULT_LOCALE, localizeHref } from "@/lib/locale-routing";
 import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
-import { COUNTRY_CODES, currentLeadFormTexts } from "@dream/contracts";
+import { visibleLocales } from "@/lib/public-locales";
+import { COUNTRY_CODES } from "@dream/contracts";
 
 /** ML-6: the title in the page's language. */
 export async function generateMetadata(): Promise<Metadata> {
@@ -27,6 +29,9 @@ export async function generateMetadata(): Promise<Metadata> {
  * DP-042 (ADR-016): the short request form of a lead-gated document. Only documents the product
  * page lists as `requestable` on BV get a form; everything else is a 404. DP-095 D-T5: where the
  * privacy texts are not published (production with drafts), no form is offered.
+ * ML-10 (ADR-028 D12): the form shows the legal texts of the page's language and sends that
+ * language; where they may not be offered (a translation under DP-095 review) there is no form,
+ * only a notice in the page's language — never the texts of another language.
  */
 export default async function DocumentRequestPage({
   params,
@@ -77,7 +82,17 @@ async function RequestDetail({
       <CatalogNotice title={t.closedTitle}>{t.closedText}</CatalogNotice>
     );
   }
-  const texts = currentLeadFormTexts();
+  // English pages read no language list (as before); other languages must be public (fail closed).
+  const legal = formLegalTexts(locale, locale === DEFAULT_LOCALE ? [] : await visibleLocales());
+  if (!legal) {
+    return (
+      <CatalogNotice title={t.notInLanguageTitle}>{t.notInLanguageText}</CatalogNotice>
+    );
+  }
+  const texts = {
+    privacyNotice: { version: legal.privacyNotice.version, text: legal.privacyNotice.text },
+    marketingConsent: { version: legal.marketingConsent.version, text: legal.marketingConsent.text },
+  };
   const countries = countryOptions(locale, COUNTRY_CODES);
   return (
     <div className="grid grid-cols-1 gap-10 pt-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-14 lg:pt-10">

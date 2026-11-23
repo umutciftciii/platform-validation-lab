@@ -15,6 +15,8 @@ import {
   DOWNLOAD_GRANT_HEADER,
   ErrorBodySchema,
   LEAD_TEXT_FIELDS,
+  LEAD_TEXT_LOCALE_MISMATCH,
+  LEAD_TEXT_LOCALE_MISMATCH_CODE,
   LEAD_TEXT_OUTDATED,
   LeadDocumentRequestResponseSchema,
   PUBLIC_LEADS_API,
@@ -173,6 +175,10 @@ async function submitLead(request: Request, form: Record<string, unknown>): Prom
     );
     if (res.status === 400 && outdated.length > 0) {
       return { ok: false, status: 409, code: LEAD_TEXT_OUTDATED, fields: outdated.map((d) => d.path), retryAfter: null };
+    }
+    // ML-10: texts of another language than the form's: refused, nothing stored (fail closed).
+    if (res.status === 400 && details.some((d) => d.rule === LEAD_TEXT_LOCALE_MISMATCH)) {
+      return { ok: false, status: 400, code: LEAD_TEXT_LOCALE_MISMATCH_CODE, fields: [], retryAfter: null };
     }
     const status = [400, 403, 404, 413, 429].includes(res.status) ? res.status : 502;
     return {

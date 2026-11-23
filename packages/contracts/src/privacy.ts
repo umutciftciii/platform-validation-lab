@@ -193,31 +193,78 @@ export const PRIVACY_POLICY_SECTIONS: readonly PrivacySection[] = [
   },
 ];
 
-function dpoText(dpo: (typeof PRIVACY_CONTROLLER)["dpo"]): string | null {
-  if (!dpo) return null;
-  return dpo.required ? dpo.contact : "not required for our organisation";
+/**
+ * ML-10 (ADR-028 D12): the words `fillPrivacyText` adds itself, per language of the policy. The
+ * English ones are the wording the policy always had; another language brings its own (see
+ * legal-texts.ts).
+ */
+export interface PrivacyFillLabels {
+  /** The visible marker of a missing value; `{label}` is the name of what is missing. */
+  pending: string;
+  /** The DPO line when the owner decided no DPO is required. */
+  dpoNotRequired: string;
+  fields: Readonly<
+    Record<
+      | "legalName"
+      | "registeredAddress"
+      | "kvkNumber"
+      | "privacyEmail"
+      | "dpo"
+      | "supervisoryAuthority",
+      string
+    >
+  >;
+  openPoints: Readonly<Record<PrivacyOpenPoint, string>>;
 }
 
-/** Fills the placeholders; a missing value becomes a visible "[pending: …]" marker. */
+export const PRIVACY_FILL_LABELS_EN: PrivacyFillLabels = {
+  pending: "[pending: {label}]",
+  dpoNotRequired: "not required for our organisation",
+  fields: {
+    legalName: "legal name",
+    registeredAddress: "registered address",
+    kvkNumber: "KvK number",
+    privacyEmail: "privacy contact e-mail",
+    dpo: "DPO decision",
+    supervisoryAuthority: "supervisory authority",
+  },
+  openPoints: Object.fromEntries(
+    Object.entries(PRIVACY_POLICY_OPEN_POINTS).map(([key, point]) => [key, point.label]),
+  ) as Record<PrivacyOpenPoint, string>,
+};
+
+function dpoText(
+  dpo: (typeof PRIVACY_CONTROLLER)["dpo"],
+  labels: PrivacyFillLabels,
+): string | null {
+  if (!dpo) return null;
+  return dpo.required ? dpo.contact : labels.dpoNotRequired;
+}
+
+/**
+ * Fills the placeholders; a missing value becomes a visible "[pending: …]" marker. ML-10: the
+ * marker and the names of the missing values follow `labels` (English by default, unchanged).
+ */
 export function fillPrivacyText(
   text: string,
   controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
   values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
+  labels: PrivacyFillLabels = PRIVACY_FILL_LABELS_EN,
 ): string {
   const known: Record<string, [string | null, string]> = {
-    legalName: [controller.legalName, "legal name"],
-    registeredAddress: [controller.registeredAddress, "registered address"],
-    kvkNumber: [controller.kvkNumber, "KvK number"],
-    privacyEmail: [controller.privacyEmail, "privacy contact e-mail"],
-    dpo: [dpoText(controller.dpo), "DPO decision"],
-    supervisoryAuthority: [controller.supervisoryAuthority, "supervisory authority"],
+    legalName: [controller.legalName, labels.fields.legalName],
+    registeredAddress: [controller.registeredAddress, labels.fields.registeredAddress],
+    kvkNumber: [controller.kvkNumber, labels.fields.kvkNumber],
+    privacyEmail: [controller.privacyEmail, labels.fields.privacyEmail],
+    dpo: [dpoText(controller.dpo, labels), labels.fields.dpo],
+    supervisoryAuthority: [controller.supervisoryAuthority, labels.fields.supervisoryAuthority],
   };
-  for (const [key, point] of Object.entries(PRIVACY_POLICY_OPEN_POINTS)) {
-    known[key] = [values[key as PrivacyOpenPoint], point.label];
+  for (const key of Object.keys(PRIVACY_POLICY_OPEN_POINTS)) {
+    known[key] = [values[key as PrivacyOpenPoint], labels.openPoints[key as PrivacyOpenPoint]];
   }
   return text.replace(/\{([a-zA-Z]+)\}/g, (match, key: string) => {
     const entry = known[key];
     if (!entry) return match;
-    return entry[0] ?? `[pending: ${entry[1]}]`;
+    return entry[0] ?? labels.pending.replace("{label}", entry[1]);
   });
 }

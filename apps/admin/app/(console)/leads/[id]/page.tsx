@@ -20,6 +20,8 @@ import {
   SOURCE_LABEL,
   STATUS_LABEL,
   STATUS_TONE,
+  formLanguageLabel,
+  textLanguageLabel,
 } from "../../../../lib/leads-view";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
@@ -372,9 +374,13 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                     </div>
                   ) : null}
                   <div>
+                    <dt className="text-ink-3">Form language</dt>
+                    <dd className="text-ink-2">{formLanguageLabel(m.locale)}</dd>
+                  </div>
+                  <div>
                     <dt className="text-ink-3">Privacy notice shown</dt>
                     <dd className="text-ink-2">
-                      version {m.privacyNoticeVersion}{" "}
+                      version {m.privacyNoticeVersion} ({textLanguageLabel(m.privacyNoticeVersion)}){" "}
                       <span className="font-mono text-xs text-ink-3" title={m.privacyNoticeSha256}>
                         {m.privacyNoticeSha256.slice(0, 12)}…
                       </span>
@@ -415,7 +421,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                 {r.product.name} <span className="font-mono text-ink-3">{r.product.code}</span> ·
                 reference <span className="font-mono">{r.reference ?? "cleared"}</span>
               </p>
-              <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+              <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <dt className="text-ink-3">Submitted as</dt>
                   <dd className="text-ink-2">
@@ -423,9 +429,13 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </dd>
                 </div>
                 <div>
+                  <dt className="text-ink-3">Form language</dt>
+                  <dd className="text-ink-2">{formLanguageLabel(r.locale)}</dd>
+                </div>
+                <div>
                   <dt className="text-ink-3">Privacy notice</dt>
                   <dd className="text-ink-2">
-                    version {r.privacyNoticeVersion}{" "}
+                    version {r.privacyNoticeVersion} ({textLanguageLabel(r.privacyNoticeVersion)}){" "}
                     <span className="font-mono text-xs text-ink-3" title={r.privacyNoticeSha256}>
                       {r.privacyNoticeSha256.slice(0, 12)}…
                     </span>
@@ -435,7 +445,11 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <dt className="text-ink-3">Marketing consent</dt>
                   <dd className="text-ink-2">
                     {r.marketingConsent
-                      ? `given (version ${r.marketingConsentVersion})`
+                      ? `given (version ${r.marketingConsentVersion}${
+                          r.marketingConsentVersion
+                            ? `, ${textLanguageLabel(r.marketingConsentVersion)}`
+                            : ""
+                        })`
                       : "not given"}
                   </dd>
                 </div>

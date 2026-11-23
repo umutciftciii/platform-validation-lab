@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { EmailSchema, UuidSchema } from "./auth/common.js";
 import { DocumentTypeSchema } from "./admin/catalog-documents.js";
+import { LocaleTagSchema } from "./site-locales.js";
 
 const IsoDate = z.iso.datetime({ offset: true });
 
@@ -122,6 +123,23 @@ export function currentLeadFormTexts(): LeadFormTexts {
 /** Error code a site answers its own browser when the form named an older text (D-T7). */
 export const LEAD_TEXT_OUTDATED = "LEAD_TEXT_OUTDATED";
 export const LEAD_TEXT_FIELDS = ["privacyNoticeVersion", "marketingConsentVersion"] as const;
+
+/**
+ * ML-10 (DP-241, ADR-028 D12): the language of a public form. Optional in the input: a site that
+ * sends none is an English form, as before (backward compatible). The API accepts a form only in a
+ * language that is public on the site and whose legal texts may be offered (legal-texts.ts), and
+ * only with that language's current versions: a version of another language is refused
+ * (`VALIDATION_FAILED`, rule `locale_mismatch`), an older version of the same language keeps the
+ * D-T7 answer (rule `outdated`, the site's LEAD_TEXT_OUTDATED).
+ */
+export const LEAD_FORM_DEFAULT_LOCALE = "en";
+export const LEAD_TEXT_LOCALE_MISMATCH = "locale_mismatch";
+/**
+ * Error code a site answers its own browser for a `locale_mismatch` (fail closed: the form shows
+ * its generic failure; it never swaps in texts of another language by itself).
+ */
+export const LEAD_TEXT_LOCALE_MISMATCH_CODE = "LEAD_TEXT_LOCALE_MISMATCH";
+export const LeadFormLocaleSchema = LocaleTagSchema;
 
 /** ISO 3166-1 alpha-2 codes (249). Names come from Intl.DisplayNames in the UI. */
 export const COUNTRY_CODES = [
@@ -524,6 +542,8 @@ export const LeadContactMessageInputSchema = z.strictObject({
   message: messageText(LEAD_MESSAGE_MIN, LEAD_MESSAGE_MAX),
   /** The notice version shown next to the form (information, not consent). */
   privacyNoticeVersion: z.string().max(20),
+  /** ML-10: the form's language (absent: English). */
+  locale: LeadFormLocaleSchema.optional(),
   /** Honeypot: hidden in the form, must stay empty. */
   website: z.literal(""),
 });
@@ -544,6 +564,8 @@ export const LeadDocumentRequestInputSchema = z.strictObject({
   marketingConsent: z.boolean(),
   /** The marketing text version shown next to the box (required when the box is ticked). */
   marketingConsentVersion: z.string().max(20).nullable(),
+  /** ML-10: the form's language (absent: English). */
+  locale: LeadFormLocaleSchema.optional(),
   /** Honeypot: hidden in the form, must stay empty. */
   website: z.literal(""),
 });
@@ -766,6 +788,11 @@ export const LeadRequestSchema = z.strictObject({
   privacyNoticeSha256: z.string(),
   marketingConsent: z.boolean(),
   marketingConsentVersion: z.string().nullable(),
+  /**
+   * ML-10: the language of the form as stored; null for requests stored before ML-10 (read as
+   * English, never rewritten). The language of the texts is the one their version names.
+   */
+  locale: z.string().nullable().default(null),
   grant: z
     .strictObject({
       expiresAt: IsoDate,
@@ -800,6 +827,8 @@ export const LeadContactMessageSchema = z.strictObject({
   /** The notice shown with the form (version and SHA-256 of its exact text). */
   privacyNoticeVersion: z.string(),
   privacyNoticeSha256: z.string(),
+  /** ML-10: the form's language as stored; null before ML-10 (read as English, never rewritten). */
+  locale: z.string().nullable().default(null),
   redactedAt: IsoDate.nullable(),
   /** DP-221: the staff e-mail notification of this message (null: stored before DP-221). */
   notification: z
