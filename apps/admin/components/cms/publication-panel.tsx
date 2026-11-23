@@ -4,19 +4,22 @@ import type { CmsPage, CmsPageResponse, CmsPreviewResponse } from "@dream/contra
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { callCms } from "../../lib/cms-client";
+import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { FormMessage } from "../catalog/parts";
 import { useNotice } from "../catalog/notices";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, Spinner, StatusPill } from "../ui";
 import { publicationState } from "./parts";
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 type Confirm = "publish" | "unpublish" | null;
 
@@ -38,6 +41,9 @@ export function PublicationPanel({
   canPublish: boolean;
   previewable: boolean;
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const router = useRouter();
   const notify = useNotice();
   const [pending, setPending] = useState<"preview" | "publish" | "unpublish" | null>(null);
@@ -47,7 +53,7 @@ export function PublicationPanel({
   const p = page.publication;
   const live = p?.status === "PUBLISHED";
   const upToDate = live && p.pageVersion === version;
-  const state = publicationState({ version, publication: p });
+  const state = publicationState({ version, publication: p }, t);
 
   async function preview() {
     setPending("preview");
@@ -71,31 +77,45 @@ export function PublicationPanel({
     if (!res.ok) return setError(res.message);
     const msg =
       action === "publish"
-        ? `Published as revision ${res.data.page.publication?.revisionNumber ?? ""}.`
-        : "Unpublished. The page is no longer shown on the site.";
+        ? t("content.editor.publication.notice.published", {
+            n: res.data.page.publication?.revisionNumber ?? "",
+          })
+        : t("content.editor.publication.notice.unpublished");
     if (notify) notify(msg);
     router.refresh();
   }
 
   return (
-    <Panel id="publication" title="Publication">
+    <Panel id="publication" title={t("content.editor.publication.title")}>
       <div className="space-y-3 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={state.tone}>{state.label}</StatusPill>
-          {p ? <span className="text-ink-3">revision {p.revisionNumber}</span> : null}
+          {p ? (
+            <span className="text-ink-3">
+              {t("content.editor.publication.revision", { n: p.revisionNumber })}
+            </span>
+          ) : null}
         </div>
         {p ? (
           <p className="text-ink-3">
             {p.status === "PUBLISHED"
-              ? `Published ${DATE.format(new Date(p.publishedAt))} by ${p.publishedBy.name}, from draft version ${p.pageVersion}.`
-              : `Unpublished ${p.unpublishedAt ? DATE.format(new Date(p.unpublishedAt)) : ""} by ${p.unpublishedBy?.name ?? "staff"}. Publish again to show the current draft.`}
+              ? t("content.editor.publication.published", {
+                  date: DATE.format(new Date(p.publishedAt)),
+                  name: p.publishedBy.name,
+                  version: p.pageVersion,
+                })
+              : t("content.editor.publication.unpublished", {
+                  date: p.unpublishedAt ? DATE.format(new Date(p.unpublishedAt)) : "",
+                  name:
+                    p.unpublishedBy?.name ?? t("content.editor.publication.unpublishedByFallback"),
+                })}
           </p>
         ) : (
-          <p className="text-ink-3">Not on the site yet. The site shows nothing for this page.</p>
+          <p className="text-ink-3">{t("content.editor.publication.notOnSite")}</p>
         )}
         {dirty ? (
           <p className="rounded-lg bg-amber-soft px-3 py-2 text-amber-ink">
-            Save the draft first: preview and publishing use the saved version.
+            {t("content.editor.publication.saveFirst")}
           </p>
         ) : null}
         {error ? <FormMessage kind="error">{error}</FormMessage> : null}
@@ -108,33 +128,31 @@ export function PublicationPanel({
             className={cx(buttonStyles.secondary, "w-full")}
           >
             {pending === "preview" ? <Spinner /> : <Icon name="eye" size={17} />}
-            <span>Preview draft</span>
+            <span>{t("content.editor.publication.preview")}</span>
           </button>
         ) : (
-          <p className="text-ink-3">
-            Preview shows pages of the BV site; this site has no pages yet.
-          </p>
+          <p className="text-ink-3">{t("content.editor.publication.previewUnavailable")}</p>
         )}
         {previewUrl ? (
           <p className="text-xs text-ink-3">
-            Opened in a new tab.{" "}
+            {t("content.editor.publication.previewOpened.before")}
             <a
               href={previewUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-petrol-strong hover:underline"
             >
-              Open the preview again
-            </a>{" "}
-            (valid for 15 minutes).
+              {t("content.editor.publication.previewOpened.link")}
+            </a>
+            {t("content.editor.publication.previewOpened.after")}
           </p>
         ) : null}
 
         {canPublish ? (
           confirm === "publish" ? (
             <ConfirmBox
-              text={`Publish draft version ${version} to the live site?`}
-              action="Publish now"
+              text={t("content.editor.publication.confirmPublish", { version })}
+              action={t("content.editor.publication.publishNow")}
               pending={pending === "publish"}
               onConfirm={() => run("publish")}
               onCancel={() => setConfirm(null)}
@@ -147,20 +165,22 @@ export function PublicationPanel({
               className={cx(buttonStyles.primary, "w-full")}
             >
               <Icon name="publish" size={17} />
-              {p ? "Publish changes" : "Publish"}
+              {p
+                ? t("content.editor.publication.publishChanges")
+                : t("content.editor.publication.publish")}
             </button>
           )
         ) : (
           <p className="rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
-            Publishing needs a publisher of this site (content:publish).
+            {t("content.editor.publication.needsPublisher")}
           </p>
         )}
 
         {canPublish && live ? (
           confirm === "unpublish" ? (
             <ConfirmBox
-              text="Take this page off the site? Visitors see the page as unavailable until it is published again."
-              action="Unpublish"
+              text={t("content.editor.publication.confirmUnpublish")}
+              action={t("content.editor.publication.unpublish")}
               danger
               pending={pending === "unpublish"}
               onConfirm={() => run("unpublish")}
@@ -173,7 +193,7 @@ export function PublicationPanel({
               disabled={pending !== null}
               className={cx(buttonStyles.ghost, "w-full")}
             >
-              Unpublish
+              {t("content.editor.publication.unpublish")}
             </button>
           )
         ) : null}
@@ -197,6 +217,7 @@ export function ConfirmBox({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   return (
     <div
       role="alertdialog"
@@ -223,7 +244,7 @@ export function ConfirmBox({
           disabled={pending}
           className={buttonStyles.secondary}
         >
-          Cancel
+          {t("content.editor.publication.cancel")}
         </button>
       </div>
     </div>

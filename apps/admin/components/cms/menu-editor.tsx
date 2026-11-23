@@ -30,7 +30,11 @@ import {
   type MenuTargetType,
 } from "@dream/contracts";
 import { useId } from "react";
+import { cmsText } from "../../lib/cms-text";
+import { INTL_LOCALE } from "../../lib/i18n/config";
+import type { Translate } from "../../lib/i18n/types";
 import { Field, FIELD, TEXTAREA } from "../catalog/parts";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, StatusPill } from "../ui";
 import { IconButton, move } from "./field-form";
@@ -39,25 +43,34 @@ type Invalid = (path: string) => true | undefined;
 
 export type MenuValue = BvNavMenu | BvFooterMenu;
 
-const TARGET_LABEL: Record<MenuTargetType, string> = {
-  page: "CMS page",
-  product: "Product",
-  category: "Product category",
-  path: "Site path or anchor",
-  url: "External address",
-  none: "Not ready yet (text)",
-};
+/** The kinds of target, in the picker's order (labels: `content.menus.target.<type>`). */
+const TARGET_TYPES: readonly MenuTargetType[] = [
+  "page",
+  "product",
+  "category",
+  "path",
+  "url",
+  "none",
+];
 
-const SOCIAL_LABEL: Record<MenuSocialNetwork, string> = {
+/**
+ * Network names are brand names: not translated. Only `other` is a UI word
+ * (`content.menus.footer.networkOther`).
+ */
+const SOCIAL_BRAND: Record<Exclude<MenuSocialNetwork, "other">, string> = {
+  // i18n-ignore: brand names
   linkedin: "LinkedIn",
   x: "X",
+  // i18n-ignore: brand names
   facebook: "Facebook",
+  // i18n-ignore: brand names
   instagram: "Instagram",
+  // i18n-ignore: brand names
   youtube: "YouTube",
-  other: "Other",
 };
 
 const newLink = (): MenuLink => ({
+  // i18n-ignore: default content of a new menu item (data, content language)
   label: "New link",
   target: { type: "none" },
   newTab: false,
@@ -127,13 +140,17 @@ function NavEditor({
   invalid: Invalid;
   onChange: (v: BvNavMenu) => void;
 }) {
+  const t = useT();
   const setItems = (items: MenuNavItem[]) => onChange({ ...value, items });
   return (
     <>
       <Panel
         id="menu-items"
-        title="Header menu"
-        description={`${value.items.length} of at most ${MENU_LIMITS.navItems} items, in this order on the site. Each item may have a submenu.`}
+        title={t("content.menus.nav.title")}
+        description={t("content.menus.nav.description", {
+          count: value.items.length,
+          max: MENU_LIMITS.navItems,
+        })}
       >
         <ol className="space-y-4">
           {value.items.map((item, i) => (
@@ -146,7 +163,7 @@ function NavEditor({
             >
               <LinkEditor
                 path={`content.items.${i}`}
-                title={`Item ${i + 1}`}
+                title={t("content.menus.nav.item", { n: i + 1 })}
                 link={item}
                 targets={targets}
                 readOnly={readOnly}
@@ -165,7 +182,7 @@ function NavEditor({
               />
               <div className="border-t border-line px-4 py-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-3">
-                  <span>Submenu of “{item.label}”</span>
+                  <span>{t("content.menus.nav.submenuOf", { label: item.label })}</span>
                 </p>
                 {item.children.length ? (
                   <ol className="space-y-3 border-l-2 border-line pl-3">
@@ -176,7 +193,7 @@ function NavEditor({
                       >
                         <LinkEditor
                           path={`content.items.${i}.children.${j}`}
-                          title={`Submenu link ${j + 1}`}
+                          title={t("content.menus.nav.submenuLink", { n: j + 1 })}
                           link={child}
                           targets={targets}
                           readOnly={readOnly}
@@ -219,12 +236,12 @@ function NavEditor({
                   </ol>
                 ) : (
                   <p className="text-sm text-ink-3">
-                    <span>No submenu: the item is a plain link.</span>
+                    <span>{t("content.menus.nav.noSubmenu")}</span>
                   </p>
                 )}
                 {!readOnly ? (
                   <AddButton
-                    label="Add submenu link"
+                    label={t("content.menus.nav.addSubmenuLink")}
                     disabled={item.children.length >= MENU_LIMITS.navChildren}
                     onClick={() =>
                       setItems(
@@ -241,7 +258,7 @@ function NavEditor({
         </ol>
         {!readOnly ? (
           <AddButton
-            label="Add menu item"
+            label={t("content.menus.nav.addItem")}
             disabled={value.items.length >= MENU_LIMITS.navItems}
             onClick={() => setItems([...value.items, { ...newLink(), children: [] }])}
           />
@@ -250,13 +267,13 @@ function NavEditor({
 
       <Panel
         id="menu-contact"
-        title="Contact button"
-        description="The button at the right of the header and at the bottom of the phone menu."
+        title={t("content.menus.nav.contactTitle")}
+        description={t("content.menus.nav.contactDescription")}
       >
         <div className="rounded-xl border border-line">
           <LinkEditor
             path="content.contact"
-            title="Button"
+            title={t("content.menus.shared.button")}
             link={value.contact}
             targets={targets}
             readOnly={readOnly}
@@ -268,12 +285,14 @@ function NavEditor({
 
       <Panel
         id="menu-noscript"
-        title="Links without JavaScript"
-        description="Shown on phones and tablets only when JavaScript is off. Real destinations only: a link that is not ready is left out."
+        title={t("content.menus.nav.noScriptTitle")}
+        description={t("content.menus.nav.noScriptDescription")}
       >
         <LinkList
+          // i18n-ignore: field path of the validation issues (code)
           path="content.noScriptLinks"
-          itemTitle="Link"
+          itemTitle={t("content.menus.nav.link")}
+          addLabel={t("content.menus.nav.addLink")}
           links={value.noScriptLinks}
           max={MENU_LIMITS.noScriptLinks}
           targets={targets}
@@ -283,13 +302,14 @@ function NavEditor({
         />
       </Panel>
 
-      <Panel id="menu-texts" title="Texts">
+      <Panel id="menu-texts" title={t("content.menus.nav.textsTitle")}>
         <TextInput
           id="menu-pending-note"
-          label="Note on links that are not ready yet"
+          label={t("content.menus.shared.pendingNote")}
           value={value.pendingNote}
           max={120}
           readOnly={readOnly}
+          // i18n-ignore: field path of the validation issues (code)
           invalid={invalid("content.pendingNote")}
           onChange={(pendingNote) => onChange({ ...value, pendingNote })}
         />
@@ -313,16 +333,17 @@ function FooterEditor({
   invalid: Invalid;
   onChange: (v: BvFooterMenu) => void;
 }) {
+  const t = useT();
   const contact = value.contact;
   const setContact = (patch: Partial<BvFooterMenu["contact"]>) =>
     onChange({ ...value, contact: { ...contact, ...patch } });
   return (
     <>
-      <Panel id="footer-call" title="Headline and button">
+      <Panel id="footer-call" title={t("content.menus.footer.callTitle")}>
         <div className="space-y-4">
           <TextInput
             id="footer-headline"
-            label="Headline"
+            label={t("content.menus.footer.headline")}
             value={value.headline}
             max={120}
             readOnly={readOnly}
@@ -332,7 +353,7 @@ function FooterEditor({
           <div className="rounded-xl border border-line">
             <LinkEditor
               path="content.cta"
-              title="Button"
+              title={t("content.menus.shared.button")}
               link={{ ...value.cta, visible: true }}
               targets={targets}
               readOnly={readOnly}
@@ -353,7 +374,7 @@ function FooterEditor({
           </div>
           <TextInput
             id="footer-intro"
-            label="Intro"
+            label={t("content.menus.footer.intro")}
             value={value.intro}
             max={500}
             multiline
@@ -366,14 +387,14 @@ function FooterEditor({
 
       <Panel
         id="footer-contact"
-        title="Contact details"
-        description="Keep address, phone and e-mail identical to the company's official details."
+        title={t("content.menus.footer.contactTitle")}
+        description={t("content.menus.footer.contactDescription")}
       >
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <TextInput
               id="footer-contact-title"
-              label="Heading"
+              label={t("content.menus.shared.heading")}
               value={contact.title}
               max={60}
               readOnly={readOnly}
@@ -382,7 +403,7 @@ function FooterEditor({
             />
             <TextInput
               id="footer-contact-company"
-              label="Company"
+              label={t("content.menus.footer.company")}
               value={contact.company}
               max={120}
               readOnly={readOnly}
@@ -391,15 +412,18 @@ function FooterEditor({
             />
           </div>
           <fieldset>
-            <legend className="mb-1.5 text-sm font-medium text-ink">Address lines</legend>
+            <legend className="mb-1.5 text-sm font-medium text-ink">
+              {t("content.menus.footer.addressLines")}
+            </legend>
             <ol className="space-y-2">
               {contact.addressLines.map((line, i) => (
                 <li key={`line-${i}`} className="flex items-center gap-2">
                   <input
-                    aria-label={`Address line ${i + 1}`}
+                    aria-label={t("content.menus.footer.addressLine", { n: i + 1 })}
                     value={line.text}
                     maxLength={120}
                     readOnly={readOnly}
+                    // i18n-ignore: field path of the validation issues (code)
                     aria-invalid={invalid(`content.contact.addressLines.${i}`)}
                     onChange={(e) =>
                       setContact({
@@ -412,7 +436,7 @@ function FooterEditor({
                   />
                   {!readOnly ? (
                     <IconButton
-                      label={`Remove address line ${i + 1}`}
+                      label={t("content.menus.footer.removeAddressLine", { n: i + 1 })}
                       disabled={contact.addressLines.length <= 1}
                       onClick={() =>
                         setContact({ addressLines: contact.addressLines.filter((_, k) => k !== i) })
@@ -426,7 +450,7 @@ function FooterEditor({
             </ol>
             {!readOnly ? (
               <AddButton
-                label="Add address line"
+                label={t("content.menus.footer.addAddressLine")}
                 disabled={contact.addressLines.length >= 4}
                 onClick={() =>
                   setContact({ addressLines: [...contact.addressLines, { text: "" }] })
@@ -437,12 +461,12 @@ function FooterEditor({
           {(["phone", "email"] as const).map((k) => (
             <fieldset key={k} className="rounded-xl border border-line p-4">
               <legend className="px-1 text-sm font-medium text-ink">
-                {k === "phone" ? "Phone" : "E-mail"}
+                {k === "phone" ? t("content.menus.footer.phone") : t("content.menus.footer.email")}
               </legend>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <TextInput
                   id={`footer-${k}-label`}
-                  label="Shown as"
+                  label={t("content.menus.footer.shownAs")}
                   value={contact[k].label}
                   max={k === "phone" ? 60 : 120}
                   readOnly={readOnly}
@@ -451,7 +475,11 @@ function FooterEditor({
                 />
                 <TextInput
                   id={`footer-${k}-href`}
-                  label={k === "phone" ? "Link (tel:)" : "Link (mailto:)"}
+                  label={
+                    k === "phone"
+                      ? t("content.menus.footer.phoneHref")
+                      : t("content.menus.footer.emailHref")
+                  }
                   value={contact[k].href}
                   max={k === "phone" ? 60 : 200}
                   mono
@@ -461,7 +489,7 @@ function FooterEditor({
                 />
                 <TextInput
                   id={`footer-${k}-note`}
-                  label="Note"
+                  label={t("content.menus.footer.note")}
                   value={contact[k].note}
                   max={80}
                   readOnly={readOnly}
@@ -471,7 +499,7 @@ function FooterEditor({
               </div>
               <Toggle
                 id={`footer-${k}-visible`}
-                label="Shown on the site"
+                label={t("content.menus.shared.shownOnSite")}
                 checked={contact[k].visible}
                 readOnly={readOnly}
                 onChange={(visible) => setContact({ [k]: { ...contact[k], visible } })}
@@ -483,8 +511,11 @@ function FooterEditor({
 
       <Panel
         id="footer-columns"
-        title="Link columns"
-        description={`${value.columns.length} of at most ${MENU_LIMITS.footerColumns} columns, in this order on the site.`}
+        title={t("content.menus.footer.columnsTitle")}
+        description={t("content.menus.footer.columnsDescription", {
+          count: value.columns.length,
+          max: MENU_LIMITS.footerColumns,
+        })}
       >
         <ol className="space-y-4">
           {value.columns.map((col, i) => {
@@ -503,12 +534,12 @@ function FooterEditor({
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
                   <h3 className="text-sm font-semibold text-ink">
-                    <span>Column {i + 1}</span>
+                    <span>{t("content.menus.footer.column", { n: i + 1 })}</span>
                   </h3>
                   {!readOnly ? (
                     <div className="flex items-center gap-1">
                       <IconButton
-                        label={`Move column ${i + 1} up`}
+                        label={t("content.menus.footer.moveColumnUp", { n: i + 1 })}
                         disabled={i === 0}
                         onClick={() =>
                           onChange({ ...value, columns: move(value.columns, i, i - 1) })
@@ -517,7 +548,7 @@ function FooterEditor({
                         <Icon name="chevron" size={16} className="-rotate-90" />
                       </IconButton>
                       <IconButton
-                        label={`Move column ${i + 1} down`}
+                        label={t("content.menus.footer.moveColumnDown", { n: i + 1 })}
                         disabled={i === value.columns.length - 1}
                         onClick={() =>
                           onChange({ ...value, columns: move(value.columns, i, i + 1) })
@@ -526,7 +557,7 @@ function FooterEditor({
                         <Icon name="chevron" size={16} className="rotate-90" />
                       </IconButton>
                       <IconButton
-                        label={`Remove column ${i + 1}`}
+                        label={t("content.menus.footer.removeColumn", { n: i + 1 })}
                         disabled={value.columns.length <= 1}
                         onClick={() =>
                           onChange({ ...value, columns: value.columns.filter((_, k) => k !== i) })
@@ -541,7 +572,7 @@ function FooterEditor({
                   <div className="grid grid-cols-1 items-end gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <TextInput
                       id={`footer-col-${i}-title`}
-                      label="Heading"
+                      label={t("content.menus.shared.heading")}
                       value={col.title}
                       max={60}
                       readOnly={readOnly}
@@ -550,7 +581,7 @@ function FooterEditor({
                     />
                     <Toggle
                       id={`footer-col-${i}-visible`}
-                      label="Column shown"
+                      label={t("content.menus.footer.columnShown")}
                       checked={col.visible}
                       readOnly={readOnly}
                       onChange={(visible) => setCol({ visible })}
@@ -558,7 +589,8 @@ function FooterEditor({
                   </div>
                   <LinkList
                     path={`content.columns.${i}.links`}
-                    itemTitle="Link"
+                    itemTitle={t("content.menus.footer.link")}
+                    addLabel={t("content.menus.footer.addLink")}
                     links={col.links}
                     min={1}
                     max={MENU_LIMITS.columnLinks}
@@ -574,13 +606,14 @@ function FooterEditor({
         </ol>
         {!readOnly ? (
           <AddButton
-            label="Add column"
+            label={t("content.menus.footer.addColumn")}
             disabled={value.columns.length >= MENU_LIMITS.footerColumns}
             onClick={() =>
               onChange({
                 ...value,
                 columns: [
                   ...value.columns,
+                  // i18n-ignore: default content of a new menu item (data, content language)
                   { title: "New column", visible: true, links: [newLink()] },
                 ],
               })
@@ -591,8 +624,8 @@ function FooterEditor({
 
       <Panel
         id="footer-social"
-        title="Social media"
-        description="Shown under the contact details, as text links. None is shown while the list is empty."
+        title={t("content.menus.footer.socialTitle")}
+        description={t("content.menus.footer.socialDescription")}
       >
         {value.social.length ? (
           <ol className="space-y-3">
@@ -605,7 +638,10 @@ function FooterEditor({
               return (
                 <li key={`social-${i}`} className="rounded-xl border border-line p-4">
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.4fr)]">
-                    <Field label="Network" htmlFor={`footer-social-${i}-network`}>
+                    <Field
+                      label={t("content.menus.footer.network")}
+                      htmlFor={`footer-social-${i}-network`}
+                    >
                       <select
                         id={`footer-social-${i}-network`}
                         value={s.network}
@@ -617,14 +653,16 @@ function FooterEditor({
                       >
                         {MENU_SOCIAL_NETWORKS.map((n) => (
                           <option key={n} value={n}>
-                            {SOCIAL_LABEL[n]}
+                            {n === "other"
+                              ? t("content.menus.footer.networkOther")
+                              : SOCIAL_BRAND[n]}
                           </option>
                         ))}
                       </select>
                     </Field>
                     <TextInput
                       id={`footer-social-${i}-label`}
-                      label="Label"
+                      label={t("content.menus.shared.label")}
                       value={s.label}
                       max={60}
                       readOnly={readOnly}
@@ -633,7 +671,7 @@ function FooterEditor({
                     />
                     <TextInput
                       id={`footer-social-${i}-url`}
-                      label="Address (https://)"
+                      label={t("content.menus.footer.socialUrl")}
                       value={s.url}
                       max={500}
                       mono
@@ -645,7 +683,7 @@ function FooterEditor({
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                     <Toggle
                       id={`footer-social-${i}-visible`}
-                      label="Shown on the site"
+                      label={t("content.menus.shared.shownOnSite")}
                       checked={s.visible}
                       readOnly={readOnly}
                       onChange={(visible) => setSocial({ visible })}
@@ -653,7 +691,7 @@ function FooterEditor({
                     {!readOnly ? (
                       <div className="flex items-center gap-1">
                         <IconButton
-                          label={`Move social link ${i + 1} up`}
+                          label={t("content.menus.footer.moveSocialUp", { n: i + 1 })}
                           disabled={i === 0}
                           onClick={() =>
                             onChange({ ...value, social: move(value.social, i, i - 1) })
@@ -662,7 +700,7 @@ function FooterEditor({
                           <Icon name="chevron" size={16} className="-rotate-90" />
                         </IconButton>
                         <IconButton
-                          label={`Move social link ${i + 1} down`}
+                          label={t("content.menus.footer.moveSocialDown", { n: i + 1 })}
                           disabled={i === value.social.length - 1}
                           onClick={() =>
                             onChange({ ...value, social: move(value.social, i, i + 1) })
@@ -671,7 +709,7 @@ function FooterEditor({
                           <Icon name="chevron" size={16} className="rotate-90" />
                         </IconButton>
                         <IconButton
-                          label={`Remove social link ${i + 1}`}
+                          label={t("content.menus.footer.removeSocial", { n: i + 1 })}
                           onClick={() =>
                             onChange({ ...value, social: value.social.filter((_, k) => k !== i) })
                           }
@@ -687,18 +725,19 @@ function FooterEditor({
           </ol>
         ) : (
           <p className="text-sm text-ink-3">
-            <span>No social media links.</span>
+            <span>{t("content.menus.footer.noSocial")}</span>
           </p>
         )}
         {!readOnly ? (
           <AddButton
-            label="Add social link"
+            label={t("content.menus.footer.addSocial")}
             disabled={value.social.length >= MENU_LIMITS.social}
             onClick={() =>
               onChange({
                 ...value,
                 social: [
                   ...value.social,
+                  // i18n-ignore: default content of a new social link (data, brand name)
                   { network: "linkedin", label: "LinkedIn", url: "https://", visible: true },
                 ],
               })
@@ -707,11 +746,11 @@ function FooterEditor({
         ) : null}
       </Panel>
 
-      <Panel id="footer-legal" title="Copyright and legal links">
+      <Panel id="footer-legal" title={t("content.menus.footer.legalTitle")}>
         <div className="space-y-4">
           <TextInput
             id="footer-copyright"
-            label="Copyright line"
+            label={t("content.menus.footer.copyright")}
             value={value.copyright}
             max={200}
             readOnly={readOnly}
@@ -720,7 +759,8 @@ function FooterEditor({
           />
           <LinkList
             path="content.legal"
-            itemTitle="Legal link"
+            itemTitle={t("content.menus.footer.legalLink")}
+            addLabel={t("content.menus.footer.addLegalLink")}
             links={value.legal}
             max={MENU_LIMITS.legal}
             targets={targets}
@@ -729,16 +769,15 @@ function FooterEditor({
             onChange={(legal) => onChange({ ...value, legal })}
           />
           <p className="text-xs text-ink-3">
-            <span>
-              The Privacy Policy link is hidden automatically where the policy is not published.
-            </span>
+            <span>{t("content.menus.footer.privacyNote")}</span>
           </p>
           <TextInput
             id="footer-pending-note"
-            label="Note on links that are not ready yet"
+            label={t("content.menus.shared.pendingNote")}
             value={value.pendingNote}
             max={120}
             readOnly={readOnly}
+            // i18n-ignore: field path of the validation issues (code)
             invalid={invalid("content.pendingNote")}
             onChange={(pendingNote) => onChange({ ...value, pendingNote })}
           />
@@ -753,6 +792,7 @@ function FooterEditor({
 function LinkList({
   path,
   itemTitle,
+  addLabel,
   links,
   min = 0,
   max,
@@ -763,6 +803,8 @@ function LinkList({
 }: {
   path: string;
   itemTitle: string;
+  /** The add button ("Add link"). */
+  addLabel: string;
   links: MenuLink[];
   min?: number;
   max: number;
@@ -771,6 +813,7 @@ function LinkList({
   invalid: Invalid;
   onChange: (links: MenuLink[]) => void;
 }) {
+  const t = useT();
   return (
     <div>
       {links.length ? (
@@ -797,12 +840,12 @@ function LinkList({
         </ol>
       ) : (
         <p className="text-sm text-ink-3">
-          <span>No links.</span>
+          <span>{t("content.menus.link.noLinks")}</span>
         </p>
       )}
       {!readOnly ? (
         <AddButton
-          label={`Add ${itemTitle.toLowerCase()}`}
+          label={addLabel}
           disabled={links.length >= max}
           onClick={() => onChange([...links, newLink()])}
         />
@@ -838,6 +881,8 @@ function LinkEditor({
   onMove?: (to: number) => void;
   onRemove?: () => void;
 }) {
+  const t = useT();
+  const lower = title.toLocaleLowerCase(INTL_LOCALE[useAdminLocale()]);
   const id = `menu-${path.replace(/[^a-z0-9]+/gi, "-")}`;
   const check = targets ? menuTargetCheck(link.target, targets) : null;
   const ordered = onMove && index !== undefined && count !== undefined;
@@ -848,7 +893,7 @@ function LinkEditor({
           <span>{title}</span>
           {link.visible ? null : (
             <StatusPill key="hidden" tone="neutral">
-              Hidden
+              {t("content.menus.link.hidden")}
             </StatusPill>
           )}
         </h3>
@@ -856,7 +901,7 @@ function LinkEditor({
           <div className="flex items-center gap-1">
             {ordered ? (
               <IconButton
-                label={`Move ${title.toLowerCase()} up`}
+                label={t("content.menus.link.moveUp", { title: lower })}
                 disabled={index === 0}
                 onClick={() => onMove(index - 1)}
               >
@@ -865,7 +910,7 @@ function LinkEditor({
             ) : null}
             {ordered ? (
               <IconButton
-                label={`Move ${title.toLowerCase()} down`}
+                label={t("content.menus.link.moveDown", { title: lower })}
                 disabled={index === count - 1}
                 onClick={() => onMove(index + 1)}
               >
@@ -873,7 +918,10 @@ function LinkEditor({
               </IconButton>
             ) : null}
             {onRemove ? (
-              <IconButton label={`Remove ${title.toLowerCase()}`} onClick={onRemove}>
+              <IconButton
+                label={t("content.menus.link.remove", { title: lower })}
+                onClick={onRemove}
+              >
                 <Icon name="trash" size={16} />
               </IconButton>
             ) : null}
@@ -883,7 +931,7 @@ function LinkEditor({
       <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
         <TextInput
           id={`${id}-label`}
-          label="Label"
+          label={t("content.menus.shared.label")}
           value={link.label}
           max={MENU_LIMITS.label}
           readOnly={readOnly}
@@ -905,7 +953,7 @@ function LinkEditor({
           <Toggle
             key="visible"
             id={`${id}-visible`}
-            label="Shown on the site"
+            label={t("content.menus.shared.shownOnSite")}
             checked={link.visible}
             readOnly={readOnly}
             onChange={(visible) => onChange({ visible })}
@@ -913,7 +961,7 @@ function LinkEditor({
         )}
         <Toggle
           id={`${id}-newtab`}
-          label="Open in a new tab"
+          label={t("content.menus.link.newTab")}
           checked={link.newTab}
           readOnly={readOnly || link.target.type === "none"}
           onChange={(newTab) => onChange({ newTab })}
@@ -931,6 +979,7 @@ function TargetStatus({
   check: ReturnType<typeof menuTargetCheck>;
   target: MenuTarget;
 }) {
+  const t = useT();
   if (check.problem) {
     return (
       <p
@@ -939,23 +988,35 @@ function TargetStatus({
         className="flex items-start gap-2 rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/25"
       >
         <Icon name="alert" size={16} className="mt-0.5 shrink-0" />
-        <span>{MENU_TARGET_PROBLEMS[check.problem]}</span>
+        <span>{cmsText(MENU_TARGET_PROBLEMS[check.problem], t)}</span>
       </p>
     );
   }
   return (
     <p key="ok" className="text-xs text-ink-3">
-      <span>{statusText(check, target)}</span>
+      <span>{statusText(check, target, t)}</span>
     </p>
   );
 }
 
-function statusText(check: ReturnType<typeof menuTargetCheck>, target: MenuTarget): string {
-  if (target.type === "none") return "Shown as text with the note on links that are not ready yet.";
-  const ref = target.type === "page" || target.type === "product" || target.type === "category";
-  return ref
-    ? `Opens ${check.href ?? ""} now. Follows the ${target.type}'s address when it changes.`
-    : `Opens ${check.href ?? ""} (fixed address).`;
+function statusText(
+  check: ReturnType<typeof menuTargetCheck>,
+  target: MenuTarget,
+  t: Translate,
+): string {
+  if (target.type === "none") return t("content.menus.status.none");
+  const href = check.href ?? "";
+  return isReference(target.type)
+    ? t("content.menus.status.reference", { href, kind: kindName(target.type, t) })
+    : t("content.menus.status.fixed", { href });
+}
+
+const isReference = (type: MenuTargetType): type is "page" | "product" | "category" =>
+  type === "page" || type === "product" || type === "category";
+
+/** A content reference's kind inside a sentence ("page"); any other type stays its code. */
+function kindName(type: MenuTargetType, t: Translate): string {
+  return isReference(type) ? t(`content.menus.kind.${type}`) : type;
 }
 
 function TargetPicker({
@@ -975,10 +1036,11 @@ function TargetPicker({
   invalid: true | undefined;
   onChange: (t: MenuTarget) => void;
 }) {
-  const types = (Object.keys(TARGET_LABEL) as MenuTargetType[]).filter(
-    (t) =>
-      (allowNone || t !== "none") &&
-      (targets || !["page", "product", "category"].includes(t) || t === target.type),
+  const t = useT();
+  const types = TARGET_TYPES.filter(
+    (ty) =>
+      (allowNone || ty !== "none") &&
+      (targets || !["page", "product", "category"].includes(ty) || ty === target.type),
   );
   function changeType(type: MenuTargetType) {
     switch (type) {
@@ -1007,19 +1069,21 @@ function TargetPicker({
   const categories = targets?.categories ?? [];
   return (
     <fieldset className="min-w-0">
-      <legend className="mb-1.5 block text-sm font-medium text-ink">Target</legend>
+      <legend className="mb-1.5 block text-sm font-medium text-ink">
+        {t("content.menus.picker.legend")}
+      </legend>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
         <select
           id={`${id}-type`}
-          aria-label="Kind of target"
+          aria-label={t("content.menus.picker.kind")}
           value={target.type}
           disabled={readOnly}
           onChange={(e) => changeType(e.currentTarget.value as MenuTargetType)}
           className={FIELD}
         >
-          {types.map((t) => (
-            <option key={t} value={t}>
-              {TARGET_LABEL[t]}
+          {types.map((ty) => (
+            <option key={ty} value={ty}>
+              {t(`content.menus.target.${ty}`)}
             </option>
           ))}
         </select>
@@ -1027,7 +1091,7 @@ function TargetPicker({
           <select
             key="page"
             id={`${id}-page`}
-            aria-label="Page"
+            aria-label={t("content.menus.picker.page")}
             value={target.pageId}
             disabled={readOnly}
             aria-invalid={invalid}
@@ -1036,12 +1100,14 @@ function TargetPicker({
           >
             {pages.some((p) => p.id === target.pageId) ? null : (
               <option key="missing" value={target.pageId}>
-                Page no longer available
+                {t("content.menus.picker.pageMissing")}
               </option>
             )}
             {pages.map((p) => (
               <option key={p.id} value={p.id}>
-                {`${p.title} — ${p.livePath ?? `${p.path} (not live)`}`}
+                {p.livePath !== null
+                  ? `${p.title} — ${p.livePath}`
+                  : t("content.menus.picker.pageNotLive", { title: p.title, path: p.path })}
               </option>
             ))}
           </select>
@@ -1049,7 +1115,7 @@ function TargetPicker({
           <select
             key="product"
             id={`${id}-product`}
-            aria-label="Product"
+            aria-label={t("content.menus.picker.product")}
             value={target.productId}
             disabled={readOnly}
             aria-invalid={invalid}
@@ -1058,12 +1124,12 @@ function TargetPicker({
           >
             {products.some((p) => p.id === target.productId) ? null : (
               <option key="missing" value={target.productId}>
-                Product not available
+                {t("content.menus.picker.productMissing")}
               </option>
             )}
             {products.map((p) => (
               <option key={p.id} value={p.id}>
-                {`${p.name}${p.livePath ? "" : " (not live)"}`}
+                {p.livePath ? p.name : t("content.menus.picker.productNotLive", { name: p.name })}
               </option>
             ))}
           </select>
@@ -1071,7 +1137,7 @@ function TargetPicker({
           <select
             key="category"
             id={`${id}-category`}
-            aria-label="Category"
+            aria-label={t("content.menus.picker.category")}
             value={target.categoryId}
             disabled={readOnly}
             aria-invalid={invalid}
@@ -1080,12 +1146,16 @@ function TargetPicker({
           >
             {categories.some((c) => c.id === target.categoryId) ? null : (
               <option key="missing" value={target.categoryId}>
-                Category no longer available
+                {t("content.menus.picker.categoryMissing")}
               </option>
             )}
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
-                {`${c.parentId ? "— " : ""}${c.name} (${c.liveProducts} live)`}
+                {t("content.menus.picker.categoryOption", {
+                  prefix: c.parentId ? "— " : "",
+                  name: c.name,
+                  count: c.liveProducts,
+                })}
               </option>
             ))}
           </select>
@@ -1093,13 +1163,13 @@ function TargetPicker({
           <input
             key="path"
             id={`${id}-path`}
-            aria-label="Site path or anchor"
+            aria-label={t("content.menus.picker.path")}
             value={target.path}
             maxLength={500}
             readOnly={readOnly}
             spellCheck={false}
             aria-invalid={invalid}
-            placeholder="/products or #services"
+            placeholder={t("content.menus.picker.pathPlaceholder")}
             onChange={(e) => onChange({ type: "path", path: e.currentTarget.value })}
             className={cx(FIELD, "font-mono")}
           />
@@ -1107,19 +1177,19 @@ function TargetPicker({
           <input
             key="url"
             id={`${id}-url`}
-            aria-label="External address"
+            aria-label={t("content.menus.picker.url")}
             value={target.url}
             maxLength={500}
             readOnly={readOnly}
             spellCheck={false}
             aria-invalid={invalid}
-            placeholder="https://, mailto: or tel:"
+            placeholder={t("content.menus.picker.urlPlaceholder")}
             onChange={(e) => onChange({ type: "url", url: e.currentTarget.value })}
             className={cx(FIELD, "font-mono")}
           />
         ) : (
           <p key="none" className="self-center text-sm text-ink-3">
-            <span>No link yet: shown as text.</span>
+            <span>{t("content.menus.picker.none")}</span>
           </p>
         )}
       </div>
@@ -1242,6 +1312,7 @@ function PreviewLink({
   /** The submenu links, listed under the link. */
   sub?: MenuLink[];
 }) {
+  const t = useT();
   const check = targets ? menuTargetCheck(link.target, targets) : null;
   const href =
     check?.href ??
@@ -1254,16 +1325,18 @@ function PreviewLink({
     <li className={cx("py-1", !link.visible && "text-ink-3 line-through")}>
       <span className="font-medium text-ink">{link.label}</span>
       <span className="ml-2 font-mono text-xs text-ink-3">
-        {link.visible ? (href ?? "text (not ready yet)") : "hidden"}
+        {link.visible
+          ? (href ?? t("content.menus.structure.notReady"))
+          : t("content.menus.structure.hidden")}
       </span>
       {link.visible && link.newTab ? (
         <span key="newtab" className="ml-2 text-xs text-ink-3">
-          new tab
+          {t("content.menus.structure.newTab")}
         </span>
       ) : null}
       {link.visible && check?.problem ? (
         <span key="warn" className="ml-2 text-xs font-medium text-amber-ink">
-          check target
+          {t("content.menus.structure.checkTarget")}
         </span>
       ) : null}
       {sub.length ? (
@@ -1277,6 +1350,34 @@ function PreviewLink({
   );
 }
 
+/**
+ * ML-12c: the `place` of a link (@dream/contracts navLinks/footerLinks: "Header › Products",
+ * "Footer › legal › Privacy Policy") in the UI language. Only the fixed words change; the menu
+ * labels in it are content. English is the contract text as it is.
+ */
+// The English words of the contract's `place` (matched, then replaced): codes here, not UI text.
+const PLACE_CONTACT = "Header › contact button"; // i18n-ignore: contract place words
+const PLACE_BUTTON = "Footer › button"; // i18n-ignore: contract place words
+const PLACE_LEGAL = "Footer › legal › "; // i18n-ignore: contract place words
+const PLACE_PREFIXES = [
+  ["Header › ", "header"], // i18n-ignore: contract place words
+  ["Footer › ", "footer"], // i18n-ignore: contract place words
+  ["Links without JavaScript › ", "noScript"], // i18n-ignore: contract place words
+] as const;
+
+function placeText(place: string, t: Translate): string {
+  const S = " › ";
+  const w = (k: "header" | "footer" | "noScript" | "contactButton" | "button" | "legal") =>
+    t(`content.menus.place.${k}`);
+  if (place === PLACE_CONTACT) return `${w("header")}${S}${w("contactButton")}`;
+  if (place === PLACE_BUTTON) return `${w("footer")}${S}${w("button")}`;
+  if (place.startsWith(PLACE_LEGAL))
+    return `${w("footer")}${S}${w("legal")}${S}${place.slice(PLACE_LEGAL.length)}`;
+  for (const [prefix, k] of PLACE_PREFIXES)
+    if (place.startsWith(prefix)) return `${w(k)}${S}${place.slice(prefix.length)}`;
+  return place;
+}
+
 function StructurePreview({
   menuKey,
   value,
@@ -1286,18 +1387,22 @@ function StructurePreview({
   value: MenuValue;
   targets: CmsMenuTargetsResponse | null;
 }) {
+  const t = useT();
   const links =
     menuKey === BV_NAV_KEY ? navLinks(value as BvNavMenu) : footerLinks(value as BvFooterMenu);
   const problems = targets
     ? links
-        .map((l) => ({ place: l.place, check: menuTargetCheck(l.link.target, targets) }))
+        .map((l) => ({
+          place: placeText(l.place, t),
+          check: menuTargetCheck(l.link.target, targets),
+        }))
         .filter((p) => p.check.problem)
     : [];
   return (
     <Panel
       id="menu-structure"
-      title="Structure"
-      description="What the site shows with this draft: hidden links struck through, each link with the address it opens now. Use Preview for the real page."
+      title={t("content.menus.structure.title")}
+      description={t("content.menus.structure.description")}
     >
       {problems.length ? (
         <div
@@ -1306,12 +1411,12 @@ function StructurePreview({
           className="mb-4 rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/25"
         >
           <p className="font-medium">
-            <span>{`${problems.length} link${problems.length === 1 ? "" : "s"} to check:`}</span>
+            <span>{t("content.menus.structure.problems", { count: problems.length })}</span>
           </p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
             {problems.map((p) => (
               <li key={p.place}>
-                <span>{`${p.place}: ${MENU_TARGET_PROBLEMS[p.check.problem as keyof typeof MENU_TARGET_PROBLEMS]}`}</span>
+                <span>{`${p.place}: ${cmsText(MENU_TARGET_PROBLEMS[p.check.problem as keyof typeof MENU_TARGET_PROBLEMS], t)}`}</span>
               </li>
             ))}
           </ul>
@@ -1329,7 +1434,11 @@ function StructurePreview({
           {(value as BvFooterMenu).columns.map((col, i) => (
             <div key={`col-${i}`} className={cx(!col.visible && "opacity-60")}>
               <p className="font-semibold text-ink">
-                <span>{col.visible ? col.title : `${col.title} (hidden)`}</span>
+                <span>
+                  {col.visible
+                    ? col.title
+                    : t("content.menus.structure.columnHidden", { title: col.title })}
+                </span>
               </p>
               <ul>
                 {col.links.map((l, j) => (
@@ -1359,30 +1468,36 @@ function ReferencePanel({
   readOnly: boolean;
   onChange: (v: MenuValue) => void;
 }) {
+  const t = useT();
   const headingId = useId();
   if (!targets) return null;
   const plan = menuReferencePlan(menuKey, value, targets);
   return (
     <Panel
       id="menu-references"
-      title="Content references"
-      description="Links to pages, products and categories follow their address when a slug changes. This finds fixed site paths that can become such references; every address stays the same."
+      title={t("content.menus.references.title")}
+      description={t("content.menus.references.description")}
     >
       {plan.changes.length === 0 ? (
         <p key="none" className="text-sm text-ink-2">
-          <span>Every link that can be a content reference already is one.</span>
+          <span>{t("content.menus.references.none")}</span>
         </p>
       ) : (
         <div key="plan" className="space-y-3" role="group" aria-labelledby={headingId}>
           <p id={headingId} className="text-sm text-ink">
-            <span>{`${plan.changes.length} fixed path${plan.changes.length === 1 ? "" : "s"} can become content references:`}</span>
+            <span>{t("content.menus.references.count", { count: plan.changes.length })}</span>
           </p>
           <ul className="space-y-1 text-sm">
             {plan.changes.map((c) => (
               <li key={c.path} className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-ink">{c.place}</span>
+                <span className="text-ink">{placeText(c.place, t)}</span>
                 <span className="font-mono text-xs text-ink-3">{c.from}</span>
-                <span className="text-xs text-ink-3">{`→ ${c.to.type} “${c.toName}”`}</span>
+                <span className="text-xs text-ink-3">
+                  {t("content.menus.references.change", {
+                    kind: kindName(c.to.type, t),
+                    name: c.toName,
+                  })}
+                </span>
               </li>
             ))}
           </ul>
@@ -1393,14 +1508,11 @@ function ReferencePanel({
               className={buttonStyles.secondary}
             >
               <Icon name="refresh" size={15} />
-              <span>Use content references in the draft</span>
+              <span>{t("content.menus.references.apply")}</span>
             </button>
           ) : null}
           <p className="text-xs text-ink-3">
-            <span>
-              Changes the draft only. Save, preview and publish as usual; the live menu changes when
-              you publish.
-            </span>
+            <span>{t("content.menus.references.note")}</span>
           </p>
         </div>
       )}
