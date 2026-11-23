@@ -5,6 +5,8 @@
  * visibility switch, message boxes and the closing states. Nothing here stores or logs a value.
  */
 import { useId, useState, type ReactNode } from "react";
+import { INTL_LOCALE } from "../../lib/i18n/config";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx } from "../ui";
 
@@ -42,8 +44,9 @@ export interface StepItem {
 
 /** Ordered steps; `current` is the active one, earlier ones are done. */
 export function StepList({ steps, current }: { steps: readonly StepItem[]; current: number }) {
+  const t = useT();
   return (
-    <ol className="mb-8 flex items-center gap-2" aria-label="Progress">
+    <ol className="mb-8 flex items-center gap-2" aria-label={t("link.progress")}>
       {steps.map((s, i) => {
         const state = i < current ? "done" : i === current ? "current" : "todo";
         return (
@@ -74,7 +77,11 @@ export function StepList({ steps, current }: { steps: readonly StepItem[]; curre
               aria-current={state === "current" ? "step" : undefined}
             >
               <span className="sr-only">
-                {state === "done" ? "Done: " : state === "current" ? "Current step: " : "Next: "}
+                {state === "done"
+                  ? t("link.stepDone")
+                  : state === "current"
+                    ? t("link.stepCurrent")
+                    : t("link.stepNext")}
               </span>
               {s.label}
             </span>
@@ -109,6 +116,8 @@ export function PasswordInput({
 }) {
   const id = useId();
   const [visible, setVisible] = useState(false);
+  const t = useT();
+  const field = label.toLocaleLowerCase(INTL_LOCALE[useAdminLocale()]);
   return (
     <div className="space-y-1.5">
       <label htmlFor={id} className="block text-sm font-medium text-ink">
@@ -136,7 +145,9 @@ export function PasswordInput({
           type="button"
           onClick={() => setVisible((v) => !v)}
           className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-r-lg text-ink-3 hover:text-ink"
-          aria-label={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+          aria-label={
+            visible ? t("link.hidePassword", { field }) : t("link.showPassword", { field })
+          }
           aria-pressed={visible}
         >
           <Icon name={visible ? "eyeOff" : "eye"} size={18} />
@@ -153,6 +164,7 @@ export function PasswordInput({
 
 /** A rule the person can see being met while typing. */
 export function RuleCheck({ met, children }: { met: boolean; children: ReactNode }) {
+  const t = useT();
   return (
     <li className={cx("flex items-center gap-2", met ? "text-success" : "text-ink-3")}>
       <span
@@ -165,7 +177,7 @@ export function RuleCheck({ met, children }: { met: boolean; children: ReactNode
         {met ? <Icon name="check" size={11} /> : null}
       </span>
       <span>
-        <span className="sr-only">{met ? "Met: " : "Not met yet: "}</span>
+        <span className="sr-only">{met ? t("link.ruleMet") : t("link.ruleNotMet")}</span>
         {children}
       </span>
     </li>
@@ -177,10 +189,11 @@ export function goToSignIn(): void {
   window.location.replace("/login");
 }
 
-export function SignInButton({ children = "Go to sign-in" }: { children?: ReactNode }) {
+export function SignInButton({ children }: { children?: ReactNode }) {
+  const t = useT();
   return (
     <button type="button" onClick={goToSignIn} className={cx(buttonStyles.primary, "h-11 w-full")}>
-      {children}
+      {children ?? t("link.goToSignIn")}
       <Icon name="arrow" size={16} />
     </button>
   );

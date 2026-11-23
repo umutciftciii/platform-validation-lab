@@ -13,7 +13,6 @@
  * - A new link (a fragment with a token) always replaces what this tab remembered.
  */
 import {
-  DEFAULT_ERROR_MESSAGES,
   ErrorBodySchema,
   type EnrolInspectResponse,
   type EnrolKind,
@@ -21,6 +20,9 @@ import {
   type EnrolMfaSetupResponse,
   type ErrorCode,
 } from "@dream/contracts";
+import { en } from "./i18n/messages/en";
+import { createTranslator } from "./i18n/translate";
+import type { Translate } from "./i18n/types";
 
 export type LinkPage = "enrol" | "reset";
 
@@ -164,19 +166,27 @@ export type FailureKind =
   | "network"
   | "other";
 
+/**
+ * `message` is the English text (logs, tests); pages show `failureMessage(failure, code, t)` in
+ * the console's language.
+ */
 export type LinkCall<T> =
-  { ok: true; data: T } | { ok: false; failure: FailureKind; message: string; details: string[] };
+  | { ok: true; data: T }
+  | {
+      ok: false;
+      failure: FailureKind;
+      code: ErrorCode | null;
+      message: string;
+      details: string[];
+    };
 
-export const POLICY_MESSAGES: Readonly<Record<string, string>> = {
-  too_short: "Use at least 12 characters.",
-  too_long: "Use at most 128 characters.",
-  breached: "This password appears in known data breaches. Choose a different one.",
-  contains_identity: "Do not use your name or parts of your e-mail address.",
-  requires_change: "Choose a password you have not used here before.",
-};
+/** Password policy rules the API names in `details` (ADR-013), English text by rule. */
+export const POLICY_MESSAGES: Readonly<Record<PolicyRule, string>> = en.link.policy;
+export type PolicyRule = keyof typeof en.link.policy;
 
-const LINK_MESSAGE =
-  "This link can no longer be used. It may have expired, been used already, or been replaced by a newer link. Ask a platform administrator for a new one.";
+export function isPolicyRule(rule: string): rule is PolicyRule {
+  return Object.hasOwn(POLICY_MESSAGES, rule);
+}
 
 const FAILURE_BY_CODE: Partial<Record<ErrorCode, FailureKind>> = {
   AUTH_TOKEN_INVALID: "link",
@@ -187,24 +197,28 @@ const FAILURE_BY_CODE: Partial<Record<ErrorCode, FailureKind>> = {
   CONFLICT_STATE: "state",
 };
 
-export function failureMessage(failure: FailureKind, code: ErrorCode | null): string {
+const EN = createTranslator("en");
+
+export function failureMessage(
+  failure: FailureKind,
+  code: ErrorCode | null,
+  t: Translate = EN,
+): string {
   switch (failure) {
     case "link":
-      return LINK_MESSAGE;
     case "policy":
-      return "Choose a stronger password.";
     case "credentials":
-      return "That is not your current password. Repeated mistakes end this link.";
     case "code":
-      return "That code is not correct. Repeated mistakes end this link.";
     case "state":
-      return "This step has to start again. Follow the instructions below.";
+      return t(`link.failure.${failure}`);
     case "rate":
-      return "Too many attempts. Wait a few minutes before trying again.";
+      return t("auth.tooManyAttempts");
     case "network":
-      return "The admin service could not be reached. Check your connection and try again.";
+      return t("auth.unreachable");
     default:
-      return code ? DEFAULT_ERROR_MESSAGES[code] : "Something went wrong. Try again in a moment.";
+      // The admin translates by error code (ADR-028 D15); English equals the contract's text
+      // (test/i18n.test.ts), and a new contract code without a message does not compile.
+      return code ? t(`errors.${code}`) : t("link.failure.other");
   }
 }
 
@@ -214,7 +228,13 @@ export async function toLinkCall<T>(res: Response): Promise<LinkCall<T>> {
   const json: unknown = await res.json().catch(() => null);
   if (res.ok) return { ok: true, data: json as T };
   if (res.status === 429) {
-    return { ok: false, failure: "rate", message: failureMessage("rate", null), details: [] };
+    return {
+      ok: false,
+      failure: "rate",
+      code: null,
+      message: failureMessage("rate", null),
+      details: [],
+    };
   }
   const parsed = ErrorBodySchema.safeParse(json);
   const code = parsed.success ? parsed.data.error.code : null;
@@ -223,7 +243,7 @@ export async function toLinkCall<T>(res: Response): Promise<LinkCall<T>> {
     : [];
   // The page only ever sends well-formed tokens (claimLink), so validation errors are about input.
   const failure: FailureKind = (code && FAILURE_BY_CODE[code]) ?? "other";
-  return { ok: false, failure, message: failureMessage(failure, code), details };
+  return { ok: false, failure, code, message: failureMessage(failure, code), details };
 }
 
 async function post<T>(url: string, body: unknown): Promise<LinkCall<T>> {
@@ -238,7 +258,13 @@ async function post<T>(url: string, body: unknown): Promise<LinkCall<T>> {
       referrerPolicy: "no-referrer",
     });
   } catch {
-    return { ok: false, failure: "network", message: failureMessage("network", null), details: [] };
+    return {
+      ok: false,
+      failure: "network",
+      code: null,
+      message: failureMessage("network", null),
+      details: [],
+    };
   }
   return toLinkCall<T>(res);
 }
@@ -271,44 +297,20 @@ export function groupSecret(secret: string): string {
   return secret.replace(/(.{4})(?=.)/g, "$1 ");
 }
 
-/** Recovery codes as a small text file the person keeps offline. */
-export function recoveryCodesText(codes: readonly string[], emailMasked: string): string {
+/** Recovery codes as a small text file the person keeps offline, in the console's language. */
+export function recoveryCodesText(
+  codes: readonly string[],
+  emailMasked: string,
+  t: Translate = EN,
+): string {
   return [
-    "Dream Petroleum admin console: recovery codes",
-    `Account: ${emailMasked}`,
+    t("enrol.codesFile.heading"),
+    t("enrol.codesFile.account", { email: emailMasked }),
     "",
-    "Each code works once, for sign-in when your authenticator is not at hand.",
-    "Keep this file offline and out of shared folders.",
+    t("enrol.codesFile.once"),
+    t("enrol.codesFile.offline"),
     "",
     ...codes,
     "",
   ].join("\n");
 }
-
-export const KIND_COPY: Readonly<
-  Record<EnrolKind, { eyebrow: string; title: string; intro: string }>
-> = {
-  activation: {
-    eyebrow: "Account activation",
-    title: "Activate your account",
-    intro: "Set a password and connect your authenticator app to finish setting up your account.",
-  },
-  invitation: {
-    eyebrow: "Invitation",
-    title: "Accept your invitation",
-    intro:
-      "You were invited to the Dream Petroleum admin console. Set a password and connect your authenticator app.",
-  },
-  recovery: {
-    eyebrow: "Account recovery",
-    title: "Recover your account",
-    intro:
-      "Your previous password, authenticator and recovery codes were cleared by the operator. Set new ones to sign in again.",
-  },
-  mfa_reenrolment: {
-    eyebrow: "Authenticator reset",
-    title: "Set up your authenticator again",
-    intro:
-      "An administrator reset your authenticator. Confirm your current password, then connect your authenticator app again.",
-  },
-};

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "../icons";
+import { useT } from "../i18n/locale-provider";
 import { Avatar, cx } from "../ui";
 
 export interface ShellUser {
@@ -20,6 +21,7 @@ export function UserMenu({ user }: { user: ShellUser }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
   const router = useRouter();
+  const t = useT();
 
   useEffect(() => {
     if (!open) return;
@@ -72,13 +74,13 @@ export function UserMenu({ user }: { user: ShellUser }) {
         <span className="hidden max-w-[14ch] truncate text-sm font-medium text-ink sm:block">
           {user.name}
         </span>
-        <span className="sr-only">Account menu</span>
+        <span className="sr-only">{t("userMenu.openMenu")}</span>
       </button>
 
       <div
         id={menuId}
         role="menu"
-        aria-label="Account"
+        aria-label={t("userMenu.menu")}
         hidden={!open}
         className="absolute right-0 top-[calc(100%+8px)] z-40 w-64 origin-top-right rounded-xl border border-line bg-surface-raised p-1.5 shadow-raised"
       >
@@ -94,7 +96,7 @@ export function UserMenu({ user }: { user: ShellUser }) {
           className="flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
         >
           <Icon name="settings" size={17} />
-          Account settings
+          {t("userMenu.accountSettings")}
         </Link>
         <button
           role="menuitem"
@@ -107,7 +109,7 @@ export function UserMenu({ user }: { user: ShellUser }) {
           )}
         >
           <Icon name="logout" size={17} />
-          {signingOut ? "Signing out…" : "Sign out"}
+          {signingOut ? t("userMenu.signingOut") : t("userMenu.signOut")}
         </button>
       </div>
     </div>

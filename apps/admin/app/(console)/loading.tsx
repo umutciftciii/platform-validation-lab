@@ -1,10 +1,12 @@
 import { Skeleton } from "../../components/ui";
+import { getTranslator } from "../../lib/i18n/server";
 
 /** Shown while a console page streams in; mirrors the overview layout. */
-export default function Loading() {
+export default async function Loading() {
+  const t = await getTranslator();
   return (
     <div className="space-y-5 sm:space-y-8" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading</span>
+      <span className="sr-only">{t("common.loading")}</span>
       <div className="space-y-3 rounded-2xl bg-masthead px-5 py-5 sm:px-8 sm:py-8">
         <span className="block h-3 w-36 rounded-md bg-rail-2" />
         <span className="block h-8 w-64 max-w-full rounded-md bg-rail-2 sm:h-10" />

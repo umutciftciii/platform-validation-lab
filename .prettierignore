@@ -8,3 +8,5 @@ docs/creative/
 docs/catalog/bv-catalog-mapping.json
 docs/catalog/bv-catalog-mapping.csv
 docs/cms/legacy-url-map/evidence/
+# ML-11: EN rendering recorded on 5d6f184, compared byte for byte (test/en-baseline.test.tsx).
+apps/admin/test/fixtures/en-baseline/

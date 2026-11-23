@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "../../components/i18n/locale-provider";
 import { ErrorState } from "../../components/ui";
 
 /**
@@ -13,13 +14,15 @@ export default function ConsoleError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const t = useT();
   return (
     <div className="rounded-2xl border border-line bg-surface shadow-panel">
-      <ErrorState title="This page could not be loaded" onRetry={reset}>
-        The admin service did not answer as expected. Try again in a moment; if it keeps happening,
-        give the reference below to the platform team.
+      <ErrorState title={t("errorPage.title")} onRetry={reset}>
+        {t("errorPage.text")}
         {error.digest ? (
-          <span className="tabular mt-3 block text-xs text-ink-3">Reference {error.digest}</span>
+          <span className="tabular mt-3 block text-xs text-ink-3">
+            {t("errorPage.reference", { digest: error.digest })}
+          </span>
         ) : null}
       </ErrorState>
     </div>

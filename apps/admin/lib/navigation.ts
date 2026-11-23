@@ -1,7 +1,12 @@
+import { en } from "./i18n/messages/en";
+
 /**
  * Console navigation model. Ready modules have their own routes (overview, products since PM-1, content since CMS S1);
  * the others are not built yet and render an empty state that says so. Showing an item here grants nothing: every action is
  * authorised by the API (RBAC, F1-001/F1-002), not by the presence of a link.
+ *
+ * ML-11: labels and summaries are dictionary messages (`nav.items.<id>`, `nav.groups.<id>`); the
+ * `label`/`summary` fields keep the English text for code that is not language-aware.
  */
 export type IconName =
   | "overview"
@@ -15,7 +20,11 @@ export type IconName =
   | "audit"
   | "settings";
 
+export type NavItemId = keyof typeof en.nav.items;
+export type NavGroupId = keyof typeof en.nav.groups;
+
 export interface NavItem {
+  id: NavItemId;
   slug: string;
   href: string;
   label: string;
@@ -28,114 +37,128 @@ export interface NavItem {
 }
 
 export interface NavGroup {
+  id: NavGroupId;
   label: string;
   items: readonly NavItem[];
 }
 
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
-    label: "Workspace",
+    id: "workspace",
+    label: en.nav.groups.workspace,
     items: [
       {
+        id: "overview",
         slug: "",
         href: "/",
-        label: "Overview",
+        label: en.nav.items.overview.label,
         icon: "overview",
-        summary: "Activity and status across both sites.",
+        summary: en.nav.items.overview.summary,
         ready: true,
       },
       {
+        id: "content",
         slug: "content",
         href: "/content",
-        label: "Content",
+        label: en.nav.items.content.label,
         icon: "content",
-        summary: "Write, review and publish pages for both sites.",
+        summary: en.nav.items.content.summary,
         ready: true,
       },
       {
+        id: "products",
         slug: "products",
         href: "/products",
-        label: "Products",
+        label: en.nav.items.products.label,
         icon: "products",
-        summary: "Keep product data sheets and specifications current.",
+        summary: en.nav.items.products.summary,
         ready: true,
       },
       {
         // DP-209: site SEO defaults and the SEO state of every page, article and product.
+        id: "seo",
         slug: "seo",
         href: "/seo",
-        label: "SEO",
+        label: en.nav.items.seo.label,
         icon: "search",
-        summary: "Search results and link previews of the BV site.",
+        summary: en.nav.items.seo.summary,
         ready: true,
       },
       {
         // DP-172 (ADR-022): proposed product texts for the company's approval.
+        id: "companyReview",
         slug: "company-review",
         href: "/company-review",
-        label: "Company review",
+        label: en.nav.items.companyReview.label,
         icon: "inbox",
-        summary: "Proposed product texts for the company's approval.",
+        summary: en.nav.items.companyReview.summary,
         ready: true,
       },
       {
+        id: "leads",
         slug: "leads",
         href: "/leads",
-        label: "Leads",
+        label: en.nav.items.leads.label,
         icon: "inbox",
-        summary:
-          "Contact-form messages and document requests from the public sites (customer data, audited).",
+        summary: en.nav.items.leads.summary,
         ready: true,
       },
       {
+        id: "sites",
         slug: "sites",
         href: "/sites",
-        label: "Sites",
+        label: en.nav.items.sites.label,
         icon: "sites",
-        summary: "Domains, navigation and publishing for each site.",
+        summary: en.nav.items.sites.summary,
         ready: false,
       },
     ],
   },
   {
-    label: "Administration",
+    id: "administration",
+    label: en.nav.groups.administration,
     items: [
       {
+        id: "staff",
         slug: "staff",
         href: "/staff",
-        label: "Staff and access",
+        label: en.nav.items.staff.label,
         icon: "staff",
-        summary: "Invite staff and give or remove roles, lead access included.",
+        summary: en.nav.items.staff.summary,
         ready: true,
       },
       {
+        id: "audit",
         slug: "audit",
         href: "/audit",
-        label: "Audit log",
+        label: en.nav.items.audit.label,
         icon: "audit",
-        summary: "Every sign-in, permission change and publication, in order.",
+        summary: en.nav.items.audit.summary,
         ready: false,
       },
       {
+        id: "settings",
         slug: "settings",
         href: "/settings",
-        label: "Settings",
+        label: en.nav.items.settings.label,
         icon: "settings",
-        summary: "Your profile, sessions and authenticator.",
+        summary: en.nav.items.settings.summary,
         ready: false,
       },
     ],
   },
   {
     // DP-110 (ADR-018): God Mode of the system owner.
-    label: "Owner",
+    id: "owner",
+    label: en.nav.groups.owner,
     items: [
       {
+        id: "owner",
         slug: "owner",
         href: "/owner",
-        label: "Owner console",
+        label: en.nav.items.owner.label,
         icon: "shield",
-        summary: "Module switches and the protected audit trail (system owner only).",
+        summary: en.nav.items.owner.summary,
         ready: true,
         ownerOnly: true,
       },

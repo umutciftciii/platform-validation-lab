@@ -15,11 +15,12 @@ import type { EnrolInspectResponse, EnrolKind, EnrolMfaSetupResponse } from "@dr
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   confirmAuthenticator,
+  failureMessage,
   followLink,
   groupSecret,
   inspectLink,
-  KIND_COPY,
-  POLICY_MESSAGES,
+  isPolicyRule,
+  type PolicyRule,
   proveCurrentPassword,
   recoveryCodesText,
   rememberDone,
@@ -29,7 +30,10 @@ import {
   tabStore,
   type LinkCall,
 } from "../../lib/credential-link";
+import { formatLinkExpiry } from "../../lib/i18n/format";
+import type { Translate } from "../../lib/i18n/types";
 import { qrPath } from "../../lib/qr";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import {
@@ -47,15 +51,6 @@ import {
 const MIN_LENGTH = 12;
 const MAX_LENGTH = 128;
 
-const EXPIRY = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-  hour: "2-digit",
-  minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-  timeZoneName: "short",
-});
-
 type Phase =
   | { name: "loading" }
   | { name: "none" }
@@ -70,6 +65,8 @@ export function EnrolFlow() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
   const [info, setInfo] = useState<EnrolInspectResponse | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const t = useT();
+  const locale = useAdminLocale();
 
   /** The link stopped working mid-flow: remember it, so a reload says the same thing. */
   const endLink = useCallback((message?: string) => {
@@ -115,56 +112,48 @@ export function EnrolFlow() {
   const backToPassword = useCallback(() => setPhase({ name: "password" }), []);
 
   const kind = info?.kind ?? "activation";
-  const copy = KIND_COPY[kind];
 
   switch (phase.name) {
     case "loading":
       return (
         <div className="flex items-center gap-3 text-ink-2" role="status">
           <Spinner />
-          Checking your link…
+          {t("link.checkingLink")}
         </div>
       );
     case "none":
       return (
-        <LinkEndState tone="neutral" eyebrow="Account setup" title="Open your link">
-          <p>
-            This page works with the personal link from your invitation or from the operator. Open
-            the full link again, exactly as you received it.
-          </p>
-          <p className="text-sm text-ink-3">
-            For your safety the link is removed from the address bar as soon as the page opens, so
-            copying the address from here does not work.
-          </p>
+        <LinkEndState
+          tone="neutral"
+          eyebrow={t("enrol.accountSetup")}
+          title={t("enrol.openLinkTitle")}
+        >
+          <p>{t("enrol.openLinkText")}</p>
+          <p className="text-sm text-ink-3">{t("enrol.openLinkSafety")}</p>
         </LinkEndState>
       );
     case "invalid":
       return (
-        <LinkEndState tone="problem" eyebrow="Account setup" title="This link cannot be used">
-          <p>
-            {phase.message ??
-              "It may have expired, been used already, been replaced by a newer link, or been blocked after too many wrong attempts."}
-          </p>
-          <p>
-            Ask a platform administrator for a new link. If you already finished setting up your
-            account, sign in instead.
-          </p>
+        <LinkEndState
+          tone="problem"
+          eyebrow={t("enrol.accountSetup")}
+          title={t("link.invalidTitle")}
+        >
+          <p>{phase.message ?? t("enrol.invalidText")}</p>
+          <p>{t("enrol.invalidAsk")}</p>
         </LinkEndState>
       );
     case "done":
       return (
-        <LinkEndState tone="success" eyebrow="Account ready" title="You are all set">
-          <p>Your password and authenticator are set up. Sign in with them now.</p>
-          <p className="text-sm text-ink-3">
-            The recovery codes were shown once and are not stored in this browser. If you did not
-            save them, ask a platform administrator for help.
-          </p>
+        <LinkEndState tone="success" eyebrow={t("enrol.accountReady")} title={t("enrol.doneTitle")}>
+          <p>{t("enrol.doneText")}</p>
+          <p className="text-sm text-ink-3">{t("enrol.doneCodes")}</p>
         </LinkEndState>
       );
     case "unreachable":
       return (
-        <LinkEndState tone="problem" title="The admin service is not reachable" action="none">
-          <p>Your link was not used. Check your connection and try again.</p>
+        <LinkEndState tone="problem" title={t("enrol.unreachableTitle")} action="none">
+          <p>{t("enrol.unreachableText")}</p>
           <button
             type="button"
             className={cx(buttonStyles.primary, "h-11 w-full")}
@@ -174,7 +163,7 @@ export function EnrolFlow() {
             }}
           >
             <Icon name="refresh" size={16} />
-            Try again
+            {t("common.tryAgain")}
           </button>
         </LinkEndState>
       );
@@ -183,7 +172,7 @@ export function EnrolFlow() {
         <RecoveryCodes
           codes={phase.codes}
           emailMasked={info?.emailMasked ?? ""}
-          steps={stepsFor(kind)}
+          steps={stepsFor(kind, t)}
         />
       );
     default:
@@ -192,9 +181,9 @@ export function EnrolFlow() {
 
   return (
     <div>
-      <StepList steps={stepsFor(kind)} current={phase.name === "password" ? 0 : 1} />
-      <Heading eyebrow={copy.eyebrow} title={copy.title}>
-        <p>{copy.intro}</p>
+      <StepList steps={stepsFor(kind, t)} current={phase.name === "password" ? 0 : 1} />
+      <Heading eyebrow={t(`enrol.kinds.${kind}.eyebrow`)} title={t(`enrol.kinds.${kind}.title`)}>
+        <p>{t(`enrol.kinds.${kind}.intro`)}</p>
       </Heading>
       {info ? (
         <p className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-3">
@@ -205,7 +194,11 @@ export function EnrolFlow() {
           <span aria-hidden="true" className="hidden sm:inline">
             ·
           </span>
-          <span>Link valid until {EXPIRY.format(new Date(info.expiresAt))}</span>
+          <span>
+            {t("enrol.linkValidUntil", {
+              date: formatLinkExpiry(new Date(info.expiresAt), locale),
+            })}
+          </span>
         </p>
       ) : null}
       {phase.name === "password" ? (
@@ -232,11 +225,15 @@ export function EnrolFlow() {
   );
 }
 
-function stepsFor(kind: EnrolKind) {
+function stepsFor(kind: EnrolKind, t: Translate) {
   return [
-    { key: "password", label: kind === "mfa_reenrolment" ? "Confirm password" : "Password" },
-    { key: "mfa", label: "Authenticator" },
-    { key: "codes", label: "Recovery codes" },
+    {
+      key: "password",
+      label:
+        kind === "mfa_reenrolment" ? t("enrol.steps.confirmPassword") : t("enrol.steps.password"),
+    },
+    { key: "mfa", label: t("enrol.steps.authenticator") },
+    { key: "codes", label: t("enrol.steps.recoveryCodes") },
   ];
 }
 
@@ -257,7 +254,8 @@ function PasswordStep({
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; rules: string[] } | null>(null);
+  const [error, setError] = useState<{ message: string; rules: PolicyRule[] } | null>(null);
+  const t = useT();
 
   const longEnough = password.length >= MIN_LENGTH;
   const notTooLong = password.length <= MAX_LENGTH;
@@ -281,8 +279,8 @@ function PasswordStep({
     }
     if (res.failure === "link") return onLinkEnd();
     setError({
-      message: res.message,
-      rules: res.failure === "policy" ? res.details.filter((d) => d in POLICY_MESSAGES) : [],
+      message: failureMessage(res.failure, res.code, t),
+      rules: res.failure === "policy" ? res.details.filter(isPolicyRule) : [],
     });
   }
 
@@ -290,23 +288,23 @@ function PasswordStep({
     <form
       onSubmit={submit}
       className="space-y-5"
-      aria-label={reenrol ? "Confirm password" : "Set password"}
+      aria-label={reenrol ? t("enrol.steps.confirmPassword") : t("enrol.setPassword")}
     >
       {reenrol ? (
         <PasswordInput
-          label="Current password"
+          label={t("enrol.currentPassword")}
           name="current-password"
           autoComplete="current-password"
           value={password}
           onChange={setPassword}
           invalid={Boolean(error)}
           autoFocus
-          hint="Your password did not change. Confirming it shows the reset reached the right person."
+          hint={t("enrol.currentPasswordHint")}
         />
       ) : (
         <>
           <PasswordInput
-            label="New password"
+            label={t("link.newPassword")}
             name="new-password"
             autoComplete="new-password"
             value={password}
@@ -314,19 +312,17 @@ function PasswordStep({
             invalid={Boolean(error?.rules.length)}
             autoFocus
             hint={
-              <ul className="mt-2 space-y-1.5" aria-label="Password rules">
+              <ul className="mt-2 space-y-1.5" aria-label={t("link.passwordRules")}>
                 <RuleCheck met={longEnough && notTooLong}>
-                  {MIN_LENGTH} to {MAX_LENGTH} characters; a passphrase of several words works well
+                  {t("enrol.lengthRule", { min: MIN_LENGTH, max: MAX_LENGTH })}
                 </RuleCheck>
-                <RuleCheck met={matches}>Both entries match</RuleCheck>
-                <li className="pl-6 text-ink-3">
-                  Not a known breached password, and without your name or e-mail address.
-                </li>
+                <RuleCheck met={matches}>{t("link.bothMatch")}</RuleCheck>
+                <li className="pl-6 text-ink-3">{t("enrol.breachedRule")}</li>
               </ul>
             }
           />
           <PasswordInput
-            label="Repeat new password"
+            label={t("link.repeatNewPassword")}
             name="repeat-password"
             autoComplete="new-password"
             value={repeat}
@@ -341,7 +337,7 @@ function PasswordStep({
           {error.rules.length ? (
             <ul className="list-disc space-y-0.5 pl-4">
               {error.rules.map((r) => (
-                <li key={r}>{POLICY_MESSAGES[r]}</li>
+                <li key={r}>{t(`link.policy.${r}`)}</li>
               ))}
             </ul>
           ) : null}
@@ -354,7 +350,11 @@ function PasswordStep({
       >
         {busy ? <Spinner /> : null}
         <span>
-          {busy ? "Checking…" : reenrol ? "Confirm and continue" : "Save password and continue"}
+          {busy
+            ? t("auth.checking")
+            : reenrol
+              ? t("enrol.confirmAndContinue")
+              : t("enrol.savePasswordAndContinue")}
         </span>
       </button>
     </form>
@@ -383,6 +383,7 @@ function AuthenticatorStep({
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
   const started = useRef(false);
+  const t = useT();
 
   const begin = useCallback(async () => {
     const res = await startAuthenticator(token);
@@ -393,8 +394,8 @@ function AuthenticatorStep({
     }
     if (res.failure === "link") return onLinkEnd();
     if (res.failure === "state") return onBackToPassword();
-    setSetupError(res.message);
-  }, [token, onLinkEnd, onBackToPassword]);
+    setSetupError(failureMessage(res.failure, res.code, t));
+  }, [token, onLinkEnd, onBackToPassword, t]);
 
   useEffect(() => {
     // Each setup replaces the key on the server: start it once per visit of this step, also
@@ -422,11 +423,11 @@ function AuthenticatorStep({
     if (res.failure === "state") {
       // The unconfirmed setup expired: a new key replaces it.
       setSetup(null);
-      setNotice("The setup timed out. Remove the old entry from your app and scan the new code.");
+      setNotice(t("enrol.setupTimedOut"));
       await begin();
       return;
     }
-    setError(res.message);
+    setError(failureMessage(res.failure, res.code, t));
     requestAnimationFrame(() => codeRef.current?.focus());
   }
 
@@ -445,7 +446,7 @@ function AuthenticatorStep({
           }}
         >
           <Icon name="refresh" size={16} />
-          Try again
+          {t("common.tryAgain")}
         </button>
       </div>
     );
@@ -454,7 +455,7 @@ function AuthenticatorStep({
     return (
       <div className="flex items-center gap-3 text-ink-2" role="status">
         <Spinner />
-        Preparing your authenticator key…
+        {t("enrol.preparingKey")}
       </div>
     );
   }
@@ -465,18 +466,14 @@ function AuthenticatorStep({
       {notice ? <NoticeBox>{notice}</NoticeBox> : null}
       <ol className="space-y-6">
         <li className="space-y-3">
-          <p className="text-sm font-medium text-ink">
-            1. Scan this code with your authenticator app
-          </p>
-          <p className="text-sm text-ink-3">
-            For example Microsoft Authenticator, Google Authenticator, 1Password or Authy.
-          </p>
+          <p className="text-sm font-medium text-ink">{t("enrol.scanStep")}</p>
+          <p className="text-sm text-ink-3">{t("enrol.appExamples")}</p>
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
             {/* Always dark modules on white: scanners need the contrast in both themes. */}
             <div className="rounded-xl bg-white p-2 ring-1 ring-line">
               <svg
                 role="img"
-                aria-label="QR code for your authenticator app"
+                aria-label={t("enrol.qrLabel")}
                 viewBox={`0 0 ${qr.size} ${qr.size}`}
                 width={184}
                 height={184}
@@ -487,7 +484,7 @@ function AuthenticatorStep({
               </svg>
             </div>
             <div className="min-w-0 space-y-2 text-sm">
-              <p className="text-ink-3">Cannot scan? Enter this key in the app instead:</p>
+              <p className="text-ink-3">{t("enrol.cannotScan")}</p>
               <p className="tabular select-all break-all rounded-lg bg-surface-2 px-3 py-2 font-mono text-[0.9375rem] tracking-wider text-ink ring-1 ring-inset ring-line">
                 {groupSecret(setup.secret)}
               </p>
@@ -500,21 +497,25 @@ function AuthenticatorStep({
                   }}
                 >
                   <Icon name={copied ? "check" : "document"} size={15} />
-                  {copied ? "Key copied" : "Copy key"}
+                  {copied ? t("enrol.keyCopied") : t("enrol.copyKey")}
                 </button>
                 {/* On a phone the QR code cannot be scanned by the same phone: open the app. */}
                 <a href={setup.otpauthUri} className={cx(buttonStyles.ghost, "lg:hidden")}>
                   <Icon name="key" size={15} />
-                  Open in authenticator app
+                  {t("enrol.openInApp")}
                 </a>
               </div>
             </div>
           </div>
         </li>
         <li>
-          <form onSubmit={submit} className="space-y-3" aria-label="Confirm authenticator">
+          <form
+            onSubmit={submit}
+            className="space-y-3"
+            aria-label={t("enrol.confirmAuthenticator")}
+          >
             <label htmlFor="enrol-code" className="block text-sm font-medium text-ink">
-              2. Enter the 6-digit code the app shows
+              {t("enrol.enterCodeStep")}
             </label>
             <input
               ref={codeRef}
@@ -533,9 +534,7 @@ function AuthenticatorStep({
             {error ? (
               <ErrorBox>
                 <p>{error}</p>
-                <p className="text-danger/80">
-                  Check that the time on your phone is set automatically.
-                </p>
+                <p className="text-danger/80">{t("enrol.phoneTime")}</p>
               </ErrorBox>
             ) : null}
             <button
@@ -544,14 +543,12 @@ function AuthenticatorStep({
               className={cx(buttonStyles.primary, "h-11 w-full")}
             >
               {busy ? <Spinner /> : null}
-              <span>{busy ? "Verifying…" : "Verify and activate"}</span>
+              <span>{busy ? t("auth.verifying") : t("enrol.verifyAndActivate")}</span>
             </button>
           </form>
         </li>
       </ol>
-      <p className="text-xs text-ink-3">
-        Reloaded this page? A new key was created; only the newest entry in your app works.
-      </p>
+      <p className="text-xs text-ink-3">{t("enrol.reloadedNote")}</p>
     </div>
   );
 }
@@ -569,9 +566,10 @@ function RecoveryCodes({
 }) {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
+  const t = useT();
 
   function download() {
-    const blob = new Blob([recoveryCodesText(codes, emailMasked)], { type: "text/plain" });
+    const blob = new Blob([recoveryCodesText(codes, emailMasked, t)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -583,15 +581,12 @@ function RecoveryCodes({
   return (
     <div>
       <StepList steps={steps} current={2} />
-      <Heading eyebrow="Account active" title="Save your recovery codes">
-        <p>
-          If your phone is lost, each code signs you in once instead of the authenticator. They are
-          shown only now and cannot be displayed again.
-        </p>
+      <Heading eyebrow={t("enrol.accountActive")} title={t("enrol.codesTitle")}>
+        <p>{t("enrol.codesText")}</p>
       </Heading>
       <ul
         className="tabular mb-4 grid grid-cols-2 gap-2 rounded-xl bg-surface-2 p-4 font-mono text-[0.9375rem] tracking-wider text-ink ring-1 ring-inset ring-line"
-        aria-label="Recovery codes"
+        aria-label={t("enrol.codesLabel")}
       >
         {codes.map((c) => (
           <li key={c} className="select-all text-center">
@@ -602,19 +597,19 @@ function RecoveryCodes({
       <div className="mb-6 flex flex-wrap gap-2">
         <button type="button" className={buttonStyles.secondary} onClick={download}>
           <Icon name="download" size={15} />
-          Download .txt
+          {t("enrol.downloadTxt")}
         </button>
         <button
           type="button"
           className={buttonStyles.secondary}
           onClick={() => {
             void navigator.clipboard
-              ?.writeText(recoveryCodesText(codes, emailMasked))
+              ?.writeText(recoveryCodesText(codes, emailMasked, t))
               .then(() => setCopied(true));
           }}
         >
           <Icon name={copied ? "check" : "document"} size={15} />
-          {copied ? "Copied" : "Copy all"}
+          {copied ? t("enrol.copied") : t("enrol.copyAll")}
         </button>
       </div>
       <label className="mb-5 flex cursor-pointer items-start gap-3 text-sm text-ink-2">
@@ -624,7 +619,7 @@ function RecoveryCodes({
           onChange={(e) => setSaved(e.target.checked)}
           className="mt-0.5 size-4 accent-petrol"
         />
-        I have stored these codes somewhere safe, away from my phone.
+        {t("enrol.codesStored")}
       </label>
       <button
         type="button"
@@ -632,7 +627,7 @@ function RecoveryCodes({
         onClick={goToSignIn}
         className={cx(buttonStyles.primary, "h-11 w-full")}
       >
-        Continue to sign-in
+        {t("enrol.continueToSignIn")}
         <Icon name="arrow" size={16} />
       </button>
     </div>

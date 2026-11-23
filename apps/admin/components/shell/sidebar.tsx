@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { isActive, navGroupsFor } from "../../lib/navigation";
 import { BrandLogo, BrandMark, Icon, RingMotif } from "../icons";
+import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
 
 /**
@@ -26,6 +27,7 @@ export function Sidebar({
   reviewOnly?: boolean;
 }) {
   const pathname = usePathname();
+  const t = useT();
 
   return (
     <div className="on-rail relative isolate flex h-full flex-col overflow-hidden bg-rail text-rail-ink">
@@ -46,36 +48,39 @@ export function Sidebar({
           href="/"
           onClick={onNavigate}
           className="inline-flex w-fit rounded-lg focus-visible:outline-offset-4"
-          aria-label="Dream Petroleum admin console, overview"
+          aria-label={t("shell.homeLink")}
         >
           {compact ? <BrandMark size={36} /> : <BrandLogo height={52} />}
         </Link>
         {compact ? null : (
           <span className="type-eyebrow flex items-center gap-2 text-rail-ink-dim">
             <span className="h-px w-4 bg-brand" aria-hidden="true" />
-            Admin console
+            {t("shell.adminConsole")}
           </span>
         )}
       </div>
 
-      <nav aria-label="Main" className="mt-1 flex-1 overflow-y-auto px-3 pb-4">
+      <nav aria-label={t("shell.mainNavigation")} className="mt-1 flex-1 overflow-y-auto px-3 pb-4">
         {navGroupsFor(isOwner, reviewOnly).map((group) => (
-          <div key={group.label} className="mb-5">
+          <div key={group.id} className="mb-5">
             {compact ? (
               <div className="mx-auto mb-2 h-px w-6 bg-rail-line" aria-hidden="true" />
             ) : (
-              <p className="type-eyebrow mb-2 px-3 text-rail-ink-dim">{group.label}</p>
+              <p className="type-eyebrow mb-2 px-3 text-rail-ink-dim">
+                {t(`nav.groups.${group.id}`)}
+              </p>
             )}
             <ul className="space-y-0.5">
               {group.items.map((item) => {
                 const active = isActive(item, pathname);
+                const label = t(`nav.items.${item.id}.label`);
                 return (
                   <li key={item.href}>
                     <Link
                       href={item.href}
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
-                      title={compact ? item.label : undefined}
+                      title={compact ? label : undefined}
                       className={cx(
                         "group relative flex items-center gap-3 rounded-lg text-sm transition-colors duration-150",
                         compact ? "mx-auto size-11 justify-center" : "h-10 px-3",
@@ -97,10 +102,10 @@ export function Sidebar({
                         size={19}
                         className={active ? "text-rail-accent" : undefined}
                       />
-                      <span className={compact ? "sr-only" : "truncate"}>{item.label}</span>
+                      <span className={compact ? "sr-only" : "truncate"}>{label}</span>
                       {!item.ready && !compact ? (
                         <span className="ml-auto rounded border border-rail-line px-1.5 text-[0.625rem] font-medium uppercase tracking-wider text-rail-ink-dim">
-                          Soon
+                          {t("shell.soon")}
                         </span>
                       ) : null}
                     </Link>
@@ -118,7 +123,7 @@ export function Sidebar({
             "inline-flex items-center gap-2 text-xs text-rail-ink-dim",
             compact && "justify-center",
           )}
-          title={`Environment: ${environmentLabel}`}
+          title={t("shell.environment", { name: environmentLabel })}
         >
           <span className="size-1.5 rounded-full bg-amber" aria-hidden="true" />
           <span className={compact ? "sr-only" : undefined}>{environmentLabel}</span>
