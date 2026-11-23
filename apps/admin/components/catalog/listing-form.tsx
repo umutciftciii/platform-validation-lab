@@ -8,6 +8,7 @@ import { flattenTree } from "../../lib/catalog-view";
 import { listingSaveBody } from "../../lib/listing-request";
 import { formHasChanges } from "../../lib/product-tabs";
 import { siteTextHint } from "../../lib/site-text";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { Field, FIELD, FormMessage, TEXTAREA } from "./parts";
@@ -56,6 +57,7 @@ export function ListingForm({
 }) {
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
@@ -63,6 +65,7 @@ export function ListingForm({
   const tree = flattenTree(categories);
   const defaultCategory = categories.find((c) => c.isDefault);
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
+  // i18n-ignore: element id, not UI text
   const id = (name: string) => `listing-${siteId}-${name}`;
   // DP-187: unsaved edits mark the Content tab and are confirmed before a site switch.
   const [fieldsChanged, setFieldsChanged] = useState(false);
@@ -127,8 +130,13 @@ export function ListingForm({
     }
     setFieldsChanged(false);
     setCopied(false);
-    if (notify) notify(listing ? `${siteName} text saved.` : `Listed on ${siteName}.`);
-    else setSaved(true);
+    if (notify) {
+      notify(
+        listing
+          ? t("catalog.detail.listing.saved", { site: siteName })
+          : t("catalog.detail.listing.listed", { site: siteName }),
+      );
+    } else setSaved(true);
     router.refresh();
   }
 
@@ -142,11 +150,13 @@ export function ListingForm({
       className="space-y-4"
     >
       <fieldset disabled={!canEdit} className="space-y-4">
-        <legend className="sr-only">Product text on {siteName}</legend>
+        <legend className="sr-only">
+          {t("catalog.detail.listing.legend", { site: siteName })}
+        </legend>
         <Field
-          label="Title on this site"
+          label={t("catalog.detail.listing.title")}
           htmlFor={id("title")}
-          hint={siteTextHint("title", siteName, listing?.text?.title, shared?.name)}
+          hint={siteTextHint("title", siteName, listing?.text?.title, shared?.name, t)}
         >
           <input
             id={id("title")}
@@ -158,9 +168,9 @@ export function ListingForm({
           />
         </Field>
         <Field
-          label="Summary on this site"
+          label={t("catalog.detail.listing.summary")}
           htmlFor={id("summary")}
-          hint={siteTextHint("summary", siteName, savedSummary, shared?.summary)}
+          hint={siteTextHint("summary", siteName, savedSummary, shared?.summary, t)}
         >
           <textarea
             ref={summaryRef}
@@ -178,9 +188,9 @@ export function ListingForm({
           />
         </Field>
         <Field
-          label="Description on this site"
+          label={t("catalog.detail.listing.description")}
           htmlFor={id("description")}
-          hint={siteTextHint("description", siteName, savedDescription, shared?.description)}
+          hint={siteTextHint("description", siteName, savedDescription, shared?.description, t)}
         >
           <textarea
             ref={descriptionRef}
@@ -198,11 +208,11 @@ export function ListingForm({
         <div className="space-y-2 rounded-lg border border-line bg-surface-2/60 p-3 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="font-medium text-ink">
-              Research proposal for {siteName}
+              {t("catalog.detail.listing.proposal.heading", { site: siteName })}
               <span className="ml-1.5 font-normal text-ink-3">
                 {proposal!.status === "APPROVED"
-                  ? "· reviewed by the company"
-                  : "· not reviewed by the company (optional)"}
+                  ? t("catalog.detail.listing.proposal.reviewed")
+                  : t("catalog.detail.listing.proposal.notReviewed")}
               </span>
             </p>
             {canEdit ? (
@@ -212,50 +222,53 @@ export function ListingForm({
                 className={cx(buttonStyles.secondary, "h-9 px-3 text-xs")}
               >
                 <Icon name="edit" size={14} />
-                Copy into summary and description
+                {t("catalog.detail.listing.proposal.copy")}
               </button>
             ) : null}
           </div>
           {differs && !copied ? (
             <p className="flex items-start gap-1.5 text-amber-ink">
               <Icon name="alert" size={13} className="mt-px shrink-0" />
-              The saved {siteName} text differs from the research proposal.
+              {t("catalog.detail.listing.proposal.differs", { site: siteName })}
             </p>
           ) : null}
           {copied ? (
             <p className="flex items-start gap-1.5 text-petrol-strong" role="status">
               <Icon name="check" size={13} className="mt-px shrink-0" />
-              Copied into the summary and description above. Edit it, then save; nothing is saved
-              yet.
+              {t("catalog.detail.listing.proposal.copied")}
             </p>
           ) : null}
-          <p className="text-ink-3">
-            Only the customer text is copied. Technical values held for verification stay in Company
-            Review and never enter the specifications.
-          </p>
+          <p className="text-ink-3">{t("catalog.detail.listing.proposal.onlyText")}</p>
           {proposal!.claimRisks.length ? (
             <details>
               <summary className="cursor-pointer font-medium text-amber-ink">
-                {proposal!.claimRisks.length} claim note
-                {proposal!.claimRisks.length === 1 ? "" : "s"}: wording that needs a certificate
+                {t("catalog.detail.listing.proposal.claimNotes", {
+                  count: proposal!.claimRisks.length,
+                })}
               </summary>
               <ul className="mt-1.5 list-disc space-y-1 pl-4 text-ink-2">
-                {proposal!.claimRisks.map((t, i) => (
-                  <li key={i}>{t}</li>
+                {proposal!.claimRisks.map((risk, i) => (
+                  <li key={i}>{risk}</li>
                 ))}
               </ul>
             </details>
           ) : null}
           {differs ? (
             <details>
-              <summary className="cursor-pointer text-ink-2">Show the proposal text</summary>
+              <summary className="cursor-pointer text-ink-2">
+                {t("catalog.detail.listing.proposal.show")}
+              </summary>
               <div className="mt-1.5 space-y-1.5 whitespace-pre-line rounded-md bg-surface p-2 text-ink-2 ring-1 ring-inset ring-line">
                 <p>
-                  <span className="font-medium text-ink">Summary: </span>
+                  <span className="font-medium text-ink">
+                    {t("catalog.detail.listing.proposal.summary")}
+                  </span>
                   {proposal!.summary ?? "—"}
                 </p>
                 <p>
-                  <span className="font-medium text-ink">Description: </span>
+                  <span className="font-medium text-ink">
+                    {t("catalog.detail.listing.proposal.description")}
+                  </span>
                   {proposal!.description ?? "—"}
                 </p>
               </div>
@@ -267,16 +280,18 @@ export function ListingForm({
         disabled={!canEdit}
         className="grid grid-cols-1 gap-4 border-t border-line pt-4 sm:grid-cols-[minmax(0,1fr)_8rem]"
       >
-        <legend className="sr-only">Listing settings on {siteName}</legend>
+        <legend className="sr-only">
+          {t("catalog.detail.listing.settings", { site: siteName })}
+        </legend>
         <Field
-          label="Category on this site"
+          label={t("catalog.detail.listing.category.label")}
           htmlFor={id("category")}
           hint={
             listing
               ? undefined
               : defaultCategory
-                ? `Left empty, the site default “${defaultCategory.name}” is used.`
-                : "This site has no default category yet."
+                ? t("catalog.detail.listing.category.hintDefault", { name: defaultCategory.name })
+                : t("catalog.detail.listing.category.noDefault")
           }
         >
           <select
@@ -286,17 +301,19 @@ export function ListingForm({
             aria-invalid={invalid("categoryId")}
             className={FIELD}
           >
-            {listing ? null : <option value="">Site default</option>}
+            {listing ? null : (
+              <option value="">{t("catalog.detail.listing.category.siteDefault")}</option>
+            )}
             {tree.map(({ category, depth }) => (
               <option key={category.id} value={category.id}>
                 {" ".repeat(depth)}
                 {category.name}
-                {category.isDefault ? " (default)" : ""}
+                {category.isDefault ? t("catalog.detail.listing.category.defaultSuffix") : ""}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Sort order" htmlFor={id("sort")}>
+        <Field label={t("catalog.detail.listing.sortOrder")} htmlFor={id("sort")}>
           <input
             id={id("sort")}
             name="sortOrder"
@@ -309,7 +326,11 @@ export function ListingForm({
         </Field>
       </fieldset>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
-      {saved ? <FormMessage kind="success">{`${siteName} text saved.`}</FormMessage> : null}
+      {saved ? (
+        <FormMessage kind="success">
+          {t("catalog.detail.listing.saved", { site: siteName })}
+        </FormMessage>
+      ) : null}
       {canEdit ? (
         <div className="flex flex-wrap justify-end gap-2">
           {fieldsChanged ? (
@@ -319,20 +340,24 @@ export function ListingForm({
               onClick={discard}
               className={buttonStyles.ghost}
             >
-              Discard changes
+              {t("catalog.detail.listing.discard")}
             </button>
           ) : null}
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={listing ? "edit" : "plus"} size={17} />}
             <span>
-              {pending ? "Saving…" : listing ? `Save ${siteName} text` : `List on ${siteName}`}
+              {pending
+                ? t("catalog.detail.listing.saving")
+                : listing
+                  ? t("catalog.detail.listing.save", { site: siteName })
+                  : t("catalog.detail.listing.listOn", { site: siteName })}
             </span>
           </button>
         </div>
       ) : (
         <p className="flex items-center gap-2 text-sm text-ink-3">
           <Icon name="shield" size={16} />
-          Read only: editing this site&apos;s listings needs product:edit on the site.
+          {t("catalog.detail.listing.readOnly")}
         </p>
       )}
     </form>

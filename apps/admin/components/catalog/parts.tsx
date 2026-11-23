@@ -3,12 +3,13 @@ import type { ReactNode } from "react";
 import type { CatalogSite, ProductStatus } from "@dream/contracts";
 import { Icon, type IconKey } from "../icons";
 import {
-  SITE_STATUS_LABEL,
   type HeaderStatus,
   type ListRowStatus,
   type SiteDisplayStatus,
   type SiteStatus,
 } from "../../lib/publication-status";
+import { en } from "../../lib/i18n/messages/en";
+import { Msg } from "../i18n/locale-provider";
 import { cx, StatusPill, type PillTone } from "../ui";
 
 /** Text inputs and selects of the console's forms (same look as the sign-in form). */
@@ -80,8 +81,11 @@ export function PageHeader({
   );
 }
 
+/** Site names are names, never translated (docs/i18n/admin-glossary.md rule 1). */
 export const SITE_SHORT: Readonly<Record<CatalogSite["key"], string>> = {
+  // i18n-ignore: site name
   BV: "Dream Petroleum BV",
+  // i18n-ignore: site name
   CORPORATE: "Corporate",
 };
 
@@ -90,13 +94,19 @@ export function SiteSwitcher({
   sites,
   current,
   hrefFor,
+  label = en.catalog.common.site,
 }: {
   sites: readonly CatalogSite[];
   current: string;
   hrefFor: (site: CatalogSite) => string;
+  /**
+   * ML-12a: the navigation's accessible name (catalog.common.site in the console's language).
+   * Screens not yet localised (Content, ML-12c) keep the English word.
+   */
+  label?: string;
 }) {
   return (
-    <nav aria-label="Site" className="inline-flex rounded-xl border border-line bg-surface-2 p-1">
+    <nav aria-label={label} className="inline-flex rounded-xl border border-line bg-surface-2 p-1">
       {sites.map((s) => {
         const active = s.id === current;
         return (
@@ -113,7 +123,11 @@ export function SiteSwitcher({
           >
             <Icon name="sites" size={15} />
             {SITE_SHORT[s.key]}
-            {!s.canEdit ? <span className="text-xs font-normal text-ink-3">(read)</span> : null}
+            {!s.canEdit ? (
+              <span className="text-xs font-normal text-ink-3">
+                <Msg k="catalog.common.readOnly" />
+              </span>
+            ) : null}
           </Link>
         );
       })}
@@ -121,19 +135,18 @@ export function SiteSwitcher({
   );
 }
 
-const STATUS_PILL: Readonly<Record<ProductStatus, { tone: PillTone; label: string }>> = {
-  DRAFT: { tone: "amber", label: "Draft" },
-  IN_REVIEW: { tone: "petrol", label: "In review" },
-  APPROVED: { tone: "success", label: "Approved" },
-  ARCHIVED: { tone: "neutral", label: "Archived" },
+const STATUS_TONE: Readonly<Record<ProductStatus, PillTone>> = {
+  DRAFT: "amber",
+  IN_REVIEW: "petrol",
+  APPROVED: "success",
+  ARCHIVED: "neutral",
 };
 
 export function ProductStatusPill({ status }: { status: ProductStatus }) {
-  const s = STATUS_PILL[status];
   // Keyed like SiteStatusPill (DP-196): a status change replaces the pill and its text.
   return (
-    <StatusPill key={status} tone={s.tone}>
-      {s.label}
+    <StatusPill key={status} tone={STATUS_TONE[status]}>
+      <Msg k={`catalog.common.productStatus.${status}`} />
     </StatusPill>
   );
 }
@@ -160,13 +173,13 @@ export function SiteStatusPill({ status }: { status: SiteDisplayStatus }) {
         data-site-status="not-listed"
         className="inline-flex items-center whitespace-nowrap rounded-full border border-dashed border-line-strong px-2.5 py-0.5 text-xs font-medium text-ink-3"
       >
-        {SITE_STATUS_LABEL[status]}
+        <Msg k={`catalog.common.siteStatus.${status}`} />
       </span>
     );
   }
   return (
     <StatusPill key={status} tone={SITE_STATUS_TONE[status]}>
-      {SITE_STATUS_LABEL[status]}
+      <Msg k={`catalog.common.siteStatus.${status}`} />
     </StatusPill>
   );
 }
@@ -174,6 +187,7 @@ export function SiteStatusPill({ status }: { status: SiteDisplayStatus }) {
 /** DP-200: short site names for the product list, so a row fits 320 px. */
 const LIST_SITE: Readonly<Record<CatalogSite["key"], string>> = {
   BV: "BV",
+  // i18n-ignore: site name
   CORPORATE: "Corporate",
 };
 
@@ -197,7 +211,9 @@ export function ProductListStatus({
       </span>
       {status.master ? (
         <span key="master" className="inline-flex items-center gap-1.5" data-status="master">
-          <span className="text-xs font-medium text-ink-3">Master</span>
+          <span className="text-xs font-medium text-ink-3">
+            <Msg k="catalog.common.master" />
+          </span>
           <ProductStatusPill status={status.master} />
         </span>
       ) : null}
@@ -234,7 +250,9 @@ export function ProductHeaderStatus({ status }: { status: HeaderStatus }) {
           )}
           data-status="master"
         >
-          <span className="text-xs font-medium text-ink-3">Master</span>
+          <span className="text-xs font-medium text-ink-3">
+            <Msg k="catalog.common.master" />
+          </span>
           <ProductStatusPill status={status.master} />
         </span>
       ) : null}

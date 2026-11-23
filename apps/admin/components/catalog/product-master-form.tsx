@@ -9,7 +9,9 @@ import {
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
+import { formatNumber } from "../../lib/i18n/format";
 import { formHasChanges } from "../../lib/product-tabs";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 import { Field, FIELD, FormMessage, TEXTAREA } from "./parts";
@@ -42,6 +44,8 @@ export function ProductMasterForm({
 }) {
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
+  const locale = useAdminLocale();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
@@ -93,7 +97,7 @@ export function ProductMasterForm({
     if (product) {
       // The provider's notice outlives this form's remount after the refresh (new version).
       setChanged(false);
-      if (notify) notify("Shared product content saved.");
+      if (notify) notify(t("catalog.detail.master.saved"));
       else setSaved(true);
       router.refresh();
     } else {
@@ -105,10 +109,10 @@ export function ProductMasterForm({
     <form onSubmit={submit} onInput={track} onChange={track} noValidate className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
-          label="Product name"
+          label={t("catalog.detail.master.name.label")}
           htmlFor="name"
           className="sm:col-span-2"
-          hint="Shared by every site; a site shows it when its own title is empty."
+          hint={t("catalog.detail.master.name.hint")}
         >
           <input
             id="name"
@@ -124,7 +128,11 @@ export function ProductMasterForm({
             className={FIELD}
           />
         </Field>
-        <Field label="Product code" htmlFor="code" hint="Upper case, e.g. ICC-SYN-6. Unique.">
+        <Field
+          label={t("catalog.detail.master.code.label")}
+          htmlFor="code"
+          hint={t("catalog.detail.master.code.hint")}
+        >
           <input
             id="code"
             name="code"
@@ -139,12 +147,12 @@ export function ProductMasterForm({
           />
         </Field>
         <Field
-          label="URL slug"
+          label={t("catalog.detail.master.slug.label")}
           htmlFor="slug"
           hint={
             product
-              ? "Lower case and hyphens. Unique. A new slug reaches a site when the product is published there again; the BV site then redirects the old address (301)."
-              : "Lower case and hyphens. Unique."
+              ? t("catalog.detail.master.slug.hintEdit")
+              : t("catalog.detail.master.slug.hintNew")
           }
         >
           <input
@@ -164,10 +172,10 @@ export function ProductMasterForm({
           />
         </Field>
         <Field
-          label="Shared summary"
+          label={t("catalog.detail.master.summary.label")}
           htmlFor="summary"
           className="sm:col-span-2"
-          hint="Optional. Used only on sites whose own summary is empty."
+          hint={t("catalog.detail.master.summary.hint")}
         >
           <input
             id="summary"
@@ -180,10 +188,12 @@ export function ProductMasterForm({
           />
         </Field>
         <Field
-          label="Shared description"
+          label={t("catalog.detail.master.description.label")}
           htmlFor="description"
           className="sm:col-span-2"
-          hint={`Optional. Used only on sites whose own description is empty. Plain text, English, up to ${DESCRIPTION_MAX.toLocaleString("en")} characters.`}
+          hint={t("catalog.detail.master.description.hint", {
+            max: formatNumber(DESCRIPTION_MAX, locale),
+          })}
         >
           <textarea
             id="description"
@@ -198,19 +208,23 @@ export function ProductMasterForm({
         </Field>
       </div>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
-      {saved ? <FormMessage kind="success">Shared product content saved.</FormMessage> : null}
+      {saved ? <FormMessage kind="success">{t("catalog.detail.master.saved")}</FormMessage> : null}
       {readOnly ? (
         <p className="flex items-center gap-2 text-sm text-ink-3">
           <Icon name="shield" size={16} />
-          {archived
-            ? "This product is archived. Restore it to edit the master."
-            : "Product masters are edited by the platform product team (product_master:edit)."}
+          {archived ? t("catalog.detail.master.archived") : t("catalog.detail.master.noPermission")}
         </p>
       ) : (
         <div className="flex justify-end">
           <button type="submit" disabled={pending} className={buttonStyles.primary}>
             {pending ? <Spinner /> : <Icon name={product ? "edit" : "plus"} size={17} />}
-            <span>{pending ? "Saving…" : product ? "Save shared content" : "Create product"}</span>
+            <span>
+              {pending
+                ? t("catalog.detail.master.saving")
+                : product
+                  ? t("catalog.detail.master.save")
+                  : t("catalog.detail.master.create")}
+            </span>
           </button>
         </div>
       )}
@@ -221,12 +235,13 @@ export function ProductMasterForm({
 /** Archive or restore a master (product_master:edit). */
 export function ProductStateButton({ product }: { product: Product }) {
   const router = useRouter();
+  const t = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const archive = product.status !== "ARCHIVED";
 
   async function run() {
-    if (archive && !window.confirm("Archive this product? It can be restored later.")) return;
+    if (archive && !window.confirm(t("catalog.detail.master.archiveConfirm"))) return;
     setPending(true);
     setError(null);
     const result = await callCatalog<{ product: Product }>(
@@ -243,7 +258,9 @@ export function ProductStateButton({ product }: { product: Product }) {
     <div className="flex flex-col items-end gap-2">
       <button type="button" onClick={run} disabled={pending} className={buttonStyles.secondary}>
         {pending ? <Spinner /> : <Icon name={archive ? "archive" : "refresh"} size={17} />}
-        <span>{archive ? "Archive" : "Restore"}</span>
+        <span>
+          {archive ? t("catalog.detail.master.archive") : t("catalog.detail.master.restore")}
+        </span>
       </button>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
     </div>

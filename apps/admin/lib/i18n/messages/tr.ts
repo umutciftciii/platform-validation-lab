@@ -5,6 +5,18 @@
  */
 import type { Messages } from "../types";
 
+import { common } from "./catalog/tr/common";
+import { rules } from "./catalog/tr/rules";
+import { issues } from "./catalog/tr/issues";
+import { api } from "./catalog/tr/api";
+import { list } from "./catalog/tr/list";
+import { detail } from "./catalog/tr/detail";
+import { workflow } from "./catalog/tr/workflow";
+import { taxonomy } from "./catalog/tr/taxonomy";
+import { media } from "./catalog/tr/media";
+import { xrefs } from "./catalog/tr/xrefs";
+import { translations } from "./catalog/tr/translations";
+
 export const tr: Messages = {
   common: {
     tryAgain: "Tekrar dene",
@@ -329,5 +341,19 @@ export const tr: Messages = {
     formLabel: "Parolayı sıfırla",
     lengthRule: "12–128 karakter",
     changePassword: "Parolayı değiştir",
+  },
+  /** ML-12a (DP-243): the Products/Catalog area, one file per part (./catalog/tr/). */
+  catalog: {
+    common,
+    rules,
+    issues,
+    api,
+    list,
+    detail,
+    workflow,
+    taxonomy,
+    media,
+    xrefs,
+    translations,
   },
 };

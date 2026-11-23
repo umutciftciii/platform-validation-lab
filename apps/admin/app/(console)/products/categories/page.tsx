@@ -16,6 +16,7 @@ import {
 } from "../../../../components/catalog/translation-editor";
 import { flattenTree } from "../../../../lib/catalog-view";
 import { localeLabel } from "../../../../lib/translations";
+import { getTranslator } from "../../../../lib/i18n/server";
 import {
   PageHeader,
   pickSite,
@@ -27,18 +28,22 @@ import { EmptyState, ErrorState, Panel } from "../../../../components/ui";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Product categories" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("catalog.taxonomy.categoriesPage.title") };
+}
 
 export default async function CategoriesPage({ searchParams }: PageProps<"/products/categories">) {
   await requireStaffSession();
+  const t = await getTranslator();
   const query = await searchParams;
   const context = await serverRead("/api/v1/admin/catalog/context", CatalogContextResponseSchema);
   if (!context.ok || context.data.sites.length === 0) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="folder" title="Product categories" />
-        <EmptyState icon="shield" title="No access to the product catalogue">
-          Your roles do not include reading products on any site.
+        <PageHeader icon="folder" title={t("catalog.taxonomy.categoriesPage.title")} />
+        <EmptyState icon="shield" title={t("catalog.taxonomy.shared.noAccessTitle")}>
+          {t("catalog.taxonomy.shared.noAccessBody")}
         </EmptyState>
       </div>
     );
@@ -68,13 +73,19 @@ export default async function CategoriesPage({ searchParams }: PageProps<"/produ
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="folder"
-        title="Product categories"
-        back={{ href: `/products?site=${sp}`, label: "All products" }}
-        description="Each site has its own category tree, up to three levels. The default category receives new listings that name no category."
+        title={t("catalog.taxonomy.categoriesPage.title")}
+        back={{ href: `/products?site=${sp}`, label: t("catalog.taxonomy.shared.allProducts") }}
+        description={t("catalog.taxonomy.categoriesPage.description")}
       />
       <div className="flex flex-wrap items-center gap-3">
-        <SiteSwitcher sites={sites} current={site.id} hrefFor={hrefFor} />
+        <SiteSwitcher
+          sites={sites}
+          current={site.id}
+          hrefFor={hrefFor}
+          label={t("catalog.common.site")}
+        />
         <LanguageNav
+          label={t("catalog.list.language.label")}
           locales={enabled}
           current={lang}
           sourceLocale={defaultLocale}
@@ -87,34 +98,45 @@ export default async function CategoriesPage({ searchParams }: PageProps<"/produ
         <NoticeProvider>
           <Panel
             id="categories-translation"
-            title={`${localeLabel(lang)} category names on ${SITE_SHORT[site.key]}`}
-            description={`Each name next to its ${localeLabel(defaultLocale)} source. A product page in ${localeLabel(lang)} needs its category name; the tree, slugs and order are the same in every language.`}
+            title={t("catalog.taxonomy.categoriesPage.translationTitle", {
+              language: localeLabel(lang, t),
+              site: SITE_SHORT[site.key],
+            })}
+            description={t("catalog.taxonomy.categoriesPage.translationDescription", {
+              source: localeLabel(defaultLocale, t),
+              language: localeLabel(lang, t),
+            })}
           >
             <SourceToggle locale={defaultLocale}>
               <ul className="divide-y divide-line">
                 {order.map(({ category, depth }) => {
-                  const t = translated.items.find((x) => x.id === category.id);
-                  if (!t) return null;
+                  const item = translated.items.find((x) => x.id === category.id);
+                  if (!item) return null;
                   return (
                     <li
-                      key={t.id}
+                      key={item.id}
                       className="space-y-2 py-4"
                       style={{ paddingLeft: `${depth * 1.25}rem` }}
-                      data-category={t.slug}
+                      data-category={item.slug}
                     >
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="font-medium text-ink">{category.name}</span>
-                        <code className="font-mono text-xs text-ink-3">{t.slug}</code>
-                        <TranslationStatePill state={t.state} />
-                        <span className="text-xs text-ink-3">{`${t.liveProducts} live product${t.liveProducts === 1 ? "" : "s"}`}</span>
+                        <code className="font-mono text-xs text-ink-3">{item.slug}</code>
+                        <TranslationStatePill state={item.state} />
+                        <span className="text-xs text-ink-3">
+                          {t("catalog.taxonomy.categoriesPage.liveProducts", {
+                            count: item.liveProducts,
+                          })}
+                        </span>
                       </div>
                       <CategoryTranslationForm
-                        key={`${t.id}-${t.version}`}
-                        category={t}
+                        key={`${item.id}-${item.version}`}
+                        category={item}
                         locale={lang}
                         enabled={translated.enabled}
                         canEdit={translated.canEdit}
-                        idPrefix={`cat-${lang}-${t.id}`}
+                        // i18n-ignore: DOM element id, not UI text
+                        idPrefix={`cat-${lang}-${item.id}`}
                       />
                     </li>
                   );
@@ -126,12 +148,13 @@ export default async function CategoriesPage({ searchParams }: PageProps<"/produ
       ) : (
         <Panel
           id="categories"
-          title={`Categories on ${SITE_SHORT[site.key]}`}
+          title={t("catalog.taxonomy.categoriesPage.panelTitle", { site: SITE_SHORT[site.key] })}
           description={
             list.ok
-              ? `${list.data.items.length} categor${list.data.items.length === 1 ? "y" : "ies"}`
+              ? t("catalog.taxonomy.categoriesPage.count", { count: list.data.items.length })
               : undefined
           }
+          // i18n-ignore: CSS class list
           bodyClassName="px-0! pb-5! pt-3!"
         >
           {list.ok ? (
@@ -143,8 +166,8 @@ export default async function CategoriesPage({ searchParams }: PageProps<"/produ
               canEdit={site.canEdit}
             />
           ) : (
-            <ErrorState title="The categories could not be loaded">
-              You are not allowed to read this site&apos;s catalogue.
+            <ErrorState title={t("catalog.taxonomy.categoriesPage.loadErrorTitle")}>
+              {t("catalog.taxonomy.categoriesPage.loadErrorBody")}
             </ErrorState>
           )}
         </Panel>

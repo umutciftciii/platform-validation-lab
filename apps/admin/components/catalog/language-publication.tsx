@@ -24,6 +24,7 @@ import {
   missingLabel,
   type LanguagePlanOption,
 } from "../../lib/translations";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner, StatusPill } from "../ui";
 import { FormMessage } from "./parts";
@@ -48,8 +49,9 @@ export function LanguageChoices({
   productId: string;
   siteId: string;
 }) {
+  const t = useT();
   const base = useId();
-  const options = languageOptions(languages);
+  const options = languageOptions(languages, t);
   const [preview, setPreview] = useState<string | null>(null);
   if (languages.length <= 1) return null;
   const toggle = (list: readonly string[], v: string, on: boolean) =>
@@ -59,11 +61,11 @@ export function LanguageChoices({
       className="space-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-line"
       data-languages=""
     >
-      <p className="text-xs font-semibold text-ink">Languages</p>
+      <p className="text-xs font-semibold text-ink">{t("catalog.workflow.languages.title")}</p>
       <ul className="space-y-2.5">
         {languages.map((l) => {
           const o: LanguagePlanOption | undefined = options.find((x) => x.locale === l.locale);
-          const name = localeLabel(l.locale);
+          const name = localeLabel(l.locale, t);
           const isChosen = chosen.includes(l.locale);
           const cid = `${base}-choose-${l.locale}`;
           const rid = `${base}-review-${l.locale}`;
@@ -75,7 +77,7 @@ export function LanguageChoices({
                 <TranslationStatePill state={l.state} />
                 {l.public ? null : (
                   <StatusPill key="np" tone="neutral">
-                    Not public yet
+                    {t("catalog.workflow.languages.notPublic")}
                   </StatusPill>
                 )}
                 <button
@@ -87,13 +89,15 @@ export function LanguageChoices({
                 >
                   <Icon name="eye" size={13} />
                   <span key={String(preview === l.locale)}>
-                    {preview === l.locale ? `Close ${name} preview` : `Preview ${name}`}
+                    {preview === l.locale
+                      ? t("catalog.workflow.languages.closePreview", { name })
+                      : t("catalog.workflow.languages.preview", { name })}
                   </span>
                 </button>
               </div>
               {l.isDefault ? (
                 <p key="default" className="text-ink-3">
-                  Always published from the current texts (the default language).
+                  {t("catalog.workflow.languages.defaultLanguage")}
                 </p>
               ) : (
                 <div key="other" className="space-y-1.5">
@@ -110,22 +114,24 @@ export function LanguageChoices({
                         }}
                         className="mt-0.5 size-4 accent-petrol"
                       />
-                      <span>{`Publish the current ${name} texts with this publication`}</span>
+                      <span>{t("catalog.workflow.languages.publishWith", { name })}</span>
                     </label>
                   ) : null}
                   <p className="text-ink-3">
                     {isChosen
-                      ? `The ${name} texts saved now are published.`
+                      ? t("catalog.workflow.languages.chosen", { name })
                       : l.live
-                        ? `Not chosen: the live ${name} texts stay exactly as published.`
-                        : `Not chosen: no ${name} texts are published.`}
+                        ? t("catalog.workflow.languages.keepLive", { name })
+                        : t("catalog.workflow.languages.noneLive", { name })}
                   </p>
                   {o && o.blockers.length ? (
                     <div key="blockers" className="space-y-0.5">
-                      <p className="font-medium text-danger">{`${name} needs before publishing:`}</p>
+                      <p className="font-medium text-danger">
+                        {t("catalog.workflow.languages.needs", { name })}
+                      </p>
                       <ul className="list-disc pl-5 text-ink-2">
                         {l.requiredMissing.map((u) => (
-                          <li key={u}>{missingLabel(u)}</li>
+                          <li key={u}>{missingLabel(u, t)}</li>
                         ))}
                       </ul>
                     </div>
@@ -134,7 +140,10 @@ export function LanguageChoices({
                     <p key="claims" className="flex items-start gap-1.5 text-amber-ink">
                       <Icon name="alert" size={13} className="mt-px shrink-0" />
                       <span>
-                        {`The ${name} text mentions ${l.claims.map((c) => c.label).join(", ")}: publish it only with a certificate or source document.`}
+                        {t("catalog.workflow.languages.claims", {
+                          name,
+                          claims: l.claims.map((c) => c.label).join(", "),
+                        })}
                       </span>
                     </p>
                   ) : null}
@@ -154,9 +163,7 @@ export function LanguageChoices({
                         }
                         className="mt-0.5 size-4 accent-petrol"
                       />
-                      <span>
-                        {`I checked the ${name} text by hand for claims that need a certificate or source document (SAF, pharmaceutical, food contact, CTL, approvals, environmental claims). The automatic check knows English words only.`}
-                      </span>
+                      <span>{t("catalog.workflow.languages.manualCheck", { name })}</span>
                     </label>
                   ) : null}
                 </div>
@@ -178,32 +185,33 @@ export function LanguageChoices({
 }
 
 function SnapshotView({ s }: { s: PublishedSnapshot }) {
+  const t = useT();
   return (
     <dl className="space-y-1.5 break-words">
       <div>
-        <dt className="text-ink-3">Name</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.name")}</dt>
         <dd className="text-ink">{s.name}</dd>
       </div>
       <div>
-        <dt className="text-ink-3">Summary</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.summary")}</dt>
         <dd className="whitespace-pre-line text-ink-2">{s.summary ?? "—"}</dd>
       </div>
       <div>
-        <dt className="text-ink-3">Description</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.description")}</dt>
         <dd className="line-clamp-6 whitespace-pre-line text-ink-2">{s.description ?? "—"}</dd>
       </div>
       <div>
-        <dt className="text-ink-3">Category</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.category")}</dt>
         <dd className="text-ink-2">{s.category.name}</dd>
       </div>
       <div>
-        <dt className="text-ink-3">Specification names</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.specNames")}</dt>
         <dd className="text-ink-2">
           {s.specs.length ? s.specs.map((x) => x.name).join(" · ") : "—"}
         </dd>
       </div>
       <div>
-        <dt className="text-ink-3">Image alt texts</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.imageAlts")}</dt>
         <dd className="text-ink-2">
           {s.images
             .filter((i) => i.altText)
@@ -212,7 +220,7 @@ function SnapshotView({ s }: { s: PublishedSnapshot }) {
         </dd>
       </div>
       <div>
-        <dt className="text-ink-3">SEO title / description</dt>
+        <dt className="text-ink-3">{t("catalog.workflow.snapshot.seo")}</dt>
         <dd className="text-ink-2">{`${s.seo?.title ?? "—"} / ${s.seo?.description ?? "—"}`}</dd>
       </div>
     </dl>
@@ -233,7 +241,8 @@ function LanguagePreview({
     | { kind: "error"; message: string }
     | { kind: "ok"; data: PublicationPreviewResponse }
   >({ kind: "loading" });
-  const name = localeLabel(locale);
+  const t = useT();
+  const name = localeLabel(locale, t);
   // Read once when opened (the panel remounts each time it is opened).
   useEffect(() => {
     let live = true;
@@ -250,18 +259,20 @@ function LanguagePreview({
   return (
     <section
       lang={locale}
-      aria-label={`${name} preview`}
+      aria-label={t("catalog.workflow.languagePreview.aria", { name })}
       className="space-y-2 rounded-lg border border-line bg-surface-2/50 p-3"
       data-language-preview={locale}
     >
       <p className="flex flex-wrap items-center gap-2 font-semibold text-ink">
         <Icon name="eye" size={13} />
-        <span>{`Preview · ${name} (${localeShort(locale)})`}</span>
+        <span>
+          {t("catalog.workflow.languagePreview.title", { name, short: localeShort(locale) })}
+        </span>
       </p>
       {state.kind === "loading" ? (
         <p key="loading" className="flex items-center gap-2 text-ink-3">
           <Spinner />
-          <span>Loading…</span>
+          <span>{t("catalog.workflow.languagePreview.loading")}</span>
         </p>
       ) : state.kind === "error" ? (
         <FormMessage key="error" kind="error">
@@ -271,42 +282,48 @@ function LanguagePreview({
         <div key="ok" className="space-y-2">
           {state.data.public ? null : (
             <p key="np" className="text-ink-3">
-              {`${name} is not public: visitors cannot open these pages yet.`}
+              {t("catalog.workflow.languagePreview.notPublic", { name })}
             </p>
           )}
           {state.data.claimScan === "MANUAL" ? (
             <p key="manual" className="text-amber-ink">
-              {`No reviewed ${name} claim check exists yet: read the text for claims yourself.`}
+              {t("catalog.workflow.languagePreview.manual", { name })}
             </p>
           ) : null}
           {state.data.claims.length ? (
             <p key="claims" className="text-amber-ink">
-              {`Found: ${state.data.claims.map((c) => c.label).join(", ")}.`}
+              {t("catalog.workflow.languagePreview.found", {
+                claims: state.data.claims.map((c) => c.label).join(", "),
+              })}
             </p>
           ) : null}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="type-eyebrow text-ink-3">Next publication</p>
+              <p className="type-eyebrow text-ink-3">
+                {t("catalog.workflow.languagePreview.next")}
+              </p>
               {state.data.next ? (
                 <SnapshotView key="next" s={state.data.next} />
               ) : (
                 <div key="next-missing" className="text-ink-2">
-                  <p>{`Not publishable in ${name} yet:`}</p>
+                  <p>{t("catalog.workflow.languagePreview.notPublishable", { name })}</p>
                   <ul className="list-disc pl-5">
                     {state.data.requiredMissing.map((u) => (
-                      <li key={u}>{missingLabel(u)}</li>
+                      <li key={u}>{missingLabel(u, t)}</li>
                     ))}
                   </ul>
                 </div>
               )}
             </div>
             <div className="space-y-1">
-              <p className="type-eyebrow text-ink-3">Live now</p>
+              <p className="type-eyebrow text-ink-3">
+                {t("catalog.workflow.languagePreview.live")}
+              </p>
               {state.data.live ? (
                 <SnapshotView key="live" s={state.data.live} />
               ) : (
                 <p key="live-none" className="text-ink-3">
-                  {`Nothing live in ${name}.`}
+                  {t("catalog.workflow.languagePreview.nothingLive", { name })}
                 </p>
               )}
             </div>

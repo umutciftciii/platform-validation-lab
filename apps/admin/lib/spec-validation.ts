@@ -21,6 +21,8 @@ import {
   type ValidationIssue,
   type ValueForCheck,
 } from "@dream/contracts";
+import { en } from "./i18n/messages/en";
+import { interpolate } from "./i18n/translate";
 
 export const SPEC_BASES: readonly SpecValueBasis[] = ["SPECIFICATION", "TYPICAL"];
 
@@ -116,12 +118,18 @@ export function liveValidation(
       if (!d?.on) continue;
       const v = draftForCheck(def, d);
       if (v === "empty" || v === "not_a_number") {
-        const what = basis === "TYPICAL" ? `${def.name} (typical)` : def.name;
+        // ML-12a: built from the English templates (the API's language); lib/catalog-issues.ts
+        // shows it in the console's language like every other issue.
+        const name =
+          basis === "TYPICAL"
+            ? interpolate(en.catalog.issues.typical, { name: def.name })
+            : def.name;
+        const spec = en.catalog.issues.spec;
         shape.push({
           severity: "BLOCKING",
           code: "invalid_type",
           target: specTarget(def.key, basis),
-          message: `${what}: ${v === "empty" ? "enter a value or remove it" : "enter a number"}.`,
+          message: interpolate(v === "empty" ? spec.enter_value : spec.enter_number, { name }),
         });
         continue;
       }

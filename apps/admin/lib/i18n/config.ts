@@ -53,6 +53,22 @@ export function localeCookie(locale: AdminLocale, secure: boolean): string {
 }
 
 /**
+ * ML-12a: the console language in the browser, for plain modules that build a message outside a
+ * component (lib/catalog-client.ts). Reads the same cookie the server read for this page, so it
+ * always equals the language the page was rendered in (a change reloads the page). English on
+ * the server and in tests.
+ */
+export function browserAdminLocale(): AdminLocale {
+  if (typeof document === "undefined") return DEFAULT_ADMIN_LOCALE;
+  const prefix = `${ADMIN_LOCALE_COOKIE}=`;
+  const raw = document.cookie
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(prefix));
+  return parseAdminLocale(raw?.slice(prefix.length));
+}
+
+/**
  * Stores the choice and reloads the page (browser only). The full reload re-renders the server
  * and client texts together, so no mixed-language or mismatched hydration can occur.
  */

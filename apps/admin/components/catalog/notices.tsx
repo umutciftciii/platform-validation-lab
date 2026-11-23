@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { cx } from "../ui";
 
@@ -58,6 +59,7 @@ export function NoticeScope({ origin, children }: { origin: NoticeOrigin; childr
 }
 
 export function NoticeProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const [notices, setNotices] = useState<Notice[]>([]);
   const seq = useRef(0);
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
@@ -139,7 +141,7 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
               className="-m-1 rounded-md p-1 text-ink-3 hover:bg-surface-2 hover:text-ink"
             >
               <Icon name="close" size={15} />
-              <span className="sr-only">Dismiss</span>
+              <span className="sr-only">{t("catalog.list.notices.dismiss")}</span>
             </button>
           </div>
         ))}

@@ -67,32 +67,44 @@ import {
   headerStatus,
   siteDisplayStatus,
 } from "../../../../lib/publication-status";
+import { dateTimeFormat } from "../../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
 import { serverRead } from "../../../../lib/server-api";
 import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
 import { requireStaffSession } from "../../../../lib/server-session";
 
 const CATALOG = "/api/v1/admin/catalog";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DATE_TIME = new Intl.DateTimeFormat("en-GB", {
+const DATE_TIME: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
+  // i18n-ignore: IANA time zone, not UI text
   timeZone: "Europe/Amsterdam",
-});
+};
 
-export const metadata: Metadata = { title: "Product" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("catalog.detail.page.metaTitle") };
+}
 
 export default async function ProductPage({ params, searchParams }: PageProps<"/products/[id]">) {
   await requireStaffSession();
-  const [{ id }, query] = await Promise.all([params, searchParams]);
+  const [{ id }, query, t, locale] = await Promise.all([
+    params,
+    searchParams,
+    getTranslator(),
+    getAdminLocale(),
+  ]);
+  const formatDate = (iso: string) => dateTimeFormat(locale, DATE_TIME).format(new Date(iso));
   if (!UUID.test(id)) notFound();
   const context = await serverRead(`${CATALOG}/context`, CatalogContextResponseSchema);
   if (!context.ok || context.data.sites.length === 0) {
     return (
-      <EmptyState icon="shield" title="No access to the product catalogue">
-        Your roles do not include reading products on any site.
+      <EmptyState icon="shield" title={t("catalog.detail.page.noAccess.title")}>
+        {t("catalog.detail.page.noAccess.text")}
       </EmptyState>
     );
   }
@@ -112,13 +124,13 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
   ]);
   if (!detail.ok && detail.status === 404) notFound();
   const sp = siteParam(site);
-  const back = { href: `/products?site=${sp}`, label: "All products" };
+  const back = { href: `/products?site=${sp}`, label: t("catalog.detail.page.back") };
   if (!detail.ok) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="products" title="Product" back={back} />
-        <ErrorState title="This product could not be loaded">
-          You are not allowed to read products on this site.
+        <PageHeader icon="products" title={t("catalog.detail.page.title")} back={back} />
+        <ErrorState title={t("catalog.detail.page.loadError.title")}>
+          {t("catalog.detail.page.loadError.text")}
         </ErrorState>
       </div>
     );
@@ -137,7 +149,11 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
     .filter((d) => d.status === "ACTIVE" && d.activeRevision)
     .map((d) => ({
       revisionId: d.activeRevision!.id,
-      label: `${d.type} · ${d.title} · revision ${d.activeRevision!.revisionNumber}`,
+      label: t("catalog.detail.page.xrefSource", {
+        type: d.type,
+        title: d.title,
+        revision: d.activeRevision!.revisionNumber,
+      }),
     }));
   const siteKeys = Object.fromEntries(sites.map((s) => [s.id, s.key]));
   // DP-197: Draft / Published / Unpublished per site (live = published and shown);
@@ -198,12 +214,12 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
   const languageStates = Object.fromEntries(languages.map((l) => [l.locale, l.state]));
   /** The editors of one other language on the Content tab. */
   const contentPanel = (locale: string) => {
-    const t = translations.get(locale) ?? null;
-    const name = localeLabel(locale);
-    if (!t) {
+    const data = translations.get(locale) ?? null;
+    const name = localeLabel(locale, t);
+    if (!data) {
       return (
-        <ErrorState title={`The ${name} texts could not be loaded`}>
-          Try again in a moment.
+        <ErrorState title={t("catalog.detail.page.translation.loadError", { language: name })}>
+          {t("catalog.detail.page.tryAgain")}
         </ErrorState>
       );
     }
@@ -211,56 +227,75 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
     return (
       <Panel
         id={`listing-${locale}`}
-        title={`${name} texts on ${SITE_SHORT[site.key]}`}
-        description={`Everything a visitor reads about this product in ${name}, next to its English source. Codes, values, units, standards and brands stay as they are in every language.`}
+        title={t("catalog.detail.page.translation.title", {
+          language: name,
+          site: SITE_SHORT[site.key],
+        })}
+        description={t("catalog.detail.page.translation.description", { language: name })}
       >
         <SourceToggle locale={defaultLocale}>
           <div className="space-y-4">
-            <LanguageSummary data={t} />
-            <TranslationSection title="Product text" state={t.listing?.state ?? null}>
-              <KeepUnsaved resetKey={`tr-${locale}-listing-${t.listing?.version ?? 0}`}>
-                <ListingTranslationForm productId={product.id} data={t} canEdit={site.canEdit} />
+            <LanguageSummary data={data} />
+            <TranslationSection
+              title={t("catalog.detail.page.translation.productText")}
+              state={data.listing?.state ?? null}
+            >
+              <KeepUnsaved
+                // i18n-ignore: remount key, not UI text
+                resetKey={`tr-${locale}-listing-${data.listing?.version ?? 0}`}
+              >
+                <ListingTranslationForm productId={product.id} data={data} canEdit={site.canEdit} />
               </KeepUnsaved>
             </TranslationSection>
-            {t.category ? (
+            {data.category ? (
               <TranslationSection
-                title="Category"
-                state={t.category.state}
-                description="The name of this product's category on the site; shared by every product in it."
+                title={t("catalog.detail.page.translation.category")}
+                state={data.category.state}
+                description={t("catalog.detail.page.translation.categoryDescription")}
               >
-                <KeepUnsaved resetKey={`tr-${locale}-category-${v(t.category)}`}>
+                <KeepUnsaved
+                  // i18n-ignore: remount key, not UI text
+                  resetKey={`tr-${locale}-category-${v(data.category)}`}
+                >
                   <CategoryTranslationForm
-                    category={t.category}
+                    category={data.category}
                     locale={locale}
-                    enabled={t.enabled}
+                    enabled={data.enabled}
                     canEdit={site.canEdit}
+                    // i18n-ignore: element id prefix, not UI text
                     idPrefix={`tr-${locale}-category`}
                   />
                 </KeepUnsaved>
               </TranslationSection>
             ) : null}
             <TranslationSection
-              title="Specification names"
+              title={t("catalog.detail.page.translation.specNames")}
               state={null}
-              description="The names of this product's technical values (the values themselves are the same in every language)."
+              description={t("catalog.detail.page.translation.specNamesDescription")}
             >
-              <KeepUnsaved resetKey={`tr-${locale}-specs-${t.specs.map(v).join(".")}`}>
+              <KeepUnsaved
+                // i18n-ignore: remount key, not UI text
+                resetKey={`tr-${locale}-specs-${data.specs.map(v).join(".")}`}
+              >
                 <SpecNamesTranslationForm
-                  rows={t.specs.map((s) => ({ ...s, id: s.definitionId }))}
+                  rows={data.specs.map((s) => ({ ...s, id: s.definitionId }))}
                   locale={locale}
-                  enabled={t.enabled}
+                  enabled={data.enabled}
                   canEdit={canEditMaster && !archived}
                   idPrefix={`tr-${locale}`}
                 />
               </KeepUnsaved>
             </TranslationSection>
             <TranslationSection
-              title="Image alt texts"
+              title={t("catalog.detail.page.translation.imageAlts")}
               state={null}
-              description="What a screen reader says for each image; the images themselves are shared."
+              description={t("catalog.detail.page.translation.imageAltsDescription")}
             >
-              <KeepUnsaved resetKey={`tr-${locale}-alts-${t.images.map(v).join(".")}`}>
-                <ImageAltTranslationForm data={t} canEdit={canEditMaster && !archived} />
+              <KeepUnsaved
+                // i18n-ignore: remount key, not UI text
+                resetKey={`tr-${locale}-alts-${data.images.map(v).join(".")}`}
+              >
+                <ImageAltTranslationForm data={data} canEdit={canEditMaster && !archived} />
               </KeepUnsaved>
             </TranslationSection>
           </div>
@@ -270,20 +305,29 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
   };
   /** The SEO texts of one other language on the SEO tab. */
   const seoPanel = (locale: string) => {
-    const t = translations.get(locale) ?? null;
-    const name = localeLabel(locale);
-    if (!t) {
+    const data = translations.get(locale) ?? null;
+    const name = localeLabel(locale, t);
+    if (!data) {
       return (
-        <ErrorState title={`The ${name} SEO texts could not be loaded`}>
-          Try again in a moment.
+        <ErrorState title={t("catalog.detail.page.translation.seoLoadError", { language: name })}>
+          {t("catalog.detail.page.tryAgain")}
         </ErrorState>
       );
     }
     return (
-      <Panel id={`seo-${locale}`} title={`${name} SEO on ${SITE_SHORT[site.key]}`}>
+      <Panel
+        id={`seo-${locale}`}
+        title={t("catalog.detail.page.translation.seoTitle", {
+          language: name,
+          site: SITE_SHORT[site.key],
+        })}
+      >
         <SourceToggle locale={defaultLocale}>
-          <KeepUnsaved resetKey={`tr-${locale}-seo-${t.listing?.version ?? 0}`}>
-            <ListingSeoTranslationForm productId={product.id} data={t} canEdit={site.canEdit} />
+          <KeepUnsaved
+            // i18n-ignore: remount key, not UI text
+            resetKey={`tr-${locale}-seo-${data.listing?.version ?? 0}`}
+          >
+            <ListingSeoTranslationForm productId={product.id} data={data} canEdit={site.canEdit} />
           </KeepUnsaved>
         </SourceToggle>
       </Panel>
@@ -299,7 +343,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
           back={back}
           description={
             <span className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="sr-only">SKU </span>
+              <span className="sr-only">{`${t("catalog.detail.page.sku")} `}</span>
               <span className="tabular rounded-md bg-surface-2 px-2 py-0.5 font-mono text-ink-2 ring-1 ring-line">
                 {product.code}
               </span>
@@ -310,7 +354,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <ProductHeaderStatus status={{ sites: [], master: product.status }} />
               )}
               <span className="text-ink-3">
-                Version {product.version} · changed {DATE_TIME.format(new Date(product.updatedAt))}
+                {t("catalog.detail.page.versionChanged", {
+                  version: product.version,
+                  date: formatDate(product.updatedAt),
+                })}
               </span>
             </span>
           }
@@ -327,7 +374,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             publication: {
               ...(blockedSites > 0
                 ? {
-                    alert: `publishing blocked on ${blockedSites} site${blockedSites === 1 ? "" : "s"}`,
+                    alert: t("catalog.detail.page.blocked", { count: blockedSites }),
                   }
                 : {}),
             },
@@ -339,10 +386,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <div id="listing" className="scroll-mt-32 space-y-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <ProductSiteSwitcher sites={sites} current={site.id} />
-                <p className="text-sm text-ink-3">Choose the site whose product text you edit.</p>
+                <p className="text-sm text-ink-3">{t("catalog.detail.page.content.chooseSite")}</p>
               </div>
               <LanguageTabs
-                label="Language of the product text"
+                label={t("catalog.detail.page.content.language")}
                 locales={tabLocales}
                 initial={lang}
                 states={languageStates}
@@ -351,11 +398,15 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   [defaultLocale]: (
                     <Panel
                       id="listing-panel"
-                      title={`Product text on ${SITE_SHORT[site.key]}`}
+                      title={t("catalog.detail.page.content.title", { site: SITE_SHORT[site.key] })}
                       description={
                         listing
-                          ? `What the ${SITE_SHORT[site.key]} product page shows. Version ${listing.version} · changed ${DATE_TIME.format(new Date(listing.updatedAt))}`
-                          : "This site does not list the product yet."
+                          ? t("catalog.detail.page.content.description", {
+                              site: SITE_SHORT[site.key],
+                              version: listing.version,
+                              date: formatDate(listing.updatedAt),
+                            })
+                          : t("catalog.detail.page.content.notListed")
                       }
                       action={
                         !listing ? (
@@ -368,18 +419,17 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                       {categories.ok && categories.data.items.length === 0 && !listing ? (
                         <EmptyState
                           icon="folder"
-                          title="No categories on this site"
+                          title={t("catalog.detail.page.content.noCategories.title")}
                           {...(site.canEdit
                             ? {
                                 action: {
                                   href: `/products/categories?site=${sp}`,
-                                  label: "Create categories",
+                                  label: t("catalog.detail.page.content.noCategories.action"),
                                 },
                               }
                             : {})}
                         >
-                          A product is listed in one of the site&apos;s categories. Create the first
-                          category to list products here.
+                          {t("catalog.detail.page.content.noCategories.text")}
                         </EmptyState>
                       ) : (
                         // DP-209: kept while it has unsaved edits (an SEO save also raises the
@@ -406,16 +456,15 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 }}
               />
               <p className="px-1 text-xs text-ink-3">
-                Saving never publishes, unpublishes or changes the live site. Preview and publish on
-                the{" "}
+                {t("catalog.detail.page.content.savingNote.before")}{" "}
                 <TabLink
                   tab="publication"
                   section="publication"
                   className="font-medium text-petrol-strong underline underline-offset-2"
                 >
-                  Publication
+                  {t("catalog.detail.page.content.savingNote.link")}
                 </TabLink>{" "}
-                tab.
+                {t("catalog.detail.page.content.savingNote.after")}
               </p>
             </div>
 
@@ -426,11 +475,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
               <summary className="flex cursor-pointer list-none items-start justify-between gap-3 rounded-2xl px-5 py-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-petrol/40 sm:px-6 [&::-webkit-details-marker]:hidden">
                 <span className="min-w-0">
                   <span className="type-display block text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink">
-                    Shared product content
+                    {t("catalog.detail.page.content.shared.title")}
                   </span>
                   <span className="mt-0.5 block text-sm text-ink-3">
-                    Name, code, URL slug and a shared summary and description, the same for every
-                    site. Not published as such: a site shows its own text above.
+                    {t("catalog.detail.page.content.shared.description")}
                   </span>
                 </span>
                 <Icon
@@ -442,11 +490,7 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
               <div className="space-y-4 border-t border-line px-5 pb-5 pt-4 sm:px-6">
                 <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2 ring-1 ring-inset ring-line">
                   <Icon name="eye" size={16} className="mt-0.5 shrink-0 text-ink-3" />
-                  <span>
-                    The shared summary and description appear on a site only where that site&apos;s
-                    own field is empty, and only after the site is published again. Editing them
-                    never changes a site&apos;s own text.
-                  </span>
+                  <span>{t("catalog.detail.page.content.shared.note")}</span>
                 </p>
                 <KeepUnsaved resetKey={`${product.id}-${product.version}`}>
                   <ProductMasterForm product={product} canEdit={canEditMaster} siteParam={sp} />
@@ -460,12 +504,15 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <Panel
               id="specs"
               className="scroll-mt-32"
-              title="Technical specifications"
-              description="Platform-wide values of this product master; never copied per site. The validation report checks the values as you type."
+              title={t("catalog.detail.page.specs.title")}
+              description={t("catalog.detail.page.specs.description")}
               action={
                 specs.ok ? (
                   <span className="text-xs text-ink-3">
-                    {specs.data.values.length} of {specs.data.definitions.length} filled
+                    {t("catalog.detail.page.specs.filled", {
+                      filled: specs.data.values.length,
+                      total: specs.data.definitions.length,
+                    })}
                   </span>
                 ) : undefined
               }
@@ -480,8 +527,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   />
                 </KeepUnsaved>
               ) : (
-                <ErrorState title="The specifications could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.specs.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>
@@ -489,9 +536,13 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <Panel
               id="cross-references"
               className="scroll-mt-32"
-              title="Cross-references"
-              description="Other brands' products related to this product master: similar, or verified against a source document."
-              action={<span className="text-xs text-ink-3">{liveXrefs} active</span>}
+              title={t("catalog.detail.page.xrefs.title")}
+              description={t("catalog.detail.page.xrefs.description")}
+              action={
+                <span className="text-xs text-ink-3">
+                  {t("catalog.detail.page.xrefs.active", { n: liveXrefs })}
+                </span>
+              }
             >
               {xrefs.ok ? (
                 <CrossReferenceManager
@@ -504,8 +555,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   sources={xrefSources}
                 />
               ) : (
-                <ErrorState title="The cross-references could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.xrefs.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>
@@ -513,19 +564,21 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <Panel
               id="research"
               className="scroll-mt-32"
-              title="Research notes"
-              description="What the research found for this product on this site: questions, missing documents, conflicts, claim risks, values held for verification and sources. Never published."
+              title={t("catalog.detail.page.research.title")}
+              description={t("catalog.detail.page.research.description")}
               action={
                 research?.ok ? (
                   <span className="text-xs text-ink-3">
-                    {research.data.proposal.reviewData.items.length} items
+                    {t("catalog.detail.page.research.items", {
+                      n: research.data.proposal.reviewData.items.length,
+                    })}
                   </span>
                 ) : undefined
               }
             >
               {!siteProposal ? (
                 <p className="text-sm text-ink-3">
-                  There is no research proposal for this product on {SITE_SHORT[site.key]}.
+                  {t("catalog.detail.page.research.none", { site: SITE_SHORT[site.key] })}
                 </p>
               ) : research?.ok ? (
                 <ResearchNotes
@@ -533,8 +586,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   reviewHref={reviewHref(siteProposal.id, sp, "verification")}
                 />
               ) : (
-                <ErrorState title="The research notes could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.research.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>
@@ -545,8 +598,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <Panel
               id="images"
               className="scroll-mt-32"
-              title="Product images"
-              description="One cover and a gallery. Originals stay private; live sites get metadata-free WebP copies of published images only."
+              title={t("catalog.detail.page.images.title")}
+              description={t("catalog.detail.page.images.description")}
             >
               {images.ok ? (
                 <ImageManager
@@ -557,8 +610,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   archived={archived}
                 />
               ) : (
-                <ErrorState title="The images could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.images.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>
@@ -566,8 +619,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <Panel
               id="documents"
               className="scroll-mt-32"
-              title="Technical documents"
-              description="TDS, SDS, COA and other PDFs of this product master. Every upload is a new, unchangeable revision."
+              title={t("catalog.detail.page.documents.title")}
+              description={t("catalog.detail.page.documents.description")}
             >
               {documents.ok ? (
                 <DocumentManager
@@ -579,8 +632,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   languages={documents.data.languages}
                 />
               ) : (
-                <ErrorState title="The documents could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.documents.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>
@@ -591,10 +644,10 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
             <div id="seo" className="scroll-mt-32 space-y-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <ProductSiteSwitcher sites={sites} current={site.id} />
-                <p className="text-sm text-ink-3">Choose the site whose SEO you edit.</p>
+                <p className="text-sm text-ink-3">{t("catalog.detail.page.seo.chooseSite")}</p>
               </div>
               <LanguageTabs
-                label="Language of the SEO texts"
+                label={t("catalog.detail.page.seo.language")}
                 locales={tabLocales}
                 initial={lang}
                 states={Object.fromEntries(
@@ -608,24 +661,29 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                   [defaultLocale]: (
                     <Panel
                       id="seo-panel"
-                      title={`SEO on ${SITE_SHORT[site.key]}`}
+                      title={t("catalog.detail.page.seo.title", { site: SITE_SHORT[site.key] })}
                       description={
                         site.key === "BV"
-                          ? "Search result and link preview of the product page. Saved on the site listing; the site shows it after the next publication. A product that is not published or not shown is never indexed."
-                          : "Only the BV site uses product SEO for now."
+                          ? t("catalog.detail.page.seo.descriptionBv")
+                          : t("catalog.detail.page.seo.descriptionOther")
                       }
                       action={
                         currentSite?.outdated.listing ? (
-                          <StatusPill tone="amber">Changes not published</StatusPill>
+                          <StatusPill tone="amber">
+                            {t("catalog.detail.page.seo.outdated")}
+                          </StatusPill>
                         ) : undefined
                       }
                     >
                       {!listing ? (
                         <p className="text-sm text-ink-3">
-                          List the product on this site first (Content tab).
+                          {t("catalog.detail.page.seo.listFirst")}
                         </p>
                       ) : (
-                        <KeepUnsaved resetKey={`seo-${site.id}-${listing.version}`}>
+                        <KeepUnsaved
+                          // i18n-ignore: remount key, not UI text
+                          resetKey={`seo-${site.id}-${listing.version}`}
+                        >
                           <ProductSeoForm
                             productId={product.id}
                             siteId={site.id}
@@ -640,7 +698,11 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                               .map((i) => ({
                                 id: i.id,
                                 isCover: i.isCover,
-                                label: `${i.isCover ? "Cover · " : ""}${i.altText ?? i.originalFilename}`,
+                                label: i.isCover
+                                  ? t("catalog.detail.page.seo.coverOption", {
+                                      name: i.altText ?? i.originalFilename,
+                                    })
+                                  : (i.altText ?? i.originalFilename),
                               }))}
                             siteSeo={siteSeo}
                             origin={site.key === "BV" ? bvPublicOrigin() : null}
@@ -661,8 +723,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <Panel
                   id="publication"
                   className="scroll-mt-32 xl:col-span-3"
-                  title="Publication"
-                  description="Preview, publish and unpublish per site. A live site shows the published snapshot, never the current draft; every blocker says where it is fixed."
+                  title={t("catalog.detail.page.publication.title")}
+                  description={t("catalog.detail.page.publication.description")}
                 >
                   <PublicationPanel
                     data={workflow.data}
@@ -673,8 +735,8 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 <Panel
                   id="review"
                   className="scroll-mt-32 xl:col-span-2"
-                  title="Second-person review"
-                  description="Optional when you can publish directly. Publishers without approval rights publish an approved master only."
+                  title={t("catalog.detail.page.review.title")}
+                  description={t("catalog.detail.page.review.description")}
                   action={
                     <ProductHeaderStatus status={{ sites: [], master: workflow.data.status }} />
                   }
@@ -685,22 +747,22 @@ export default async function ProductPage({ params, searchParams }: PageProps<"/
                 </Panel>
               </div>
             ) : (
-              <ErrorState title="The publication status could not be loaded">
-                Try again in a moment.
+              <ErrorState title={t("catalog.detail.page.publication.loadError")}>
+                {t("catalog.detail.page.tryAgain")}
               </ErrorState>
             )}
 
             <Panel
               id="history"
               className="scroll-mt-32"
-              title="Review and publication history"
-              description="Every submission, decision and publication, newest first. It cannot be edited."
+              title={t("catalog.detail.page.history.title")}
+              description={t("catalog.detail.page.history.description")}
             >
               {workflow.ok ? (
                 <ReviewHistory events={workflow.data.history} siteKeys={siteKeys} />
               ) : (
-                <ErrorState title="The history could not be loaded">
-                  Try again in a moment.
+                <ErrorState title={t("catalog.detail.page.history.loadError")}>
+                  {t("catalog.detail.page.tryAgain")}
                 </ErrorState>
               )}
             </Panel>

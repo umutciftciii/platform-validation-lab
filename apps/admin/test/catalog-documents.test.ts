@@ -2,6 +2,7 @@
 // proxy keep their limits), the browser-side checks, messages and wording of the documents tab.
 import { randomBytes } from "node:crypto";
 import { DOCUMENT_ACCESS_POLICIES, DOCUMENT_SITE_STATES } from "@dream/contracts";
+import { createTranslator } from "../lib/i18n/translate";
 import { describe, expect, it } from "vitest";
 import type { ProxyConfig } from "../lib/api-proxy";
 import { messageForIssues } from "../lib/catalog-client";
@@ -11,9 +12,9 @@ import {
   documentLanguageOptions,
   documentPrecheck,
   documentUploadMessage,
-  POLICY_TEXT,
+  policyText,
   revisionHref,
-  SITE_STATE_TEXT,
+  siteStateText,
 } from "../components/catalog/document-manager";
 
 const KEY = randomBytes(32).toString("base64url");
@@ -166,9 +167,9 @@ describe("documents tab helpers", () => {
   });
 
   it("has wording for every policy and site state, and same-origin file links", () => {
-    for (const p of DOCUMENT_ACCESS_POLICIES) expect(POLICY_TEXT[p].label).toBeTruthy();
-    for (const s of DOCUMENT_SITE_STATES) expect(SITE_STATE_TEXT[s].label).toBeTruthy();
-    expect(POLICY_TEXT.MEMBERS_ONLY.help).toMatch(/not downloadable/);
+    for (const p of DOCUMENT_ACCESS_POLICIES) expect(policyText(p).label).toBeTruthy();
+    for (const s of DOCUMENT_SITE_STATES) expect(siteStateText(s).label).toBeTruthy();
+    expect(policyText("MEMBERS_ONLY").help).toMatch(/not downloadable/);
     expect(revisionHref(DOC, "inline")).toBe(
       `/api/v1/admin/catalog/document-revisions/${DOC}/inline`,
     );
@@ -195,6 +196,20 @@ describe("ML-9 document language (admin)", () => {
   });
 
   it("has wording for the language state of every site", () => {
-    expect(SITE_STATE_TEXT.language_not_public.label).toBe("Waits for its language to be public");
+    expect(siteStateText("language_not_public").label).toBe("Waits for its language to be public");
+  });
+});
+
+describe("ML-12a: document wording in Turkish", () => {
+  const tr = createTranslator("tr");
+  it("translates policies, site states, upload messages and language names; codes stay", () => {
+    expect(policyText("PUBLIC", tr).label).toBe("Herkese açık");
+    expect(siteStateText("language_not_public", tr).label).not.toBe(
+      siteStateText("language_not_public").label,
+    );
+    expect(documentUploadMessage(413, null, tr)).toMatch(/20 MB/);
+    expect(documentUploadMessage(413, null, tr)).not.toBe(documentUploadMessage(413, null));
+    expect(documentLanguageName("nl", "tr")).toBe("Felemenkçe (nl)");
+    expect(documentLanguageName("zz-Unknowntag", "tr")).toBe("zz-Unknowntag");
   });
 });

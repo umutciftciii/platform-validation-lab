@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { callCatalog, type FieldIssue } from "../../lib/catalog-client";
 import { flattenTree, type TreeRow } from "../../lib/catalog-view";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill } from "../ui";
 import { Field, FIELD, FormMessage } from "./parts";
@@ -46,10 +47,11 @@ function CategoryFields({
 }) {
   const [slug, setSlug] = useState(category?.slug ?? "");
   const [touched, setTouched] = useState(Boolean(category));
+  const t = useT();
   const invalid = (path: string) => issues.some((i) => i.path === path) || undefined;
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <Field label="Name" htmlFor={`${idPrefix}-name`}>
+      <Field label={t("catalog.taxonomy.shared.name")} htmlFor={`${idPrefix}-name`}>
         <input
           id={`${idPrefix}-name`}
           name="name"
@@ -63,7 +65,11 @@ function CategoryFields({
           className={FIELD}
         />
       </Field>
-      <Field label="Slug" htmlFor={`${idPrefix}-slug`} hint="Unique on this site.">
+      <Field
+        label={t("catalog.taxonomy.categories.slug")}
+        htmlFor={`${idPrefix}-slug`}
+        hint={t("catalog.taxonomy.categories.slugHint")}
+      >
         <input
           id={`${idPrefix}-slug`}
           name="slug"
@@ -80,9 +86,9 @@ function CategoryFields({
         />
       </Field>
       <Field
-        label="Parent"
+        label={t("catalog.taxonomy.categories.parent")}
         htmlFor={`${idPrefix}-parent`}
-        hint={`At most ${CATEGORY_MAX_DEPTH} levels.`}
+        hint={t("catalog.taxonomy.categories.parentHint", { max: CATEGORY_MAX_DEPTH })}
       >
         <select
           id={`${idPrefix}-parent`}
@@ -91,7 +97,7 @@ function CategoryFields({
           aria-invalid={invalid("parentId")}
           className={FIELD}
         >
-          <option value="">None (top level)</option>
+          <option value="">{t("catalog.taxonomy.categories.parentNone")}</option>
           {rows
             .filter(
               ({ category: c, depth }) => !excluded.has(c.id) && depth < CATEGORY_MAX_DEPTH - 1,
@@ -104,7 +110,7 @@ function CategoryFields({
             ))}
         </select>
       </Field>
-      <Field label="Sort order" htmlFor={`${idPrefix}-sort`}>
+      <Field label={t("catalog.taxonomy.shared.sortOrder")} htmlFor={`${idPrefix}-sort`}>
         <input
           id={`${idPrefix}-sort`}
           name="sortOrder"
@@ -115,7 +121,11 @@ function CategoryFields({
           className={cx(FIELD, "tabular")}
         />
       </Field>
-      <Field label="Description" htmlFor={`${idPrefix}-description`} className="sm:col-span-2">
+      <Field
+        label={t("catalog.taxonomy.categories.description")}
+        htmlFor={`${idPrefix}-description`}
+        className="sm:col-span-2"
+      >
         <input
           id={`${idPrefix}-description`}
           name="description"
@@ -153,6 +163,7 @@ export function CategoryManager({
   canEdit: boolean;
 }) {
   const router = useRouter();
+  const t = useT();
   const rows = flattenTree(items);
   const [editing, setEditing] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -204,7 +215,7 @@ export function CategoryManager({
   }
 
   async function remove(c: Category) {
-    if (!window.confirm(`Delete the category “${c.name}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("catalog.taxonomy.categories.confirmDelete", { name: c.name }))) return;
     setBusy(c.id);
     setError(null);
     const r = await callCatalog("DELETE", `/categories/${c.id}`);
@@ -222,10 +233,13 @@ export function CategoryManager({
       ) : null}
 
       {rows.length === 0 ? (
-        <EmptyState icon="folder" title={`No categories on ${siteName} yet`}>
+        <EmptyState
+          icon="folder"
+          title={t("catalog.taxonomy.categories.emptyTitle", { site: siteName })}
+        >
           {canEdit
-            ? "Create the first category. It becomes the site's default for new listings."
-            : "A site editor creates the categories of this site."}
+            ? t("catalog.taxonomy.categories.emptyEditor")
+            : t("catalog.taxonomy.categories.emptyReader")}
         </EmptyState>
       ) : (
         <ul className="divide-y divide-line border-y border-line">
@@ -235,20 +249,26 @@ export function CategoryManager({
               <li key={c.id} className={cx(isEditing && "bg-surface-2/60")}>
                 <div
                   className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 pr-5 sm:pr-6"
+                  // i18n-ignore: CSS length
                   style={{ paddingLeft: `calc(1.25rem + ${depth * 1.5}rem)` }}
                 >
                   <Icon name="folder" size={17} className="shrink-0 text-ink-3" />
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-ink">{c.name}</span>
-                      {c.isDefault ? <StatusPill tone="petrol">Default</StatusPill> : null}
+                      {c.isDefault ? (
+                        <StatusPill tone="petrol">
+                          {t("catalog.taxonomy.categories.default")}
+                        </StatusPill>
+                      ) : null}
                     </span>
                     <span className="block text-xs text-ink-3">
-                      <span className="font-mono">{c.slug}</span> · {c.listingCount} product
-                      {c.listingCount === 1 ? "" : "s"}
-                      {c.childCount
-                        ? ` · ${c.childCount} sub-categor${c.childCount === 1 ? "y" : "ies"}`
-                        : ""}
+                      <span className="font-mono">{c.slug}</span>
+                      {` · ${t("catalog.taxonomy.shared.products", { count: c.listingCount })}${
+                        c.childCount
+                          ? ` · ${t("catalog.taxonomy.categories.subCategories", { count: c.childCount })}`
+                          : ""
+                      }`}
                     </span>
                   </span>
                   {canEdit ? (
@@ -260,11 +280,15 @@ export function CategoryManager({
                           onClick={() => makeDefault(c)}
                           disabled={busy !== null}
                           className={buttonStyles.ghost}
-                          title="Use for new listings without a category"
+                          title={t("catalog.taxonomy.categories.makeDefaultTitle")}
                         >
                           <Icon name="star" size={16} />
-                          <span className="hidden sm:inline">Make default</span>
-                          <span className="sr-only sm:hidden">Make {c.name} the default</span>
+                          <span className="hidden sm:inline">
+                            {t("catalog.taxonomy.categories.makeDefault")}
+                          </span>
+                          <span className="sr-only sm:hidden">
+                            {t("catalog.taxonomy.categories.makeDefaultName", { name: c.name })}
+                          </span>
                         </button>
                       ) : null}
                       <button
@@ -279,8 +303,14 @@ export function CategoryManager({
                         className={buttonStyles.ghost}
                       >
                         <Icon name="edit" size={16} />
-                        <span className="hidden sm:inline">{isEditing ? "Close" : "Edit"}</span>
-                        <span className="sr-only sm:hidden">Edit {c.name}</span>
+                        <span className="hidden sm:inline">
+                          {isEditing
+                            ? t("catalog.taxonomy.shared.close")
+                            : t("catalog.taxonomy.shared.edit")}
+                        </span>
+                        <span className="sr-only sm:hidden">
+                          {t("catalog.taxonomy.shared.editName", { name: c.name })}
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -288,13 +318,15 @@ export function CategoryManager({
                         disabled={busy !== null || c.childCount > 0 || c.listingCount > 0}
                         title={
                           c.childCount > 0 || c.listingCount > 0
-                            ? "Only empty categories can be deleted"
-                            : "Delete"
+                            ? t("catalog.taxonomy.categories.deleteBlocked")
+                            : t("catalog.taxonomy.shared.delete")
                         }
                         className={cx(buttonStyles.icon, "hover:text-danger")}
                       >
                         <Icon name="trash" size={16} />
-                        <span className="sr-only">Delete {c.name}</span>
+                        <span className="sr-only">
+                          {t("catalog.taxonomy.shared.deleteName", { name: c.name })}
+                        </span>
                       </button>
                     </span>
                   ) : null}
@@ -304,6 +336,7 @@ export function CategoryManager({
                     onSubmit={(e) => update(e, c)}
                     noValidate
                     className="space-y-3 px-5 pb-4 sm:px-6"
+                    // i18n-ignore: CSS length
                     style={{ paddingLeft: `calc(1.25rem + ${depth * 1.5}rem)` }}
                   >
                     <CategoryFields
@@ -319,7 +352,7 @@ export function CategoryManager({
                         onClick={() => setEditing(null)}
                         className={buttonStyles.secondary}
                       >
-                        Cancel
+                        {t("catalog.taxonomy.shared.cancel")}
                       </button>
                       <button
                         type="submit"
@@ -327,7 +360,7 @@ export function CategoryManager({
                         className={buttonStyles.primary}
                       >
                         {busy === c.id ? <Spinner /> : null}
-                        <span>Save category</span>
+                        <span>{t("catalog.taxonomy.categories.save")}</span>
                       </button>
                     </div>
                   </form>
@@ -346,7 +379,9 @@ export function CategoryManager({
               noValidate
               className="space-y-3 rounded-xl border border-line p-4"
             >
-              <h3 className="text-sm font-semibold text-ink">New category on {siteName}</h3>
+              <h3 className="text-sm font-semibold text-ink">
+                {t("catalog.taxonomy.categories.newTitle", { site: siteName })}
+              </h3>
               <CategoryFields
                 idPrefix="new"
                 category={null}
@@ -360,11 +395,11 @@ export function CategoryManager({
                   onClick={() => setCreating(false)}
                   className={buttonStyles.secondary}
                 >
-                  Cancel
+                  {t("catalog.taxonomy.shared.cancel")}
                 </button>
                 <button type="submit" disabled={busy !== null} className={buttonStyles.primary}>
                   {busy === "create" ? <Spinner /> : <Icon name="plus" size={17} />}
-                  <span>Create category</span>
+                  <span>{t("catalog.taxonomy.categories.create")}</span>
                 </button>
               </div>
             </form>
@@ -380,7 +415,7 @@ export function CategoryManager({
               className={buttonStyles.secondary}
             >
               <Icon name="plus" size={17} />
-              New category
+              {t("catalog.taxonomy.categories.new")}
             </button>
           )}
         </div>

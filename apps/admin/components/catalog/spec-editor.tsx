@@ -14,6 +14,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 import { callCatalog } from "../../lib/catalog-client";
+import { issueText } from "../../lib/catalog-issues";
 import {
   draftForCheck,
   draftsDiffer,
@@ -23,6 +24,7 @@ import {
   SPEC_BASES,
   type Draft,
 } from "../../lib/spec-validation";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill } from "../ui";
 import { FIELD, FormMessage } from "./parts";
@@ -53,13 +55,6 @@ function initialDraft(
 
 export { draftValue };
 
-const TYPE_LABEL: Record<SpecDefinition["dataType"], string> = {
-  NUMBER: "Number",
-  RANGE: "Range",
-  TEXT: "Text",
-  BOOLEAN: "Yes / no",
-};
-
 interface Issues {
   blocking: string[];
   warnings: string[];
@@ -78,6 +73,7 @@ export function SpecEditor({
 }) {
   const router = useRouter();
   const notify = useNotice();
+  const t = useT();
   const [saved] = useState<Record<string, Draft>>(() =>
     Object.fromEntries(
       data.definitions.flatMap((d) =>
@@ -110,28 +106,33 @@ export function SpecEditor({
         const entry: Issues = { blocking: [], warnings: [] };
         if (!d.on) {
           if (def.required && basis === "SPECIFICATION")
-            entry.blocking.push("Required for publication.");
+            entry.blocking.push(t("catalog.taxonomy.specEditor.requiredForPublication"));
         } else {
           // The same value the save request sends (unit and test method normalised alike).
           const v = draftForCheck(def, d);
-          if (v === "empty") entry.blocking.push("Enter a value or remove it.");
-          else if (v === "not_a_number") entry.blocking.push("Enter a number.");
+          if (v === "empty") entry.blocking.push(t("catalog.taxonomy.specEditor.enterValue"));
+          else if (v === "not_a_number")
+            entry.blocking.push(t("catalog.taxonomy.specEditor.enterNumber"));
           else {
             const issues: ValidationIssue[] = checkSpecValue(def, v);
             for (const i of issues)
               (i.severity === "BLOCKING" ? entry.blocking : entry.warnings).push(
-                i.message.replace(`${def.name}: `, ""),
+                // ML-12a: the issue in the console's language; its "{name}: " prefix is dropped
+                // as before (every template of checkSpecValue starts with it, in EN and TR).
+                issueText(i, t).replace(`${def.name}: `, ""),
               );
           }
         }
         for (const s of serverIssues.filter((x) => x.path === specTarget(def.key, basis))) {
-          entry.blocking.push(`Refused by the server (${s.rule.replace(/_/g, " ")}).`);
+          entry.blocking.push(
+            t("catalog.taxonomy.specEditor.refused", { rule: s.rule.replace(/_/g, " ") }),
+          );
         }
         out.set(slot, entry);
       }
     }
     return out;
-  }, [data.definitions, drafts, serverIssues]);
+  }, [data.definitions, drafts, serverIssues, t]);
 
   /** The summary: the shared engine over the values as typed (PM-3 validation review). */
   const live: ProductValidation = useMemo(
@@ -156,8 +157,14 @@ export function SpecEditor({
         if (!d.on) continue;
         const v = draftForCheck(def, d);
         if (v === "empty" || v === "not_a_number") {
-          const what = basis === "TYPICAL" ? `${def.name} (typical)` : def.name;
-          setError(`${what}: ${v === "empty" ? "enter a value or remove it" : "enter a number"}.`);
+          // "Viscosity (typical): enter a number." — the console's issue texts (catalog.issues).
+          const name =
+            basis === "TYPICAL" ? t("catalog.issues.typical", { name: def.name }) : def.name;
+          setError(
+            v === "empty"
+              ? t("catalog.issues.spec.enter_value", { name })
+              : t("catalog.issues.spec.enter_number", { name }),
+          );
           return;
         }
         values.push(v);
@@ -178,7 +185,7 @@ export function SpecEditor({
       return;
     }
     setJustSaved(true);
-    notify?.("Technical specifications saved.");
+    notify?.(t("catalog.taxonomy.specEditor.saved"));
     router.refresh();
   }
 
@@ -186,13 +193,17 @@ export function SpecEditor({
     return (
       <EmptyState
         icon="list"
-        title="No specifications defined yet"
+        title={t("catalog.taxonomy.specEditor.emptyTitle")}
         {...(canEdit
-          ? { action: { href: "/products/specifications", label: "Define specifications" } }
+          ? {
+              action: {
+                href: "/products/specifications",
+                label: t("catalog.taxonomy.specEditor.emptyAction"),
+              },
+            }
           : {})}
       >
-        Specifications (viscosity, flash point, …) are defined once for the whole platform, then
-        filled in per product.
+        {t("catalog.taxonomy.specEditor.emptyBody")}
       </EmptyState>
     );
   }
@@ -213,14 +224,20 @@ export function SpecEditor({
               <div className="min-w-0">
                 <p className="flex flex-wrap items-center gap-2 font-medium text-ink">
                   {def.name}
-                  {def.required ? <StatusPill tone="amber">Required</StatusPill> : null}
-                  {def.archived ? <StatusPill tone="neutral">Archived</StatusPill> : null}
+                  {def.required ? (
+                    <StatusPill tone="amber">{t("catalog.taxonomy.shared.required")}</StatusPill>
+                  ) : null}
+                  {def.archived ? (
+                    <StatusPill tone="neutral">{t("catalog.taxonomy.shared.archived")}</StatusPill>
+                  ) : null}
                 </p>
                 <p className="mt-0.5 text-xs text-ink-3">
-                  <span className="font-mono">{def.key}</span> · {TYPE_LABEL[def.dataType]}
-                  {def.minValue !== null || def.maxValue !== null
-                    ? ` · ${def.minValue ?? "…"} – ${def.maxValue ?? "…"}`
-                    : ""}
+                  <span className="font-mono">{def.key}</span>
+                  {` · ${t(`catalog.taxonomy.specEditor.types.${def.dataType}`)}${
+                    def.minValue !== null || def.maxValue !== null
+                      ? ` · ${def.minValue ?? "…"} – ${def.maxValue ?? "…"}`
+                      : ""
+                  }`}
                 </p>
               </div>
               <div className="min-w-0 space-y-3">
@@ -246,8 +263,10 @@ export function SpecEditor({
                     className={cx(buttonStyles.ghost, "text-xs")}
                   >
                     <Icon name="plus" size={14} />
-                    Add typical value
-                    <span className="sr-only"> for {def.name}</span>
+                    {t("catalog.taxonomy.specEditor.addTypical")}
+                    <span className="sr-only">
+                      {t("catalog.taxonomy.specEditor.forName", { name: def.name })}
+                    </span>
                   </button>
                 ) : null}
               </div>
@@ -260,8 +279,8 @@ export function SpecEditor({
         <p className="flex items-center gap-2 text-sm text-ink-3">
           <Icon name="shield" size={16} />
           {archived
-            ? "This product is archived. Restore it to edit its specifications."
-            : "Specifications are part of the product master (product_master:edit)."}
+            ? t("catalog.taxonomy.specEditor.archivedReadOnly")
+            : t("catalog.taxonomy.specEditor.masterReadOnly")}
         </p>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -269,7 +288,7 @@ export function SpecEditor({
             href="/products/specifications"
             className="text-sm font-medium text-petrol-strong hover:underline"
           >
-            Manage specification definitions
+            {t("catalog.taxonomy.specEditor.manageDefinitions")}
           </Link>
           <button
             type="submit"
@@ -277,7 +296,11 @@ export function SpecEditor({
             className={buttonStyles.primary}
           >
             {pending ? <Spinner /> : <Icon name="check" size={17} />}
-            <span>{pending ? "Saving…" : "Save specifications"}</span>
+            <span>
+              {pending
+                ? t("catalog.taxonomy.specEditor.saving")
+                : t("catalog.taxonomy.specEditor.save")}
+            </span>
           </button>
         </div>
       )}
@@ -302,8 +325,11 @@ function ValueEditor({
   readOnly: boolean;
   onChange: (patch: Partial<Draft>) => void;
 }) {
+  const t = useT();
   const typical = d.basis === "TYPICAL";
-  const label = typical ? `${def.name} typical value` : def.name;
+  const label = typical
+    ? t("catalog.taxonomy.specEditor.typicalLabel", { name: def.name })
+    : def.name;
   const base = `spec-${def.id}${typical ? "-typical" : ""}`;
   const describedBy =
     issues.blocking.length || issues.warnings.length ? `${base}-issues` : undefined;
@@ -312,12 +338,13 @@ function ValueEditor({
     <div className="space-y-2">
       {typical ? (
         <p className="text-xs font-medium uppercase tracking-wide text-ink-3">
-          Typical value <span className="normal-case">(for information, not a limit)</span>
+          {t("catalog.taxonomy.specEditor.typicalHeading")}{" "}
+          <span className="normal-case">{t("catalog.taxonomy.specEditor.typicalNote")}</span>
         </p>
       ) : null}
       {!d.on ? (
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-ink-3">No value</span>
+          <span className="text-sm text-ink-3">{t("catalog.taxonomy.specEditor.noValue")}</span>
           {!readOnly ? (
             <button
               type="button"
@@ -325,8 +352,10 @@ function ValueEditor({
               className={buttonStyles.ghost}
             >
               <Icon name="plus" size={16} />
-              Add value
-              <span className="sr-only"> for {def.name}</span>
+              {t("catalog.taxonomy.specEditor.addValue")}
+              <span className="sr-only">
+                {t("catalog.taxonomy.specEditor.forName", { name: def.name })}
+              </span>
             </button>
           ) : null}
         </div>
@@ -342,7 +371,7 @@ function ValueEditor({
                 onChange={(e) => onChange({ number: e.currentTarget.value })}
                 aria-invalid={invalid}
                 aria-describedby={describedBy}
-                placeholder="Value"
+                placeholder={t("catalog.taxonomy.specEditor.valuePlaceholder")}
                 className={cx(FIELD, "tabular")}
               />
             </label>
@@ -351,50 +380,60 @@ function ValueEditor({
             <>
               <div className="flex w-full gap-1 sm:w-auto">
                 <label className="w-16 shrink-0">
-                  <span className="sr-only">{label} minimum: closed or open</span>
+                  <span className="sr-only">
+                    {t("catalog.taxonomy.specEditor.minBoundLabel", { label })}
+                  </span>
                   <select
                     value={d.minExclusive ? "open" : "closed"}
                     onChange={(e) => onChange({ minExclusive: e.currentTarget.value === "open" })}
                     className={FIELD}
                   >
                     <option value="closed">≥</option>
+                    {/* i18n-ignore: comparison sign */}
                     <option value="open">&gt;</option>
                   </select>
                 </label>
                 <label className="min-w-0 flex-1 sm:w-28 sm:flex-none">
-                  <span className="sr-only">{label} minimum</span>
+                  <span className="sr-only">
+                    {t("catalog.taxonomy.specEditor.minLabel", { label })}
+                  </span>
                   <input
                     inputMode="decimal"
                     value={d.min}
                     onChange={(e) => onChange({ min: e.currentTarget.value })}
                     aria-invalid={invalid}
                     aria-describedby={describedBy}
-                    placeholder="Min"
+                    placeholder={t("catalog.taxonomy.specEditor.minPlaceholder")}
                     className={cx(FIELD, "tabular")}
                   />
                 </label>
               </div>
               <div className="flex w-full gap-1 sm:w-auto">
                 <label className="w-16 shrink-0">
-                  <span className="sr-only">{label} maximum: closed or open</span>
+                  <span className="sr-only">
+                    {t("catalog.taxonomy.specEditor.maxBoundLabel", { label })}
+                  </span>
                   <select
                     value={d.maxExclusive ? "open" : "closed"}
                     onChange={(e) => onChange({ maxExclusive: e.currentTarget.value === "open" })}
                     className={FIELD}
                   >
                     <option value="closed">≤</option>
+                    {/* i18n-ignore: comparison sign */}
                     <option value="open">&lt;</option>
                   </select>
                 </label>
                 <label className="min-w-0 flex-1 sm:w-28 sm:flex-none">
-                  <span className="sr-only">{label} maximum</span>
+                  <span className="sr-only">
+                    {t("catalog.taxonomy.specEditor.maxLabel", { label })}
+                  </span>
                   <input
                     inputMode="decimal"
                     value={d.max}
                     onChange={(e) => onChange({ max: e.currentTarget.value })}
                     aria-invalid={invalid}
                     aria-describedby={describedBy}
-                    placeholder="Max"
+                    placeholder={t("catalog.taxonomy.specEditor.maxPlaceholder")}
                     className={cx(FIELD, "tabular")}
                   />
                 </label>
@@ -424,15 +463,17 @@ function ValueEditor({
                 aria-describedby={describedBy}
                 className={FIELD}
               >
-                <option value="">Choose…</option>
-                <option value="true">Yes</option>
-                <option value="false">No</option>
+                <option value="">{t("catalog.taxonomy.specEditor.choose")}</option>
+                <option value="true">{t("catalog.taxonomy.specEditor.yes")}</option>
+                <option value="false">{t("catalog.taxonomy.specEditor.no")}</option>
               </select>
             </label>
           ) : null}
           {def.units.length > 0 ? (
             <label className="w-full sm:w-32">
-              <span className="sr-only">{label} unit</span>
+              <span className="sr-only">
+                {t("catalog.taxonomy.specEditor.unitLabel", { label })}
+              </span>
               <select
                 value={d.unit}
                 onChange={(e) => onChange({ unit: e.currentTarget.value })}
@@ -447,13 +488,17 @@ function ValueEditor({
             </label>
           ) : null}
           <label className="w-full sm:w-44">
-            <span className="sr-only">{label} test method</span>
+            <span className="sr-only">
+              {t("catalog.taxonomy.specEditor.testMethodLabel", { label })}
+            </span>
             <input
               list={`${base}-methods`}
               value={d.testMethod}
               maxLength={64}
               onChange={(e) => onChange({ testMethod: e.currentTarget.value })}
-              placeholder={def.testMethods[0] ?? "Test method"}
+              placeholder={
+                def.testMethods[0] ?? t("catalog.taxonomy.specEditor.testMethodPlaceholder")
+              }
               className={FIELD}
             />
             <datalist id={`${base}-methods`}>
@@ -470,7 +515,9 @@ function ValueEditor({
             >
               <Icon name="trash" size={16} />
               <span className="sr-only">
-                Remove the {typical ? "typical value" : "value"} of {def.name}
+                {typical
+                  ? t("catalog.taxonomy.specEditor.removeTypical", { name: def.name })
+                  : t("catalog.taxonomy.specEditor.removeValue", { name: def.name })}
               </span>
             </button>
           ) : null}
@@ -508,11 +555,12 @@ export function ValidationSummary({
   /** The report covers values typed but not saved yet. */
   unsaved?: boolean;
 }) {
+  const t = useT();
   const { blocking, warnings } = validation;
   const note = unsaved ? (
     <p className="flex items-center gap-1.5 text-xs text-ink-3" role="status">
       <Icon name="alert" size={13} />
-      Checked as typed: includes changes that are not saved yet.
+      {t("catalog.taxonomy.summary.unsaved")}
     </p>
   ) : null;
   if (!blocking.length && !warnings.length) {
@@ -520,7 +568,7 @@ export function ValidationSummary({
       <div className="space-y-1.5">
         <p className="flex items-center gap-2 rounded-lg bg-success-soft px-3 py-2 text-sm text-success ring-1 ring-inset ring-success/25">
           <Icon name="check" size={16} />
-          Technical data complete: nothing blocks publication.
+          {t("catalog.taxonomy.summary.complete")}
         </p>
         {note}
       </div>
@@ -535,12 +583,11 @@ export function ValidationSummary({
           className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger ring-1 ring-inset ring-danger/25"
         >
           <summary className="cursor-pointer font-medium">
-            {blocking.length} blocking issue{blocking.length === 1 ? "" : "s"} — publication would
-            be refused
+            {t("catalog.taxonomy.summary.blocking", { count: blocking.length })}
           </summary>
           <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
             {blocking.map((i) => (
-              <li key={`${i.target}-${i.code}`}>{i.message}</li>
+              <li key={`${i.target}-${i.code}`}>{issueText(i, t)}</li>
             ))}
           </ul>
         </details>
@@ -548,11 +595,11 @@ export function ValidationSummary({
       {warnings.length ? (
         <details className="rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/30">
           <summary className="cursor-pointer font-medium">
-            {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+            {t("catalog.taxonomy.summary.warnings", { count: warnings.length })}
           </summary>
           <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
             {warnings.map((i) => (
-              <li key={`${i.target}-${i.code}`}>{i.message}</li>
+              <li key={`${i.target}-${i.code}`}>{issueText(i, t)}</li>
             ))}
           </ul>
         </details>

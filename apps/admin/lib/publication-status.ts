@@ -12,6 +12,7 @@ import type {
   PublicationIssue,
   SitePublication,
 } from "@dream/contracts";
+import { en } from "./i18n/messages/en";
 
 export type SiteStatus = "DRAFT" | "PUBLISHED" | "UNPUBLISHED";
 
@@ -22,12 +23,7 @@ export type SiteStatus = "DRAFT" | "PUBLISHED" | "UNPUBLISHED";
  */
 export type SiteDisplayStatus = SiteStatus | "NOT_LISTED";
 
-export const SITE_STATUS_LABEL: Readonly<Record<SiteDisplayStatus, string>> = {
-  DRAFT: "Draft",
-  PUBLISHED: "Published",
-  UNPUBLISHED: "Unpublished",
-  NOT_LISTED: "Not listed",
-};
+/** ML-12a: the words are in the dictionary, catalog.common.siteStatus.<status>. */
 
 /**
  * Draft: never published on the site. Published: live there — the public catalogue shows a
@@ -157,9 +153,9 @@ export interface PublicationPlan {
   canUnpublish: boolean;
 }
 
-const SHOWN_ON_PUBLISH = "Not shown on this site yet: publishing shows it.";
-const CANNOT_SHOW =
-  "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.";
+// ML-12a: the console's English wording, shown in the UI language by lib/catalog-issues.ts.
+const SHOWN_ON_PUBLISH = en.catalog.issues.plain.listing_shown_on_publish;
+const CANNOT_SHOW = en.catalog.issues.plain.listing_hidden;
 
 /** The API's readiness text for the two listing codes, without the technical terms. */
 function plain(issue: PublicationIssue): PublicationIssue {
@@ -193,6 +189,7 @@ export function planPublication(
     warnings,
     upToDate,
     canPublish: site.canPublish && !notListed && blocking.length === 0 && !upToDate,
+    // i18n-ignore: an identifier (workflow.tsx shows catalog.workflow.site.publishLabel.<it>)
     publishLabel: status === "PUBLISHED" ? "Republish" : "Publish",
     canUnpublish: site.canPublish && pub?.status === "PUBLISHED" && status === "PUBLISHED",
   };

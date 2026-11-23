@@ -4,6 +4,12 @@
  * known error code, refined for the catalogue's validation and conflict details.
  */
 import { CATALOG_API, DEFAULT_ERROR_MESSAGES, ErrorBodySchema } from "@dream/contracts";
+import { browserAdminLocale } from "./i18n/config";
+import { en } from "./i18n/messages/en";
+import { createTranslator } from "./i18n/translate";
+import type { Translate } from "./i18n/types";
+
+const unreachable = () => createTranslator(browserAdminLocale())("catalog.api.unreachable");
 
 export interface FieldIssue {
   path: string;
@@ -13,98 +19,46 @@ export interface FieldIssue {
 export type CallResult<T> =
   { ok: true; data: T } | { ok: false; status: number; message: string; issues: FieldIssue[] };
 
-const RULE_MESSAGES: Readonly<Record<string, string>> = {
-  "version:stale": "Someone else changed this record. Reload the page to see their version.",
-  "code:unique": "Another product already uses this code.",
-  "slug:unique": "This slug is already in use.",
-  // DP-210: a product's address on a site.
-  "slug:live_elsewhere":
-    "Another product is still published on this site at this address. Republish or unpublish that product first.",
-  "slug:old_address":
-    "This address used to belong to another product on this site and now redirects (301) to it. Choose another slug.",
-  "slug:redirect_loop":
-    "This address change would make old addresses redirect in a circle. Choose another slug.",
-  "listing:unique": "This product is already listed on the site. Reload the page.",
-  "parentId:too_deep": "Categories can be at most three levels deep.",
-  "parentId:cycle": "A category cannot be moved below itself.",
-  "parentId:unknown_parent": "The parent category does not exist on this site.",
-  "categoryId:required": "Choose a category, or set a default category for this site first.",
-  "categoryId:unknown": "The category does not exist on this site.",
-  "visibility:product_archived": "An archived product cannot be visible on a site.",
-  "status:archived": "Archived products cannot be edited. Restore it first.",
-  "(root):has_children": "Move or delete the sub-categories first.",
-  "(root):has_listings": "Move the products in this category first.",
-  // PM-3 review and publication.
-  "(root):own_change":
-    "You changed or submitted this revision, so another reviewer must decide (separation of duties).",
-  "status:not_draft": "Only a draft can be submitted. Reload the page to see the current state.",
-  "status:not_in_review": "The product is no longer in review. Reload the page.",
-  "status:published": "Unpublish the product on every site before archiving it.",
-  "status:not_published": "The product is not published on this site.",
-  "status:transition": "This status change is not possible. Reload the page.",
-  "listingVersion:stale": "The site listing changed meanwhile. Reload the page and check it again.",
-  // DP-209: product SEO.
-  "canonicalPath:custom":
-    "Use a path of this site, such as /products/base-oil-sn-150 (lower-case words and hyphens, no domain).",
-  "ogImageId:unknown": "This image is no longer a public image of the product. Choose another one.",
-  "listing:missing": "List the product on this site first.",
-  "product:not_approved": "The product master must be approved in its current version.",
-  "product:archived": "Archived products cannot be published.",
-  "listing:listing_missing": "List the product on this site first.",
-  "listing:listing_hidden":
-    "Not shown on this site yet. Publishing here also needs edit rights on this site's listing.",
-  // DP-198: the database's refusal of an unapproved version, and repeated or concurrent publishing.
-  "status:not_approved": "The product master must be approved in its current version.",
-  "publication:already_published": "This version is already live on the site. Reload the page.",
-  "publication:unique": "The product was published on this site meanwhile. Reload the page.",
-  "images:cover_missing": "Add a cover image first.",
-  "summary:summary_missing": "Add a summary (master or listing) first.",
-  "(root):image_published": "This image is shown on a live site. Unpublish the product first.",
-  // DP-166 image visibility.
-  "isPublic:cover_cannot_be_hidden":
-    "The cover cannot be hidden. Make another image the cover first.",
-  "isPublic:hidden_image": "Show this image on the site before making it the cover.",
-  "file:busy": "Image processing is busy. Try again in a moment.",
-  // PM-5 technical documents.
-  "status:document_archived": "This document is archived. Restore it first.",
-  "(root):not_publishable":
-    "Only an active, non-internal document with a file can be shown on a site.",
-  "(root):too_many_documents": "This product already has the maximum number of documents.",
-  "(root):too_many_revisions": "This document already has the maximum number of revisions.",
-  // ML-8b: languages of a publication and translations.
-  "locale:not_enabled": "This language is not enabled on the site.",
-  "locales:default_locale":
-    "The default language is always published; choose other languages only.",
-  "manualReview:not_chosen": "Confirm the manual check only for languages you publish.",
-  "name:required": "The name is required in the site's default language.",
-};
-
-export function messageForIssues(code: string | null, issues: FieldIssue[]): string {
+/**
+ * ML-12a: the message for an API error in the console's language. The API contract is unchanged:
+ * the console translates by its stable codes — a field issue (`path:rule`), the error code, or the
+ * per-language publication rules — and falls back to a generic message for anything unknown.
+ * English is the contract's text, word for word. `t` defaults to the browser's console language
+ * (the `dp-admin-locale` cookie; English on the server).
+ */
+export function messageForIssues(
+  code: string | null,
+  issues: FieldIssue[],
+  t: Translate = createTranslator(browserAdminLocale()),
+): string {
   for (const i of issues) {
-    const text = RULE_MESSAGES[`${i.path}:${i.rule}`];
-    if (text) return text;
+    const rule = `${i.path}:${i.rule}`;
+    if (rule in en.catalog.rules)
+      return t(`catalog.rules.${rule as keyof typeof en.catalog.rules}`);
   }
   // ML-8b: per-language publication rules ("nl:category" translation_missing, "nl" manual).
   const missing = issues.filter((i) => i.rule === "translation_missing");
   if (missing.length) {
     const langs = [...new Set(missing.map((i) => i.path.split(":")[0]!.toUpperCase()))];
-    return `Some texts are not translated yet (${langs.join(", ")}): see what is needed under Languages.`;
+    return t("catalog.api.translationMissing", { languages: langs.join(", ") });
   }
   const manual = issues.filter((i) => i.rule === "manual_review_required");
   if (manual.length) {
-    return `Confirm that you checked the ${manual.map((i) => i.path.toUpperCase()).join(", ")} text by hand before publishing it.`;
+    return t("catalog.api.manualReview", {
+      languages: manual.map((i) => i.path.toUpperCase()).join(", "),
+    });
   }
   if (code === "VALIDATION_FAILED" && issues.some((i) => i.path.startsWith("spec:"))) {
-    return "Fix the blocking specification issues first (see the validation report).";
+    return t("catalog.api.specBlocking");
   }
   if (code === "VALIDATION_FAILED" && issues.length) {
     const fields = [...new Set(issues.map((i) => i.path))].join(", ");
-    return `Check these fields: ${fields}.`;
+    return t("catalog.api.checkFields", { fields });
   }
   if (code && code in DEFAULT_ERROR_MESSAGES) {
-    return DEFAULT_ERROR_MESSAGES[code as keyof typeof DEFAULT_ERROR_MESSAGES];
+    return t(`errors.${code as keyof typeof DEFAULT_ERROR_MESSAGES}`);
   }
-  return "The change could not be saved. Try again in a moment.";
+  return t("catalog.api.notSaved");
 }
 
 export async function callCatalog<T>(
@@ -125,7 +79,7 @@ export async function callCatalog<T>(
       cache: "no-store",
     });
   } catch {
-    return { ok: false, status: 0, message: "The admin API cannot be reached.", issues: [] };
+    return { ok: false, status: 0, message: unreachable(), issues: [] };
   }
   if (res.status === 204) return { ok: true, data: undefined as T };
   const json: unknown = await res.json().catch(() => null);
@@ -148,7 +102,7 @@ export async function getCatalog<T>(path: string): Promise<CallResult<T>> {
       cache: "no-store",
     });
   } catch {
-    return { ok: false, status: 0, message: "The admin API cannot be reached.", issues: [] };
+    return { ok: false, status: 0, message: unreachable(), issues: [] };
   }
   const json: unknown = await res.json().catch(() => null);
   if (res.ok) return { ok: true, data: json as T };
