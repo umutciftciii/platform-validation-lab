@@ -8,12 +8,17 @@ import {
   type ThemePreference,
 } from "../../lib/theme";
 import { Icon, type IconKey } from "../icons";
+import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
 
-const OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string; icon: IconKey }> = [
-  { value: "light", label: "Light", icon: "sun" },
-  { value: "dark", label: "Dark", icon: "moon" },
-  { value: "system", label: "Match system", icon: "monitor" },
+const OPTIONS: ReadonlyArray<{
+  value: ThemePreference;
+  label: "theme.light" | "theme.dark" | "theme.system";
+  icon: IconKey;
+}> = [
+  { value: "light", label: "theme.light", icon: "sun" },
+  { value: "dark", label: "theme.dark", icon: "moon" },
+  { value: "system", label: "theme.system", icon: "monitor" },
 ];
 
 const CHANGE_EVENT = "dp-admin-theme-change";
@@ -42,6 +47,7 @@ function apply(preference: ThemePreference) {
 
 /** Three-way segmented control: light, dark, follow the OS. */
 export function ThemeToggle({ className }: { className?: string }) {
+  const t = useT();
   // null on the server: no option is shown as selected until the browser store is read.
   const preference = useSyncExternalStore<ThemePreference | null>(
     subscribe,
@@ -72,7 +78,7 @@ export function ThemeToggle({ className }: { className?: string }) {
   return (
     <div
       role="radiogroup"
-      aria-label="Colour theme"
+      aria-label={t("theme.label")}
       className={cx("inline-flex rounded-lg border border-line bg-surface-2 p-0.5", className)}
     >
       {OPTIONS.map((o) => {
@@ -83,8 +89,8 @@ export function ThemeToggle({ className }: { className?: string }) {
             type="button"
             role="radio"
             aria-checked={checked}
-            aria-label={o.label}
-            title={o.label}
+            aria-label={t(o.label)}
+            title={t(o.label)}
             onClick={() => choose(o.value)}
             className={cx(
               "inline-flex size-7 items-center justify-center rounded-md transition-colors duration-150",

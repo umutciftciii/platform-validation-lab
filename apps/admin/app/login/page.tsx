@@ -3,8 +3,11 @@ import { redirect } from "next/navigation";
 import { AuthFrame } from "../../components/auth/auth-frame";
 import { LoginForm } from "../../components/auth/login-form";
 import { getStaffSession } from "../../lib/server-session";
+import { getTranslator } from "../../lib/i18n/server";
 
-export const metadata: Metadata = { title: "Sign in" };
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: (await getTranslator())("login.metaTitle") };
+}
 export const dynamic = "force-dynamic";
 
 async function hasSession(): Promise<boolean> {
@@ -18,17 +21,14 @@ async function hasSession(): Promise<boolean> {
 
 export default async function LoginPage() {
   if (await hasSession()) redirect("/");
+  const t = await getTranslator();
 
   return (
     <AuthFrame>
-      <h1 className="type-display text-[2rem] font-semibold text-ink">Sign in</h1>
-      <p className="mb-8 mt-2 text-ink-2">
-        Use your staff account. You will need your authenticator app.
-      </p>
+      <h1 className="type-display text-[2rem] font-semibold text-ink">{t("login.title")}</h1>
+      <p className="mb-8 mt-2 text-ink-2">{t("login.intro")}</p>
       <LoginForm />
-      <p className="mt-8 text-sm text-ink-3">
-        Locked out or lost your authenticator? Ask a platform administrator for a recovery link.
-      </p>
+      <p className="mt-8 text-sm text-ink-3">{t("login.lockedOut")}</p>
     </AuthFrame>
   );
 }

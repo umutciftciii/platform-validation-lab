@@ -8,13 +8,16 @@
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  failureMessage,
   followLink,
-  POLICY_MESSAGES,
+  isPolicyRule,
+  type PolicyRule,
   rememberDone,
   rememberInvalid,
   resetPassword,
   tabStore,
 } from "../../lib/credential-link";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
 import {
   AUTH_FIELD,
@@ -35,7 +38,8 @@ export function ResetFlow() {
   const [factor, setFactor] = useState<"code" | "recoveryCode">("code");
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; rules: string[] } | null>(null);
+  const [error, setError] = useState<{ message: string; rules: PolicyRule[] } | null>(null);
+  const t = useT();
 
   useEffect(
     () =>
@@ -62,12 +66,12 @@ export function ResetFlow() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const t = token.current;
-    if (!t || busy || !longEnough || !matches || !answerOk) return;
+    const link = token.current;
+    if (!link || busy || !longEnough || !matches || !answerOk) return;
     setBusy(true);
     setError(null);
     const res = await resetPassword(
-      t,
+      link,
       password,
       factor === "code" ? { code: answer } : { recoveryCode: answer.toUpperCase() },
     );
@@ -88,8 +92,8 @@ export function ResetFlow() {
       return;
     }
     setError({
-      message: res.message,
-      rules: res.failure === "policy" ? res.details.filter((d) => d in POLICY_MESSAGES) : [],
+      message: failureMessage(res.failure, res.code, t),
+      rules: res.failure === "policy" ? res.details.filter(isPolicyRule) : [],
     });
   }
 
@@ -97,46 +101,40 @@ export function ResetFlow() {
     return (
       <div className="flex items-center gap-3 text-ink-2" role="status">
         <Spinner />
-        Checking your link…
+        {t("link.checkingLink")}
       </div>
     );
   }
   if (phase === "none") {
     return (
-      <LinkEndState tone="neutral" eyebrow="Password reset" title="Open your reset link">
-        <p>
-          This page works with the personal reset link from the operator. Open the full link again,
-          exactly as you received it.
-        </p>
+      <LinkEndState tone="neutral" eyebrow={t("reset.eyebrow")} title={t("reset.openLinkTitle")}>
+        <p>{t("reset.openLinkText")}</p>
       </LinkEndState>
     );
   }
   if (phase === "invalid") {
     return (
-      <LinkEndState tone="problem" eyebrow="Password reset" title="This link cannot be used">
-        <p>
-          It may have expired, been used already, been replaced by a newer link, or been blocked
-          after too many wrong attempts. Ask a platform administrator for a new one.
-        </p>
+      <LinkEndState tone="problem" eyebrow={t("reset.eyebrow")} title={t("link.invalidTitle")}>
+        <p>{t("reset.invalidText")}</p>
       </LinkEndState>
     );
   }
   if (phase === "done") {
     return (
-      <LinkEndState tone="success" eyebrow="Password reset" title="Your password was changed">
-        <p>All earlier sessions of your account were signed out. Sign in with the new password.</p>
+      <LinkEndState tone="success" eyebrow={t("reset.eyebrow")} title={t("reset.doneTitle")}>
+        <p>{t("reset.doneText")}</p>
       </LinkEndState>
     );
   }
 
   return (
     <div>
-      <Heading eyebrow="Password reset" title="Choose a new password">
-        <p>Your authenticator stays the same. You need it, or one recovery code, to confirm.</p>
+      <Heading eyebrow={t("reset.eyebrow")} title={t("reset.title")}>
+        <p>{t("reset.intro")}</p>
       </Heading>
-      <form onSubmit={submit} className="space-y-5" aria-label="Reset password">
+      <form onSubmit={submit} className="space-y-5" aria-label={t("reset.formLabel")}>
         <PasswordInput
-          label="New password"
+          label={t("link.newPassword")}
           name="new-password"
           autoComplete="new-password"
           value={password}
@@ -144,14 +142,14 @@ export function ResetFlow() {
           invalid={Boolean(error?.rules.length)}
           autoFocus
           hint={
-            <ul className="mt-2 space-y-1.5" aria-label="Password rules">
-              <RuleCheck met={longEnough}>12 to 128 characters</RuleCheck>
-              <RuleCheck met={matches}>Both entries match</RuleCheck>
+            <ul className="mt-2 space-y-1.5" aria-label={t("link.passwordRules")}>
+              <RuleCheck met={longEnough}>{t("reset.lengthRule")}</RuleCheck>
+              <RuleCheck met={matches}>{t("link.bothMatch")}</RuleCheck>
             </ul>
           }
         />
         <PasswordInput
-          label="Repeat new password"
+          label={t("link.repeatNewPassword")}
           name="repeat-password"
           autoComplete="new-password"
           value={repeat}
@@ -160,7 +158,7 @@ export function ResetFlow() {
         />
         <div className="space-y-1.5">
           <label htmlFor="reset-answer" className="block text-sm font-medium text-ink">
-            {factor === "code" ? "Authenticator code" : "Recovery code"}
+            {factor === "code" ? t("auth.authenticatorCode") : t("auth.recoveryCode")}
           </label>
           <input
             key={factor}
@@ -184,7 +182,7 @@ export function ResetFlow() {
             }}
             className="rounded text-sm text-petrol hover:text-petrol-strong hover:underline"
           >
-            {factor === "code" ? "Use a recovery code instead" : "Use the authenticator instead"}
+            {factor === "code" ? t("auth.useRecoveryCode") : t("auth.useAuthenticator")}
           </button>
         </div>
         {error ? (
@@ -193,7 +191,7 @@ export function ResetFlow() {
             {error.rules.length ? (
               <ul className="list-disc space-y-0.5 pl-4">
                 {error.rules.map((r) => (
-                  <li key={r}>{POLICY_MESSAGES[r]}</li>
+                  <li key={r}>{t(`link.policy.${r}`)}</li>
                 ))}
               </ul>
             ) : null}
@@ -205,7 +203,7 @@ export function ResetFlow() {
           className={cx(buttonStyles.primary, "h-11 w-full")}
         >
           {busy ? <Spinner /> : null}
-          <span>{busy ? "Saving…" : "Change password"}</span>
+          <span>{busy ? t("link.saving") : t("reset.changePassword")}</span>
         </button>
       </form>
     </div>

@@ -5,6 +5,8 @@
  * "expired". This probe sets and removes a throwaway cookie with the same attributes to tell the
  * person before they try. It carries no value of any account.
  */
+import { en } from "./i18n/messages/en";
+
 const PROBE = "__Host-dp_cookie_probe";
 
 export interface CookieJar {
@@ -23,5 +25,5 @@ export function secureCookiesBlocked(doc: CookieJar): boolean {
   }
 }
 
-export const COOKIES_BLOCKED_MESSAGE =
-  "This browser did not keep the secure sign-in cookie, so signing in cannot finish here. On a local development address (http://…localhost) Safari refuses such cookies: use Chrome or Firefox there, or the console's https address.";
+/** English text; the sign-in form shows `auth.cookiesBlocked` in the console's language. */
+export const COOKIES_BLOCKED_MESSAGE: string = en.auth.cookiesBlocked;

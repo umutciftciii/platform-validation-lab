@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { initials } from "../lib/format";
+import { Msg } from "./i18n/locale-provider";
 import { Icon, type IconKey } from "./icons";
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
@@ -188,7 +189,7 @@ export function ErrorState({
       {onRetry ? (
         <button type="button" onClick={onRetry} className={cx(buttonStyles.secondary, "mt-5")}>
           <Icon name="refresh" size={16} />
-          Try again
+          <Msg k="common.tryAgain" />
         </button>
       ) : null}
     </div>

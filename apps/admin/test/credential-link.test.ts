@@ -10,7 +10,6 @@ import {
   fragmentNeedsCleaning,
   groupSecret,
   inspectLink,
-  KIND_COPY,
   POLICY_MESSAGES,
   proveCurrentPassword,
   recoveryCodesText,
@@ -22,6 +21,8 @@ import {
   toLinkCall,
   tokenFromFragment,
 } from "../lib/credential-link";
+import { en } from "../lib/i18n/messages/en";
+import { tr } from "../lib/i18n/messages/tr";
 import { qrPath } from "../lib/qr";
 import { ENROL_KINDS, PASSWORD_POLICY_DETAILS } from "@dream/contracts";
 
@@ -200,7 +201,10 @@ describe("API calls", () => {
 
   it("has a message for every password rule and a text for every link kind", () => {
     for (const rule of PASSWORD_POLICY_DETAILS) expect(POLICY_MESSAGES[rule]).toBeTruthy();
-    for (const kind of ENROL_KINDS) expect(KIND_COPY[kind].title).toBeTruthy();
+    for (const kind of ENROL_KINDS) {
+      expect(en.enrol.kinds[kind].title).toBeTruthy();
+      expect(tr.enrol.kinds[kind].title).toBeTruthy();
+    }
   });
 });
 
