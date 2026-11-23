@@ -19,6 +19,12 @@ import { media } from "./catalog/en/media";
 import { xrefs } from "./catalog/en/xrefs";
 import { translations } from "./catalog/en/translations";
 import { companyReview } from "./company-review/en";
+import { common as contentCommon } from "./content/en/common";
+import { api as contentApi } from "./content/en/api";
+import { contract as contentContract } from "./content/en/contract";
+import { pages as contentPages } from "./content/en/pages";
+import { editor as contentEditor } from "./content/en/editor";
+import { menus as contentMenus } from "./content/en/menus";
 
 export const en = {
   common: {
@@ -352,4 +358,13 @@ export const en = {
   },
   /** ML-12b (DP-243): the Company Review area (./company-review/). */
   companyReview,
+  /** ML-12c (DP-243): the Content area — CMS pages, news and menus (./content/<lang>/). */
+  content: {
+    common: contentCommon,
+    api: contentApi,
+    contract: contentContract,
+    pages: contentPages,
+    editor: contentEditor,
+    menus: contentMenus,
+  },
 } as const;

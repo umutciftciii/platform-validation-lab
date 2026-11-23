@@ -23,6 +23,9 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { callCms, type FieldIssue } from "../../lib/cms-client";
+import { cmsText } from "../../lib/cms-text";
+import type { Translate } from "../../lib/i18n/types";
+import { useT } from "../i18n/locale-provider";
 import { Field, FIELD, FormMessage, TEXTAREA } from "../catalog/parts";
 import { Fields, IconButton, move, toContent, toValues, type ItemValue } from "./field-form";
 import { HistoryPanel } from "./history-panel";
@@ -102,6 +105,7 @@ export function PageEditor({
   const template = page.kind === "TEMPLATE" ? null : cmsDesignTemplate(page.templateKey);
   const article = cmsIsArticle(page);
   const sectionTypes = article ? ARTICLE_SECTIONS : CMS_SECTION_TYPES;
+  const t = useT();
   const router = useRouter();
   const notify = useNotice();
   const readOnly = !canEdit;
@@ -202,7 +206,7 @@ export function PageEditor({
     }
     setVersion(result.data.page.version);
     setDirty(false);
-    if (notify) notify("Draft saved.");
+    if (notify) notify(t("content.editor.page.saved"));
     router.refresh();
   }
 
@@ -215,9 +219,21 @@ export function PageEditor({
       className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start"
     >
       <div className="min-w-0 space-y-6">
-        <Panel id="page-details" title="Page" description={`On ${siteLabel}, in ${page.locale}.`}>
+        <Panel
+          id="page-details"
+          title={t("content.editor.page.title")}
+          description={t("content.editor.page.description", {
+            site: siteLabel,
+            locale: page.locale,
+          })}
+        >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label={article ? "Article title" : "Page title"} htmlFor="title">
+            <Field
+              label={
+                article ? t("content.editor.page.articleTitle") : t("content.editor.page.pageTitle")
+              }
+              htmlFor="title"
+            >
               <input
                 id="title"
                 required
@@ -231,19 +247,23 @@ export function PageEditor({
             </Field>
             {template ? (
               <Field
-                label="Address"
+                label={t("content.editor.page.address")}
                 htmlFor="path"
-                hint="Fixed: the page is part of the site's design."
+                hint={t("content.editor.page.addressFixedHint")}
               >
                 <input
                   id="path"
-                  value={page.path ?? "Shown on every page (site-wide part)"}
+                  value={page.path ?? t("content.editor.page.addressSiteWide")}
                   readOnly
                   className={cx(FIELD, page.path ? "font-mono" : undefined)}
                 />
               </Field>
             ) : (
-              <Field label="Address" htmlFor="slug" hint="Changing it changes the page URL.">
+              <Field
+                label={t("content.editor.page.address")}
+                htmlFor="slug"
+                hint={t("content.editor.page.addressSlugHint")}
+              >
                 <div className="flex items-center">
                   <span className="inline-flex h-10 items-center rounded-l-lg border border-r-0 border-line-strong bg-surface-2 px-3 font-mono text-sm text-ink-3">
                     {article ? "/news/" : "/"}
@@ -277,8 +297,8 @@ export function PageEditor({
         {article ? (
           <Panel
             id="article-fields"
-            title="Summary and cover"
-            description="Shown on the news list and at the top of the article."
+            title={t("content.editor.page.articleFields.title")}
+            description={t("content.editor.page.articleFields.description")}
           >
             <div className="space-y-4">
               <Fields
@@ -307,11 +327,8 @@ export function PageEditor({
               onChange={updateMenu}
             />
           ) : (
-            <Panel key="menu-invalid" id="menu-invalid" title="Menu">
-              <FormMessage kind="error">
-                The draft of this menu does not match the menu fields. Restore a revision from the
-                history to edit it.
-              </FormMessage>
+            <Panel key="menu-invalid" id="menu-invalid" title={t("content.editor.page.menu.title")}>
+              <FormMessage kind="error">{t("content.editor.page.menu.invalid")}</FormMessage>
             </Panel>
           )
         ) : template ? (
@@ -326,14 +343,28 @@ export function PageEditor({
         ) : (
           <Panel
             id="sections"
-            title={article ? "Article body" : "Sections"}
-            description={`${sectionCount} of at most ${CMS_SECTIONS_MAX}. Shown on the ${article ? "article" : "page"} in this order.`}
+            title={
+              article
+                ? t("content.editor.page.sections.articleTitle")
+                : t("content.editor.page.sections.title")
+            }
+            description={
+              article
+                ? t("content.editor.page.sections.descriptionArticle", {
+                    count: sectionCount,
+                    max: CMS_SECTIONS_MAX,
+                  })
+                : t("content.editor.page.sections.descriptionPage", {
+                    count: sectionCount,
+                    max: CMS_SECTIONS_MAX,
+                  })
+            }
           >
             {sections.length === 0 ? (
               <p className="rounded-xl border border-dashed border-line-strong px-4 py-6 text-center text-sm text-ink-3">
                 {article
-                  ? "No body yet. Add a Text section below; an article needs at least one section to be published."
-                  : "No sections yet. Add the first one below; a page usually opens with a hero."}
+                  ? t("content.editor.page.sections.emptyArticle")
+                  : t("content.editor.page.sections.emptyPage")}
               </p>
             ) : (
               <ol className="space-y-4">
@@ -400,17 +431,17 @@ export function PageEditor({
       </div>
 
       <div className="space-y-6 lg:sticky lg:top-6">
-        <Panel id="draft" title="Draft">
+        <Panel id="draft" title={t("content.editor.page.draft.title")}>
           <div className="space-y-3 text-sm">
             <p className="text-ink-2">
-              Version {version}
+              {t("content.editor.page.draft.version", { version })}
               {dirty ? (
-                <span className="ml-2 font-medium text-amber-ink">· unsaved changes</span>
+                <span className="ml-2 font-medium text-amber-ink">
+                  {t("content.editor.page.draft.unsaved")}
+                </span>
               ) : null}
             </p>
-            <p className="text-ink-3">
-              Saving keeps the draft in the CMS; the site shows only what is published.
-            </p>
+            <p className="text-ink-3">{t("content.editor.page.draft.note")}</p>
             {error ? <FormMessage kind="error">{error}</FormMessage> : null}
             {!readOnly ? (
               <button
@@ -419,11 +450,11 @@ export function PageEditor({
                 className={cx(buttonStyles.primary, "w-full")}
               >
                 {pending ? <Spinner /> : <Icon name="check" size={17} />}
-                <span>Save draft</span>
+                <span>{t("content.editor.page.draft.save")}</span>
               </button>
             ) : (
               <p className="rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
-                Read only for you on this site.
+                {t("content.editor.page.draft.readOnly")}
               </p>
             )}
           </div>
@@ -468,6 +499,7 @@ function SectionCard({
   onMove: (to: number) => void;
   onRemove: () => void;
 }) {
+  const t = useT();
   const def = SECTION_BY_TYPE.get(section.type);
   const path = `content.sections.${index}`;
   const headingId = `${section.id}-heading`;
@@ -484,25 +516,28 @@ function SectionCard({
           <span className="tabular inline-flex size-6 items-center justify-center rounded-md bg-surface-2 text-xs text-ink-2">
             {index + 1}
           </span>
-          {def?.label ?? section.type}
+          {def ? cmsText(def.label, t) : section.type}
         </h3>
         {!readOnly ? (
           <div className="flex items-center gap-1">
             <IconButton
-              label={`Move section ${index + 1} up`}
+              label={t("content.editor.section.moveUp", { n: index + 1 })}
               disabled={index === 0}
               onClick={() => onMove(index - 1)}
             >
               <Icon name="chevron" size={16} className="-rotate-90" />
             </IconButton>
             <IconButton
-              label={`Move section ${index + 1} down`}
+              label={t("content.editor.section.moveDown", { n: index + 1 })}
               disabled={index === count - 1}
               onClick={() => onMove(index + 1)}
             >
               <Icon name="chevron" size={16} className="rotate-90" />
             </IconButton>
-            <IconButton label={`Remove section ${index + 1}`} onClick={onRemove}>
+            <IconButton
+              label={t("content.editor.section.remove", { n: index + 1 })}
+              onClick={onRemove}
+            >
               <Icon name="trash" size={16} />
             </IconButton>
           </div>
@@ -520,7 +555,7 @@ function SectionCard({
             onChange={onChange}
           />
         ) : (
-          <p className="text-sm text-danger">Unknown section type. Remove it to save the page.</p>
+          <p className="text-sm text-danger">{t("content.editor.section.unknown")}</p>
         )}
       </div>
     </li>
@@ -536,11 +571,12 @@ function AddSection({
   disabled: boolean;
   onAdd: (def: CmsSectionType) => void;
 }) {
+  const t = useT();
   const id = useId();
   return (
     <div className="mt-5 border-t border-line pt-4" role="group" aria-labelledby={id}>
       <p id={id} className="mb-3 text-sm font-medium text-ink">
-        Add a section
+        {t("content.editor.section.add")}
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {types.map((def) => (
@@ -555,8 +591,8 @@ function AddSection({
               <Icon name="plus" size={15} />
             </span>
             <span>
-              <span className="block text-sm font-medium text-ink">{def.label}</span>
-              <span className="block text-xs text-ink-3">{def.description}</span>
+              <span className="block text-sm font-medium text-ink">{cmsText(def.label, t)}</span>
+              <span className="block text-xs text-ink-3">{cmsText(def.description, t)}</span>
             </span>
           </button>
         ))}
@@ -584,12 +620,13 @@ function DesignFields({
   siteKey: "BV" | "CORPORATE";
   onChange: (values: ItemValue) => void;
 }) {
+  const t = useT();
   const groups = fields.filter((f) => f.type === "group");
   const rest = fields.filter((f) => f.type !== "group");
   return (
     <>
       {rest.length ? (
-        <Panel id="content-fields" title="Content">
+        <Panel id="content-fields" title={t("content.editor.designContent")}>
           <div className="space-y-4">
             <Fields
               fields={rest}
@@ -606,7 +643,12 @@ function DesignFields({
       ) : null}
       {groups.map((g) =>
         g.type === "group" ? (
-          <Panel key={g.key} id={`block-${g.key}`} title={g.label} description={g.hint}>
+          <Panel
+            key={g.key}
+            id={`block-${g.key}`}
+            title={cmsText(g.label, t)}
+            description={cmsText(g.hint, t)}
+          >
             <div className="space-y-4">
               <Fields
                 fields={g.fields}
@@ -626,14 +668,17 @@ function DesignFields({
   );
 }
 
-const OG_IMAGE_FIELD: CmsField = {
-  type: "asset",
-  key: "ogImage",
-  label: "Open Graph image",
-  kinds: ["image"],
-  required: false,
-  hint: "Empty: the page's own image, then the site's default image.",
-};
+/** The page's Open Graph image chooser (a field of the form, not of the contracts). */
+function ogImageField(t: Translate): CmsField {
+  return {
+    type: "asset",
+    key: "ogImage",
+    label: t("content.editor.seo.ogImageLabel"),
+    kinds: ["image"],
+    required: false,
+    hint: t("content.editor.seo.ogImageHint"),
+  };
+}
 
 /**
  * DP-209: the page's SEO with a live preview (search result, link preview, canonical URL and
@@ -673,6 +718,7 @@ function PageSeoPanel({
   onChange: (patch: Partial<SeoValues>) => void;
   onOgImage: (v: ItemValue) => void;
 }) {
+  const t = useT();
   const chosen = (ogImage["ogImage"] as string | undefined) || null;
   const view = seoView(
     {
@@ -691,8 +737,8 @@ function PageSeoPanel({
   return (
     <Panel
       id="seo"
-      title="SEO"
-      description="Search results and link previews. Saved with the draft; the site shows it after publishing."
+      title={t("content.editor.seo.title")}
+      description={t("content.editor.seo.description")}
     >
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <SeoFields
@@ -702,13 +748,15 @@ function PageSeoPanel({
           readOnly={readOnly}
           invalid={invalid}
           pathPrefix="seo."
-          titleFallback={`“${fallbackTitle}”`}
+          titleFallback={t("content.editor.seo.titleFallback", { title: fallbackTitle })}
           descriptionFallback={
-            fallbackDescription ? "the page's summary" : "the site's default description"
+            fallbackDescription
+              ? t("content.editor.seo.fallbackSummary")
+              : t("content.editor.seo.fallbackSiteDescription")
           }
           ogImage={
             <Fields
-              fields={[OG_IMAGE_FIELD]}
+              fields={[ogImageField(t)]}
               values={ogImage}
               path="seo"
               idPrefix={`seo-${pageId.slice(0, 8)}`}
@@ -741,10 +789,11 @@ function SiteSeoPreview({
   /** ML-5: the language of this `bv.site-seo` fragment (its home: `/en`, `/nl`). */
   locale: string;
 }) {
+  const t = useT();
   const text = (k: string) => ((values[k] as string | undefined) ?? "").trim();
   const site: SiteSeoDefaults = {
-    siteName: text("siteName") || "Site name",
-    defaultTitle: text("defaultTitle") || "Default title",
+    siteName: text("siteName") || t("content.editor.siteSeoPreview.siteName"),
+    defaultTitle: text("defaultTitle") || t("content.editor.siteSeoPreview.defaultTitle"),
     defaultDescription: text("defaultDescription") || null,
     defaultOgImage: text("defaultOgImage") || "",
   };
@@ -767,8 +816,8 @@ function SiteSeoPreview({
   return (
     <Panel
       id="seo-defaults-preview"
-      title="Preview"
-      description="A page without its own SEO values, with these defaults (as the home page would show them)."
+      title={t("content.editor.siteSeoPreview.title")}
+      description={t("content.editor.siteSeoPreview.description")}
     >
       <SeoPreview
         view={view}

@@ -14,3 +14,5 @@ apps/admin/test/fixtures/en-baseline/
 apps/admin/test/fixtures/catalog-en/
 # ML-12b: Company Review UI texts recorded on 7b543f6 (test/company-review-ui-literals.test.ts).
 apps/admin/test/fixtures/company-review-en/
+# ML-12c: Content UI texts recorded on a7b140f (test/content-ui-literals.test.ts).
+apps/admin/test/fixtures/content-en/

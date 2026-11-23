@@ -1,3 +1,7 @@
+// ML-12c (DP-243): extended — `push()` arguments are text again (`out.push("Default")`; router
+// paths start with "/" and stay silent), `value`/`defaultValue` with spaces is text, a template is
+// also judged with its values as digits (a field path stays a code), `callCms` paths are silent.
+//
 // ML-12a (DP-243): finds the user-visible English text written directly in code — JSX text, and
 // string or template literals that read like UI text — with the TypeScript parser. Used by
 // test/catalog-ui-literals.test.ts: no hard-coded UI text may remain in the Products/Catalog area,
@@ -84,8 +88,8 @@ const SILENT_CALLS = new Set([
   "fetch",
   "callCatalog",
   "getCatalog",
+  "callCms",
   "serverRead",
-  "push",
   "replace",
   "replaceAll",
   "startsWith",
@@ -188,8 +192,14 @@ function hasIgnoreComment(sf: ts.SourceFile, node: ts.Node): boolean {
   return near.some((l) => l.includes("i18n-ignore"));
 }
 
+/**
+ * ML-12c: attributes that are silent only while their value is a code. `value="nl"` is an enum, but
+ * `value="Shown on every page (site-wide part)"` is what a read-only field shows to a person.
+ */
+const CODE_VALUE_ATTRS = new Set(["value", "defaultValue"]);
+
 /** True when the literal sits where its text is a value of the program, not text for people. */
-function isSilentPosition(node: ts.Node): boolean {
+function isSilentPosition(node: ts.Node, text = ""): boolean {
   let child: ts.Node = node;
   let parent: ts.Node | undefined = node.parent;
   // a literal inside a template, a parenthesis, `as`, `?:` or `||`/`??` is judged by its context
@@ -244,6 +254,7 @@ function isSilentPosition(node: ts.Node): boolean {
   ) {
     const attr = ts.isJsxAttribute(parent) ? parent : (parent.parent as ts.JsxAttribute);
     const name = attr.name.getText();
+    if (CODE_VALUE_ATTRS.has(name) && /\s/.test(text.trim())) return false;
     return (
       SILENT_ATTRS.has(name) ||
       name.startsWith("data-") ||
@@ -278,12 +289,17 @@ export function scanSource(file: string, source: string): Literal[] {
       return;
     }
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      if (looksLikeUiText(node.text) && !isSilentPosition(node)) add(node, node.text);
+      if (looksLikeUiText(node.text) && !isSilentPosition(node, node.text)) add(node, node.text);
       return;
     }
     if (ts.isTemplateExpression(node)) {
       const text = templateText(node);
-      if (looksLikeUiText(text.replaceAll("{…}", " ")) && !isSilentPosition(node)) add(node, text);
+      // ML-12c: judged twice — values as gaps and values as digits — so a field path such as
+      // `content.items.${i}.label` stays a code while `Move ${what} up` is still text.
+      const gaps = text.replaceAll("{…}", " ");
+      const digits = text.replaceAll("{…}", "0");
+      if (looksLikeUiText(gaps) && looksLikeUiText(digits) && !isSilentPosition(node, gaps))
+        add(node, text);
       node.templateSpans.forEach((s) => visit(s.expression));
       return;
     }

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { CmsSite } from "@dream/contracts";
+import type { AdminLocale } from "../../lib/i18n/config";
+import type { Translate } from "../../lib/i18n/types";
 import { cx } from "../ui";
 import { languageLabel } from "./site-languages";
 
@@ -11,15 +13,20 @@ export function LanguageTabs({
   site,
   current,
   hrefFor,
+  t,
+  locale,
 }: {
   site: CmsSite;
   current: string;
   hrefFor: (locale: string) => string;
+  /** ML-12c: the UI language of the server page that renders the tabs. */
+  t: Translate;
+  locale: AdminLocale;
 }) {
   const locales = site.locales.filter((l) => l.enabled);
   if (locales.length < 2) return null;
   return (
-    <nav aria-label="Content language" className="flex flex-wrap gap-1">
+    <nav aria-label={t("content.pages.languageTabs.label")} className="flex flex-wrap gap-1">
       {locales.map((l) => (
         <Link
           key={l.locale}
@@ -32,7 +39,11 @@ export function LanguageTabs({
               : "text-ink-3 ring-line hover:text-ink",
           )}
         >
-          {l.public ? languageLabel(l.locale) : `${languageLabel(l.locale)} · not public`}
+          {l.public
+            ? languageLabel(l.locale, locale)
+            : t("content.pages.languageTabs.notPublic", {
+                language: languageLabel(l.locale, locale),
+              })}
         </Link>
       ))}
     </nav>

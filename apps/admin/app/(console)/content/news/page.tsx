@@ -12,20 +12,26 @@ import { pickCmsSite, publicationState } from "../../../../components/cms/parts"
 import { PageHeader, SiteSwitcher } from "../../../../components/catalog/parts";
 import { Icon } from "../../../../components/icons";
 import { buttonStyles, EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
+import { ADMIN_TIME_ZONE, INTL_LOCALE } from "../../../../lib/i18n/config";
+import { dateTimeFormat } from "../../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "News" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("content.pages.meta.news") };
+}
 
 const CMS = "/api/v1/admin/cms";
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 /** Newest activity first: the last publication, else the last save. */
 function sortKey(p: CmsPageSummary): string {
@@ -41,15 +47,17 @@ function sortKey(p: CmsPageSummary): string {
 export default async function NewsListPage({ searchParams }: PageProps<"/content/news">) {
   await requireStaffSession();
   const params = await searchParams;
+  const t = await getTranslator();
+  const uiLocale = await getAdminLocale();
+  const DATE = dateTimeFormat(uiLocale, DATE_OPTIONS);
   const context = await serverRead(`${CMS}/context`, CmsContextResponseSchema);
   if (!context.ok || context.data.sites.length === 0) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="content" title="News" />
+        <PageHeader icon="content" title={t("content.pages.news.title")} />
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
-          <EmptyState icon="shield" title="No access to site content">
-            Your roles do not include reading content on any site. Ask a site or platform
-            administrator for a content role.
+          <EmptyState icon="shield" title={t("content.pages.shared.noAccessTitle")}>
+            {t("content.pages.shared.noAccessBody")}
           </EmptyState>
         </div>
       </div>
@@ -79,24 +87,26 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="content"
-        title="Content"
-        description="News articles of the public sites. Write drafts, preview them and publish; the site lists only what is published, newest first."
+        title={t("content.pages.news.contentTitle")}
+        description={t("content.pages.news.description")}
         actions={
           site.canEdit ? (
             <Link href={newHref} className={buttonStyles.primary}>
               <Icon name="plus" size={17} />
-              New article
+              {t("content.pages.news.newArticle")}
             </Link>
           ) : null
         }
       />
 
-      <ContentTabs current="news" siteParam={sp} />
+      <ContentTabs current="news" siteParam={sp} t={t} />
 
       <LanguageTabs
         site={site}
         current={locale}
         hrefFor={(l) => `/content/news?site=${sp}&locale=${l}`}
+        t={t}
+        locale={uiLocale}
       />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -107,8 +117,8 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
         />
         <p className="text-sm text-ink-3">
           {site.canEdit
-            ? `You can write and edit articles of this site (${site.locale}).`
-            : "Read only on this site."}
+            ? t("content.pages.news.canEdit", { locale: site.locale })
+            : t("content.pages.shared.readOnly")}
         </p>
       </div>
 
@@ -116,25 +126,27 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
         <p className="text-sm text-ink-2">
           {heading ? (
             <span key="heading">
-              Heading and introduction of the news list:{" "}
+              {t("content.pages.news.headingBefore")}
               <Link
                 href={`/content/${heading.id}?site=${sp}`}
                 className="font-medium text-ink underline underline-offset-4"
               >
-                edit the News page
-              </Link>{" "}
-              ({publicationState(heading).label.toLowerCase()}).
+                {t("content.pages.news.headingLink")}
+              </Link>
+              {t("content.pages.news.headingAfter", {
+                state: publicationState(heading, t).label.toLocaleLowerCase(INTL_LOCALE[uiLocale]),
+              })}
             </span>
           ) : (
             <span key="missing">
-              The heading of the news list is not in the CMS yet: import “News” under{" "}
+              {t("content.pages.news.missingBefore")}
               <Link
                 href={`/content?site=${sp}`}
                 className="font-medium text-ink underline underline-offset-4"
               >
-                Pages
+                {t("content.pages.news.missingLink")}
               </Link>
-              , then publish it. Until then the site shows the list as unavailable.
+              {t("content.pages.news.missingAfter")}
             </span>
           )}
         </p>
@@ -142,39 +154,35 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
 
       <Panel
         id="news-articles"
-        title="Articles"
+        title={t("content.pages.news.panelTitle")}
         description={
-          list.ok
-            ? articles.length === 1
-              ? "1 article"
-              : `${articles.length} articles`
-            : undefined
+          list.ok ? t("content.pages.news.count", { count: articles.length }) : undefined
         }
         bodyClassName="px-0! pb-2! pt-3!"
       >
         {!list.ok ? (
-          <ErrorState title="The article list could not be loaded">
+          <ErrorState title={t("content.pages.news.loadError")}>
             {list.status === 403
-              ? "You are not allowed to read content on this site."
-              : "Try again in a moment."}
+              ? t("content.pages.shared.forbidden")
+              : t("content.pages.shared.tryAgain")}
           </ErrorState>
         ) : articles.length === 0 ? (
           <EmptyState
             icon="content"
-            title="No articles on this site yet"
-            {...(site.canEdit ? { action: { href: newHref, label: "New article" } } : {})}
+            title={t("content.pages.news.emptyTitle")}
+            {...(site.canEdit
+              ? { action: { href: newHref, label: t("content.pages.news.newArticle") } }
+              : {})}
           >
-            {site.canEdit
-              ? "Write the first article: a title, a summary, an optional cover image and the body."
-              : "Content editors of this site write articles here."}
+            {site.canEdit ? t("content.pages.news.emptyEdit") : t("content.pages.news.emptyRead")}
           </EmptyState>
         ) : (
           <ul
             className="divide-y divide-line border-t border-line"
-            aria-label={`News articles of ${site.name}`}
+            aria-label={t("content.pages.news.listLabel", { site: site.name })}
           >
             {articles.map((p) => {
-              const state = publicationState(p);
+              const state = publicationState(p, t);
               return (
                 <li
                   key={p.id}

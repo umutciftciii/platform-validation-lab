@@ -13,6 +13,11 @@ vi.mock("../lib/server-api", () => ({
     return { ok: true, data: schema.parse(reads.get(path)) };
   },
 }));
+// ML-12c: the content pages read the admin UI language (cookie); no cookie = English.
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, has: () => false }),
+  headers: async () => new Headers(),
+}));
 vi.mock("../lib/server-session", () => ({ requireStaffSession: async () => ({}) }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: () => undefined, refresh: () => undefined }),

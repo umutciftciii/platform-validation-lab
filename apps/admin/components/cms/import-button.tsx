@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { callCms } from "../../lib/cms-client";
 import { FormMessage } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
 
 /**
@@ -23,6 +24,7 @@ export function ImportButton({
   templateKey: string;
   title: string;
 }) {
+  const t = useT();
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [checked, setChecked] = useState<CmsImportResponse | null>(null);
@@ -49,11 +51,12 @@ export function ImportButton({
           role="status"
         >
           <p className="text-ink">
-            Check passed: {title} can be imported as a draft with{" "}
-            {checked.summary
-              .map((s) => (s.items === null ? s.field : `${s.field} (${s.items})`))
-              .join(", ")}
-            . The site does not change until it is published.
+            {t("content.pages.importButton.checkPassed", {
+              title,
+              fields: checked.summary
+                .map((s) => (s.items === null ? s.field : `${s.field} (${s.items})`))
+                .join(", "),
+            })}
           </p>
           <div className="flex gap-2">
             <button
@@ -63,7 +66,7 @@ export function ImportButton({
               className={cx(buttonStyles.primary, "h-9")}
             >
               {pending ? <Spinner /> : null}
-              <span>Import as draft</span>
+              <span>{t("content.pages.importButton.importDraft")}</span>
             </button>
             <button
               type="button"
@@ -71,7 +74,7 @@ export function ImportButton({
               disabled={pending}
               className={cx(buttonStyles.secondary, "h-9")}
             >
-              Cancel
+              {t("content.pages.importButton.cancel")}
             </button>
           </div>
         </div>
@@ -83,7 +86,7 @@ export function ImportButton({
           className={cx(buttonStyles.secondary, "h-9")}
         >
           {pending ? <Spinner /> : null}
-          <span>Import into CMS</span>
+          <span>{t("content.pages.importButton.importIntoCms")}</span>
         </button>
       )}
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}

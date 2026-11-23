@@ -17,6 +17,12 @@ import { media } from "./catalog/tr/media";
 import { xrefs } from "./catalog/tr/xrefs";
 import { translations } from "./catalog/tr/translations";
 import { companyReview } from "./company-review/tr";
+import { common as contentCommon } from "./content/tr/common";
+import { api as contentApi } from "./content/tr/api";
+import { contract as contentContract } from "./content/tr/contract";
+import { pages as contentPages } from "./content/tr/pages";
+import { editor as contentEditor } from "./content/tr/editor";
+import { menus as contentMenus } from "./content/tr/menus";
 
 export const tr: Messages = {
   common: {
@@ -359,4 +365,13 @@ export const tr: Messages = {
   },
   /** ML-12b (DP-243): the Company Review area (./company-review/). */
   companyReview,
+  /** ML-12c (DP-243): the Content area — CMS pages, news and menus (./content/<lang>/). */
+  content: {
+    common: contentCommon,
+    api: contentApi,
+    contract: contentContract,
+    pages: contentPages,
+    editor: contentEditor,
+    menus: contentMenus,
+  },
 };

@@ -61,6 +61,18 @@ const SAME_IN_TR = new Set([
   "companyReview.current.slug",
   "companyReview.detail.sku",
   "companyReview.list.site",
+  // ML-12c: messages made only of parameters and punctuation, and the technical term noindex
+  "content.api.path.menu",
+  "content.api.path.seo",
+  "content.api.pathWords.noindex",
+  "content.common.registry.stage",
+  "content.editor.fields.item",
+  "content.editor.fields.listCountRange",
+  "content.editor.seo.title",
+  "content.editor.seo.titleFallback",
+  "content.editor.translationTabs.menuWarnings.item",
+  "content.menus.references.change",
+  "content.pages.news.headingAfter",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
@@ -83,11 +95,14 @@ describe("dictionary completeness (EN source, TR)", () => {
 
   it("counts the keys of this release", () => {
     // ML-11 scope: shell, navigation, auth, errors, 404 and the error boundary (ADR-028 D15);
-    // ML-12a adds the Products/Catalog area (catalog.*), ML-12b the Company Review area.
+    // ML-12a adds the Products/Catalog area (catalog.*), ML-12b the Company Review area, ML-12c
+    // the Content area (content.*).
     expect(EN.length).toBe(TR.length);
     expect(EN.length).toBeGreaterThan(200);
     expect(EN.filter(([k]) => k.startsWith("catalog.")).length).toBeGreaterThan(1000);
     expect(EN.filter(([k]) => k.startsWith("companyReview.")).length).toBeGreaterThan(200);
+    // ML-12c: the Content area (pages, news, editor, menus, CMS contract texts, API messages)
+    expect(EN.filter(([k]) => k.startsWith("content.")).length).toBeGreaterThan(500);
   });
 
   it("a missing or an extra Turkish key is a compile error", () => {
