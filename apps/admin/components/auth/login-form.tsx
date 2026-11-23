@@ -1,9 +1,12 @@
 "use client";
 
-import { DEFAULT_ERROR_MESSAGES, ErrorBodySchema, type ErrorCode } from "@dream/contracts";
+import { ErrorBodySchema, type ErrorCode } from "@dream/contracts";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { COOKIES_BLOCKED_MESSAGE, secureCookiesBlocked } from "../../lib/cookie-support";
+import { secureCookiesBlocked } from "../../lib/cookie-support";
+import { createTranslator } from "../../lib/i18n/translate";
+import type { Translate } from "../../lib/i18n/types";
+import { useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 
@@ -13,10 +16,16 @@ const MFA_PATH = "/api/v1/auth/staff/login/mfa";
 type Step = "credentials" | "mfa";
 type Factor = "code" | "recoveryCode";
 
-/** Message for a failed call: the contract's text for a known code, a generic one otherwise. */
-export async function messageFor(response: Response): Promise<{ code?: ErrorCode; text: string }> {
+/**
+ * Message for a failed call, in the console's language: the text for a known error code (English
+ * equals the contract's text), a generic one otherwise.
+ */
+export async function messageFor(
+  response: Response,
+  t: Translate = createTranslator("en"),
+): Promise<{ code?: ErrorCode; text: string }> {
   if (response.status === 429) {
-    return { text: "Too many attempts. Wait a few minutes before trying again." };
+    return { text: t("auth.tooManyAttempts") };
   }
   const parsed = ErrorBodySchema.safeParse(await response.json().catch(() => null));
   if (parsed.success) {
@@ -26,18 +35,15 @@ export async function messageFor(response: Response): Promise<{ code?: ErrorCode
     );
     if (code === "AUTH_CHALLENGE_EXPIRED" && cookieMissing) {
       // DP-119: the browser dropped the challenge cookie of the first step.
-      return { code, text: COOKIES_BLOCKED_MESSAGE };
+      return { code, text: t("auth.cookiesBlocked") };
     }
     if (code === "AUTH_CSRF_REJECTED") {
       // The API only accepts sign-ins from the console's configured address (Origin check).
-      return {
-        code,
-        text: "Sign-in is not allowed from this address. Open the admin console at its configured address and try again.",
-      };
+      return { code, text: t("login.csrfRejected") };
     }
-    return { code, text: DEFAULT_ERROR_MESSAGES[code] };
+    return { code, text: t(`errors.${code}`) };
   }
-  return { text: "Sign-in is not available right now. Try again in a moment." };
+  return { text: t("login.unavailable") };
 }
 
 async function postJson(path: string, body: unknown): Promise<Response> {
@@ -58,6 +64,7 @@ let cookieProbe: boolean | undefined;
 
 export function LoginForm() {
   const router = useRouter();
+  const t = useT();
   // false in the server HTML and until React has hydrated. Submitting is blocked until then, so
   // a quick Enter can never fall back to a native form submission.
   const hydrated = useSyncExternalStore(
@@ -91,10 +98,10 @@ export function LoginForm() {
         setStep("mfa");
         requestAnimationFrame(() => codeRef.current?.focus());
       } else {
-        setError((await messageFor(res)).text);
+        setError((await messageFor(res, t)).text);
       }
     } catch {
-      setError("The admin service could not be reached. Check your connection and try again.");
+      setError(t("auth.unreachable"));
     } finally {
       setPending(false);
     }
@@ -115,12 +122,12 @@ export function LoginForm() {
         router.refresh();
         return;
       }
-      const { code, text } = await messageFor(res);
+      const { code, text } = await messageFor(res, t);
       if (code === "AUTH_CHALLENGE_EXPIRED") setStep("credentials");
       setError(text);
       setPending(false);
     } catch {
-      setError("The admin service could not be reached. Check your connection and try again.");
+      setError(t("auth.unreachable"));
       setPending(false);
     }
   }
@@ -141,7 +148,7 @@ export function LoginForm() {
       className="flex items-start gap-2.5 rounded-lg bg-amber-soft px-3.5 py-3 text-sm text-amber-ink"
     >
       <Icon name="alert" size={17} className="mt-0.5 shrink-0" />
-      {COOKIES_BLOCKED_MESSAGE}
+      {t("auth.cookiesBlocked")}
     </p>
   ) : null;
 
@@ -151,7 +158,7 @@ export function LoginForm() {
         {cookieNotice}
         <div className="space-y-1.5">
           <label htmlFor="email" className="block text-sm font-medium text-ink">
-            Work email
+            {t("login.workEmail")}
           </label>
           <input
             id="email"
@@ -165,7 +172,7 @@ export function LoginForm() {
         </div>
         <div className="space-y-1.5">
           <label htmlFor="password" className="block text-sm font-medium text-ink">
-            Password
+            {t("login.password")}
           </label>
           <input
             id="password"
@@ -186,10 +193,10 @@ export function LoginForm() {
           {pending ? (
             <>
               <Spinner />
-              Checking…
+              {t("auth.checking")}
             </>
           ) : (
-            "Continue"
+            t("login.continue")
           )}
         </button>
       </form>
@@ -200,12 +207,10 @@ export function LoginForm() {
     <form method="post" onSubmit={submitMfa} className="space-y-5">
       <div className="space-y-1.5">
         <label htmlFor="answer" className="block text-sm font-medium text-ink">
-          {factor === "code" ? "Authenticator code" : "Recovery code"}
+          {factor === "code" ? t("auth.authenticatorCode") : t("auth.recoveryCode")}
         </label>
         <p id="answer-help" className="text-sm text-ink-3">
-          {factor === "code"
-            ? "Enter the 6-digit code from your authenticator app."
-            : "Enter one of your saved recovery codes, for example ABCDE-12345. Each code works once."}
+          {factor === "code" ? t("login.codeHelp") : t("login.recoveryHelp")}
         </p>
         <input
           key={factor}
@@ -230,10 +235,10 @@ export function LoginForm() {
         {pending ? (
           <>
             <Spinner />
-            Verifying…
+            {t("auth.verifying")}
           </>
         ) : (
-          "Sign in"
+          t("login.signIn")
         )}
       </button>
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -245,7 +250,7 @@ export function LoginForm() {
           }}
           className="rounded text-petrol hover:text-petrol-strong hover:underline"
         >
-          {factor === "code" ? "Use a recovery code instead" : "Use the authenticator instead"}
+          {factor === "code" ? t("auth.useRecoveryCode") : t("auth.useAuthenticator")}
         </button>
         <button
           type="button"
@@ -256,7 +261,7 @@ export function LoginForm() {
           }}
           className="rounded text-ink-3 hover:text-ink"
         >
-          Start over
+          {t("login.startOver")}
         </button>
       </div>
     </form>

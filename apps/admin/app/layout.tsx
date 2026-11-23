@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Archivo } from "next/font/google";
+import { LocaleProvider } from "../components/i18n/locale-provider";
+import { getAdminLocale } from "../lib/i18n/server";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import "./globals.css";
 
@@ -26,14 +28,19 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+// ML-11: `lang` and every text follow the dp-admin-locale cookie (English by default). Reading it
+// makes each route render per request; the console's routes already did (session cookie).
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const locale = await getAdminLocale();
   return (
-    <html lang="en" className={archivo.variable} suppressHydrationWarning>
+    <html lang={locale} className={archivo.variable} suppressHydrationWarning>
       <head>
         {/* Sets data-theme before first paint so a stored dark theme never flashes light. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <LocaleProvider locale={locale}>{children}</LocaleProvider>
+      </body>
     </html>
   );
 }

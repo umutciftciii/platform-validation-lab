@@ -5,6 +5,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NAV_ITEMS, isActive } from "../../lib/navigation";
 import { BrandMark, Icon } from "../icons";
 import { buttonStyles, cx } from "../ui";
+import { useT } from "../i18n/locale-provider";
+import { LanguageSwitcher } from "./language-switcher";
 import { Sidebar } from "./sidebar";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu, type ShellUser } from "./user-menu";
@@ -28,6 +30,7 @@ export function AppShell({
   children: ReactNode;
 }) {
   const pathname = usePathname();
+  const t = useT();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
@@ -56,7 +59,7 @@ export function AppShell({
         href="#main"
         className="sr-only z-50 rounded-lg bg-petrol px-4 py-2 text-petrol-ink focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
       >
-        Skip to content
+        {t("shell.skipToContent")}
       </a>
 
       {/* Tablet rail and desktop sidebar */}
@@ -90,7 +93,7 @@ export function AppShell({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Navigation"
+          aria-label={t("shell.navigation")}
           inert={!drawerOpen}
           className={cx(
             "absolute inset-y-0 left-0 w-[min(84vw,300px)] shadow-raised transition-transform duration-300 ease-out-soft",
@@ -110,7 +113,7 @@ export function AppShell({
             className="on-rail absolute right-3 top-3.5 inline-flex size-9 items-center justify-center rounded-lg text-rail-ink-dim transition-colors hover:bg-rail-2 hover:text-white"
           >
             <Icon name="close" size={18} />
-            <span className="sr-only">Close navigation</span>
+            <span className="sr-only">{t("shell.closeNavigation")}</span>
           </button>
         </div>
       </div>
@@ -126,23 +129,24 @@ export function AppShell({
               className={cx(buttonStyles.icon, "-ml-1.5 md:hidden")}
             >
               <Icon name="menu" />
-              <span className="sr-only">Open navigation</span>
+              <span className="sr-only">{t("shell.openNavigation")}</span>
             </button>
             <span className="md:hidden">
               <BrandMark size={28} />
             </span>
-            <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+            <nav aria-label={t("shell.breadcrumb")} className="min-w-0 flex-1">
               <ol className="flex items-center gap-1.5 text-sm">
-                <li className="hidden text-ink-3 sm:block">Admin</li>
+                <li className="hidden text-ink-3 sm:block">{t("shell.admin")}</li>
                 <li className="hidden text-ink-3 sm:block" aria-hidden="true">
                   <Icon name="chevron" size={14} />
                 </li>
                 <li className="truncate font-medium text-ink" aria-current="page">
-                  {current?.label ?? "Admin"}
+                  {current ? t(`nav.items.${current.id}.label`) : t("shell.admin")}
                 </li>
               </ol>
             </nav>
             <span className="hidden sm:contents">
+              <LanguageSwitcher />
               <ThemeToggle />
             </span>
             <UserMenu user={user} />
@@ -156,8 +160,12 @@ export function AppShell({
         >
           {children}
           <div className="mt-12 flex items-center justify-between border-t border-line pt-5 text-xs text-ink-3 sm:hidden">
-            <span>Theme</span>
+            <span>{t("shell.theme")}</span>
             <ThemeToggle />
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs text-ink-3 sm:hidden">
+            <span>{t("language.label")}</span>
+            <LanguageSwitcher />
           </div>
         </main>
       </div>

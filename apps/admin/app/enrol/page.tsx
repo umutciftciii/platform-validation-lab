@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import { AuthFrame } from "../../components/auth/auth-frame";
 import { EnrolFlow } from "../../components/auth/enrol-flow";
+import { getTranslator } from "../../lib/i18n/server";
 
-export const metadata: Metadata = { title: "Account setup", referrer: "no-referrer" };
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: (await getTranslator())("enrol.metaTitle"), referrer: "no-referrer" };
+}
 
 /**
  * Activation, invitation, operator recovery (also the system owner's) and MFA re-enrolment with
@@ -11,11 +14,7 @@ export const metadata: Metadata = { title: "Account setup", referrer: "no-referr
  */
 export default function EnrolPage() {
   return (
-    <AuthFrame
-      width="wide"
-      railTitle="Your access, set up securely."
-      railText="A password only you know and an authenticator on your phone protect every sign-in to the console."
-    >
+    <AuthFrame width="wide" rail="enrol">
       <EnrolFlow />
     </AuthFrame>
   );
