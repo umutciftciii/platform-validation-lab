@@ -20,11 +20,12 @@ const ID = "0190f2a1-0000-7000-8000-000000000301";
 const CAT = "0190f2a1-0000-7000-8000-000000000501";
 
 describe("review tabs", () => {
-  it("has the four tabs in order, Content Review first", () => {
+  it("has the four tabs in order, Content review first", () => {
     const en = createTranslator("en");
     expect(REVIEW_TABS.map((t) => reviewTabLabel(t.id, en))).toEqual([
-      "Content Review",
-      "Missing & Verification",
+      // DP-275: tab names in sentence case, as in Turkish.
+      "Content review",
+      "Missing & verification",
       "Sources",
       "History",
     ]);

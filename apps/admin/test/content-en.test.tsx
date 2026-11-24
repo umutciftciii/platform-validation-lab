@@ -328,6 +328,7 @@ describe("client panels in the states their props select (EN)", () => {
             <MenuEditor
               menuKey={key}
               value={value}
+              contentLocale="en"
               targets={targets as never}
               readOnly={readOnly}
               invalid={(p) => (p.endsWith(".label") || p === "content.headline" ? true : undefined)}

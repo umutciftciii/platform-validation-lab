@@ -34,6 +34,7 @@ import { cmsText } from "../../lib/cms-text";
 import { INTL_LOCALE } from "../../lib/i18n/config";
 import type { Translate } from "../../lib/i18n/types";
 import { Field, FIELD, TEXTAREA } from "../catalog/parts";
+import { DATA_SLOT, DataInText } from "../i18n/data-in-text";
 import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, StatusPill } from "../ui";
@@ -80,6 +81,7 @@ const newLink = (): MenuLink => ({
 export function MenuEditor({
   menuKey,
   value,
+  contentLocale,
   targets,
   readOnly,
   invalid,
@@ -87,6 +89,8 @@ export function MenuEditor({
 }: {
   menuKey: CmsMenuKey;
   value: MenuValue;
+  /** The page's (menu's) content language: labels are data in this language (DP-272). */
+  contentLocale: string;
   targets: CmsMenuTargetsResponse | null;
   readOnly: boolean;
   invalid: Invalid;
@@ -98,6 +102,7 @@ export function MenuEditor({
         <NavEditor
           key="nav"
           value={value as BvNavMenu}
+          contentLocale={contentLocale}
           targets={targets}
           readOnly={readOnly}
           invalid={invalid}
@@ -129,12 +134,14 @@ export function MenuEditor({
 
 function NavEditor({
   value,
+  contentLocale,
   targets,
   readOnly,
   invalid,
   onChange,
 }: {
   value: BvNavMenu;
+  contentLocale: string;
   targets: CmsMenuTargetsResponse | null;
   readOnly: boolean;
   invalid: Invalid;
@@ -182,7 +189,11 @@ function NavEditor({
               />
               <div className="border-t border-line px-4 py-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-3">
-                  <span>{t("content.menus.nav.submenuOf", { label: item.label })}</span>
+                  <DataInText
+                    text={t("content.menus.nav.submenuOf", { label: DATA_SLOT })}
+                    data={item.label}
+                    lang={contentLocale}
+                  />
                 </p>
                 {item.children.length ? (
                   <ol className="space-y-3 border-l-2 border-line pl-3">

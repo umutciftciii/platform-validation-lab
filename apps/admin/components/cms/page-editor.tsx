@@ -321,6 +321,7 @@ export function PageEditor({
               key="menu"
               menuKey={menuKey}
               value={menu}
+              contentLocale={page.locale}
               targets={menuTargets}
               readOnly={readOnly}
               invalid={invalid}

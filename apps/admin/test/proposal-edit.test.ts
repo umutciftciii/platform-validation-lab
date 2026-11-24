@@ -51,7 +51,7 @@ describe("proposal text editor rules", () => {
     expect(textProblem("description", "x".repeat(8000), en, "en")).toBeNull();
     expect(textProblem("description", "x".repeat(8001), en, "en")).toMatch(/8,000 characters/);
     expect(textProblem("description", "Base oil [CONFIRM: grade]", en, "en")).toMatch(
-      /Missing & Verification/,
+      /Missing & verification/,
     );
   });
 

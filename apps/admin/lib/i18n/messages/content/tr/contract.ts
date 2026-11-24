@@ -145,15 +145,15 @@ export const contract: Messages["content"]["contract"] = {
     bvSiteSeo:
       "Site adı, varsayılan başlık, açıklama ve Open Graph görseli (DP-209). SEO altında yönetilir.",
     bvAboutUs:
-      "Canlı siteden (DP-135). Pazar görselleri kullanılmadı: pazarlarla ilgisi olmayan stok fotoğraflar.",
-    bvEnergyTrading: "Canlı siteden (DP-135); kaynağı belirtilmemiş +%12 rakamı çıkarıldı.",
-    bvLogistics: "Canlı siteden (DP-135).",
+      "Yayındaki siteden (DP-135). Pazar görselleri kullanılmadı: pazarlarla ilgisi olmayan stok fotoğraflar.",
+    bvEnergyTrading: "Yayındaki siteden (DP-135); kaynağı belirtilmemiş +%12 rakamı çıkarıldı.",
+    bvLogistics: "Yayındaki siteden (DP-135).",
     bvContact:
       "DP-150. İletişim bilgileri yayındaki alt bilgiden gelir; form DP-151'e kadar hiçbir şey göndermez.",
-    bvStrategicPartnership: "Canlı siteden (DP-206).",
-    bvOurTeam: "Canlı siteden (DP-206). Canlı sitede 0 gösteren sayaçlar çıkarıldı.",
+    bvStrategicPartnership: "Yayındaki siteden (DP-206).",
+    bvOurTeam: "Yayındaki siteden (DP-206). Yayındaki sitede 0 gösteren sayaçlar çıkarıldı.",
     bvNewsOilPricesUsIran:
-      "Canlı sitenin tek blog yazısı (DP-206); haber makalesi olarak içe aktarıldı.",
+      "Yayındaki sitenin tek blog yazısı (DP-206); haber makalesi olarak içe aktarıldı.",
     bvProductDetail: "Yayındaki ürün anlık görüntüleri. Ürünler altında düzenleyin.",
     bvPrivacy:
       "Onay kayıtlarına bağlı, sürümlü hukuki metin. Yalnızca yeni bir sürümle değiştirilebilir.",

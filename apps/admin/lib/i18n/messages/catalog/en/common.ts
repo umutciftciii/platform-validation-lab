@@ -59,7 +59,7 @@ export const common = {
   tabs: {
     content: "Content",
     technical: "Technical",
-    media: "Media & Documents",
+    media: "Media & documents",
     seo: "SEO",
     publication: "Publication",
   },
