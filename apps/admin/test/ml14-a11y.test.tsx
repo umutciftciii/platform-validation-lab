@@ -36,6 +36,7 @@ describe("menu editors have unique ids (DP-271)", () => {
           <MenuEditor
             menuKey={key}
             value={cmsMenuSchema(key).parse(content) as never}
+            contentLocale="en"
             targets={MENU_TARGETS as never}
             readOnly={false}
             invalid={() => undefined}

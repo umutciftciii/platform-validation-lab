@@ -87,7 +87,10 @@ export function SeoPreview({
             )}
           </div>
           <div className="space-y-0.5 border-t border-[#dadde1] bg-[#f2f3f5] px-3 py-2">
-            <p className="truncate text-[11px] uppercase text-[#606770]">{host}</p>
+            {/* DP-272: a host name is ASCII data; lang="en" keeps the uppercase "I" (not "İ") in a Turkish UI. */}
+            <p lang="en" className="truncate text-[11px] uppercase text-[#606770]">
+              {host}
+            </p>
             <p className="line-clamp-2 break-words text-[15px] font-semibold leading-snug text-[#1d2129]">
               {view.ogTitle}
             </p>

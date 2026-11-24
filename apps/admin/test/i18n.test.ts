@@ -57,9 +57,7 @@ const SAME_IN_TR = new Set([
   "catalog.media.documents.fields.typeOption",
   "catalog.taxonomy.categories.slug",
   // ML-12b: technical terms and the word "Site" (the same in Turkish)
-  "companyReview.current.sku",
   "companyReview.current.slug",
-  "companyReview.detail.sku",
   "companyReview.list.site",
   // ML-12c: messages made only of parameters and punctuation, and the technical term noindex
   "content.api.path.menu",

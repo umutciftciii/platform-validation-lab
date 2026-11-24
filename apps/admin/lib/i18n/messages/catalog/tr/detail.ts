@@ -35,7 +35,7 @@ export const detail: Messages["catalog"]["detail"] = {
       },
       savingNote: {
         before:
-          "Kaydetmek canlı siteyi hiçbir zaman yayınlamaz, yayından kaldırmaz veya değiştirmez. Önizleme ve yayın için",
+          "Kaydetmek yayındaki siteyi hiçbir zaman yayınlamaz, yayından kaldırmaz veya değiştirmez. Önizleme ve yayın için",
         link: "Yayın",
         after: "sekmesini kullanın.",
       },
@@ -89,7 +89,7 @@ export const detail: Messages["catalog"]["detail"] = {
     images: {
       title: "Ürün görselleri",
       description:
-        "Bir kapak ve bir galeri. Orijinaller gizli kalır; canlı siteler yalnızca yayınlanmış görsellerin meta verisiz WebP kopyalarını alır.",
+        "Bir kapak ve bir galeri. Orijinaller gizli kalır; yayındaki siteler yalnızca yayınlanmış görsellerin meta verisiz WebP kopyalarını alır.",
       loadError: "Görseller yüklenemedi",
     },
     documents: {
@@ -112,7 +112,7 @@ export const detail: Messages["catalog"]["detail"] = {
     publication: {
       title: "Yayın",
       description:
-        "Site başına önizleyin, yayınlayın ve yayından kaldırın. Canlı site, güncel taslağı değil her zaman yayınlanmış anlık görüntüyü gösterir; her engel nerede giderileceğini söyler.",
+        "Site başına önizleyin, yayınlayın ve yayından kaldırın. Yayındaki site, güncel taslağı değil her zaman yayınlanmış anlık görüntüyü gösterir; her engel nerede giderileceğini söyler.",
       loadError: "Yayın durumu yüklenemedi",
     },
     review: {

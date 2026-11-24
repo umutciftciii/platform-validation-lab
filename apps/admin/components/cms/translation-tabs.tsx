@@ -155,6 +155,38 @@ export function TranslationTabs({
   );
 }
 
+/**
+ * The one-line state of a translation against its source page. DP-270: without a source-language
+ * row the fallback name is never put into the "The {source} page" sentence (it read "The the
+ * source language page …"); that case has its own message.
+ */
+export function translationSummaryText(
+  current: CmsTranslation,
+  source: CmsTranslation | undefined,
+  t: Translate,
+  locale: AdminLocale,
+): string {
+  const from = current.sourceRevisionNumber;
+  const latest = current.sourceLatestRevisionNumber;
+  const sourceName = source
+    ? languageLabel(source.locale, locale)
+    : t("content.editor.translationTabs.summary.sourceFallback");
+  if (latest === null)
+    return source
+      ? t("content.editor.translationTabs.summary.notPublished", { source: sourceName })
+      : t("content.editor.translationTabs.summary.notPublishedNoSource");
+  return current.outdated
+    ? t("content.editor.translationTabs.summary.outdated", {
+        source: sourceName,
+        latest,
+        from:
+          from === null
+            ? t("content.editor.translationTabs.summary.fromEarlierDraft")
+            : t("content.editor.translationTabs.summary.fromRevision", { n: from }),
+      })
+    : t("content.editor.translationTabs.summary.upToDate", { latest, source: sourceName });
+}
+
 function TranslationSummary({
   current,
   source,
@@ -166,27 +198,9 @@ function TranslationSummary({
   t: Translate;
   locale: AdminLocale;
 }) {
-  const from = current.sourceRevisionNumber;
-  const latest = current.sourceLatestRevisionNumber;
-  const sourceName = source
-    ? languageLabel(source.locale, locale)
-    : t("content.editor.translationTabs.summary.sourceFallback");
-  const text =
-    latest === null
-      ? t("content.editor.translationTabs.summary.notPublished", { source: sourceName })
-      : current.outdated
-        ? t("content.editor.translationTabs.summary.outdated", {
-            source: sourceName,
-            latest,
-            from:
-              from === null
-                ? t("content.editor.translationTabs.summary.fromEarlierDraft")
-                : t("content.editor.translationTabs.summary.fromRevision", { n: from }),
-          })
-        : t("content.editor.translationTabs.summary.upToDate", { latest, source: sourceName });
   return (
     <p key="summary" className="text-sm text-ink-2">
-      {text}
+      {translationSummaryText(current, source, t, locale)}
     </p>
   );
 }

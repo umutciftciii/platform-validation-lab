@@ -17,6 +17,12 @@
 // got their visual polish, so content-en, owner-en, seo-en and staff-en were recorded again on this
 // branch with ML14_RECORD_EN=1. The DP-268 recording they replace is kept in fixtures/ml14-en, and
 // test/ml14-en-texts.test.ts allows only the approved wording changes against it.
+// DP-270/272/275: the tab names in sentence case (Media & documents, Content review, Missing &
+// verification), the menu label marked with its content language (DP-272) and the host of the
+// link preview marked lang="en" changed content-en, seo-en, company-review-en,
+// company-review-render and product-tabs; they were recorded again with DP275_RECORD_EN=1. The
+// ML-14 recording they replace is kept in fixtures/dp275-en, and test/dp275-en-texts.test.ts
+// allows only the approved wording changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -36,7 +42,8 @@ const RECORD =
   process.env["ML12D_RECORD_EN"] === "1" ||
   process.env["ML12E_RECORD_EN"] === "1" ||
   process.env["DP268_RECORD_EN"] === "1" ||
-  process.env["ML14_RECORD_EN"] === "1";
+  process.env["ML14_RECORD_EN"] === "1" ||
+  process.env["DP275_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");
