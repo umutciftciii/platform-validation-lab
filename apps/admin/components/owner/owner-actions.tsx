@@ -27,6 +27,7 @@ import {
 } from "../../lib/owner-client";
 import { stepUp, type StaffCall } from "../../lib/staff-client";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { Dialog, DialogBody, DialogFooter, DialogForm } from "../dialog";
 import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner, StatusPill } from "../ui";
 
@@ -62,7 +63,16 @@ function useStepUp() {
   return { pending, clear: () => setPending(null), run };
 }
 
-function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCancel: () => void }) {
+function StepUpPrompt({
+  retry,
+  onCancel,
+  variant = "inline",
+}: {
+  retry: () => Promise<void>;
+  onCancel: () => void;
+  /** DP-268: "dialog" = the second step inside the module switch dialog. */
+  variant?: "inline" | "dialog";
+}) {
   const t = useT();
   const id = useId();
   const [code, setCode] = useState("");
@@ -80,6 +90,36 @@ function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCance
     }
     await retry();
     setBusy(false);
+  }
+  if (variant === "dialog") {
+    return (
+      <DialogForm onSubmit={submit} label={t("owner.stepUp.form")}>
+        <DialogBody>
+          <Field label={t("owner.stepUp.code")} htmlFor={id} hint={t("owner.stepUp.hint")}>
+            <input
+              id={id}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+              autoFocus
+              className={FIELD}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </Field>
+          {error ? <FormMessage kind="error">{error}</FormMessage> : null}
+        </DialogBody>
+        <DialogFooter>
+          <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
+            {t("owner.stepUp.cancel")}
+          </button>
+          <button type="submit" className={buttonStyles.primary} disabled={busy || !code.trim()}>
+            {busy ? <Spinner size={14} /> : null}
+            <span>{t("owner.stepUp.confirm")}</span>
+          </button>
+        </DialogFooter>
+      </DialogForm>
+    );
   }
   return (
     <form
@@ -158,72 +198,75 @@ export function ModuleSwitch({
   }
 
   const name = ownerModuleName(module, t);
+  const label = t(enabled ? "owner.switch.switchOffLabel" : "owner.switch.switchOnLabel", {
+    module: name,
+    site: site.name,
+  });
+  function cancel() {
+    setOpen(false);
+    setMessage(null);
+    step.clear();
+  }
+  // DP-268: the reason form opens as the console's modal; the switch button stays on the page and
+  // gets focus back. A step-up is the dialog's second step. Cancel keeps the typed reason (as
+  // before), so Escape has nothing to discard.
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill tone={enabled ? "success" : "neutral"}>
           {enabled ? t("owner.switch.on") : t("owner.switch.off")}
         </StatusPill>
-        {open ? null : (
-          <button
-            type="button"
-            className={buttonStyles.ghost}
-            onClick={() => setOpen(true)}
-            aria-label={t(enabled ? "owner.switch.switchOffLabel" : "owner.switch.switchOnLabel", {
-              module: name,
-              site: site.name,
-            })}
-          >
-            {enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}
-          </button>
-        )}
-      </div>
-      {open ? (
-        <form
-          onSubmit={submit}
-          className="space-y-2"
-          aria-label={t("owner.switch.form", { module: name })}
+        <button
+          type="button"
+          className={buttonStyles.ghost}
+          onClick={() => setOpen(true)}
+          aria-label={label}
+          aria-haspopup="dialog"
         >
-          <Field
-            label={t("owner.switch.reason")}
-            htmlFor={id}
-            hint={enabled ? t("owner.switch.hintOff") : t("owner.switch.hintOn")}
-          >
-            <input
-              id={id}
-              required
-              minLength={3}
-              maxLength={1000}
-              className={FIELD}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-            />
-          </Field>
-          {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="submit"
-              className={buttonStyles.primary}
-              disabled={busy || reason.trim().length < 3}
-            >
-              {busy ? <Spinner size={14} /> : null}
-              <span>{enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}</span>
-            </button>
-            <button
-              type="button"
-              className={buttonStyles.ghost}
-              onClick={() => {
-                setOpen(false);
-                setMessage(null);
-                step.clear();
-              }}
-            >
-              {t("owner.switch.cancel")}
-            </button>
-          </div>
-        </form>
+          {enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}
+        </button>
+      </div>
+      {open || step.pending ? (
+        <Dialog title={label} size="md" busy={busy} onClose={cancel}>
+          {step.pending ? (
+            <StepUpPrompt variant="dialog" retry={step.pending} onCancel={step.clear} />
+          ) : (
+            <DialogForm onSubmit={submit} label={t("owner.switch.form", { module: name })}>
+              <DialogBody>
+                <Field
+                  label={t("owner.switch.reason")}
+                  htmlFor={id}
+                  hint={enabled ? t("owner.switch.hintOff") : t("owner.switch.hintOn")}
+                >
+                  <input
+                    id={id}
+                    required
+                    minLength={3}
+                    maxLength={1000}
+                    className={FIELD}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  />
+                </Field>
+                {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
+              </DialogBody>
+              <DialogFooter>
+                <button type="button" className={buttonStyles.secondary} onClick={cancel}>
+                  {t("owner.switch.cancel")}
+                </button>
+                <button
+                  type="submit"
+                  className={enabled ? buttonStyles.danger : buttonStyles.primary}
+                  disabled={busy || reason.trim().length < 3}
+                >
+                  {busy ? <Spinner size={14} /> : null}
+                  <span>{enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}</span>
+                </button>
+              </DialogFooter>
+            </DialogForm>
+          )}
+        </Dialog>
       ) : null}
-      {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}
     </div>
   );
 }
