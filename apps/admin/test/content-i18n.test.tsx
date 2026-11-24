@@ -390,6 +390,7 @@ describe("Content in Turkish: every screen and state", () => {
                   ) as MenuValue
                 }
                 targets={MENU_TARGETS as never}
+                contentLocale="en"
                 readOnly={ro}
                 invalid={(p) => (p.endsWith(".label") ? true : undefined)}
                 onChange={() => undefined}

@@ -105,7 +105,7 @@ export const editor: Messages["content"]["editor"] = {
       link: "Önizlemeyi yeniden açın",
       after: " (15 dakika geçerlidir).",
     },
-    confirmPublish: "Taslak sürüm {version} canlı sitede yayınlansın mı?",
+    confirmPublish: "Taslak sürüm {version} yayındaki sitede yayınlansın mı?",
     publishNow: "Şimdi yayınla",
     publishChanges: "Değişiklikleri yayınla",
     publish: "Yayınla",
@@ -154,6 +154,7 @@ export const editor: Messages["content"]["editor"] = {
     summary: {
       sourceFallback: "kaynak dildeki",
       notPublished: "{source} sayfa henüz yayınlanmadı.",
+      notPublishedNoSource: "Kaynak dildeki sayfa henüz yayınlanmadı.",
       outdated:
         "{source} sayfa revizyon {latest} durumunda; bu çeviri {from} temel alınarak yapıldı. Metinleri güncelleyin, ardından çeviriyi güncel olarak işaretleyin.",
       fromEarlierDraft: "daha önceki bir taslak",

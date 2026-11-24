@@ -457,7 +457,7 @@ describe("company review product page", () => {
     expect(html).toContain("Group II Base Oil HVI 6");
     expect(html).toMatch(/data-sku=""[^>]*>G2-HVI-6</);
     expect(html.indexOf("Review pending")).toBeLessThan(html.indexOf('role="tablist"'));
-    for (const label of ["Content Review", "Missing &amp; Verification", "Sources", "History"]) {
+    for (const label of ["Content review", "Missing &amp; verification", "Sources", "History"]) {
       expect(html).toContain(`>${label}`);
     }
     expect(count(html, 'role="tab"')).toBe(4);

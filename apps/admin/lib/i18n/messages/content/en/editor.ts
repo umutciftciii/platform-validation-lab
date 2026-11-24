@@ -151,6 +151,8 @@ export const editor = {
     summary: {
       sourceFallback: "the source language",
       notPublished: "The {source} page has not been published yet.",
+      /** DP-270: no source-language row; the fallback name is not put into notPublished ("The the"). */
+      notPublishedNoSource: "The source-language page has not been published yet.",
       outdated:
         "{source} has revision {latest}; this translation was made from {from}. Update the texts, then mark it as up to date.",
       fromEarlierDraft: "an earlier draft",

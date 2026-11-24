@@ -6,7 +6,10 @@
 //   "Remove role" and the question "Remove <role> from <person>?" as its text;
 // - owner-en: the module reason dialog gained a close (×) button named "Close";
 // - every other text and accessible name is unchanged (as often as before), in every render.
-import { readFileSync } from "node:fs";
+// DP-270/272/275 recorded content-en and seo-en again; the ML-14 recording of those two moved to
+// fixtures/dp275-en, so this test keeps comparing the two recordings of ML-14 and
+// dp275-en-texts.test.ts takes the next step.
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -55,7 +58,10 @@ describe("ML-14: the EN wording changes only where approved", () => {
   for (const file of FILES) {
     it(file, () => {
       const before = load("ml14-en", file);
-      const after = load("catalog-en", file);
+      const after = load(
+        existsSync(path.join(FIXTURES, "dp275-en", `${file}.json.gz`)) ? "dp275-en" : "catalog-en",
+        file,
+      );
       expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
       let changed = 0;
       for (const key of Object.keys(before)) {

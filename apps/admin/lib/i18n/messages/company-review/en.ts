@@ -108,8 +108,8 @@ export const companyReview = {
 
   /** The tabs of one proposal (lib/review-tabs.ts REVIEW_TABS) and the tab bar. */
   tabs: {
-    content: "Content Review",
-    verification: "Missing & Verification",
+    content: "Content review",
+    verification: "Missing & verification",
     sources: "Sources",
     history: "History",
     label: "Review sections",
@@ -205,7 +205,7 @@ export const companyReview = {
     description:
       "Proposed customer text. It is applied to the site only in a later, separate step after approval.",
     empty:
-      "No text is proposed for this product: it is not defined well enough to describe. It awaits the company's confirmation (see Missing & Verification).",
+      "No text is proposed for this product: it is not defined well enough to describe. It awaits the company's confirmation (see Missing & verification).",
     noTextProposed: "No text proposed",
   },
   openPoints: "Open points in the research:",
@@ -285,7 +285,7 @@ export const companyReview = {
     comment: "Comment",
     commentHint: "(required to request changes, optional to approve)",
     commentPlaceholder:
-      "What has to change, or answers to the questions in Missing & Verification…",
+      "What has to change, or answers to the questions in Missing & verification…",
     approve: "Approve",
     requestChanges: "Request changes",
     approved: "Proposal approved.",
@@ -301,7 +301,7 @@ export const companyReview = {
     description:
       "Edit the proposed customer text next to the current site text. The site itself changes only in a later, separate step.",
     placeholderNote:
-      "The research proposes no text: this product is not defined well enough to describe. Write a text only from information the company has confirmed (see Missing & Verification).",
+      "The research proposes no text: this product is not defined well enough to describe. Write a text only from information the company has confirmed (see Missing & verification).",
     edited: "edited",
     noTextYet: "No text yet",
     emptySaved: "Empty: saved as no text.",
@@ -315,7 +315,7 @@ export const companyReview = {
     saving: "Saving…",
     tooLong: "Keep it to {max} characters (now {now}).",
     reviewNotes:
-      "Review notes ([CONFIRM …]) belong in Missing & Verification, not in customer text.",
+      "Review notes ([CONFIRM …]) belong in Missing & verification, not in customer text.",
     stale:
       "Someone saved a newer version of this proposal meanwhile. It is loaded now and your edits are kept: Save adds them to the newer version, Cancel discards them.",
     tooLarge:
