@@ -16,7 +16,9 @@ export const BV_DEFAULT_LOCALE = "en";
 
 /** The site defaults while `bv.site-seo` is not published (the site's code defaults). */
 export const CODE_SITE_SEO = {
+  // i18n-ignore: the site's name (data, the code default of the bv.site-seo fragment)
   siteName: "Dream Petroleum BV",
+  // i18n-ignore: the site's name (data, the code default of the bv.site-seo fragment)
   defaultTitle: "Dream Petroleum BV",
   defaultDescription: null as string | null,
   defaultOgImage: "/media/ctl-technology/clear-base-oil.webp",

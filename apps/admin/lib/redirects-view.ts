@@ -2,6 +2,11 @@
  * DP-211: view helpers of Admin > SEO > Redirects (pure, shared by the server page and the client
  * components): list parameters, labels, readable messages for the API's `field:rule` codes and
  * the downloadable CSV report of a dry-run.
+ *
+ * ML-12d (DP-243): labels and messages in the UI language (`t`), looked up by the API's own codes
+ * (origins, sorts, `field:rule`, warnings, audit actions), which are unchanged. The dry-run report
+ * CSV stays English in every UI language: its columns, BOM, order and texts are byte-identical to
+ * before (a file, not the screen).
  */
 import {
   ADMIN_SEO_API,
@@ -13,6 +18,9 @@ import {
   type SeoRedirectItem,
   type SiteRedirectOrigin,
 } from "@dream/contracts";
+import { en } from "./i18n/messages/en";
+import { createTranslator } from "./i18n/translate";
+import type { Translate } from "./i18n/types";
 
 export const redirectsApi = (siteId: string) => `${ADMIN_SEO_API}/sites/${siteId}/redirects`;
 
@@ -66,18 +74,13 @@ export function redirectQuery(p: RedirectListParams, patch: Partial<RedirectList
   return s ? `?${s}` : "";
 }
 
-export const ORIGIN_LABEL: Record<SiteRedirectOrigin, string> = {
-  MANUAL: "Manual",
-  SLUG_CHANGE: "Slug change",
-  IMPORT: "Import",
-};
+export function originLabel(origin: SiteRedirectOrigin, t: Translate): string {
+  return t(`seo.redirects.origin.${origin}`);
+}
 
-export const SORT_LABEL: Record<RedirectListParams["sort"], string> = {
-  updated: "Last changed",
-  created: "Created",
-  source: "Source address",
-  target: "Target address",
-};
+export function sortLabel(sort: RedirectListParams["sort"], t: Translate): string {
+  return t(`seo.redirects.sort.${sort}`);
+}
 
 /** The admin page of the content a slug-change redirect belongs to. */
 export function redirectContentHref(item: SeoRedirectItem, siteParam = "bv"): string | null {
@@ -87,76 +90,92 @@ export function redirectContentHref(item: SeoRedirectItem, siteParam = "bv"): st
     : `/products/${item.content.id}?site=${siteParam}&tab=seo`;
 }
 
-const RULES: Readonly<Record<string, string>> = {
-  "source:required": "Enter the old address.",
-  "source:format":
-    "Use an address of this site (/old-page, /news/old-article, /products/old-product) or of the old site (/en/about-us, /tr/products/x, /en/contact-us.html): letters, digits, hyphens, dots or underscores, at most 6 parts; a query such as ?id=5 is allowed.",
-  "source:reserved":
-    "This address belongs to the site itself (home, products, news, privacy, a language code other than the old site's /en and /tr, an app address or a site file).",
-  "source:fragment": "Leave out the # part: browsers never send it to the site.",
-  "source:query_format": "The query cannot be stored. Use plain name=value pairs.",
-  "source:too_long": "The old address is too long.",
-  "source:live_content":
-    "A published page, article or product is live at this address. Unpublish or move it first: live content always wins.",
-  "source:duplicate": "A redirect for this address (and query) already exists. Edit that one.",
-  "source:duplicate_in_file": "This address appears more than once in the file.",
-  "source:chain":
-    "Another redirect leads to this address. Point that one at the final target instead (no redirect chains).",
-  "target:required": "Enter the new address.",
-  "target:format":
-    "Use a path of this site, such as /about-us or /products?category=base-oil (lower-case words and hyphens, up to three levels).",
-  "target:external": "Redirects stay on this site. Enter a path such as /about-us, not a URL.",
-  "target:reserved": "This address is internal to the site and cannot be a target.",
-  "target:fragment": "Leave out the # part.",
-  "target:query_format": "The query cannot be stored. Use plain name=value pairs.",
-  "target:too_long": "The new address is too long.",
-  "target:self": "The old and the new address are the same: that would be a loop.",
-  "target:chain":
-    "The new address redirects itself. Enter its final address instead (no redirect chains or loops).",
-  "status:format": "Status must be 301 or 302.",
-  "active:format": "Active must be true or false.",
-  "note:format": "The note is too long or contains control characters.",
-  "redirect:protected":
-    "This redirect was created when the content moved (slug change). It keeps the old address for search engines; only its note can be changed.",
-  "version:stale": "Someone else changed this redirect meanwhile. Reload to see their version.",
-  "import:has_errors": "Fix the rows with errors and check the file again.",
-  "import:changed":
-    "The redirects changed since the check. Check the file again and confirm the new result.",
-  "csv:empty": "The file has no redirects.",
-  "csv:header":
-    "The first line must name the columns: source, target and optionally status, active, note.",
-  "csv:quote": "A quoted value is not closed.",
-  "csv:too_large": `The file is too large (at most ${SEO_REDIRECT_CSV_MAX_BYTES / 1024} KB).`,
-  "csv:too_many_rows": `At most ${SEO_REDIRECT_CSV_MAX_ROWS} redirects per file.`,
-  "csv:columns": "A line has more values than the header.",
-  "site:no_redirects": "This site does not use redirects.",
+type RuleKey = Exclude<
+  keyof typeof en.seo.redirects.rules,
+  "unknown" | "unknownField" | "unknownRule"
+>;
+
+/** `field:rule` codes of the API → their message (`seo.redirects.rules.<key>`). */
+const RULES: Readonly<Record<string, RuleKey>> = {
+  "source:required": "sourceRequired",
+  "source:format": "sourceFormat",
+  "source:reserved": "sourceReserved",
+  "source:fragment": "sourceFragment",
+  "source:query_format": "queryFormat",
+  "source:too_long": "sourceTooLong",
+  "source:live_content": "sourceLiveContent",
+  "source:duplicate": "sourceDuplicate",
+  "source:duplicate_in_file": "sourceDuplicateInFile",
+  "source:chain": "sourceChain",
+  "target:required": "targetRequired",
+  "target:format": "targetFormat",
+  "target:external": "targetExternal",
+  "target:reserved": "targetReserved",
+  "target:fragment": "targetFragment",
+  "target:query_format": "queryFormat",
+  "target:too_long": "targetTooLong",
+  "target:self": "targetSelf",
+  "target:chain": "targetChain",
+  "status:format": "statusFormat",
+  "active:format": "activeFormat",
+  "note:format": "noteFormat",
+  "redirect:protected": "protected",
+  "version:stale": "versionStale",
+  "import:has_errors": "importHasErrors",
+  "import:changed": "importChanged",
+  "csv:empty": "csvEmpty",
+  "csv:header": "csvHeader",
+  "csv:quote": "csvQuote",
+  "csv:too_large": "csvTooLarge",
+  "csv:too_many_rows": "csvTooManyRows",
+  "csv:columns": "csvColumns",
+  "site:no_redirects": "siteNoRedirects",
 };
 
-export const WARNINGS: Readonly<Record<string, string>> = {
-  "target:not_live":
-    "The new address has no live content right now: visitors would land on a 404 until it is published.",
-  "source:draft_content":
-    "A draft page or product uses the old address. When it is published there, this redirect is switched off.",
+/** Warning codes of a saved redirect or an import row → `seo.redirects.warnings.<key>`. */
+const WARNING_KEYS: Readonly<Record<string, keyof typeof en.seo.redirects.warnings>> = {
+  "target:not_live": "targetNotLive",
+  "source:draft_content": "sourceDraftContent",
+};
+
+/** A readable text for one warning code; an unknown code is shown as it is. */
+export function warningMessage(code: string, t: Translate): string {
+  const key = WARNING_KEYS[code];
+  return key ? t(`seo.redirects.warnings.${key}`) : code;
+}
+
+const ruleKey = (code: string) => {
+  const [field = "", rule = ""] = code.split(":");
+  return { field, rule, key: `${field.startsWith("csv.") ? "csv" : field}:${rule}` };
 };
 
 /** A readable text for one `field:rule` code (CSV path "csv.<line>" counts as "csv"). */
-export function ruleMessage(code: string): string {
-  const [field = "", rule = ""] = code.split(":");
-  const key = `${field.startsWith("csv.") ? "csv" : field}:${rule}`;
-  return RULES[key] ?? `Check ${field || "the value"} (${rule || "invalid"}).`;
+export function ruleMessage(code: string, t: Translate): string {
+  const { field, rule, key } = ruleKey(code);
+  const known = RULES[key];
+  if (known === "csvTooLarge")
+    return t("seo.redirects.rules.csvTooLarge", { kb: SEO_REDIRECT_CSV_MAX_BYTES / 1024 });
+  if (known === "csvTooManyRows")
+    return t("seo.redirects.rules.csvTooManyRows", { rows: SEO_REDIRECT_CSV_MAX_ROWS });
+  if (known) return t(`seo.redirects.rules.${known}`);
+  return t("seo.redirects.rules.unknown", {
+    field: field || t("seo.redirects.rules.unknownField"),
+    rule: rule || t("seo.redirects.rules.unknownRule"),
+  });
 }
 
 export function knownRule(code: string): boolean {
-  const [field = "", rule = ""] = code.split(":");
-  return `${field.startsWith("csv.") ? "csv" : field}:${rule}` in RULES;
+  return ruleKey(code).key in RULES;
 }
 
-export const IMPORT_ACTION_LABEL: Record<string, string> = {
-  create: "New",
-  update: "Update",
-  unchanged: "Unchanged",
-  error: "Error",
-};
+export function importActionLabel(action: string, t: Translate): string {
+  return action === "create" || action === "update" || action === "unchanged" || action === "error"
+    ? t(`seo.redirects.action.${action}`)
+    : action;
+}
+
+/** The report is a file: English in every UI language (byte-identical to before ML-12d). */
+const REPORT_T = createTranslator("en");
 
 /** The dry-run as a CSV report (row, action, values, problems) for download. */
 export function importReportCsv(result: SeoRedirectImportResponse): string {
@@ -166,34 +185,43 @@ export function importReportCsv(result: SeoRedirectImportResponse): string {
   for (const r of result.rows) {
     lines.push([
       String(r.line),
-      IMPORT_ACTION_LABEL[r.action] ?? r.action,
+      importActionLabel(r.action, REPORT_T),
       r.source,
       r.target,
       r.statusCode === null ? "" : String(r.statusCode),
       r.active === null ? "" : String(r.active),
       r.note ?? "",
-      r.errors.map(ruleMessage).join(" | "),
-      r.warnings.map((w) => WARNINGS[w] ?? w).join(" | "),
+      r.errors.map((e) => ruleMessage(e, REPORT_T)).join(" | "),
+      r.warnings.map((w) => warningMessage(w, REPORT_T)).join(" | "),
     ]);
   }
   return `${lines.map((l) => l.map(csvCell).join(",")).join("\r\n")}\r\n`;
 }
 
-const HISTORY_ACTION: Readonly<Record<string, string>> = {
-  "seo.redirect_created": "Created",
-  "seo.redirect_updated": "Changed",
-  "seo.redirect_deleted": "Deleted",
-  "seo.redirect_retargeted": "Target followed the content",
-  "seo.redirect_retired": "Switched off (content live again)",
+const HISTORY_ACTION: Readonly<
+  Record<string, "created" | "updated" | "deleted" | "retargeted" | "retired">
+> = {
+  "seo.redirect_created": "created",
+  "seo.redirect_updated": "updated",
+  "seo.redirect_deleted": "deleted",
+  "seo.redirect_retargeted": "retargeted",
+  "seo.redirect_retired": "retired",
 };
 
-export function historyActionLabel(action: string, details: Record<string, unknown>): string {
-  const base = HISTORY_ACTION[action] ?? action;
-  return details["via"] === "import" ? `${base} (import)` : base;
+export function historyActionLabel(
+  action: string,
+  details: Record<string, unknown>,
+  t: Translate,
+): string {
+  const key = HISTORY_ACTION[action];
+  const base = key ? t(`seo.redirects.history.${key}`) : action;
+  return details["via"] === "import"
+    ? t("seo.redirects.history.viaImport", { action: base })
+    : base;
 }
 
-/** A short description of what an audit event recorded. */
-export function historySummary(details: Record<string, unknown>): string {
+/** A short description of what an audit event recorded (paths, codes and field keys as stored). */
+export function historySummary(details: Record<string, unknown>, t: Translate): string {
   const parts: string[] = [];
   const str = (k: string) => (typeof details[k] === "string" ? (details[k] as string) : null);
   const source = str("sourcePath");
@@ -202,11 +230,18 @@ export function historySummary(details: Record<string, unknown>): string {
   if (source) parts.push(`${source}${query ? `?${query}` : ""}`);
   if (target) parts.push(`→ ${target}`);
   if (typeof details["statusCode"] === "number") parts.push(String(details["statusCode"]));
-  if (typeof details["active"] === "boolean") parts.push(details["active"] ? "active" : "inactive");
+  if (typeof details["active"] === "boolean")
+    parts.push(
+      t(details["active"] ? "seo.redirects.history.active" : "seo.redirects.history.inactive"),
+    );
   if (Array.isArray(details["changed"]) && details["changed"].length) {
-    parts.push(`changed: ${(details["changed"] as unknown[]).join(", ")}`);
+    parts.push(
+      t("seo.redirects.history.changed", {
+        fields: (details["changed"] as unknown[]).join(", "),
+      }),
+    );
   }
   const prev = str("previousTarget");
-  if (prev) parts.push(`(was ${prev})`);
+  if (prev) parts.push(t("seo.redirects.history.was", { target: prev }));
   return parts.join(" · ");
 }
