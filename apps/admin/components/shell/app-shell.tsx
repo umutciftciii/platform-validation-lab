@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NAV_ITEMS, isActive } from "../../lib/navigation";
+import { trapTab } from "../dialog";
 import { BrandMark, Icon } from "../icons";
 import { buttonStyles, cx } from "../ui";
 import { useT } from "../i18n/locale-provider";
@@ -34,6 +35,7 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
   const current = NAV_ITEMS.find((i) => isActive(i, pathname));
 
   useEffect(() => {
@@ -56,6 +58,7 @@ export function AppShell({
   return (
     <div className="min-h-svh">
       <a
+        inert={drawerOpen}
         href="#main"
         className="sr-only z-50 rounded-lg bg-petrol px-4 py-2 text-petrol-ink focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
       >
@@ -91,10 +94,12 @@ export function AppShell({
           onClick={() => setDrawerOpen(false)}
         />
         <div
+          ref={drawerRef}
           role="dialog"
           aria-modal="true"
           aria-label={t("shell.navigation")}
           inert={!drawerOpen}
+          onKeyDown={(e) => trapTab(e, drawerRef.current)}
           className={cx(
             "absolute inset-y-0 left-0 w-[min(84vw,300px)] shadow-raised transition-transform duration-300 ease-out-soft",
             drawerOpen ? "translate-x-0" : "-translate-x-full",
@@ -118,7 +123,8 @@ export function AppShell({
         </div>
       </div>
 
-      <div className="md:pl-[76px] lg:pl-[264px]">
+      {/* DP-268: while the phone drawer is open the page behind it takes no focus. */}
+      <div className="md:pl-[76px] lg:pl-[264px]" inert={drawerOpen}>
         <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-md supports-[backdrop-filter]:bg-bg/70">
           <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-2.5 px-3 sm:h-16 sm:gap-3 sm:px-6 lg:px-10">
             <button

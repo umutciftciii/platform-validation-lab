@@ -36,6 +36,10 @@ export const tr: Messages = {
     backToOverview: "Genel bakışa dön",
     sampleData: "Örnek veri",
     sampleDataTitle: "Tasarım prototipi için örnek veri. Hiçbir sisteme bağlı değildir.",
+    /** DP-268: ortak modal. */
+    dialog: {
+      discard: "Kaydedilmemiş değişiklikler silinsin mi?",
+    },
   },
   language: {
     label: "Dil",

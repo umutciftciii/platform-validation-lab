@@ -25,6 +25,11 @@ export const buttonStyles = {
     BUTTON_BASE,
     "h-10 px-4 border border-line-strong bg-surface text-ink hover:border-ink-3 hover:bg-surface-2 disabled:hover:border-line-strong disabled:hover:bg-surface",
   ),
+  /** DP-268: the confirm button of a destructive dialog (unpublish, delete, remove a role). */
+  danger: cx(
+    BUTTON_BASE,
+    "h-10 px-4 bg-danger text-surface hover:bg-danger/90 disabled:hover:bg-danger shadow-[inset_0_-1px_0_rgb(0_0_0/0.14),0_1px_2px_rgb(0_0_0/0.08)]",
+  ),
   ghost: cx(BUTTON_BASE, "h-9 px-3 text-ink-2 hover:bg-surface-2 hover:text-ink"),
   icon: cx(BUTTON_BASE, "size-9 text-ink-2 hover:bg-surface-2 hover:text-ink"),
 } as const;
