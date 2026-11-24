@@ -2,38 +2,70 @@
  * Staff and role administration from the browser (DP-076 revision, DP-107; ADR-017 v2), through
  * the admin's same-origin proxy. A call answering AUTH_STEP_UP_REQUIRED (user invitations keep
  * their step-up) returns `stepUp: true` so the form can ask for an authenticator code.
+ *
+ * ML-12e (DP-243): the messages are in the admin UI language (by the API's code and rule, as
+ * lib/cms-client.ts and lib/redirects-client.ts); request paths, bodies and every API code are
+ * unchanged. Used by Staff, the owner console (lib/owner-client.ts) and the lead workflow.
  */
 import { DEFAULT_ERROR_MESSAGES, ErrorBodySchema } from "@dream/contracts";
+import { browserAdminLocale } from "./i18n/config";
+import { createTranslator } from "./i18n/translate";
+import type { Translate } from "./i18n/types";
 
-export const RULE_MESSAGES: Readonly<Record<string, string>> = {
-  already_assigned: "This person already has this role there.",
-  self_grant: "You cannot change your own roles.",
-  reciprocal_grant: "You cannot give a role to someone who gave you yours.",
-  membership_inactive: "This person's access to that site is suspended. Reactivate it first.",
-  scope_mismatch: "Choose a site for a site role, none for a platform role.",
-  expiry_in_past: "The end date must be in the future.",
-  already_ended: "This role has already ended. Reload the page.",
-  assignee_inactive: "This account is closed.",
-  unknown_role: "Unknown role.",
-  db_guard: "The database refused this change. Reload the page and try again.",
+/** `t` in the language of the page the call is made from (English outside a browser). */
+export const browserT = (): Translate => createTranslator(browserAdminLocale());
+
+/** The API rules (error details `rule`) with their own message, keyed as `staff.api.rules.<rule>`. */
+export const RULES = [
+  "already_assigned",
+  "self_grant",
+  "reciprocal_grant",
+  "membership_inactive",
+  "scope_mismatch",
+  "expiry_in_past",
+  "already_ended",
+  "assignee_inactive",
+  "unknown_role",
+  "db_guard",
   // DP-110: system owner console (ADR-018).
-  core_module: "Core modules are always on and cannot be switched off.",
-  reason_required: "Give a reason for the change.",
-  already_designated: "A system owner is already designated. It cannot be changed.",
-  not_eligible: "This account cannot become the owner (it needs a password and an authenticator).",
+  "core_module",
+  "reason_required",
+  "already_designated",
+  "not_eligible",
   // DP-041: lead sales workflow (ADR-019).
-  stale: "Someone else changed this lead meanwhile. Reload the page and try again.",
-  transition: "This status change is not allowed from the current status.",
-  unchanged: "Nothing to change.",
-  anonymised: "This lead is anonymised and cannot change.",
-  assignee_not_eligible: "This person cannot work leads of this site.",
-  future: "The contact cannot be in the future.",
-};
+  "stale",
+  "transition",
+  "unchanged",
+  "anonymised",
+  "assignee_not_eligible",
+  "future",
+] as const;
+export type ApiRule = (typeof RULES)[number];
+
+const isRule = (rule: string): rule is ApiRule => (RULES as readonly string[]).includes(rule);
+
+/** The message of an API rule in the UI language; undefined for a rule without its own text. */
+export function ruleMessage(rule: string, t: Translate = browserT()): string | undefined {
+  return isRule(rule) ? t(`staff.api.rules.${rule}`) : undefined;
+}
+
+/** The message of an API error code (the contract's codes, `errors.<CODE>`), else `fallback`. */
+export function codeMessage(code: string | null, fallback: string, t: Translate): string {
+  return code && code in DEFAULT_ERROR_MESSAGES
+    ? t(`errors.${code as keyof typeof DEFAULT_ERROR_MESSAGES}`)
+    : fallback;
+}
+
+/** English rule messages by rule (as before ML-12e; kept for callers that read the table). */
+export const RULE_MESSAGES: Readonly<Record<string, string>> = Object.fromEntries(
+  RULES.map((r) => [r, createTranslator("en")(`staff.api.rules.${r}`)]),
+);
 
 export type StaffCall<T> =
   { ok: true; data: T } | { ok: false; status: number; message: string; stepUp: boolean };
 
 export async function postJson<T>(url: string, body?: unknown): Promise<StaffCall<T>> {
+  const t = browserT();
   let res: Response;
   try {
     res = await fetch(url, {
@@ -44,7 +76,7 @@ export async function postJson<T>(url: string, body?: unknown): Promise<StaffCal
       cache: "no-store",
     });
   } catch {
-    return { ok: false, status: 0, message: "The admin API cannot be reached.", stepUp: false };
+    return { ok: false, status: 0, message: t("staff.api.unreachable"), stepUp: false };
   }
   if (res.status === 204) return { ok: true, data: undefined as T };
   const json: unknown = await res.json().catch(() => null);
@@ -54,15 +86,13 @@ export async function postJson<T>(url: string, body?: unknown): Promise<StaffCal
   const rule = parsed.success
     ? parsed.data.error.details
         .map((d) => (typeof d === "object" && d && "rule" in d ? String(d.rule) : ""))
-        .find((r) => r in RULE_MESSAGES)
+        .find((r) => isRule(r))
     : undefined;
   const message =
-    (rule && RULE_MESSAGES[rule]) ??
+    (rule && ruleMessage(rule, t)) ??
     (code === "FORBIDDEN"
-      ? "You may not make this change (it needs permissions you do not hold, or another site)."
-      : code && code in DEFAULT_ERROR_MESSAGES
-        ? DEFAULT_ERROR_MESSAGES[code as keyof typeof DEFAULT_ERROR_MESSAGES]
-        : "The change could not be saved. Try again in a moment.");
+      ? t("staff.api.forbidden")
+      : codeMessage(code, t("staff.api.saveFailed"), t));
   return { ok: false, status: res.status, message, stepUp: code === "AUTH_STEP_UP_REQUIRED" };
 }
 

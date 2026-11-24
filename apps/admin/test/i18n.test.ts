@@ -81,6 +81,20 @@ const SAME_IN_TR = new Set([
   "seo.redirects.find.withCount",
   "seo.redirects.row.event",
   "seo.tabs.label",
+  // ML-12e Overview: fictitious people of the sample data (names) and "{greeting}, {name}".
+  "dashboard.demo.people.jonas",
+  "dashboard.demo.people.lotte",
+  "dashboard.demo.people.mehmet",
+  "dashboard.demo.people.sanne",
+  "dashboard.overview.greeting",
+  // ML-12e: the word "Site" (the same in Turkish), messages made only of parameters, a name, CRM
+  "leads.list.site",
+  "staff.assign.site",
+  "staff.invite.site",
+  "staff.page.unknownSite",
+  "staff.page.roleSite",
+  "staff.page.membershipNotActive",
+  "owner.modules.crm.name",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
@@ -113,6 +127,11 @@ describe("dictionary completeness (EN source, TR)", () => {
     expect(EN.filter(([k]) => k.startsWith("content.")).length).toBeGreaterThan(500);
     // ML-12d: the SEO area (overview, redirects, rule messages, history).
     expect(EN.filter(([k]) => k.startsWith("seo.")).length).toBeGreaterThan(200);
+    // ML-12e: Leads, Staff and access, the owner console and the overview.
+    expect(EN.filter(([k]) => k.startsWith("leads.")).length).toBeGreaterThan(200);
+    expect(EN.filter(([k]) => k.startsWith("staff.")).length).toBeGreaterThan(100);
+    expect(EN.filter(([k]) => k.startsWith("owner.")).length).toBeGreaterThan(80);
+    expect(EN.filter(([k]) => k.startsWith("dashboard.")).length).toBeGreaterThan(70);
   });
 
   it("a missing or an extra Turkish key is a compile error", () => {

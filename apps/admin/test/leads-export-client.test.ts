@@ -1,9 +1,10 @@
 // DP-227 / DP-229: the browser side of the lead CSV export: separator, file name and the real
 // error for staff.
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "../lib/i18n/translate";
 import {
-  EXPORT_SEPARATOR_OPTIONS,
   exportErrorMessage,
+  exportSeparatorOptions,
   exportFilenameOf,
   exportQueryWithSeparator,
 } from "../lib/leads-client";
@@ -72,6 +73,7 @@ describe("lead export download", () => {
   });
 
   it("DP-229: offers semicolon first (the default), then comma", () => {
+    const EXPORT_SEPARATOR_OPTIONS = exportSeparatorOptions(createTranslator("en"));
     expect(EXPORT_SEPARATOR_OPTIONS.map((o) => o.value)).toEqual([";", ","]);
     expect(EXPORT_SEPARATOR_OPTIONS[0]?.label).toBe("Semicolon (;)");
   });

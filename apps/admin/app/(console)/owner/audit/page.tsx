@@ -4,10 +4,14 @@ import { OwnerOverviewResponseSchema } from "@dream/contracts";
 import { PageHeader } from "../../../../components/catalog/parts";
 import { ProtectedAuditLog } from "../../../../components/owner/owner-actions";
 import { Panel } from "../../../../components/ui";
+import { getTranslator } from "../../../../lib/i18n/server";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Protected audit trail" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("owner.audit.title") };
+}
 
 /**
  * The PROTECTED audit stream (DP-110, ADR-018 D6): the owner's actions and every action aimed at
@@ -18,15 +22,16 @@ export default async function ProtectedAuditPage() {
   await requireStaffSession();
   const res = await serverRead("/api/v1/admin/owner/overview", OwnerOverviewResponseSchema);
   if (!res.ok) notFound();
+  const t = await getTranslator();
   return (
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="audit"
-        title="Protected audit trail"
-        description="Never shown on staff screens and never deleted. Each event carries its place in the hash chain."
-        back={{ href: "/owner", label: "Owner console" }}
+        title={t("owner.audit.title")}
+        description={t("owner.audit.description")}
+        back={{ href: "/owner", label: t("owner.audit.back") }}
       />
-      <Panel id="events" title="Events">
+      <Panel id="events" title={t("owner.audit.events")}>
         <ProtectedAuditLog />
       </Panel>
     </div>

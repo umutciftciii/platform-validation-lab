@@ -20,8 +20,9 @@ import {
   localDateTimeToIso,
   nowLocalDateTime,
 } from "../../lib/leads-client";
-import { CHANNEL_LABEL, STATUS_HINT, STATUS_LABEL } from "../../lib/leads-view";
+import { channelLabel, statusHint, statusLabel } from "../../lib/leads-view";
 import { Field, FIELD, FormMessage, TEXTAREA } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
 
 type Message = { kind: "error" | "success"; text: string } | null;
@@ -41,6 +42,7 @@ export function LeadWorkflowForm({
   assignees: readonly LeadAssignee[];
   viewerId: string;
 }) {
+  const t = useT();
   const router = useRouter();
   const ids = { status: useId(), assignee: useId(), note: useId() };
   const next = LEAD_STATUS_TRANSITIONS[status];
@@ -72,7 +74,7 @@ export function LeadWorkflowForm({
     }
     setTo("");
     setNote("");
-    setMessage({ kind: "success", text: "Saved. The change is in the activity history." });
+    setMessage({ kind: "success", text: t("leads.workflow.saved") });
     router.refresh();
   }
 
@@ -81,14 +83,12 @@ export function LeadWorkflowForm({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4" aria-label="Change status or assignment">
+    <form onSubmit={submit} className="space-y-4" aria-label={t("leads.workflow.label")}>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field
-          label="Move to"
+          label={t("leads.workflow.moveTo")}
           htmlFor={ids.status}
-          hint={
-            to ? STATUS_HINT[to] : next.length ? "Leave as is to change only the assignment." : ""
-          }
+          hint={to ? statusHint(to, t) : next.length ? t("leads.workflow.keepHint") : ""}
         >
           <select
             id={ids.status}
@@ -98,19 +98,21 @@ export function LeadWorkflowForm({
             onChange={(e) => setTo(e.target.value as "" | LeadStatus)}
           >
             <option value="">
-              {next.length ? `Keep ${STATUS_LABEL[status]}` : `${STATUS_LABEL[status]} (final)`}
+              {next.length
+                ? t("leads.workflow.keep", { status: statusLabel(status, t) })
+                : t("leads.workflow.final", { status: statusLabel(status, t) })}
             </option>
             {next.map((s) => (
               <option key={s} value={s}>
-                {STATUS_LABEL[s]}
+                {statusLabel(s, t)}
               </option>
             ))}
           </select>
         </Field>
         <Field
-          label="Assigned to"
+          label={t("leads.common.assignedTo")}
           htmlFor={ids.assignee}
-          hint="Only staff who work leads of this site are listed."
+          hint={t("leads.workflow.assigneeHint")}
         >
           <div className="flex gap-2">
             <select
@@ -119,47 +121,48 @@ export function LeadWorkflowForm({
               value={assignee}
               onChange={(e) => setAssignee(e.target.value)}
             >
-              <option value="">Unassigned</option>
+              <option value="">{t("leads.common.unassigned")}</option>
               {!knownCurrent && assignedToId ? (
                 <option value={assignedToId} disabled>
-                  Current assignee (no longer has access)
+                  {t("leads.workflow.currentNoAccess")}
                 </option>
               ) : null}
               {assignees.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.displayName}
-                  {a.id === viewerId ? " (me)" : ""}
+                  {a.id === viewerId ? t("leads.workflow.me") : ""}
                 </option>
               ))}
             </select>
             {assignees.some((a) => a.id === viewerId) && assignee !== viewerId ? (
               <button type="button" className={buttonStyles.secondary} onClick={assignToMe}>
-                Me
+                {t("leads.workflow.meButton")}
               </button>
             ) : null}
           </div>
         </Field>
       </div>
-      <Field label="Note with this change (optional)" htmlFor={ids.note}>
+      <Field label={t("leads.workflow.note")} htmlFor={ids.note}>
         <textarea
           id={ids.note}
           className={cx(TEXTAREA, "min-h-20")}
           maxLength={LEAD_NOTE_MAX}
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Why the status changes, what was agreed…"
+          placeholder={t("leads.workflow.notePlaceholder")}
         />
       </Field>
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !dirty}>
         {busy ? <Spinner size={14} /> : null}
-        <span>Save change</span>
+        <span>{t("leads.workflow.save")}</span>
       </button>
     </form>
   );
 }
 
 export function LeadActivityForm({ leadId }: { leadId: string }) {
+  const t = useT();
   const router = useRouter();
   const ids = { body: useId(), channel: useId(), when: useId() };
   const [kind, setKind] = useState<"NOTE" | "CONTACT">("NOTE");
@@ -176,7 +179,7 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
     if (kind === "CONTACT") {
       contactedAt = localDateTimeToIso(when);
       if (!contactedAt) {
-        setMessage({ kind: "error", text: "Enter when the contact took place." });
+        setMessage({ kind: "error", text: t("leads.workflow.activity.whenRequired") });
         return;
       }
     }
@@ -195,15 +198,21 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
     }
     setBody("");
     setWhen(nowLocalDateTime());
-    setMessage({ kind: "success", text: kind === "NOTE" ? "Note added." : "Contact recorded." });
+    setMessage({
+      kind: "success",
+      text:
+        kind === "NOTE"
+          ? t("leads.workflow.activity.noteAdded")
+          : t("leads.workflow.activity.contactRecorded"),
+    });
     router.refresh();
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4" aria-label="Add a note or record a contact">
+    <form onSubmit={submit} className="space-y-4" aria-label={t("leads.workflow.activity.label")}>
       <div
         role="radiogroup"
-        aria-label="Entry type"
+        aria-label={t("leads.workflow.activity.entryType")}
         className="inline-flex rounded-lg border border-line-strong bg-surface-2 p-0.5"
       >
         {(["NOTE", "CONTACT"] as const).map((k) => (
@@ -218,13 +227,15 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
               kind === k ? "bg-surface text-ink shadow-sm" : "text-ink-3 hover:text-ink",
             )}
           >
-            {k === "NOTE" ? "Note" : "Contact"}
+            {k === "NOTE"
+              ? t("leads.workflow.activity.note")
+              : t("leads.workflow.activity.contact")}
           </button>
         ))}
       </div>
       {kind === "CONTACT" ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Channel" htmlFor={ids.channel}>
+          <Field label={t("leads.workflow.activity.channel")} htmlFor={ids.channel}>
             <select
               id={ids.channel}
               className={FIELD}
@@ -233,12 +244,12 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
             >
               {LEAD_CONTACT_CHANNELS.map((c) => (
                 <option key={c} value={c}>
-                  {CHANNEL_LABEL[c]}
+                  {channelLabel(c, t)}
                 </option>
               ))}
             </select>
           </Field>
-          <Field label="When" htmlFor={ids.when}>
+          <Field label={t("leads.workflow.activity.when")} htmlFor={ids.when}>
             <input
               id={ids.when}
               type="datetime-local"
@@ -252,9 +263,11 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
         </div>
       ) : null}
       <Field
-        label={kind === "NOTE" ? "Note" : "Summary"}
+        label={
+          kind === "NOTE" ? t("leads.workflow.activity.note") : t("leads.workflow.activity.summary")
+        }
         htmlFor={ids.body}
-        hint="Visible to staff who read this site's leads. Cleared when the lead is anonymised."
+        hint={t("leads.workflow.activity.hint")}
       >
         <textarea
           id={ids.body}
@@ -264,14 +277,20 @@ export function LeadActivityForm({ leadId }: { leadId: string }) {
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder={
-            kind === "NOTE" ? "What the team should know…" : "What was discussed, next steps…"
+            kind === "NOTE"
+              ? t("leads.workflow.activity.notePlaceholder")
+              : t("leads.workflow.activity.contactPlaceholder")
           }
         />
       </Field>
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !body.trim()}>
         {busy ? <Spinner size={14} /> : null}
-        <span>{kind === "NOTE" ? "Add note" : "Record contact"}</span>
+        <span>
+          {kind === "NOTE"
+            ? t("leads.workflow.activity.addNote")
+            : t("leads.workflow.activity.recordContact")}
+        </span>
       </button>
     </form>
   );

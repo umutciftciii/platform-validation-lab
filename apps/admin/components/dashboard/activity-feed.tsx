@@ -1,5 +1,7 @@
 import type { ActivityEvent, ActivityKind, DemoDataset } from "../../lib/demo-data";
 import { relativeTime } from "../../lib/format";
+import type { AdminLocale } from "../../lib/i18n/config";
+import type { Translate } from "../../lib/i18n/types";
 import { Icon, type IconKey } from "../icons";
 import { cx, EmptyState, Panel } from "../ui";
 
@@ -10,18 +12,28 @@ const KIND: Record<ActivityKind, { icon: IconKey; className: string }> = {
   security: { icon: "shield", className: "bg-amber-soft text-amber-ink ring-amber/30" },
 };
 
-export function ActivityFeed({ data, now }: { data: DemoDataset<ActivityEvent>; now: Date }) {
+export function ActivityFeed({
+  data,
+  now,
+  t,
+  locale,
+}: {
+  data: DemoDataset<ActivityEvent>;
+  now: Date;
+  t: Translate;
+  locale: AdminLocale;
+}) {
   return (
     <Panel
       id="activity"
-      title="Recent activity"
-      description="Changes and access events across both sites"
+      title={t("dashboard.activity.title")}
+      description={t("dashboard.activity.description")}
       demo={data.demo}
       bodyClassName="pt-2"
     >
       {data.items.length === 0 ? (
-        <EmptyState title="No activity yet">
-          Publications, edits and access changes will appear here as they happen.
+        <EmptyState title={t("dashboard.activity.emptyTitle")}>
+          {t("dashboard.activity.emptyText")}
         </EmptyState>
       ) : (
         <ol className="relative">
@@ -53,7 +65,7 @@ export function ActivityFeed({ data, now }: { data: DemoDataset<ActivityEvent>; 
                     dateTime={at.toISOString()}
                     className="tabular mt-0.5 block text-xs text-ink-3"
                   >
-                    {relativeTime(at, now)}
+                    {relativeTime(at, now, locale)}
                   </time>
                 </div>
               </li>

@@ -1,5 +1,7 @@
 import type { DemoDataset, Kpi } from "../../lib/demo-data";
 import { formatDelta, formatNumber } from "../../lib/format";
+import type { AdminLocale } from "../../lib/i18n/config";
+import type { Translate } from "../../lib/i18n/types";
 import { cx, DemoBadge, Sparkline } from "../ui";
 
 function deltaTone(kpi: Kpi): string {
@@ -21,7 +23,15 @@ function deltaArrow(kpi: Kpi): string {
  * like a gauge panel rather than four separate cards. Each reading ends in its 12-week trace over a
  * tick scale, one tick per week.
  */
-export function KpiStrip({ data }: { data: DemoDataset<Kpi> }) {
+export function KpiStrip({
+  data,
+  t,
+  locale,
+}: {
+  data: DemoDataset<Kpi>;
+  t: Translate;
+  locale: AdminLocale;
+}) {
   return (
     <section
       aria-labelledby="kpi-title"
@@ -29,9 +39,9 @@ export function KpiStrip({ data }: { data: DemoDataset<Kpi> }) {
     >
       <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3 sm:px-6">
         <h2 id="kpi-title" className="flex items-baseline gap-2 text-sm font-semibold text-ink">
-          Last 30 days
+          {t("dashboard.kpi.title")}
           <span className="hidden text-xs font-normal text-ink-3 min-[420px]:inline">
-            Trend over 12 weeks
+            {t("dashboard.kpi.trend")}
           </span>
         </h2>
         {data.demo ? <DemoBadge /> : null}
@@ -65,7 +75,7 @@ export function KpiStrip({ data }: { data: DemoDataset<Kpi> }) {
               <dd className="mt-2 flex min-w-0 flex-1 flex-col">
                 <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                   <span className="type-display tabular text-[2rem] font-semibold text-ink sm:text-[2.5rem]">
-                    {formatNumber(kpi.value)}
+                    {formatNumber(kpi.value, locale)}
                   </span>
                   <span
                     className={cx(
@@ -86,7 +96,7 @@ export function KpiStrip({ data }: { data: DemoDataset<Kpi> }) {
                     >
                       <path d={deltaArrow(kpi)} />
                     </svg>
-                    {formatDelta(kpi.deltaPercent)}
+                    {formatDelta(kpi.deltaPercent, locale)}
                   </span>
                 </span>
                 <span className="mt-1 line-clamp-2 text-xs text-ink-3">{kpi.hint}</span>
@@ -97,7 +107,7 @@ export function KpiStrip({ data }: { data: DemoDataset<Kpi> }) {
                     width={240}
                     height={36}
                     fluid
-                    label={`${kpi.label}, 12-week trend`}
+                    label={t("dashboard.kpi.trendLabel", { label: kpi.label })}
                     className="block"
                   />
                   <span

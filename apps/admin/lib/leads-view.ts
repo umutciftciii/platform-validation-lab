@@ -12,7 +12,11 @@ import {
   type LeadSource,
   type LeadStatus,
 } from "@dream/contracts";
+import type { DocumentType } from "@dream/contracts";
 import type { PillTone } from "../components/ui";
+import { type AdminLocale, INTL_LOCALE } from "./i18n/config";
+import { formatNumber } from "./i18n/format";
+import type { Translate } from "./i18n/types";
 
 export interface LeadFilters {
   site: string;
@@ -29,19 +33,20 @@ export interface LeadFilters {
   to: string;
 }
 
+/**
+ * ML-12e: the labels below are dictionary messages (`leads.*` in lib/i18n/messages/leads), keyed by
+ * the API's codes; the codes themselves never change. Tones are not text and stay here.
+ */
+
 /** DP-221: how the lead first reached us. */
-export const SOURCE_LABEL: Readonly<Record<LeadSource, string>> = {
-  DOCUMENT_REQUEST: "Document request",
-  CONTACT_FORM: "Contact form",
-};
+export function sourceLabel(source: LeadSource, t: Translate): string {
+  return t(`leads.source.${source}`);
+}
 
 /** DP-221: the staff e-mail of a contact-form message. */
-export const NOTIFICATION_LABEL: Readonly<Record<LeadNotificationStatus, string>> = {
-  PENDING: "E-mail pending",
-  SENT: "Staff e-mailed",
-  SKIPPED: "No e-mail",
-  FAILED: "E-mail failed",
-};
+export function notificationLabel(status: LeadNotificationStatus, t: Translate): string {
+  return t(`leads.notification.${status}`);
+}
 
 export const NOTIFICATION_TONE: Readonly<Record<LeadNotificationStatus, PillTone>> = {
   PENDING: "neutral",
@@ -50,26 +55,31 @@ export const NOTIFICATION_TONE: Readonly<Record<LeadNotificationStatus, PillTone
   FAILED: "amber",
 };
 
-/** Reason codes of a skipped or failed notification, for staff. */
-export const NOTIFICATION_REASON: Readonly<Record<string, string>> = {
-  disabled: "notifications are off for this site",
-  no_recipients: "nobody on the list can read this site's leads",
-  transport_off: "e-mail delivery is off in this environment",
-  smtp_auth: "the mail server refused our login",
-  smtp_rejected: "the mail server refused the e-mail",
-  smtp_deferred: "the mail server asked us to try later",
-  smtp_timeout: "the mail server did not answer in time",
-  smtp_unavailable: "the mail server could not be reached",
-  smtp_error: "the e-mail could not be sent",
-};
+/** Reason codes of a skipped or failed notification that have their own words for staff. */
+export const NOTIFICATION_REASONS = [
+  "disabled",
+  "no_recipients",
+  "transport_off",
+  "smtp_auth",
+  "smtp_rejected",
+  "smtp_deferred",
+  "smtp_timeout",
+  "smtp_unavailable",
+  "smtp_error",
+] as const;
+type NotificationReason = (typeof NOTIFICATION_REASONS)[number];
+const REASON_SET = new Set<string>(NOTIFICATION_REASONS);
 
-export const STATUS_LABEL: Readonly<Record<LeadStatus, string>> = {
-  NEW: "New",
-  CONTACTED: "Contacted",
-  QUALIFIED: "Qualified",
-  UNQUALIFIED: "Unqualified",
-  CONVERTED: "Converted",
-};
+/** The words of a reason code, or undefined for an unknown (or no) code. */
+export function notificationReason(code: string | null, t: Translate): string | undefined {
+  return code !== null && REASON_SET.has(code)
+    ? t(`leads.notificationReason.${code as NotificationReason}`)
+    : undefined;
+}
+
+export function statusLabel(status: LeadStatus, t: Translate): string {
+  return t(`leads.status.${status}`);
+}
 
 export const STATUS_TONE: Readonly<Record<LeadStatus, PillTone>> = {
   NEW: "petrol",
@@ -80,20 +90,13 @@ export const STATUS_TONE: Readonly<Record<LeadStatus, PillTone>> = {
 };
 
 /** What each status means for the sales team (shown as a hint). */
-export const STATUS_HINT: Readonly<Record<LeadStatus, string>> = {
-  NEW: "Not yet worked.",
-  CONTACTED: "We reached out or spoke with them.",
-  QUALIFIED: "A real opportunity. Kept out of automatic anonymisation.",
-  UNQUALIFIED: "Not a fit. Can be reopened.",
-  CONVERTED: "Became a customer. Final; kept out of automatic anonymisation.",
-};
+export function statusHint(status: LeadStatus, t: Translate): string {
+  return t(`leads.statusHint.${status}`);
+}
 
-export const CHANNEL_LABEL: Readonly<Record<LeadContactChannel, string>> = {
-  EMAIL: "E-mail",
-  PHONE: "Phone",
-  MEETING: "Meeting",
-  OTHER: "Other",
-};
+export function channelLabel(channel: LeadContactChannel, t: Translate): string {
+  return t(`leads.channel.${channel}`);
+}
 
 const STATUS_SET = new Set<string>(LEAD_STATUSES);
 const SOURCE_SET = new Set<string>(LEAD_SOURCES);
@@ -182,60 +185,69 @@ export function leadListHref(f: Partial<LeadFilters>): string {
   return s ? `/leads?${s}` : "/leads";
 }
 
-const REGION = new Intl.DisplayNames(["en"], { type: "region" });
+const regions = new Map<AdminLocale, Intl.DisplayNames>();
 
-export function countryName(code: string): string {
+/** The country's name in the UI language (English: as before ML-12e); the code if unknown. */
+export function countryName(code: string, locale: AdminLocale): string {
+  let names = regions.get(locale);
+  if (!names) {
+    // English keeps the plain "en" names the console showed before ML-12e.
+    names = new Intl.DisplayNames([locale === "en" ? "en" : INTL_LOCALE[locale]], {
+      type: "region",
+    });
+    regions.set(locale, names);
+  }
   try {
-    return REGION.of(code) ?? code;
+    return names.of(code) ?? code;
   } catch {
     return code;
   }
 }
 
-export const DOC_TYPE_LABEL: Readonly<Record<string, string>> = {
-  TDS: "Technical data sheet",
-  SDS: "Safety data sheet",
-  COA: "Certificate of analysis",
-  OTHER: "Document",
-};
-
-const NUMBER = new Intl.NumberFormat("en-GB");
+export function docTypeLabel(type: DocumentType, t: Translate): string {
+  return t(`leads.docType.${type}`);
+}
 
 /** DP-227: "1 lead", "1,234 leads". */
-export function leadCount(n: number): string {
-  return `${NUMBER.format(n)} lead${n === 1 ? "" : "s"}`;
+export function leadCount(n: number, t: Translate, locale: AdminLocale): string {
+  return t("leads.count", { count: n, n: formatNumber(n, locale) });
 }
 
 /** DP-227: what the export would download, said before the click. */
-export function exportSummaryText(count: number, maxRows: number, filtered: boolean): string {
+export function exportSummaryText(
+  count: number,
+  maxRows: number,
+  filtered: boolean,
+  t: Translate,
+  locale: AdminLocale,
+): string {
   if (count === 0) {
-    return filtered
-      ? "No leads match these filters, so there is nothing to export."
-      : "There are no leads to export yet.";
+    return filtered ? t("leads.exportSummary.noneFiltered") : t("leads.exportSummary.none");
   }
+  const leads = leadCount(count, t, locale);
   if (count > maxRows) {
-    return `${leadCount(count)} match. One export holds at most ${NUMBER.format(maxRows)}; narrow the filters (for example the dates) to export.`;
+    return t("leads.exportSummary.tooMany", { leads, max: formatNumber(maxRows, locale) });
   }
-  return `${leadCount(count)} ${filtered ? "match these filters" : "in total"} and will be exported.`;
+  return filtered
+    ? t("leads.exportSummary.filtered", { leads })
+    : t("leads.exportSummary.total", { leads });
 }
 
-/** ML-10: language names of the forms (the admin console is English until ML-11). */
-const LANGUAGE_NAME: Readonly<Record<string, string>> = { en: "English", nl: "Dutch" };
-
-function languageName(tag: string): string {
-  return Object.hasOwn(LANGUAGE_NAME, tag) ? (LANGUAGE_NAME[tag] as string) : tag;
+/** ML-10: names of the form languages in the UI language; any other tag is shown as stored. */
+function languageName(tag: string, t: Translate): string {
+  return tag === "en" || tag === "nl" ? t(`leads.language.${tag}`) : tag;
 }
 
 /**
  * ML-10 (ADR-028 D12): the language a form was sent in, as stored. A request or message stored
  * before ML-10 has none: it is shown as English (the only language then) and marked as not
- * recorded; the stored row is never changed.
+ * recorded; the stored row is never changed. Only the label is translated (ML-12e).
  */
-export function formLanguageLabel(locale: string | null): string {
-  return locale === null ? "English (not recorded, before ML-10)" : languageName(locale);
+export function formLanguageLabel(locale: string | null, t: Translate): string {
+  return locale === null ? t("leads.language.notRecorded") : languageName(locale, t);
 }
 
 /** ML-10: the language of the legal text a version names (`<date>.<locale>`; older: English). */
-export function textLanguageLabel(version: string): string {
-  return languageName(legalTextVersionLocale(version));
+export function textLanguageLabel(version: string, t: Translate): string {
+  return languageName(legalTextVersionLocale(version), t);
 }

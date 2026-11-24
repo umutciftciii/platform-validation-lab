@@ -4,21 +4,26 @@ import {
   LEAD_PIPELINE_HELD,
   LeadDetailResponseSchema,
   type LeadActivity,
+  type LeadContactMessage,
   type LeadStatus,
 } from "@dream/contracts";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { Icon, type IconKey } from "../../../../components/icons";
 import { LeadActivityForm, LeadWorkflowForm } from "../../../../components/leads/lead-workflow";
 import { cx, EmptyState, Panel, StatusPill } from "../../../../components/ui";
+import { ADMIN_TIME_ZONE, type AdminLocale, INTL_LOCALE } from "../../../../lib/i18n/config";
+import { dateTimeFormat } from "../../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
+import type { Translate } from "../../../../lib/i18n/types";
 import {
-  CHANNEL_LABEL,
+  channelLabel,
   countryName,
-  DOC_TYPE_LABEL,
-  NOTIFICATION_LABEL,
-  NOTIFICATION_REASON,
+  docTypeLabel,
+  notificationLabel,
+  notificationReason,
   NOTIFICATION_TONE,
-  SOURCE_LABEL,
-  STATUS_LABEL,
+  sourceLabel,
+  statusLabel,
   STATUS_TONE,
   formLanguageLabel,
   textLanguageLabel,
@@ -26,38 +31,40 @@ import {
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Lead" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("leads.detail.title") };
+}
 
-/** DP-096: why a lead is kept outside the 24-month retention rule. */
-const HOLD_LABEL = {
-  CUSTOMER: "customer",
-  OPEN_OPPORTUNITY: "open opportunity",
-  LEGAL_HOLD: "legal hold",
-} as const;
-
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
-function size(bytes: number): string {
+/** File size; one decimal for MB in the UI language's notation (English: "2.5 MB" as before). */
+function size(bytes: number, locale: AdminLocale): string {
+  const mb = new Intl.NumberFormat(INTL_LOCALE[locale], {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+    useGrouping: false,
+  });
   return bytes >= 1024 * 1024
-    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    ? `${mb.format(bytes / 1024 / 1024)} MB`
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 /** The main path of the pipeline; UNQUALIFIED is a side exit (ADR-019 D2). */
 const PATH: readonly LeadStatus[] = ["NEW", "CONTACTED", "QUALIFIED", "CONVERTED"];
 
-function Pipeline({ status }: { status: LeadStatus }) {
+function Pipeline({ status, t }: { status: LeadStatus; t: Translate }) {
   const at = PATH.indexOf(status);
   return (
     <div className="space-y-3">
-      <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Sales pipeline">
+      <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label={t("leads.detail.pipeline")}>
         {PATH.map((s, i) => {
           const done = at >= 0 && i < at;
           const current = s === status;
@@ -86,15 +93,15 @@ function Pipeline({ status }: { status: LeadStatus }) {
               >
                 {done ? <Icon name="check" size={12} /> : i + 1}
               </span>
-              {STATUS_LABEL[s]}
+              {statusLabel(s, t)}
             </li>
           );
         })}
       </ol>
       {status === "UNQUALIFIED" ? (
         <p className="flex flex-wrap items-center gap-2 text-sm text-ink-2">
-          <StatusPill tone="neutral">Unqualified</StatusPill>
-          Off the pipeline; can be reopened as Contacted or Qualified.
+          <StatusPill tone="neutral">{statusLabel("UNQUALIFIED", t)}</StatusPill>
+          {t("leads.detail.offPipeline")}
         </p>
       ) : null}
     </div>
@@ -108,26 +115,42 @@ const ACTIVITY_ICON: Readonly<Record<LeadActivity["kind"], IconKey>> = {
   ASSIGNMENT_CHANGED: "staff",
 };
 
-function activityTitle(a: LeadActivity): string {
+function activityTitle(a: LeadActivity, t: Translate): string {
   switch (a.kind) {
     case "NOTE":
-      return "Note";
+      return t("leads.detail.activity.note");
     case "CONTACT":
-      return `Contact · ${a.contactChannel ? CHANNEL_LABEL[a.contactChannel] : "other"}`;
+      return t("leads.detail.activity.contact", {
+        channel: a.contactChannel
+          ? channelLabel(a.contactChannel, t)
+          : t("leads.detail.activity.otherChannel"),
+      });
     case "STATUS_CHANGED":
-      return `Status ${a.fromStatus ? STATUS_LABEL[a.fromStatus] : "?"} → ${
-        a.toStatus ? STATUS_LABEL[a.toStatus] : "?"
-      }`;
+      return t("leads.detail.activity.status", {
+        from: a.fromStatus ? statusLabel(a.fromStatus, t) : "?",
+        to: a.toStatus ? statusLabel(a.toStatus, t) : "?",
+      });
     case "ASSIGNMENT_CHANGED":
       return a.toAssignee
-        ? `Assigned to ${a.toAssignee.displayName}`
-        : `Unassigned${a.fromAssignee ? ` (was ${a.fromAssignee.displayName})` : ""}`;
+        ? t("leads.detail.activity.assigned", { name: a.toAssignee.displayName })
+        : a.fromAssignee
+          ? t("leads.detail.activity.unassignedWas", { name: a.fromAssignee.displayName })
+          : t("leads.common.unassigned");
   }
 }
 
-function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
+function Timeline({
+  activities,
+  t,
+  date,
+}: {
+  activities: readonly LeadActivity[];
+  t: Translate;
+  date: Intl.DateTimeFormat;
+}) {
+  const DATE = date;
   if (activities.length === 0) {
-    return <p className="text-sm text-ink-3">No sales activity yet.</p>;
+    return <p className="text-sm text-ink-3">{t("leads.detail.activity.empty")}</p>;
   }
   return (
     <ol className="relative space-y-5 before:absolute before:bottom-2 before:left-[0.9375rem] before:top-2 before:w-px before:bg-line">
@@ -138,15 +161,17 @@ function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
           </span>
           <div className="min-w-0 flex-1 pt-1">
             <p className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span className="font-medium text-ink">{activityTitle(a)}</span>
+              <span className="font-medium text-ink">{activityTitle(a, t)}</span>
               <time dateTime={a.createdAt} className="text-xs tabular-nums text-ink-3">
                 {DATE.format(new Date(a.createdAt))}
               </time>
             </p>
             <p className="text-xs text-ink-3">
-              by {a.actor.displayName}
+              {t("leads.detail.activity.by", { name: a.actor.displayName })}
               {a.kind === "CONTACT" && a.contactedAt
-                ? ` · took place ${DATE.format(new Date(a.contactedAt))}`
+                ? t("leads.detail.activity.tookPlace", {
+                    date: DATE.format(new Date(a.contactedAt)),
+                  })
                 : ""}
             </p>
             {a.body ? (
@@ -155,7 +180,7 @@ function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
               </p>
             ) : a.redactedAt ? (
               <p className="mt-1.5 text-xs italic text-ink-3">
-                Text cleared when the lead was anonymised.
+                {t("leads.detail.activity.redacted")}
               </p>
             ) : null}
           </div>
@@ -163,6 +188,32 @@ function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
       ))}
     </ol>
   );
+}
+
+type Notification = NonNullable<LeadContactMessage["notification"]>;
+
+/** DP-221: what happened to the staff e-mail of a contact-form message. */
+function staffEmailText(n: Notification, t: Translate, DATE: Intl.DateTimeFormat): string {
+  if (n.status === "SENT" && n.sentAt) {
+    return t("leads.detail.messages.sent", {
+      count: n.recipientCount,
+      date: DATE.format(new Date(n.sentAt)),
+    });
+  }
+  // A reason code without words of its own is shown as the code.
+  const reason = notificationReason(n.reason, t) ?? n.reason;
+  if (n.status === "PENDING") {
+    return n.attempts > 0
+      ? t("leads.detail.messages.retry", { attempt: n.attempts, reason: String(reason) })
+      : t("leads.detail.messages.waiting");
+  }
+  const params = {
+    status: notificationLabel(n.status, t),
+    reason: reason ?? t("leads.detail.messages.unknownReason"),
+  };
+  return n.status === "FAILED"
+    ? t("leads.detail.messages.failed", { ...params, count: n.attempts })
+    : t("leads.detail.messages.notSent", params);
 }
 
 /**
@@ -173,6 +224,9 @@ function Timeline({ activities }: { activities: readonly LeadActivity[] }) {
  */
 export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const session = await requireStaffSession();
+  const t = await getTranslator();
+  const locale = await getAdminLocale();
+  const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const { id } = await params;
   const res = await serverRead(
     `/api/v1/admin/leads/${encodeURIComponent(id)}`,
@@ -182,9 +236,13 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   if (!res.ok) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="inbox" title="Lead" back={{ href: "/leads", label: "All leads" }} />
-        <EmptyState icon="shield" title="No access to leads">
-          Leads are customer data and need a customer-data role.
+        <PageHeader
+          icon="inbox"
+          title={t("leads.detail.title")}
+          back={{ href: "/leads", label: t("leads.common.allLeads") }}
+        />
+        <EmptyState icon="shield" title={t("leads.common.noAccess")}>
+          {t("leads.detail.noAccessText")}
         </EmptyState>
       </div>
     );
@@ -195,31 +253,39 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="inbox"
-        title={lead.anonymisedAt ? "Anonymised lead" : lead.fullName}
-        back={{ href: "/leads", label: "All leads" }}
+        title={lead.anonymisedAt ? t("leads.common.anonymised") : lead.fullName}
+        back={{ href: "/leads", label: t("leads.common.allLeads") }}
         description={
           <span className="flex flex-wrap items-center gap-2">
-            <StatusPill tone={STATUS_TONE[lead.status]}>{STATUS_LABEL[lead.status]}</StatusPill>
+            <StatusPill tone={STATUS_TONE[lead.status]}>{statusLabel(lead.status, t)}</StatusPill>
             <StatusPill tone="neutral">{SITE_SHORT[lead.siteKey]}</StatusPill>
             <StatusPill tone={lead.source === "CONTACT_FORM" ? "petrol" : "neutral"}>
-              Source: {SOURCE_LABEL[lead.source]}
+              {t("leads.detail.source", { source: sourceLabel(lead.source, t) })}
             </StatusPill>
             {lead.anonymisedAt ? (
               <StatusPill tone="neutral">
-                Anonymised {DATE.format(new Date(lead.anonymisedAt))}
+                {t("leads.detail.anonymisedAt", { date: DATE.format(new Date(lead.anonymisedAt)) })}
               </StatusPill>
             ) : null}
             {lead.retentionHold ? (
-              <StatusPill tone="amber">Retention hold: {HOLD_LABEL[lead.retentionHold]}</StatusPill>
+              <StatusPill tone="amber">
+                {t("leads.detail.retentionHold", {
+                  reason: t(`leads.detail.hold.${lead.retentionHold}`),
+                })}
+              </StatusPill>
             ) : null}
             {lead.marketingConsentAt ? (
               <StatusPill tone="success">
-                Marketing consent {DATE.format(new Date(lead.marketingConsentAt))}
+                {t("leads.detail.marketingConsentAt", {
+                  date: DATE.format(new Date(lead.marketingConsentAt)),
+                })}
               </StatusPill>
             ) : (
-              <StatusPill tone="neutral">No marketing consent</StatusPill>
+              <StatusPill tone="neutral">{t("leads.detail.noMarketingConsent")}</StatusPill>
             )}
-            {lead.freeMailDomain ? <StatusPill tone="amber">Free-mail address</StatusPill> : null}
+            {lead.freeMailDomain ? (
+              <StatusPill tone="amber">{t("leads.detail.freeMail")}</StatusPill>
+            ) : null}
           </span>
         }
       />
@@ -227,22 +293,25 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
         <div className="min-w-0 space-y-6 sm:space-y-8">
           <Panel
             id="workflow"
-            title="Sales workflow"
+            title={t("leads.detail.workflow.title")}
             description={
               lead.assignedTo
-                ? `Assigned to ${lead.assignedTo.displayName}${
-                    lead.assignedTo.active ? "" : " (no longer has access to this site's leads)"
-                  }`
-                : "Not assigned yet."
+                ? lead.assignedTo.active
+                  ? t("leads.detail.workflow.assignedTo", { name: lead.assignedTo.displayName })
+                  : t("leads.detail.workflow.assignedToInactive", {
+                      name: lead.assignedTo.displayName,
+                    })
+                : t("leads.detail.workflow.notAssigned")
             }
           >
             <div className="space-y-5">
-              <Pipeline status={lead.status} />
+              <Pipeline status={lead.status} t={t} />
               {pipelineHeld && !lead.anonymisedAt ? (
                 <p className="flex items-start gap-2 rounded-lg bg-amber-soft px-3 py-2 text-sm text-amber-ink ring-1 ring-inset ring-amber/30">
                   <Icon name="shield" size={16} className="mt-0.5 shrink-0" />
-                  {lead.status === "CONVERTED" ? "A customer" : "An open opportunity"}: kept out of
-                  the automatic 24-month anonymisation while in this status.
+                  {lead.status === "CONVERTED"
+                    ? t("leads.detail.workflow.heldCustomer")
+                    : t("leads.detail.workflow.heldOpportunity")}
                 </p>
               ) : null}
               {canManage ? (
@@ -258,16 +327,16 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
               ) : (
                 <p className="text-sm text-ink-3">
                   {lead.anonymisedAt
-                    ? "This lead is anonymised; its status and history are kept as a record and cannot change."
-                    : "You can read this lead. Changing its status or assignment needs a sales role for this site."}
+                    ? t("leads.detail.workflow.anonymised")
+                    : t("leads.detail.workflow.readOnly")}
                 </p>
               )}
             </div>
           </Panel>
           <Panel
             id="activity"
-            title="Activity"
-            description="Notes, contacts, status and assignment changes: who did what, and when."
+            title={t("leads.detail.activity.title")}
+            description={t("leads.detail.activity.description")}
           >
             <div className="space-y-6">
               {canManage ? (
@@ -275,19 +344,26 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <LeadActivityForm leadId={lead.id} />
                 </div>
               ) : null}
-              <Timeline activities={activities} />
+              <Timeline activities={activities} t={t} date={DATE} />
             </div>
           </Panel>
         </div>
-        <Panel id="lead" title="Contact" className="order-first lg:sticky lg:top-6 lg:order-none">
+        <Panel
+          id="lead"
+          title={t("leads.detail.contact.title")}
+          className="order-first lg:sticky lg:top-6 lg:order-none"
+        >
           <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 lg:grid-cols-1">
             {[
-              ["E-mail", lead.email],
-              ["Company", lead.company],
-              ["Country", countryName(lead.country)],
+              [t("leads.detail.contact.email"), lead.email],
+              [t("leads.detail.contact.company"), lead.company],
+              [t("leads.detail.contact.country"), countryName(lead.country, locale)],
               [
-                "Requests",
-                `${lead.requestCount} · first ${DATE.format(new Date(lead.firstRequestAt))}`,
+                t("leads.detail.contact.requests"),
+                t("leads.detail.contact.requestsValue", {
+                  count: lead.requestCount,
+                  date: DATE.format(new Date(lead.firstRequestAt)),
+                }),
               ],
             ].map(([k, v]) => (
               <div key={k} className="min-w-0">
@@ -300,8 +376,8 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
       </div>
       <Panel
         id="contact-messages"
-        title="Contact form messages"
-        description="Each message keeps the details as submitted and the privacy notice shown with the form (evidence, never edited)."
+        title={t("leads.detail.messages.title")}
+        description={t("leads.detail.messages.description")}
         bodyClassName={contactMessages.length ? "px-0! pb-2! pt-3!" : undefined}
       >
         {contactMessages.length ? (
@@ -310,12 +386,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
               <li key={m.id} className="space-y-3 px-5 py-4 sm:px-6">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
                   <p className="font-medium text-ink">
-                    {m.redactedAt ? "Message cleared" : (m.subject ?? "No subject")}
+                    {m.redactedAt
+                      ? t("leads.detail.messages.cleared")
+                      : (m.subject ?? t("leads.detail.messages.noSubject"))}
                   </p>
                   <p className="flex flex-wrap items-center gap-2 text-sm tabular-nums text-ink-3">
                     {m.notification ? (
                       <StatusPill tone={NOTIFICATION_TONE[m.notification.status]}>
-                        {NOTIFICATION_LABEL[m.notification.status]}
+                        {notificationLabel(m.notification.status, t)}
                       </StatusPill>
                     ) : null}
                     {DATE.format(new Date(m.createdAt))}
@@ -330,17 +408,22 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </p>
                 ) : (
                   <p key="cleared" className="text-sm text-ink-3">
-                    Cleared when the lead was anonymised
-                    {m.redactedAt ? ` (${DATE.format(new Date(m.redactedAt))})` : ""}.
+                    {m.redactedAt
+                      ? t("leads.detail.messages.clearedTextAt", {
+                          date: DATE.format(new Date(m.redactedAt)),
+                        })
+                      : t("leads.detail.messages.clearedText")}
                   </p>
                 )}
                 <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                   <div>
-                    <dt className="text-ink-3">Submitted as</dt>
+                    <dt className="text-ink-3">{t("leads.detail.messages.submittedAs")}</dt>
                     <dd className="text-ink-2">
                       {m.redactedAt
-                        ? `cleared, ${countryName(m.country)}`
-                        : `${m.fullName}, ${m.company}, ${countryName(m.country)}`}
+                        ? t("leads.detail.messages.submittedCleared", {
+                            country: countryName(m.country, locale),
+                          })
+                        : `${m.fullName}, ${m.company}, ${countryName(m.country, locale)}`}
                       {m.phone ? (
                         <span className="block font-mono text-xs text-ink-3">{m.phone}</span>
                       ) : null}
@@ -348,39 +431,21 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </div>
                   {m.notification ? (
                     <div className="sm:col-span-2">
-                      <dt className="text-ink-3">Staff e-mail</dt>
-                      <dd className="text-ink-2">
-                        {m.notification.status === "SENT" && m.notification.sentAt
-                          ? `Sent to ${m.notification.recipientCount} ${
-                              m.notification.recipientCount === 1 ? "person" : "people"
-                            } on ${DATE.format(new Date(m.notification.sentAt))}`
-                          : m.notification.status === "PENDING"
-                            ? m.notification.attempts > 0
-                              ? `Waiting to retry (attempt ${m.notification.attempts} failed: ${
-                                  NOTIFICATION_REASON[m.notification.reason ?? ""] ??
-                                  m.notification.reason
-                                })`
-                              : "Waiting to be sent"
-                            : `${NOTIFICATION_LABEL[m.notification.status]}: ${
-                                NOTIFICATION_REASON[m.notification.reason ?? ""] ??
-                                m.notification.reason ??
-                                "unknown reason"
-                              }${
-                                m.notification.status === "FAILED"
-                                  ? ` after ${m.notification.attempts} attempt${m.notification.attempts === 1 ? "" : "s"}`
-                                  : ""
-                              }. The message itself is stored here.`}
-                      </dd>
+                      <dt className="text-ink-3">{t("leads.detail.messages.staffEmail")}</dt>
+                      <dd className="text-ink-2">{staffEmailText(m.notification, t, DATE)}</dd>
                     </div>
                   ) : null}
                   <div>
-                    <dt className="text-ink-3">Form language</dt>
-                    <dd className="text-ink-2">{formLanguageLabel(m.locale)}</dd>
+                    <dt className="text-ink-3">{t("leads.detail.messages.formLanguage")}</dt>
+                    <dd className="text-ink-2">{formLanguageLabel(m.locale, t)}</dd>
                   </div>
                   <div>
-                    <dt className="text-ink-3">Privacy notice shown</dt>
+                    <dt className="text-ink-3">{t("leads.detail.messages.noticeShown")}</dt>
                     <dd className="text-ink-2">
-                      version {m.privacyNoticeVersion} ({textLanguageLabel(m.privacyNoticeVersion)}){" "}
+                      {t("leads.detail.messages.version", {
+                        version: m.privacyNoticeVersion,
+                        language: textLanguageLabel(m.privacyNoticeVersion, t),
+                      })}{" "}
                       <span className="font-mono text-xs text-ink-3" title={m.privacyNoticeSha256}>
                         {m.privacyNoticeSha256.slice(0, 12)}…
                       </span>
@@ -391,17 +456,17 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
             ))}
           </ol>
         ) : (
-          <p className="text-sm text-ink-3">No message from the contact form.</p>
+          <p className="text-sm text-ink-3">{t("leads.detail.messages.empty")}</p>
         )}
       </Panel>
       <Panel
         id="requests"
-        title="Downloaded documents and request history"
-        description="Each request keeps the details and consent as submitted (evidence, never edited)."
+        title={t("leads.detail.requests.title")}
+        description={t("leads.detail.requests.description")}
         bodyClassName="px-0! pb-2! pt-3!"
       >
         {requests.length === 0 ? (
-          <p className="px-5 py-2 text-sm text-ink-3 sm:px-6">No document requests.</p>
+          <p className="px-5 py-2 text-sm text-ink-3 sm:px-6">{t("leads.detail.requests.empty")}</p>
         ) : null}
         <ol className="divide-y divide-line">
           {requests.map((r) => (
@@ -410,7 +475,10 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                 <p className="font-medium text-ink">
                   {r.document.title}
                   <span className="ml-2 text-sm font-normal text-ink-3">
-                    {DOC_TYPE_LABEL[r.document.type]} · revision {r.revision.revisionNumber}
+                    {t("leads.detail.requests.revision", {
+                      type: docTypeLabel(r.document.type, t),
+                      revision: r.revision.revisionNumber,
+                    })}
                   </span>
                 </p>
                 <p className="text-sm tabular-nums text-ink-3">
@@ -418,68 +486,82 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                 </p>
               </div>
               <p className="text-sm text-ink-2">
-                {r.product.name} <span className="font-mono text-ink-3">{r.product.code}</span> ·
-                reference <span className="font-mono">{r.reference ?? "cleared"}</span>
+                {r.product.name} <span className="font-mono text-ink-3">{r.product.code}</span>
+                {` · ${t("leads.detail.requests.reference")} `}
+                <span className="font-mono">
+                  {r.reference ?? t("leads.detail.requests.cleared")}
+                </span>
               </p>
               <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <div>
-                  <dt className="text-ink-3">Submitted as</dt>
+                  <dt className="text-ink-3">{t("leads.detail.messages.submittedAs")}</dt>
                   <dd className="text-ink-2">
-                    {r.fullName}, {r.company}, {countryName(r.country)}
+                    {r.fullName}, {r.company}, {countryName(r.country, locale)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-ink-3">Form language</dt>
-                  <dd className="text-ink-2">{formLanguageLabel(r.locale)}</dd>
+                  <dt className="text-ink-3">{t("leads.detail.messages.formLanguage")}</dt>
+                  <dd className="text-ink-2">{formLanguageLabel(r.locale, t)}</dd>
                 </div>
                 <div>
-                  <dt className="text-ink-3">Privacy notice</dt>
+                  <dt className="text-ink-3">{t("leads.detail.requests.notice")}</dt>
                   <dd className="text-ink-2">
-                    version {r.privacyNoticeVersion} ({textLanguageLabel(r.privacyNoticeVersion)}){" "}
+                    {t("leads.detail.messages.version", {
+                      version: r.privacyNoticeVersion,
+                      language: textLanguageLabel(r.privacyNoticeVersion, t),
+                    })}{" "}
                     <span className="font-mono text-xs text-ink-3" title={r.privacyNoticeSha256}>
                       {r.privacyNoticeSha256.slice(0, 12)}…
                     </span>
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-ink-3">Marketing consent</dt>
+                  <dt className="text-ink-3">{t("leads.detail.requests.marketingConsent")}</dt>
                   <dd className="text-ink-2">
                     {r.marketingConsent
-                      ? `given (version ${r.marketingConsentVersion}${
-                          r.marketingConsentVersion
-                            ? `, ${textLanguageLabel(r.marketingConsentVersion)}`
-                            : ""
-                        })`
-                      : "not given"}
+                      ? r.marketingConsentVersion
+                        ? t("leads.detail.requests.consentGivenIn", {
+                            version: r.marketingConsentVersion,
+                            language: textLanguageLabel(r.marketingConsentVersion, t),
+                          })
+                        : t("leads.detail.requests.consentGiven", {
+                            version: String(r.marketingConsentVersion),
+                          })
+                      : t("leads.detail.requests.consentNotGiven")}
                   </dd>
                 </div>
               </dl>
               <div className="text-sm text-ink-2">
                 {r.grant ? (
                   <p>
-                    Downloads {r.grant.downloadCount} of {r.grant.maxDownloads} · link valid until{" "}
-                    {DATE.format(new Date(r.grant.expiresAt))}
+                    {t("leads.detail.requests.grant", {
+                      count: r.grant.downloadCount,
+                      max: r.grant.maxDownloads,
+                      date: DATE.format(new Date(r.grant.expiresAt)),
+                    })}
                   </p>
                 ) : null}
                 {r.downloads.length ? (
                   <ul className="mt-1 space-y-0.5 text-ink-3">
                     {r.downloads.map((d) => (
                       <li key={d.deliveredAt} className="tabular-nums">
-                        {DATE.format(new Date(d.deliveredAt))} · {size(d.byteSize)} · stamped copy{" "}
+                        {`${DATE.format(new Date(d.deliveredAt))} · ${size(d.byteSize, locale)} · ${t(
+                          "leads.detail.requests.stampedCopy",
+                        )}`}{" "}
                         {d.sha256 ? (
                           <span key="hash" className="font-mono text-xs" title={d.sha256}>
                             {d.sha256.slice(0, 12)}…
                           </span>
                         ) : (
                           <span key="cleared" className="text-xs">
-                            (hash cleared)
+                            {t("leads.detail.requests.hashCleared")}
                           </span>
                         )}
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-ink-3">Not downloaded.</p>
+                  <p className="text-ink-3">{t("leads.detail.requests.notDownloaded")}</p>
                 )}
               </div>
             </li>

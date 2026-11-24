@@ -26,6 +26,10 @@ import { pages as contentPages } from "./content/en/pages";
 import { editor as contentEditor } from "./content/en/editor";
 import { menus as contentMenus } from "./content/en/menus";
 import { seo } from "./seo/en";
+import { leads } from "./leads/en";
+import { staff } from "./staff/en";
+import { owner } from "./owner/en";
+import { dashboard } from "./dashboard/en";
 
 export const en = {
   common: {
@@ -370,4 +374,9 @@ export const en = {
   },
   /** ML-12d (DP-243): the SEO area — overview and redirects (./seo/). */
   seo,
+  /** ML-12e (DP-243): Leads, Staff and access, the owner console and the overview. */
+  leads,
+  staff,
+  owner,
+  dashboard,
 } as const;
