@@ -13,6 +13,10 @@
 // HTML of the renders that show one open was recorded again on this branch with DP268_RECORD_EN=1
 // (all EN render tests). Their texts are unchanged: test/dp268-en-texts.test.ts compares the
 // visible text and accessible names of every render with the ML-12e recording (fixtures/dp268-en).
+// ML-14 (DP-271, DP-274): the footer menu editor's heading input got its own id and the dialogs
+// got their visual polish, so content-en, owner-en, seo-en and staff-en were recorded again on this
+// branch with ML14_RECORD_EN=1. The DP-268 recording they replace is kept in fixtures/ml14-en, and
+// test/ml14-en-texts.test.ts allows only the approved wording changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -31,7 +35,8 @@ const RECORD =
   process.env["ML12C_RECORD_EN"] === "1" ||
   process.env["ML12D_RECORD_EN"] === "1" ||
   process.env["ML12E_RECORD_EN"] === "1" ||
-  process.env["DP268_RECORD_EN"] === "1";
+  process.env["DP268_RECORD_EN"] === "1" ||
+  process.env["ML14_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

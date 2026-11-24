@@ -393,7 +393,9 @@ function FooterEditor({
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <TextInput
-              id="footer-contact-title"
+              // DP-271: not "footer-contact-title", the id of the panel's own heading (Panel adds
+              // "-title" to its id), which made the label point at the h2 and left this input unnamed.
+              id="footer-contact-heading"
               label={t("content.menus.shared.heading")}
               value={contact.title}
               max={60}

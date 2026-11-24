@@ -203,7 +203,34 @@ body {
   );
 }
 
+/*
+ * DP-274 (V-2): the modal's entrance (components/dialog.tsx). The dialog fades in and rises 4 px,
+ * the backdrop fades in to its usual tint (the backdrop colour itself is unchanged). Only opening
+ * animates; closing is instant. No motion with prefers-reduced-motion (below).
+ */
+.dp-dialog {
+  transition:
+    opacity 150ms ease-out,
+    translate 150ms ease-out;
+}
+.dp-dialog::backdrop {
+  transition: opacity 150ms ease-out;
+}
+@starting-style {
+  .dp-dialog[open] {
+    opacity: 0;
+    translate: 0 4px;
+  }
+  .dp-dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .dp-dialog,
+  .dp-dialog::backdrop {
+    transition: none;
+  }
   *,
   *::before,
   *::after {

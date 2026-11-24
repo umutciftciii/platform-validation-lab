@@ -544,8 +544,7 @@ function RedirectForm({
           </label>
           {error ? <FormMessage kind="error">{error.message}</FormMessage> : null}
         </DialogBody>
-        <DialogFooter>
-          <span className="text-xs text-ink-3 sm:mr-auto">{t("seo.redirects.form.atOnce")}</span>
+        <DialogFooter hint={t("seo.redirects.form.atOnce")}>
           <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
             <span>{t("seo.redirects.form.cancel")}</span>
           </button>

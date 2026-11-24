@@ -16,6 +16,15 @@
  * - gives focus back to the element that opened it (or `#main` when that element is gone or
  *   disabled after the action).
  *
+ * DP-274 (visual polish, behaviour above unchanged):
+ * - V-2: a short entrance (150 ms fade, 4 px rise; the backdrop fades in) from `.dp-dialog` in
+ *   globals.css with @starting-style; none at all with prefers-reduced-motion. Closing stays
+ *   instant: the parent unmounts the dialog and focus goes back at once;
+ * - V-3: a confirmation's text is neutral; red is kept for the danger button and a small warning
+ *   icon by the title;
+ * - V-4: the close (×) button asks before discarding unsaved input, like Escape; a footer hint sits
+ *   left of the buttons on wider screens and above them on phones.
+ *
  * The parent mounts the dialog only while it is open (`{open ? <Dialog …/> : null}`). The component
  * holds no React state, so the static render tests that queue useState values are unaffected.
  */
@@ -127,6 +136,7 @@ export function Dialog({
   busy = false,
   dirty = false,
   closeLabel,
+  danger = false,
   onClose,
   children,
 }: {
@@ -142,6 +152,8 @@ export function Dialog({
   dirty?: boolean;
   /** Shows a close (×) button in the header with this name. */
   closeLabel?: string;
+  /** DP-274: a warning icon by the title (a confirmation of a destructive action). */
+  danger?: boolean;
   onClose: () => void;
   /** <DialogBody> and <DialogFooter>, or a <DialogForm> holding them. */
   children: ReactNode;
@@ -216,14 +228,20 @@ export function Dialog({
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cx(
-        "m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-line bg-surface p-0 text-ink shadow-raised outline-none backdrop:bg-[#07121f]/55 open:flex open:flex-col",
+        "dp-dialog m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-line bg-surface p-0 text-ink shadow-raised outline-none backdrop:bg-[#07121f]/55 open:flex open:flex-col",
         SIZE[size],
       )}
     >
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-5 py-4">
         <div className="min-w-0 space-y-1">
-          <h2 id={titleId} className="break-words text-base font-semibold text-ink">
-            {title}
+          <h2
+            id={titleId}
+            className="flex items-start gap-2 break-words text-base font-semibold text-ink"
+          >
+            {danger ? (
+              <Icon name="alert" size={18} className="mt-0.5 shrink-0 text-danger" />
+            ) : null}
+            <span className="min-w-0">{title}</span>
           </h2>
           {description ? (
             <div id={descriptionId} className="break-words text-sm text-ink-2">
@@ -234,9 +252,7 @@ export function Dialog({
         {closeLabel ? (
           <button
             type="button"
-            onClick={() => {
-              if (!busy) onClose();
-            }}
+            onClick={requestClose}
             disabled={busy}
             className={cx(buttonStyles.icon, "-mr-2 -mt-1 shrink-0")}
             aria-label={closeLabel}
@@ -262,11 +278,17 @@ export function DialogBody({ children, className }: { children?: ReactNode; clas
   );
 }
 
-/** The action bar: right-aligned on wider screens, full-width buttons (primary on top) on phones. */
-export function DialogFooter({ children }: { children: ReactNode }) {
+/**
+ * The action bar: right-aligned on wider screens, full-width buttons (primary on top) on phones.
+ * DP-274: `hint` (a short note about the action) sits at the left on wider screens and above the
+ * buttons on phones (the bar is a reversed column there). It comes after the buttons in the DOM
+ * so that no node is inserted before a bare text child (translate-safe JSX, DP-196).
+ */
+export function DialogFooter({ children, hint }: { children: ReactNode; hint?: string }) {
   return (
     <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-line bg-surface-2/60 px-5 py-3 *:w-full sm:flex-row sm:items-center sm:justify-end sm:*:w-auto">
       {children}
+      {hint ? <span className="text-xs text-ink-3 sm:order-first sm:mr-auto">{hint}</span> : null}
     </div>
   );
 }
@@ -319,7 +341,8 @@ export function ConfirmDialog({
     <Dialog
       role="alertdialog"
       title={title}
-      description={text ? <p className={danger ? "text-danger" : undefined}>{text}</p> : undefined}
+      description={text ? <p>{text}</p> : undefined}
+      danger={danger}
       busy={pending}
       onClose={onCancel}
     >

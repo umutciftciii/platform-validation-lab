@@ -55,7 +55,7 @@ export const media: Messages["catalog"]["media"] = {
       too_many_revisions: "Bu belge zaten en fazla revizyon sayısına ulaştı.",
       document_archived: "Arşivlenmiş belgelere yeni revizyon eklenemez. Önce geri yükleyin.",
       archived: "Arşivlenmiş bir ürünün belgeleri değiştirilemez.",
-      busy: "Dosya işleme şu anda meşgul. Birazdan tekrar deneyin.",
+      busy: "Dosya işleme şu anda meşgul. Biraz sonra tekrar deneyin.",
       too_long: "Değişiklik notu çok uzun.",
     },
     tooLarge: "Çok büyük: PDF başına en fazla 20 MB.",

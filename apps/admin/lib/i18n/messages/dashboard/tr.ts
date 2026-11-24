@@ -46,7 +46,7 @@ export const dashboard: Messages["dashboard"] = {
     forbiddenText:
       "Rolleriniz ürünleri okuma yetkisi içermiyor, bu nedenle sizin için inceleme kuyruğu yok.",
     errorTitle: "İnceleme kuyruğu yüklenemedi",
-    errorText: "Birazdan tekrar deneyin.",
+    errorText: "Biraz sonra tekrar deneyin.",
     emptyTitle: "İnceleme bekleyen kayıt yok",
     emptyText: "Bir ürün ana kaydı gönderildiğinde onay için burada görünür.",
     loading: "İnceleme kuyruğu yükleniyor",
