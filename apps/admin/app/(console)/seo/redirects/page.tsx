@@ -11,9 +11,10 @@ import { Icon } from "../../../../components/icons";
 import { RedirectManager } from "../../../../components/seo/redirect-manager";
 import { SeoTabs } from "../../../../components/seo/seo-tabs";
 import { buttonStyles, cx, EmptyState, ErrorState } from "../../../../components/ui";
+import { getTranslator } from "../../../../lib/i18n/server";
 import {
-  ORIGIN_LABEL,
-  SORT_LABEL,
+  originLabel,
+  sortLabel,
   parseRedirectParams,
   redirectQuery,
   redirectsApi,
@@ -21,16 +22,22 @@ import {
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Redirects · SEO" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("seo.redirects.metaTitle") };
+}
 
 /**
  * DP-211 (ADR-024 D9): Admin > SEO > Redirects of the BV site. Lists every redirect (manual,
  * imported and the automatic 301s of moved content) with search, filters, sorting and pages;
  * the client part creates, edits, deletes and imports. The API decides every permission:
  * `content:read`/`product:read` reads, `content:publish` changes, `audit:read` shows history.
+ * ML-12d (DP-243): every UI text in the console's language (`seo.redirects.*`); query parameters,
+ * API paths, origins, status codes and redirect data are unchanged.
  */
 export default async function RedirectsPage({ searchParams }: PageProps<"/seo/redirects">) {
   await requireStaffSession();
+  const t = await getTranslator();
   const params = parseRedirectParams(await searchParams);
   const [cms, catalog] = await Promise.all([
     serverRead("/api/v1/admin/cms/context", CmsContextResponseSchema),
@@ -42,18 +49,18 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
   const header = (
     <PageHeader
       icon="search"
-      title="Redirects"
-      description="Old addresses of dreampetroleumbv.com and where they lead. Changes take effect on the site at once."
+      title={t("seo.redirects.title")}
+      description={t("seo.redirects.description")}
     />
   );
   if (!bv) {
     return (
       <div className="space-y-6 sm:space-y-8">
         {header}
-        <SeoTabs current="redirects" />
+        <SeoTabs current="redirects" t={t} />
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
-          <EmptyState icon="shield" title="No access to the BV site">
-            Your roles do not include reading content or products of Dream Petroleum BV.
+          <EmptyState icon="shield" title={t("seo.common.noAccessTitle")}>
+            {t("seo.common.noAccessText")}
           </EmptyState>
         </div>
       </div>
@@ -67,20 +74,23 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
     return (
       <div className="space-y-6 sm:space-y-8">
         {header}
-        <SeoTabs current="redirects" />
-        <ErrorState title="The redirects could not be loaded">
-          {res.status === 403
-            ? "You are not allowed to read the content or products of this site."
-            : "Try again in a moment."}
+        <SeoTabs current="redirects" t={t} />
+        <ErrorState title={t("seo.redirects.loadError")}>
+          {res.status === 403 ? t("seo.common.forbidden") : t("seo.common.tryAgain")}
         </ErrorState>
       </div>
     );
   }
   const data = res.data;
   const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
-  const chip = (label: string, patch: Parameters<typeof redirectQuery>[1], current: boolean) => (
+  const chip = (
+    id: string,
+    label: string,
+    patch: Parameters<typeof redirectQuery>[1],
+    current: boolean,
+  ) => (
     <Link
-      key={label}
+      key={id}
       href={`/seo/redirects${redirectQuery(params, { ...patch, page: 1 })}`}
       aria-current={current ? "page" : undefined}
       className={cx(
@@ -99,36 +109,35 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
   return (
     <div className="space-y-6 sm:space-y-8">
       {header}
-      <SeoTabs current="redirects" />
+      <SeoTabs current="redirects" t={t} />
 
       <p className="flex items-start gap-2 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 ring-1 ring-inset ring-line">
         <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
-        <span>
-          Live content always wins: a redirect never starts at a published page or product, and it
-          is switched off when content is published at its old address. Redirects never chain, never
-          leave the site and never appear in the sitemap. Slug-change redirects keep moved content
-          findable and cannot be deleted here.
-        </span>
+        <span>{t("seo.redirects.rulesNote")}</span>
       </p>
 
-      <section aria-label="Find redirects" className="space-y-3">
+      <section aria-label={t("seo.redirects.find.label")} className="space-y-3">
         <form
           method="get"
           action="/seo/redirects"
           className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-end"
         >
           <label className="min-w-0 flex-1 space-y-1">
-            <span className="block text-xs font-medium text-ink-3">Search</span>
+            <span className="block text-xs font-medium text-ink-3">
+              {t("seo.redirects.find.search")}
+            </span>
             <input
               name="q"
               defaultValue={params.q}
-              placeholder="Address or note"
+              placeholder={t("seo.redirects.find.searchPlaceholder")}
               className={cx(field, "w-full")}
               maxLength={200}
             />
           </label>
           <label className="space-y-1">
-            <span className="block text-xs font-medium text-ink-3">Sort by</span>
+            <span className="block text-xs font-medium text-ink-3">
+              {t("seo.redirects.find.sortBy")}
+            </span>
             <select
               name="sort"
               defaultValue={params.sort}
@@ -136,16 +145,18 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
             >
               {SEO_REDIRECT_SORTS.map((s) => (
                 <option key={s} value={s}>
-                  {SORT_LABEL[s]}
+                  {sortLabel(s, t)}
                 </option>
               ))}
             </select>
           </label>
           <label className="space-y-1">
-            <span className="block text-xs font-medium text-ink-3">Order</span>
+            <span className="block text-xs font-medium text-ink-3">
+              {t("seo.redirects.find.order")}
+            </span>
             <select name="dir" defaultValue={params.dir} className={cx(field, "w-full md:w-auto")}>
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
+              <option value="desc">{t("seo.redirects.find.descending")}</option>
+              <option value="asc">{t("seo.redirects.find.ascending")}</option>
             </select>
           </label>
           {params.origin ? <input type="hidden" name="origin" value={params.origin} /> : null}
@@ -153,43 +164,72 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
           {params.active ? <input type="hidden" name="active" value={params.active} /> : null}
           <button type="submit" className={buttonStyles.secondary}>
             <Icon name="search" size={16} />
-            <span>Apply</span>
+            <span>{t("seo.redirects.find.apply")}</span>
           </button>
         </form>
-        <nav aria-label="Filter by origin" className="flex flex-wrap gap-2">
-          {chip(`All (${data.counts.all})`, { origin: "" }, params.origin === "")}
+        <nav aria-label={t("seo.redirects.find.byOrigin")} className="flex flex-wrap gap-2">
+          {chip(
+            "origin-all",
+            t("seo.redirects.find.all", { n: data.counts.all }),
+            { origin: "" },
+            params.origin === "",
+          )}
           {(["MANUAL", "SLUG_CHANGE", "IMPORT"] as const).map((o) =>
-            chip(`${ORIGIN_LABEL[o]} (${data.counts[o]})`, { origin: o }, params.origin === o),
+            chip(
+              `origin-${o}`,
+              t("seo.redirects.find.withCount", { label: originLabel(o, t), n: data.counts[o] }),
+              { origin: o },
+              params.origin === o,
+            ),
           )}
         </nav>
-        <nav aria-label="Filter by status and state" className="flex flex-wrap gap-2">
-          {chip("Any status", { status: "" }, params.status === "")}
-          {chip("301", { status: "301" }, params.status === "301")}
-          {chip("302", { status: "302" }, params.status === "302")}
-          {chip("Active and inactive", { active: "" }, params.active === "")}
-          {chip("Active", { active: "true" }, params.active === "true")}
+        <nav aria-label={t("seo.redirects.find.byStatus")} className="flex flex-wrap gap-2">
           {chip(
-            `Inactive (${data.counts.inactive})`,
+            "status-any",
+            t("seo.redirects.find.anyStatus"),
+            { status: "" },
+            params.status === "",
+          )}
+          {chip("status-301", "301", { status: "301" }, params.status === "301")}
+          {chip("status-302", "302", { status: "302" }, params.status === "302")}
+          {chip(
+            "active-any",
+            t("seo.redirects.find.activeAndInactive"),
+            { active: "" },
+            params.active === "",
+          )}
+          {chip(
+            "active-true",
+            t("seo.redirects.find.active"),
+            { active: "true" },
+            params.active === "true",
+          )}
+          {chip(
+            "active-false",
+            t("seo.redirects.find.inactive", { n: data.counts.inactive }),
             { active: "false" },
             params.active === "false",
           )}
         </nav>
       </section>
 
-      <section aria-label="Redirects" className="space-y-3">
+      <section aria-label={t("seo.redirects.list.label")} className="space-y-3">
         <p className="text-sm text-ink-3">
-          {`${data.total} redirect${data.total === 1 ? "" : "s"}${data.total > data.pageSize ? ` · page ${data.page} of ${pages}` : ""}`}
+          {`${t("seo.redirects.list.count", { count: data.total })}${data.total > data.pageSize ? t("seo.redirects.list.page", { page: data.page, pages }) : ""}`}
         </p>
         <RedirectManager data={data} />
         {pages > 1 ? (
-          <nav aria-label="Pages" className="flex flex-wrap items-center gap-2">
+          <nav
+            aria-label={t("seo.redirects.list.pages")}
+            className="flex flex-wrap items-center gap-2"
+          >
             {data.page > 1 ? (
               <Link
                 key="prev"
                 href={`/seo/redirects${redirectQuery(params, { page: data.page - 1 })}`}
                 className={buttonStyles.secondary}
               >
-                Previous
+                {t("seo.redirects.list.previous")}
               </Link>
             ) : null}
             {data.page < pages ? (
@@ -198,7 +238,7 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
                 href={`/seo/redirects${redirectQuery(params, { page: data.page + 1 })}`}
                 className={buttonStyles.secondary}
               >
-                Next
+                {t("seo.redirects.list.next")}
               </Link>
             ) : null}
           </nav>

@@ -23,6 +23,7 @@ import { contract as contentContract } from "./content/tr/contract";
 import { pages as contentPages } from "./content/tr/pages";
 import { editor as contentEditor } from "./content/tr/editor";
 import { menus as contentMenus } from "./content/tr/menus";
+import { seo } from "./seo/tr";
 
 export const tr: Messages = {
   common: {
@@ -374,4 +375,5 @@ export const tr: Messages = {
     editor: contentEditor,
     menus: contentMenus,
   },
+  seo,
 };
