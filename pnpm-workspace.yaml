@@ -25,3 +25,8 @@ overrides:
   # typescript-estree 8.72.x still asks for ^10.2.2. It only calls minimatch(path, pattern,
   # { dot: true }), which 11.x keeps. Lint-time only.
   "@typescript-eslint/typescript-estree>minimatch": "11.0.1"
+  # GHSA-7589-6fvf-x4pw / CVE-2026-121707 (effect <=3.22.0, Schema.TemplateLiteral ReDoS; DP-249,
+  # Dependabot #2). @prisma/config 7.10.1 pins effect 3.20.0; Prisma's 7.11.0 line moves to the
+  # same 3.22.1. @prisma/config never uses TemplateLiteral and only decodes our own
+  # prisma.config.ts, Prisma CLI only (generate, migrate). Remove with prisma >= 7.11.0.
+  "@prisma/config>effect": "3.22.1"
