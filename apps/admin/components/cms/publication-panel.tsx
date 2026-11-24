@@ -9,6 +9,7 @@ import { dateTimeFormat } from "../../lib/i18n/format";
 import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { FormMessage } from "../catalog/parts";
 import { useNotice } from "../catalog/notices";
+import { ConfirmDialog } from "../dialog";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Panel, Spinner, StatusPill } from "../ui";
 import { publicationState } from "./parts";
@@ -149,19 +150,12 @@ export function PublicationPanel({
         ) : null}
 
         {canPublish ? (
-          confirm === "publish" ? (
-            <ConfirmBox
-              text={t("content.editor.publication.confirmPublish", { version })}
-              action={t("content.editor.publication.publishNow")}
-              pending={pending === "publish"}
-              onConfirm={() => run("publish")}
-              onCancel={() => setConfirm(null)}
-            />
-          ) : (
+          <>
             <button
               type="button"
               onClick={() => setConfirm("publish")}
               disabled={dirty || upToDate || pending !== null}
+              aria-haspopup="dialog"
               className={cx(buttonStyles.primary, "w-full")}
             >
               <Icon name="publish" size={17} />
@@ -169,7 +163,16 @@ export function PublicationPanel({
                 ? t("content.editor.publication.publishChanges")
                 : t("content.editor.publication.publish")}
             </button>
-          )
+            {confirm === "publish" ? (
+              <ConfirmBox
+                text={t("content.editor.publication.confirmPublish", { version })}
+                action={t("content.editor.publication.publishNow")}
+                pending={pending === "publish"}
+                onConfirm={() => run("publish")}
+                onCancel={() => setConfirm(null)}
+              />
+            ) : null}
+          </>
         ) : (
           <p className="rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
             {t("content.editor.publication.needsPublisher")}
@@ -177,31 +180,38 @@ export function PublicationPanel({
         )}
 
         {canPublish && live ? (
-          confirm === "unpublish" ? (
-            <ConfirmBox
-              text={t("content.editor.publication.confirmUnpublish")}
-              action={t("content.editor.publication.unpublish")}
-              danger
-              pending={pending === "unpublish"}
-              onConfirm={() => run("unpublish")}
-              onCancel={() => setConfirm(null)}
-            />
-          ) : (
+          <>
             <button
               type="button"
               onClick={() => setConfirm("unpublish")}
               disabled={pending !== null}
+              aria-haspopup="dialog"
               className={cx(buttonStyles.ghost, "w-full")}
             >
               {t("content.editor.publication.unpublish")}
             </button>
-          )
+            {confirm === "unpublish" ? (
+              <ConfirmBox
+                text={t("content.editor.publication.confirmUnpublish")}
+                action={t("content.editor.publication.unpublish")}
+                danger
+                pending={pending === "unpublish"}
+                onConfirm={() => run("unpublish")}
+                onCancel={() => setConfirm(null)}
+              />
+            ) : null}
+          </>
         ) : null}
       </div>
     </Panel>
   );
 }
 
+/**
+ * A confirmation of a publication action (publish, unpublish, restore; also the redirect delete).
+ * DP-268: opens as the console's modal dialog (components/dialog.tsx) with the same texts; the
+ * button that opened it stays on the page and gets focus back when it closes.
+ */
 export function ConfirmBox({
   text,
   action,
@@ -219,34 +229,15 @@ export function ConfirmBox({
 }) {
   const t = useT();
   return (
-    <div
-      role="alertdialog"
-      aria-label={action}
-      className={cx(
-        "space-y-2 rounded-lg p-3 ring-1 ring-inset",
-        danger ? "bg-danger-soft ring-danger/25" : "bg-petrol-soft ring-petrol/25",
-      )}
-    >
-      <p className={danger ? "text-danger" : "text-ink"}>{text}</p>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={onConfirm}
-          disabled={pending}
-          className={cx(buttonStyles.primary, "flex-1")}
-        >
-          {pending ? <Spinner /> : null}
-          <span>{action}</span>
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={pending}
-          className={buttonStyles.secondary}
-        >
-          {t("content.editor.publication.cancel")}
-        </button>
-      </div>
-    </div>
+    <ConfirmDialog
+      title={action}
+      text={text}
+      confirmLabel={action}
+      cancelLabel={t("content.editor.publication.cancel")}
+      danger={danger}
+      pending={pending}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
   );
 }

@@ -30,6 +30,7 @@ import {
   warningMessage,
 } from "../../lib/redirects-view";
 import { FormMessage } from "../catalog/parts";
+import { Dialog, DialogBody, DialogFooter, DialogForm } from "../dialog";
 import { ConfirmBox } from "../cms/publication-panel";
 import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
@@ -81,6 +82,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
               setNotice(null);
               setEditing({ mode: "create" });
             }}
+            aria-haspopup="dialog"
           >
             <Icon name="plus" size={17} />
             <span>{t("seo.redirects.manager.newRedirect")}</span>
@@ -138,13 +140,20 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
           </button>
         </div>
       ) : null}
-      {editing?.mode === "create" ? (
+      {editing ? (
         <RedirectForm
-          key="create"
+          key={editing.mode === "edit" ? `edit-${editing.item.id}` : "create"}
           api={api}
-          item={null}
+          item={editing.mode === "edit" ? editing.item : null}
           onCancel={() => setEditing(null)}
-          onSaved={(res) => done(t("seo.redirects.manager.created"), res.warnings)}
+          onSaved={(res) =>
+            done(
+              editing.mode === "edit"
+                ? t("seo.redirects.manager.saved")
+                : t("seo.redirects.manager.created"),
+              res.warnings,
+            )
+          }
         />
       ) : null}
       {importing ? (
@@ -164,31 +173,20 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
         </p>
       ) : (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
-          {data.items.map((item) =>
-            editing?.mode === "edit" && editing.item.id === item.id ? (
-              <li key={`edit-${item.id}`} className="p-3 sm:p-4">
-                <RedirectForm
-                  api={api}
-                  item={item}
-                  onCancel={() => setEditing(null)}
-                  onSaved={(res) => done(t("seo.redirects.manager.saved"), res.warnings)}
-                />
-              </li>
-            ) : (
-              <RedirectRow
-                key={`row-${item.id}`}
-                item={item}
-                api={api}
-                canManage={manage}
-                canReadHistory={history}
-                onEdit={() => {
-                  setImporting(false);
-                  setEditing({ mode: "edit", item });
-                }}
-                onDeleted={() => done(t("seo.redirects.manager.deleted"))}
-              />
-            ),
-          )}
+          {data.items.map((item) => (
+            <RedirectRow
+              key={`row-${item.id}`}
+              item={item}
+              api={api}
+              canManage={manage}
+              canReadHistory={history}
+              onEdit={() => {
+                setImporting(false);
+                setEditing({ mode: "edit", item });
+              }}
+              onDeleted={() => done(t("seo.redirects.manager.deleted"))}
+            />
+          ))}
         </ul>
       )}
     </div>
@@ -314,6 +312,7 @@ function RedirectRow({
           <button
             type="button"
             onClick={onEdit}
+            aria-haspopup="dialog"
             className="font-medium text-petrol-strong hover:underline"
           >
             {item.protected ? t("seo.redirects.row.editNote") : t("seo.redirects.row.edit")}
@@ -329,10 +328,11 @@ function RedirectRow({
             {showHistory ? t("seo.redirects.row.hideHistory") : t("seo.redirects.row.history")}
           </button>
         ) : null}
-        {canManage && !item.protected && !confirm ? (
+        {canManage && !item.protected ? (
           <button
             type="button"
             onClick={() => setConfirm(true)}
+            aria-haspopup="dialog"
             className="font-medium text-danger hover:underline"
           >
             {t("seo.redirects.row.delete")}
@@ -430,129 +430,137 @@ function RedirectForm({
   }
 
   const invalid = (f: string) => (error?.fields.includes(f) ? true : undefined);
+  // DP-268: Escape asks before it throws away typed input (Cancel and × keep their old rule).
+  const dirty =
+    source !== (item ? redirectSourceLabel(item) : "") ||
+    target !== (item?.target ?? "") ||
+    statusCode !== (item?.statusCode ?? 301) ||
+    active !== (item?.active ?? true) ||
+    note !== (item?.note ?? "");
   const input =
     "h-10 w-full min-w-0 rounded-lg border border-line-strong bg-surface px-3 font-mono text-sm text-ink placeholder:text-ink-3 disabled:bg-surface-2 disabled:text-ink-3 aria-invalid:border-danger";
 
   return (
-    <form
-      onSubmit={submit}
-      aria-label={item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
-      className="space-y-4 rounded-2xl border border-line bg-surface p-4 shadow-sm sm:p-5"
+    <Dialog
+      title={item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
+      size="lg"
+      busy={pending}
+      dirty={dirty}
+      closeLabel={t("seo.redirects.form.close")}
+      onClose={onCancel}
     >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-ink">
-          {item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
-        </h2>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={buttonStyles.icon}
-          aria-label={t("seo.redirects.form.close")}
-        >
-          <Icon name="close" size={18} />
-        </button>
-      </div>
-      {locked ? (
-        <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2 ring-1 ring-inset ring-line">
-          <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
-          <span>{t("seo.redirects.form.locked")}</span>
-        </p>
-      ) : null}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label className="min-w-0 space-y-1.5" htmlFor={`${id}-source`}>
-          <span className="block text-sm font-medium text-ink">
-            {t("seo.redirects.form.source")}
-          </span>
-          <input
-            id={`${id}-source`}
-            className={input}
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder="/old-page"
-            disabled={locked}
-            required
-            maxLength={1000}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={invalid("source")}
-          />
-          <span className="block text-xs text-ink-3">{t("seo.redirects.form.sourceHint")}</span>
-        </label>
-        <label className="min-w-0 space-y-1.5" htmlFor={`${id}-target`}>
-          <span className="block text-sm font-medium text-ink">
-            {t("seo.redirects.form.target")}
-          </span>
-          <input
-            id={`${id}-target`}
-            className={input}
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            placeholder="/new-page"
-            disabled={locked}
-            required
-            maxLength={1000}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={invalid("target")}
-          />
-          <span className="block text-xs text-ink-3">{t("seo.redirects.form.targetHint")}</span>
-        </label>
-      </div>
-      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
-        <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-2" disabled={locked}>
-          <legend className="sr-only">{t("seo.redirects.form.status")}</legend>
-          {([301, 302] as const).map((code) => (
-            <label key={code} className="inline-flex items-center gap-2 text-sm text-ink">
-              <input
-                type="radio"
-                name={`${id}-status`}
-                checked={statusCode === code}
-                onChange={() => setStatusCode(code)}
-              />
-              <span>
-                {code === 301 ? t("seo.redirects.row.permanent") : t("seo.redirects.row.temporary")}
+      <DialogForm
+        onSubmit={submit}
+        label={item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
+      >
+        <DialogBody>
+          {locked ? (
+            <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2 ring-1 ring-inset ring-line">
+              <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
+              <span>{t("seo.redirects.form.locked")}</span>
+            </p>
+          ) : null}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label className="min-w-0 space-y-1.5" htmlFor={`${id}-source`}>
+              <span className="block text-sm font-medium text-ink">
+                {t("seo.redirects.form.source")}
               </span>
+              <input
+                id={`${id}-source`}
+                className={input}
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                placeholder="/old-page"
+                disabled={locked}
+                required
+                maxLength={1000}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("source")}
+              />
+              <span className="block text-xs text-ink-3">{t("seo.redirects.form.sourceHint")}</span>
             </label>
-          ))}
-        </fieldset>
-        <label className="inline-flex items-center gap-2 text-sm text-ink">
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(e) => setActive(e.target.checked)}
-            disabled={locked}
-          />
-          <span>{t("seo.redirects.form.active")}</span>
-        </label>
-      </div>
-      <label className="block space-y-1.5" htmlFor={`${id}-note`}>
-        <span className="block text-sm font-medium text-ink">{t("seo.redirects.form.note")}</span>
-        <textarea
-          id={`${id}-note`}
-          className="min-h-16 w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          maxLength={500}
-          aria-invalid={invalid("note")}
-        />
-      </label>
-      {error ? <FormMessage kind="error">{error.message}</FormMessage> : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="submit" className={buttonStyles.primary} disabled={pending}>
-          <span>
-            {pending
-              ? t("seo.redirects.form.saving")
-              : item
-                ? t("seo.redirects.form.save")
-                : t("seo.redirects.form.createAction")}
-          </span>
-        </button>
-        <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-          <span>{t("seo.redirects.form.cancel")}</span>
-        </button>
-        <span className="text-xs text-ink-3">{t("seo.redirects.form.atOnce")}</span>
-      </div>
-    </form>
+            <label className="min-w-0 space-y-1.5" htmlFor={`${id}-target`}>
+              <span className="block text-sm font-medium text-ink">
+                {t("seo.redirects.form.target")}
+              </span>
+              <input
+                id={`${id}-target`}
+                className={input}
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder="/new-page"
+                disabled={locked}
+                required
+                maxLength={1000}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("target")}
+              />
+              <span className="block text-xs text-ink-3">{t("seo.redirects.form.targetHint")}</span>
+            </label>
+          </div>
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
+            <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-2" disabled={locked}>
+              <legend className="sr-only">{t("seo.redirects.form.status")}</legend>
+              {([301, 302] as const).map((code) => (
+                <label key={code} className="inline-flex items-center gap-2 text-sm text-ink">
+                  <input
+                    type="radio"
+                    name={`${id}-status`}
+                    checked={statusCode === code}
+                    onChange={() => setStatusCode(code)}
+                  />
+                  <span>
+                    {code === 301
+                      ? t("seo.redirects.row.permanent")
+                      : t("seo.redirects.row.temporary")}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <label className="inline-flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={active}
+                onChange={(e) => setActive(e.target.checked)}
+                disabled={locked}
+              />
+              <span>{t("seo.redirects.form.active")}</span>
+            </label>
+          </div>
+          <label className="block space-y-1.5" htmlFor={`${id}-note`}>
+            <span className="block text-sm font-medium text-ink">
+              {t("seo.redirects.form.note")}
+            </span>
+            <textarea
+              id={`${id}-note`}
+              className="min-h-16 w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={500}
+              aria-invalid={invalid("note")}
+            />
+          </label>
+          {error ? <FormMessage kind="error">{error.message}</FormMessage> : null}
+        </DialogBody>
+        <DialogFooter>
+          <span className="text-xs text-ink-3 sm:mr-auto">{t("seo.redirects.form.atOnce")}</span>
+          <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
+            <span>{t("seo.redirects.form.cancel")}</span>
+          </button>
+          <button type="submit" className={buttonStyles.primary} disabled={pending}>
+            <span>
+              {pending
+                ? t("seo.redirects.form.saving")
+                : item
+                  ? t("seo.redirects.form.save")
+                  : t("seo.redirects.form.createAction")}
+            </span>
+          </button>
+        </DialogFooter>
+      </DialogForm>
+    </Dialog>
   );
 }
 

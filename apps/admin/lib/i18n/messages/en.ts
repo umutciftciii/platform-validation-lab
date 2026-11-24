@@ -38,6 +38,10 @@ export const en = {
     backToOverview: "Back to overview",
     sampleData: "Sample data",
     sampleDataTitle: "Sample data for the design prototype. Not connected to any system.",
+    /** DP-268: components/dialog.tsx */
+    dialog: {
+      discard: "Discard the changes you have not saved?",
+    },
   },
   language: {
     label: "Language",

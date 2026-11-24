@@ -98,24 +98,26 @@ export function HistoryPanel({
                   ) : null}
                 </p>
                 {canEdit ? (
-                  confirm === r.revisionNumber ? (
-                    <ConfirmBox
-                      text={t("content.editor.history.confirm", { n: r.revisionNumber })}
-                      action={t("content.editor.history.restore")}
-                      pending={pending}
-                      onConfirm={() => restore(r.revisionNumber)}
-                      onCancel={() => setConfirm(null)}
-                    />
-                  ) : (
+                  <>
                     <button
                       type="button"
                       onClick={() => setConfirm(r.revisionNumber)}
                       disabled={dirty || pending}
+                      aria-haspopup="dialog"
                       className="text-sm font-medium text-petrol-strong hover:underline disabled:cursor-not-allowed disabled:text-ink-3 disabled:no-underline"
                     >
                       {t("content.editor.history.restore")}
                     </button>
-                  )
+                    {confirm === r.revisionNumber ? (
+                      <ConfirmBox
+                        text={t("content.editor.history.confirm", { n: r.revisionNumber })}
+                        action={t("content.editor.history.restore")}
+                        pending={pending}
+                        onConfirm={() => restore(r.revisionNumber)}
+                        onCancel={() => setConfirm(null)}
+                      />
+                    ) : null}
+                  </>
                 ) : null}
               </li>
             ))}

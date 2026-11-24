@@ -173,8 +173,11 @@ describe("language switch", () => {
       expect(html).toMatch(
         new RegExp(`role="radio" aria-checked="${locale === "tr"}" aria-label="Türkçe" lang="tr"`),
       );
-      // Native buttons: reachable with Tab, chosen with Enter or Space.
+      // Native buttons, chosen with Enter or Space. DP-269: one Tab stop (the checked option);
+      // the arrow keys, Home and End move between the options (test/dp268-a11y.test.tsx).
       expect(html.match(/<button type="button"/g)).toHaveLength(2);
+      expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+      expect(html.match(/tabindex="-1"/g)).toHaveLength(1);
     },
   );
 });

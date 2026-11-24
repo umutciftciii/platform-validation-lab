@@ -12,6 +12,7 @@ import { staff as STAFF_EN } from "../../lib/i18n/messages/staff/en";
 import type { Translate } from "../../lib/i18n/types";
 import { assignRole, endOfDayIso, inviteStaff, revokeRole, stepUp } from "../../lib/staff-client";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { ConfirmDialog } from "../dialog";
 import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
 
@@ -184,39 +185,32 @@ export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string
     setConfirming(false);
     router.refresh();
   }
+  // DP-268: the confirmation opens as the console's modal; the Remove button stays on the page
+  // and gets focus back when the dialog closes (a refusal stays inside the dialog).
   return (
     <span className="inline-flex flex-col items-start gap-1">
+      <button
+        type="button"
+        className={cx(buttonStyles.ghost, "h-8 px-2 text-sm text-danger")}
+        onClick={() => setConfirming(true)}
+        aria-label={t("staff.remove.removeLabel", { label })}
+        aria-haspopup="dialog"
+      >
+        {t("staff.remove.remove")}
+      </button>
       {confirming ? (
-        <span className="inline-flex items-center gap-1">
-          <button
-            type="button"
-            className={cx(buttonStyles.primary, "h-8 px-3 text-sm")}
-            disabled={busy}
-            onClick={() => void remove()}
-            aria-label={t("staff.remove.confirmLabel", { label })}
-          >
-            {busy ? <Spinner size={12} /> : null}
-            <span>{t("staff.remove.remove")}</span>
-          </button>
-          <button
-            type="button"
-            className={cx(buttonStyles.ghost, "h-8 text-sm")}
-            onClick={() => setConfirming(false)}
-          >
-            {t("staff.remove.keep")}
-          </button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          className={cx(buttonStyles.ghost, "h-8 px-2 text-sm text-danger")}
-          onClick={() => setConfirming(true)}
-          aria-label={t("staff.remove.removeLabel", { label })}
-        >
-          {t("staff.remove.remove")}
-        </button>
-      )}
-      {error ? (
+        <ConfirmDialog
+          title={t("staff.remove.removeLabel", { label })}
+          confirmLabel={t("staff.remove.remove")}
+          confirmAriaLabel={t("staff.remove.confirmLabel", { label })}
+          cancelLabel={t("staff.remove.keep")}
+          danger
+          pending={busy}
+          error={error}
+          onConfirm={() => void remove()}
+          onCancel={() => setConfirming(false)}
+        />
+      ) : error ? (
         <span role="alert" className="text-xs text-danger">
           {error}
         </span>
