@@ -4,7 +4,6 @@
  * database checks the same again. Error rules map to messages in staff-client RULE_MESSAGES.
  */
 import {
-  DEFAULT_ERROR_MESSAGES,
   ErrorBodySchema,
   LEAD_EXPORT_MAX_ROWS,
   LEAD_EXPORT_PATH,
@@ -17,7 +16,11 @@ import type {
   LeadWorkflowInput,
   LeadWorkflowResponse,
 } from "@dream/contracts";
-import { postJson } from "./staff-client";
+import { type AdminLocale, browserAdminLocale } from "./i18n/config";
+import { formatNumber } from "./i18n/format";
+import { createTranslator } from "./i18n/translate";
+import type { Translate } from "./i18n/types";
+import { codeMessage, postJson } from "./staff-client";
 
 const base = (leadId: string) => `/api/v1/admin/leads/${encodeURIComponent(leadId)}`;
 
@@ -48,30 +51,33 @@ export type LeadExportResult =
   | { ok: true; blob: Blob; filename: string; rows: number | null }
   | { ok: false; status: number; message: string; stepUp: boolean };
 
-const EXPORT_RULE_MESSAGES: Readonly<Record<string, string>> = {
-  too_many_rows: `Too many leads for one file (at most ${LEAD_EXPORT_MAX_ROWS.toLocaleString(
-    "en-GB",
-  )}). Narrow the filters, for example by date.`,
-  before_from: "The end date is before the start date.",
-};
+/** API rules of a refused export that have their own message (`leads.export.errors.*`). */
+const EXPORT_RULES = { too_many_rows: "tooManyRows", before_from: "beforeFrom" } as const;
+
+function exportRuleMessage(rule: keyof typeof EXPORT_RULES, t: Translate, locale: AdminLocale) {
+  return EXPORT_RULES[rule] === "tooManyRows"
+    ? t("leads.export.errors.tooManyRows", { max: formatNumber(LEAD_EXPORT_MAX_ROWS, locale) })
+    : t("leads.export.errors.beforeFrom");
+}
 
 /** DP-229: the separator choices of the export, in the order the console shows them. */
-export const EXPORT_SEPARATOR_OPTIONS: readonly {
+const SEPARATORS = [
+  { value: ";", key: "semicolon" },
+  { value: ",", key: "comma" },
+] as const satisfies readonly { value: LeadExportSeparator; key: string }[];
+
+/** DP-229: the separator choices with their label and hint in the UI language. */
+export function exportSeparatorOptions(t: Translate): readonly {
   value: LeadExportSeparator;
   label: string;
   hint: string;
-}[] = [
-  {
-    value: ";",
-    label: "Semicolon (;)",
-    hint: "Opens in columns in Excel with Dutch or Turkish settings.",
-  },
-  {
-    value: ",",
-    label: "Comma (,)",
-    hint: "For Excel with English settings, Google Sheets and other tools.",
-  },
-];
+}[] {
+  return SEPARATORS.map((s) => ({
+    value: s.value,
+    label: t(`leads.export.separators.${s.key}.label`),
+    hint: t(`leads.export.separators.${s.key}.hint`),
+  }));
+}
 
 /**
  * The list filters (`?a=1&b=2` or empty) plus the separator (DP-229). Any separator already in the
@@ -93,49 +99,50 @@ export function exportFilenameOf(disposition: string | null, now: Date = new Dat
  * The real reason of a failed export for staff: the API's code, rule and request id (support can
  * find the request in the logs), never a generic "something went wrong".
  */
-export function exportErrorMessage(status: number, body: unknown): string {
+export function exportErrorMessage(
+  status: number,
+  body: unknown,
+  locale: AdminLocale = browserAdminLocale(),
+): string {
+  const t = createTranslator(locale);
   const parsed = ErrorBodySchema.safeParse(body);
   if (!parsed.success) {
     return status === 0
-      ? "The admin API cannot be reached. Check the connection and try again."
-      : `The export failed (HTTP ${status}). Try again in a moment.`;
+      ? t("leads.export.errors.unreachable")
+      : t("leads.export.errors.failedHttp", { status });
   }
   const { code, requestId, details } = parsed.data.error;
   const rule = details
     .map((d) => (typeof d === "object" && d && "rule" in d ? String(d.rule) : ""))
-    .find((r) => r in EXPORT_RULE_MESSAGES);
-  const ref = ` (HTTP ${status}, ${code}, request ${requestId})`;
-  if (rule) return `${EXPORT_RULE_MESSAGES[rule]}${ref}`;
+    .find((r): r is keyof typeof EXPORT_RULES => Object.hasOwn(EXPORT_RULES, r));
+  const ref = t("leads.export.errors.ref", { status, code, requestId });
+  if (rule) return `${exportRuleMessage(rule, t, locale)}${ref}`;
   const badSeparator = details.some(
     (d) => typeof d === "object" && d && "path" in d && d.path === LEAD_EXPORT_SEPARATOR_PARAM,
   );
-  if (badSeparator) return `Choose a separator: semicolon (;) or comma (,).${ref}`;
-  if (code === "FORBIDDEN") {
-    return `You may not export these leads. Exporting needs the lead export permission (customer-data officer or platform administrator) on every selected site.${ref}`;
-  }
-  if (code === "AUTH_SESSION_REQUIRED") return `Your session has ended. Sign in again.${ref}`;
-  const text =
-    code in DEFAULT_ERROR_MESSAGES
-      ? DEFAULT_ERROR_MESSAGES[code as keyof typeof DEFAULT_ERROR_MESSAGES]
-      : "The export failed.";
-  return `${text}${ref}`;
+  if (badSeparator) return `${t("leads.export.errors.separator")}${ref}`;
+  if (code === "FORBIDDEN") return `${t("leads.export.errors.forbidden")}${ref}`;
+  if (code === "AUTH_SESSION_REQUIRED") return `${t("leads.export.errors.session")}${ref}`;
+  return `${codeMessage(code, t("leads.export.errors.failed"), t)}${ref}`;
 }
 
 /** Downloads the filtered leads as CSV (chosen separator, DP-229) through the same-origin proxy. */
 export async function downloadLeadExport(
   query: string,
   separator: LeadExportSeparator,
+  locale: AdminLocale = browserAdminLocale(),
 ): Promise<LeadExportResult> {
   let res: Response;
   try {
     res = await fetch(`${LEAD_EXPORT_PATH}${exportQueryWithSeparator(query, separator)}`, {
       method: "GET",
+      // i18n-ignore: HTTP Accept header (media types), not UI text
       headers: { Accept: "text/csv, application/json" },
       credentials: "same-origin",
       cache: "no-store",
     });
   } catch {
-    return { ok: false, status: 0, message: exportErrorMessage(0, null), stepUp: false };
+    return { ok: false, status: 0, message: exportErrorMessage(0, null, locale), stepUp: false };
   }
   if (!res.ok) {
     const json: unknown = await res.json().catch(() => null);
@@ -143,7 +150,7 @@ export async function downloadLeadExport(
     return {
       ok: false,
       status: res.status,
-      message: exportErrorMessage(res.status, json),
+      message: exportErrorMessage(res.status, json, locale),
       stepUp: parsed.success && parsed.data.error.code === "AUTH_STEP_UP_REQUIRED",
     };
   }
@@ -161,8 +168,7 @@ export async function downloadLeadExport(
     return {
       ok: false,
       status: res.status,
-      message:
-        "The download was interrupted before the file was complete. Nothing was saved; try again.",
+      message: createTranslator(locale)("leads.export.errors.interrupted"),
       stepUp: false,
     };
   }

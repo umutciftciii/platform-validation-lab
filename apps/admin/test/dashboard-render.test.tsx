@@ -12,12 +12,16 @@ import { RingMotif } from "../components/icons";
 import { Spinner } from "../components/ui";
 import {
   ALL_DEMO_DATASETS,
-  DEMO_ACTIVITY,
-  DEMO_KPIS,
-  DEMO_SITES,
+  demoDatasets,
   type ActivityEvent,
   type DemoDataset,
 } from "../lib/demo-data";
+import { createTranslator } from "../lib/i18n/translate";
+
+// ML-12e: the widgets take the translator and language; the sample texts come from the dictionary.
+const EN = createTranslator("en");
+const L = { t: EN, locale: "en" } as const;
+const { DEMO_ACTIVITY, DEMO_KPIS, DEMO_SITES } = demoDatasets(EN);
 
 const NOW = new Date("2026-11-11T12:00:00Z");
 const MARKER = "data-demo-marker";
@@ -31,21 +35,25 @@ describe("sample data", () => {
   });
 
   it("contains no e-mail addresses or URLs", () => {
-    const text = JSON.stringify(ALL_DEMO_DATASETS);
+    const text = JSON.stringify([
+      ALL_DEMO_DATASETS,
+      demoDatasets(EN),
+      demoDatasets(createTranslator("tr")),
+    ]);
     expect(text).not.toMatch(/@|https?:\/\//);
   });
 });
 
 describe("dashboard widgets", () => {
   it("KPI strip shows values and the sample-data marker", () => {
-    const html = renderToStaticMarkup(<KpiStrip data={DEMO_KPIS} />);
+    const html = renderToStaticMarkup(<KpiStrip {...L} data={DEMO_KPIS} />);
     expect(html).toContain(MARKER);
     for (const kpi of DEMO_KPIS.items) expect(html).toContain(kpi.label);
     expect(html).toContain("+4.2%");
   });
 
   it("KPI strip labels every 12-week trace and states each delta in text", () => {
-    const html = renderToStaticMarkup(<KpiStrip data={DEMO_KPIS} />);
+    const html = renderToStaticMarkup(<KpiStrip {...L} data={DEMO_KPIS} />);
     for (const kpi of DEMO_KPIS.items) expect(html).toContain(`${kpi.label}, 12-week trend`);
     expect(html).toContain("−8.0%");
   });
@@ -56,13 +64,17 @@ describe("dashboard widgets", () => {
   });
 
   it("activity feed and site status carry the marker", () => {
-    expect(renderToStaticMarkup(<ActivityFeed data={DEMO_ACTIVITY} now={NOW} />)).toContain(MARKER);
-    expect(renderToStaticMarkup(<SiteStatusPanel data={DEMO_SITES} now={NOW} />)).toContain(MARKER);
+    expect(renderToStaticMarkup(<ActivityFeed {...L} data={DEMO_ACTIVITY} now={NOW} />)).toContain(
+      MARKER,
+    );
+    expect(renderToStaticMarkup(<SiteStatusPanel {...L} data={DEMO_SITES} now={NOW} />)).toContain(
+      MARKER,
+    );
   });
 
   it("activity feed shows its empty state for an empty dataset", () => {
     const empty: DemoDataset<ActivityEvent> = { demo: true, items: [] };
-    expect(renderToStaticMarkup(<ActivityFeed data={empty} now={NOW} />)).toContain(
+    expect(renderToStaticMarkup(<ActivityFeed {...L} data={empty} now={NOW} />)).toContain(
       "No activity yet",
     );
   });
@@ -70,6 +82,7 @@ describe("dashboard widgets", () => {
   it("session card shows the real session without the sample-data marker", () => {
     const html = renderToStaticMarkup(
       <SessionCard
+        {...L}
         now={NOW}
         session={{
           user: { id: randomUUID(), email: "staff@example.com", displayName: null },

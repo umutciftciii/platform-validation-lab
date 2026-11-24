@@ -11,16 +11,23 @@ import {
 import { SessionCard } from "../../components/dashboard/session-card";
 import { SiteStatusPanel } from "../../components/dashboard/site-status";
 import { Icon, RingMotif } from "../../components/icons";
-import { DEMO_ACTIVITY, DEMO_KPIS, DEMO_SITES } from "../../lib/demo-data";
+import { demoDatasets } from "../../lib/demo-data";
 import { formatLongDate, greeting } from "../../lib/format";
+import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
+import { getAdminLocale, getTranslator } from "../../lib/i18n/server";
 import { requireStaffSession } from "../../lib/server-session";
 
-export const metadata: Metadata = { title: "Overview" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("dashboard.overview.title") };
+}
 
 export default async function OverviewPage() {
   // The layout checks too, but a layout is not re-rendered on client navigation.
   const session = await requireStaffSession();
   const now = new Date();
+  const [t, locale] = [await getTranslator(), await getAdminLocale()];
+  const { DEMO_ACTIVITY, DEMO_KPIS, DEMO_SITES } = demoDatasets(t);
   const firstName =
     session.user.displayName?.split(/\s+/)[0] ?? session.user.email.split("@")[0] ?? "";
 
@@ -42,13 +49,16 @@ export default async function OverviewPage() {
           <div className="min-w-0">
             <p className="type-eyebrow flex items-center gap-2 text-rail-ink-dim">
               <span className="h-px w-4 bg-brand" aria-hidden="true" />
-              {formatLongDate(now)}
+              {formatLongDate(now, ADMIN_TIME_ZONE, locale)}
             </p>
             <h1 className="type-display mt-2 text-[1.625rem] font-semibold text-white sm:text-[2.5rem]">
-              {greeting(now)}, {firstName}
+              {t("dashboard.overview.greeting", {
+                greeting: greeting(now, ADMIN_TIME_ZONE, locale),
+                name: firstName,
+              })}
             </h1>
             <p className="mt-1.5 hidden max-w-[60ch] text-sm text-rail-ink-dim sm:block">
-              Pages, product data sheets and staff access for both Dream Petroleum sites.
+              {t("dashboard.overview.intro")}
             </p>
           </div>
           <Link
@@ -56,7 +66,7 @@ export default async function OverviewPage() {
             className="inline-flex h-10 w-fit shrink-0 select-none items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-[#0b1b2e] shadow-[0_1px_2px_rgb(0_0_0/0.2)] transition-[background-color,transform] duration-150 ease-out-soft hover:bg-[#e3ecf3] active:translate-y-px"
           >
             <Icon name="plus" size={17} />
-            Write a page
+            {t("dashboard.overview.writePage")}
           </Link>
         </div>
       </header>
@@ -67,26 +77,25 @@ export default async function OverviewPage() {
       >
         <Icon name="alert" size={17} className="mt-px shrink-0" />
         <p>
-          <span className="font-semibold">Sample data.</span> Figures, activity and site status on
-          this overview are illustrations, not connected to any system. The review queue and your
-          session details are real.
+          <span className="font-semibold">{t("dashboard.overview.sampleLabel")}</span>{" "}
+          {t("dashboard.overview.sampleText")}
         </p>
       </div>
 
-      <KpiStrip data={DEMO_KPIS} />
+      <KpiStrip data={DEMO_KPIS} t={t} locale={locale} />
 
-      <QuickActions />
+      <QuickActions t={t} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <Suspense fallback={<ProductReviewSkeleton />}>
+          <Suspense fallback={<ProductReviewSkeleton t={t} />}>
             <ProductReviewPanel now={now} />
           </Suspense>
-          <ActivityFeed data={DEMO_ACTIVITY} now={now} />
+          <ActivityFeed data={DEMO_ACTIVITY} now={now} t={t} locale={locale} />
         </div>
         <div className="space-y-6">
-          <SessionCard session={session} now={now} />
-          <SiteStatusPanel data={DEMO_SITES} now={now} />
+          <SessionCard session={session} now={now} t={t} locale={locale} />
+          <SiteStatusPanel data={DEMO_SITES} now={now} t={t} locale={locale} />
         </div>
       </div>
     </div>

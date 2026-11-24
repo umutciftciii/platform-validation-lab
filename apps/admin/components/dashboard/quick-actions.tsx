@@ -1,32 +1,28 @@
 import Link from "next/link";
+import type { Translate } from "../../lib/i18n/types";
 import { Icon, type IconKey } from "../icons";
 
 interface QuickAction {
+  /** dashboard.quickActions.<id>: the label and detail of the action. */
+  id: "content" | "products" | "staff" | "audit";
   href: string;
-  label: string;
-  detail: string;
   icon: IconKey;
 }
 
 // Each action opens its module. Until a module ships, its page says so; the API still decides
 // whether the person may do the action once it exists.
 const ACTIONS: readonly QuickAction[] = [
-  { href: "/content", label: "Write a page", detail: "Draft for either site", icon: "content" },
-  {
-    href: "/products",
-    label: "Update a data sheet",
-    detail: "Product specifications",
-    icon: "products",
-  },
-  { href: "/staff", label: "Invite a colleague", detail: "Staff account and role", icon: "staff" },
-  { href: "/audit", label: "Open the audit log", detail: "Who changed what, when", icon: "audit" },
+  { id: "content", href: "/content", icon: "content" },
+  { id: "products", href: "/products", icon: "products" },
+  { id: "staff", href: "/staff", icon: "staff" },
+  { id: "audit", href: "/audit", icon: "audit" },
 ];
 
-export function QuickActions() {
+export function QuickActions({ t }: { t: Translate }) {
   return (
     <section aria-labelledby="quick-title">
       <h2 id="quick-title" className="sr-only">
-        Quick actions
+        {t("dashboard.quickActions.title")}
       </h2>
       <ul className="grid grid-cols-2 gap-2 xl:grid-cols-4">
         {ACTIONS.map((a) => (
@@ -40,9 +36,11 @@ export function QuickActions() {
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[0.8125rem] font-semibold leading-snug text-ink sm:text-sm">
-                  {a.label}
+                  {t(`dashboard.quickActions.${a.id}.label`)}
                 </span>
-                <span className="hidden truncate text-xs text-ink-3 sm:block">{a.detail}</span>
+                <span className="hidden truncate text-xs text-ink-3 sm:block">
+                  {t(`dashboard.quickActions.${a.id}.detail`)}
+                </span>
               </span>
               <Icon
                 name="arrow"
