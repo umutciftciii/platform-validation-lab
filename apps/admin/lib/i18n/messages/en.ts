@@ -25,6 +25,7 @@ import { contract as contentContract } from "./content/en/contract";
 import { pages as contentPages } from "./content/en/pages";
 import { editor as contentEditor } from "./content/en/editor";
 import { menus as contentMenus } from "./content/en/menus";
+import { seo } from "./seo/en";
 
 export const en = {
   common: {
@@ -367,4 +368,6 @@ export const en = {
     editor: contentEditor,
     menus: contentMenus,
   },
+  /** ML-12d (DP-243): the SEO area — overview and redirects (./seo/). */
+  seo,
 } as const;

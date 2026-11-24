@@ -1,16 +1,26 @@
 import Link from "next/link";
+import type { Translate } from "../../lib/i18n/types";
 import { cx } from "../ui";
 
 const TABS = [
-  { id: "overview", href: "/seo", label: "Overview" },
+  { id: "overview", href: "/seo" },
   // DP-211: redirect management of the BV site.
-  { id: "redirects", href: "/seo/redirects", label: "Redirects" },
+  { id: "redirects", href: "/seo/redirects" },
 ] as const;
 
-/** DP-211: the two parts of the SEO section (overview and redirects). */
-export function SeoTabs({ current }: { current: (typeof TABS)[number]["id"] }) {
+/**
+ * DP-211: the two parts of the SEO section (overview and redirects).
+ * ML-12d: a shared server component; the page passes its `t` (labels `seo.tabs.*`).
+ */
+export function SeoTabs({
+  current,
+  t: tr,
+}: {
+  current: (typeof TABS)[number]["id"];
+  t: Translate;
+}) {
   return (
-    <nav aria-label="SEO" className="flex gap-1 border-b border-line">
+    <nav aria-label={tr("seo.tabs.label")} className="flex gap-1 border-b border-line">
       {TABS.map((t) => (
         <Link
           key={t.id}
@@ -23,7 +33,7 @@ export function SeoTabs({ current }: { current: (typeof TABS)[number]["id"] }) {
               : "border-transparent text-ink-2 hover:text-ink",
           )}
         >
-          {t.label}
+          {tr(`seo.tabs.${t.id}`)}
         </Link>
       ))}
     </nav>

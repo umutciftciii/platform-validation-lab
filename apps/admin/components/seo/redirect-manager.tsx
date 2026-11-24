@@ -15,31 +15,34 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
 import { callRedirects, downloadText } from "../../lib/redirects-client";
 import {
-  IMPORT_ACTION_LABEL,
-  ORIGIN_LABEL,
-  WARNINGS,
   historyActionLabel,
   historySummary,
+  importActionLabel,
   importReportCsv,
+  originLabel,
   redirectContentHref,
   redirectsApi,
   ruleMessage,
+  warningMessage,
 } from "../../lib/redirects-view";
 import { FormMessage } from "../catalog/parts";
 import { ConfirmBox } from "../cms/publication-panel";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, StatusPill } from "../ui";
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 type Editing = { mode: "create" } | { mode: "edit"; item: SeoRedirectItem } | null;
 
@@ -48,8 +51,11 @@ type Editing = { mode: "create" } | { mode: "edit"; item: SeoRedirectItem } | nu
  * server page), creating and editing a redirect, deleting it, its change history and the CSV
  * import (dry-run first, import of exactly the checked plan). Every change is checked again by
  * the API; slug-change redirects are protected (only their note can change).
+ * ML-12d (DP-243): every text in the console's language (`seo.redirects.*`); request bodies,
+ * versions, codes and the downloaded CSV files are unchanged.
  */
 export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
+  const t = useT();
   const router = useRouter();
   const api = redirectsApi(data.site.id);
   const [editing, setEditing] = useState<Editing>(null);
@@ -77,7 +83,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
             }}
           >
             <Icon name="plus" size={17} />
-            <span>New redirect</span>
+            <span>{t("seo.redirects.manager.newRedirect")}</span>
           </button>
           <button
             type="button"
@@ -89,7 +95,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
             }}
           >
             <Icon name="upload" size={17} />
-            <span>Import CSV</span>
+            <span>{t("seo.redirects.manager.importCsv")}</span>
           </button>
           <button
             type="button"
@@ -97,16 +103,13 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
             onClick={() => downloadText("redirects-sample.csv", SEO_REDIRECT_CSV_SAMPLE)}
           >
             <Icon name="download" size={16} />
-            <span>Sample CSV</span>
+            <span>{t("seo.redirects.manager.sampleCsv")}</span>
           </button>
         </div>
       ) : (
         <p className="flex items-start gap-2 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 ring-1 ring-inset ring-line">
           <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
-          <span>
-            You can read the redirects. Creating, changing, deleting and importing them needs the
-            right to publish content on this site.
-          </span>
+          <span>{t("seo.redirects.manager.readOnly")}</span>
         </p>
       )}
 
@@ -121,7 +124,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
             {notice.warnings.map((w) => (
               <p key={w} className="flex items-start gap-1.5 text-amber-ink">
                 <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
-                <span>{WARNINGS[w] ?? w}</span>
+                <span>{warningMessage(w, t)}</span>
               </p>
             ))}
           </div>
@@ -129,7 +132,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
             type="button"
             onClick={() => setNotice(null)}
             className={buttonStyles.icon}
-            aria-label="Dismiss"
+            aria-label={t("seo.redirects.manager.dismiss")}
           >
             <Icon name="close" size={16} />
           </button>
@@ -141,7 +144,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
           api={api}
           item={null}
           onCancel={() => setEditing(null)}
-          onSaved={(res) => done("Redirect created. It is live on the site now.", res.warnings)}
+          onSaved={(res) => done(t("seo.redirects.manager.created"), res.warnings)}
         />
       ) : null}
       {importing ? (
@@ -150,14 +153,14 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
           api={api}
           onDone={(n) => {
             setImporting(false);
-            done(`${n} redirect${n === 1 ? "" : "s"} imported. They are live on the site now.`);
+            done(t("seo.redirects.manager.imported", { count: n }));
           }}
         />
       ) : null}
 
       {data.items.length === 0 ? (
         <p className="rounded-xl border border-dashed border-line-strong bg-surface px-5 py-8 text-center text-sm text-ink-3">
-          No redirects match.
+          {t("seo.redirects.list.empty")}
         </p>
       ) : (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
@@ -168,7 +171,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
                   api={api}
                   item={item}
                   onCancel={() => setEditing(null)}
-                  onSaved={(res) => done("Redirect saved.", res.warnings)}
+                  onSaved={(res) => done(t("seo.redirects.manager.saved"), res.warnings)}
                 />
               </li>
             ) : (
@@ -182,7 +185,7 @@ export function RedirectManager({ data }: { data: SeoRedirectListResponse }) {
                   setImporting(false);
                   setEditing({ mode: "edit", item });
                 }}
-                onDeleted={() => done("Redirect deleted. The old address answers 404 again.")}
+                onDeleted={() => done(t("seo.redirects.manager.deleted"))}
               />
             ),
           )}
@@ -207,6 +210,9 @@ function RedirectRow({
   onEdit: () => void;
   onDeleted: () => void;
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const date = (iso: string) => dateTimeFormat(locale, DATE_OPTIONS).format(new Date(iso));
   const [confirm, setConfirm] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -249,39 +255,56 @@ function RedirectRow({
           </p>
           {item.content ? (
             <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink-2">
-              <span>{`Moved ${item.content.type === "PRODUCT" ? "product" : "page"}:`}</span>
+              <span>
+                {item.content.type === "PRODUCT"
+                  ? t("seo.redirects.row.movedProduct")
+                  : t("seo.redirects.row.movedPage")}
+              </span>
               {contentHref && item.content.name ? (
                 <Link href={contentHref} className="font-medium text-petrol-strong hover:underline">
                   {item.content.name}
                 </Link>
               ) : (
-                <span className="text-ink-3">not available to you</span>
+                <span className="text-ink-3">{t("seo.redirects.row.notAvailable")}</span>
               )}
               <span className="text-ink-3">
-                {item.content.livePath ? `· live at ${item.content.livePath}` : "· not live now"}
+                {item.content.livePath
+                  ? t("seo.redirects.row.liveAt", { path: item.content.livePath })
+                  : t("seo.redirects.row.notLiveNow")}
               </span>
             </p>
           ) : null}
           {item.note ? <p className="break-words text-sm text-ink-2">{item.note}</p> : null}
           <p className="text-xs text-ink-3">
-            {`Changed ${DATE.format(new Date(item.updatedAt))}${item.updatedBy ? ` by ${item.updatedBy}` : ""} · created ${DATE.format(new Date(item.createdAt))}`}
+            {item.updatedBy
+              ? t("seo.redirects.row.changedBy", {
+                  date: date(item.updatedAt),
+                  person: item.updatedBy,
+                  created: date(item.createdAt),
+                })
+              : t("seo.redirects.row.changed", {
+                  date: date(item.updatedAt),
+                  created: date(item.createdAt),
+                })}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           <StatusPill tone={item.statusCode === 301 ? "petrol" : "amber"}>
-            {item.statusCode === 301 ? "301 permanent" : "302 temporary"}
+            {item.statusCode === 301
+              ? t("seo.redirects.row.permanent")
+              : t("seo.redirects.row.temporary")}
           </StatusPill>
           <StatusPill tone={item.active ? "success" : "neutral"}>
-            {item.active ? "Active" : "Inactive"}
+            {item.active ? t("seo.redirects.row.active") : t("seo.redirects.row.inactive")}
           </StatusPill>
-          <StatusPill tone="neutral">{ORIGIN_LABEL[item.origin]}</StatusPill>
+          <StatusPill tone="neutral">{originLabel(item.origin, t)}</StatusPill>
           {item.protected ? (
             <span
               className="inline-flex items-center gap-1 text-xs text-ink-3"
-              title="Created when the content moved. Only its note can be changed."
+              title={t("seo.redirects.row.protectedTitle")}
             >
               <Icon name="shield" size={13} />
-              <span>Protected</span>
+              <span>{t("seo.redirects.row.protected")}</span>
             </span>
           ) : null}
         </div>
@@ -293,7 +316,7 @@ function RedirectRow({
             onClick={onEdit}
             className="font-medium text-petrol-strong hover:underline"
           >
-            {item.protected ? "Edit note" : "Edit"}
+            {item.protected ? t("seo.redirects.row.editNote") : t("seo.redirects.row.edit")}
           </button>
         ) : null}
         {canReadHistory ? (
@@ -303,7 +326,7 @@ function RedirectRow({
             aria-expanded={showHistory}
             className="font-medium text-petrol-strong hover:underline"
           >
-            {showHistory ? "Hide history" : "History"}
+            {showHistory ? t("seo.redirects.row.hideHistory") : t("seo.redirects.row.history")}
           </button>
         ) : null}
         {canManage && !item.protected && !confirm ? (
@@ -312,14 +335,14 @@ function RedirectRow({
             onClick={() => setConfirm(true)}
             className="font-medium text-danger hover:underline"
           >
-            Delete
+            {t("seo.redirects.row.delete")}
           </button>
         ) : null}
       </div>
       {confirm ? (
         <ConfirmBox
-          text={`Delete the redirect from ${redirectSourceLabel(item)}? The old address answers 404 again (the change history is kept).`}
-          action="Delete redirect"
+          text={t("seo.redirects.row.confirmDelete", { source: redirectSourceLabel(item) })}
+          action={t("seo.redirects.row.confirmAction")}
           danger
           pending={pending}
           onConfirm={remove}
@@ -331,19 +354,32 @@ function RedirectRow({
         <div className="rounded-lg bg-surface-2 px-3 py-2 ring-1 ring-inset ring-line">
           {events === null ? (
             <p key="loading" className="text-sm text-ink-3">
-              Loading the history…
+              {t("seo.redirects.row.loadingHistory")}
             </p>
           ) : events.length === 0 ? (
             <p key="empty" className="text-sm text-ink-3">
-              No recorded changes.
+              {t("seo.redirects.row.noHistory")}
             </p>
           ) : (
-            <ol key="events" className="space-y-1.5 text-sm" aria-label="Changes, newest first">
+            <ol
+              key="events"
+              className="space-y-1.5 text-sm"
+              aria-label={t("seo.redirects.row.historyLabel")}
+            >
               {events.map((e) => (
                 <li key={e.id} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-                  <span className="shrink-0 text-ink-3">{DATE.format(new Date(e.occurredAt))}</span>
+                  <span className="shrink-0 text-ink-3">{date(e.occurredAt)}</span>
                   <span className="min-w-0 break-words text-ink-2">
-                    {`${historyActionLabel(e.action, e.details)}${e.actor ? ` by ${e.actor}` : ""} — ${historySummary(e.details)}`}
+                    {e.actor
+                      ? t("seo.redirects.row.eventBy", {
+                          action: historyActionLabel(e.action, e.details, t),
+                          person: e.actor,
+                          summary: historySummary(e.details, t),
+                        })
+                      : t("seo.redirects.row.event", {
+                          action: historyActionLabel(e.action, e.details, t),
+                          summary: historySummary(e.details, t),
+                        })}
                   </span>
                 </li>
               ))}
@@ -366,6 +402,7 @@ function RedirectForm({
   onCancel: () => void;
   onSaved: (res: SeoRedirectResponse) => void;
 }) {
+  const t = useT();
   const id = useId();
   const locked = item?.protected ?? false;
   const [source, setSource] = useState(item ? redirectSourceLabel(item) : "");
@@ -399,29 +436,33 @@ function RedirectForm({
   return (
     <form
       onSubmit={submit}
-      aria-label={item ? "Edit redirect" : "New redirect"}
+      aria-label={item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
       className="space-y-4 rounded-2xl border border-line bg-surface p-4 shadow-sm sm:p-5"
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-ink">
-          {item ? "Edit redirect" : "New redirect"}
+          {item ? t("seo.redirects.form.edit") : t("seo.redirects.form.create")}
         </h2>
-        <button type="button" onClick={onCancel} className={buttonStyles.icon} aria-label="Close">
+        <button
+          type="button"
+          onClick={onCancel}
+          className={buttonStyles.icon}
+          aria-label={t("seo.redirects.form.close")}
+        >
           <Icon name="close" size={18} />
         </button>
       </div>
       {locked ? (
         <p className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2 ring-1 ring-inset ring-line">
           <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
-          <span>
-            Created when the content moved: it keeps the old address for search engines and follows
-            the content. Only the note can be changed here.
-          </span>
+          <span>{t("seo.redirects.form.locked")}</span>
         </p>
       ) : null}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <label className="min-w-0 space-y-1.5" htmlFor={`${id}-source`}>
-          <span className="block text-sm font-medium text-ink">Old address (source)</span>
+          <span className="block text-sm font-medium text-ink">
+            {t("seo.redirects.form.source")}
+          </span>
           <input
             id={`${id}-source`}
             className={input}
@@ -435,13 +476,12 @@ function RedirectForm({
             spellCheck={false}
             aria-invalid={invalid("source")}
           />
-          <span className="block text-xs text-ink-3">
-            /page, /news/article, /products/product or an old-site address such as /en/about-us,
-            optionally with ?query
-          </span>
+          <span className="block text-xs text-ink-3">{t("seo.redirects.form.sourceHint")}</span>
         </label>
         <label className="min-w-0 space-y-1.5" htmlFor={`${id}-target`}>
-          <span className="block text-sm font-medium text-ink">New address (target)</span>
+          <span className="block text-sm font-medium text-ink">
+            {t("seo.redirects.form.target")}
+          </span>
           <input
             id={`${id}-target`}
             className={input}
@@ -455,14 +495,12 @@ function RedirectForm({
             spellCheck={false}
             aria-invalid={invalid("target")}
           />
-          <span className="block text-xs text-ink-3">
-            A path of this site, never another domain
-          </span>
+          <span className="block text-xs text-ink-3">{t("seo.redirects.form.targetHint")}</span>
         </label>
       </div>
       <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
         <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-2" disabled={locked}>
-          <legend className="sr-only">Status</legend>
+          <legend className="sr-only">{t("seo.redirects.form.status")}</legend>
           {([301, 302] as const).map((code) => (
             <label key={code} className="inline-flex items-center gap-2 text-sm text-ink">
               <input
@@ -471,7 +509,9 @@ function RedirectForm({
                 checked={statusCode === code}
                 onChange={() => setStatusCode(code)}
               />
-              <span>{code === 301 ? "301 permanent" : "302 temporary"}</span>
+              <span>
+                {code === 301 ? t("seo.redirects.row.permanent") : t("seo.redirects.row.temporary")}
+              </span>
             </label>
           ))}
         </fieldset>
@@ -482,11 +522,11 @@ function RedirectForm({
             onChange={(e) => setActive(e.target.checked)}
             disabled={locked}
           />
-          <span>Active</span>
+          <span>{t("seo.redirects.form.active")}</span>
         </label>
       </div>
       <label className="block space-y-1.5" htmlFor={`${id}-note`}>
-        <span className="block text-sm font-medium text-ink">Note (optional)</span>
+        <span className="block text-sm font-medium text-ink">{t("seo.redirects.form.note")}</span>
         <textarea
           id={`${id}-note`}
           className="min-h-16 w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink"
@@ -499,20 +539,25 @@ function RedirectForm({
       {error ? <FormMessage kind="error">{error.message}</FormMessage> : null}
       <div className="flex flex-wrap items-center gap-2">
         <button type="submit" className={buttonStyles.primary} disabled={pending}>
-          <span>{pending ? "Saving…" : item ? "Save redirect" : "Create redirect"}</span>
+          <span>
+            {pending
+              ? t("seo.redirects.form.saving")
+              : item
+                ? t("seo.redirects.form.save")
+                : t("seo.redirects.form.createAction")}
+          </span>
         </button>
         <button type="button" className={buttonStyles.secondary} onClick={onCancel}>
-          <span>Cancel</span>
+          <span>{t("seo.redirects.form.cancel")}</span>
         </button>
-        <span className="text-xs text-ink-3">
-          Takes effect on the site at once; no publication step.
-        </span>
+        <span className="text-xs text-ink-3">{t("seo.redirects.form.atOnce")}</span>
       </div>
     </form>
   );
 }
 
 function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void }) {
+  const t = useT();
   const id = useId();
   const [csv, setCsv] = useState<string | null>(null);
   const [fileName, setFileName] = useState("");
@@ -528,7 +573,7 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
     setCsv(null);
     if (!file) return;
     if (file.size > SEO_REDIRECT_CSV_MAX_BYTES) {
-      setError(ruleMessage("csv:too_large"));
+      setError(ruleMessage("csv:too_large", t));
       return;
     }
     setFileName(file.name);
@@ -560,20 +605,19 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
   const shown = result ? (onlyIssues && issues.length ? issues : result.rows) : [];
   return (
     <section
-      aria-label="Import redirects from CSV"
+      aria-label={t("seo.redirects.import.label")}
       className="space-y-4 rounded-2xl border border-line bg-surface p-4 shadow-sm sm:p-5"
     >
       <div className="space-y-1">
-        <h2 className="text-base font-semibold text-ink">Import redirects from CSV</h2>
-        <p className="text-sm text-ink-2">
-          Columns: source, target, status (301/302), active (true/false), note. Check the file
-          first; nothing changes until you confirm. A file with errors is never imported, and
-          importing the same file again creates no duplicates.
-        </p>
+        <h2 className="text-base font-semibold text-ink">{t("seo.redirects.import.label")}</h2>
+        <p className="text-sm text-ink-2">{t("seo.redirects.import.intro")}</p>
       </div>
       <label className="block space-y-1.5" htmlFor={`${id}-file`}>
         <span className="block text-sm font-medium text-ink">
-          {`CSV file (at most ${SEO_REDIRECT_CSV_MAX_ROWS} rows, ${SEO_REDIRECT_CSV_MAX_BYTES / 1024} KB)`}
+          {t("seo.redirects.import.file", {
+            rows: SEO_REDIRECT_CSV_MAX_ROWS,
+            kb: SEO_REDIRECT_CSV_MAX_BYTES / 1024,
+          })}
         </span>
         <input
           id={`${id}-file`}
@@ -586,7 +630,7 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
       {csv !== null ? (
         <div className="space-y-2">
           <p className="text-xs text-ink-3">
-            {`${fileName} · ${dataLines} line${dataLines === 1 ? "" : "s"} · first lines`}
+            {t("seo.redirects.import.lines", { file: fileName, count: dataLines })}
           </p>
           <pre className="max-h-40 overflow-auto rounded-lg bg-surface-2 p-3 font-mono text-xs text-ink-2 ring-1 ring-inset ring-line">
             {preview.join("\n")}
@@ -599,7 +643,7 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
               onClick={() => void run(true)}
             >
               <Icon name="check" size={16} />
-              <span>Check file (dry-run)</span>
+              <span>{t("seo.redirects.import.check")}</span>
             </button>
           </div>
         </div>
@@ -607,12 +651,18 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       {result ? (
         <div className="space-y-3">
-          <p className="flex flex-wrap gap-2 text-sm" aria-label="Dry-run result">
-            <StatusPill tone="petrol">{`${result.summary.create} new`}</StatusPill>
-            <StatusPill tone="amber">{`${result.summary.update} updated`}</StatusPill>
-            <StatusPill tone="neutral">{`${result.summary.unchanged} unchanged`}</StatusPill>
+          <p className="flex flex-wrap gap-2 text-sm" aria-label={t("seo.redirects.import.result")}>
+            <StatusPill tone="petrol">
+              {t("seo.redirects.import.new", { n: result.summary.create })}
+            </StatusPill>
+            <StatusPill tone="amber">
+              {t("seo.redirects.import.updated", { n: result.summary.update })}
+            </StatusPill>
+            <StatusPill tone="neutral">
+              {t("seo.redirects.import.unchanged", { n: result.summary.unchanged })}
+            </StatusPill>
             <StatusPill tone={result.summary.error ? "danger" : "success"}>
-              {`${result.summary.error} with errors`}
+              {t("seo.redirects.import.withErrors", { n: result.summary.error })}
             </StatusPill>
           </p>
           {issues.length && issues.length < result.rows.length ? (
@@ -622,14 +672,21 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
                 checked={onlyIssues}
                 onChange={(e) => setOnlyIssues(e.target.checked)}
               />
-              <span>{`Only rows with errors or warnings (${issues.length} of ${result.rows.length})`}</span>
+              <span>
+                {t("seo.redirects.import.onlyIssues", {
+                  n: issues.length,
+                  total: result.rows.length,
+                })}
+              </span>
             </label>
           ) : null}
           <ol className="max-h-96 divide-y divide-line overflow-auto rounded-lg ring-1 ring-inset ring-line">
             {shown.map((r) => (
               <li key={r.line} className="space-y-1 px-3 py-2 text-sm">
                 <p className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="text-xs text-ink-3">{`Line ${r.line}`}</span>
+                  <span className="text-xs text-ink-3">
+                    {t("seo.redirects.import.line", { line: r.line })}
+                  </span>
                   <span
                     className={cx(
                       "rounded-md px-1.5 py-0.5 text-xs ring-1 ring-inset",
@@ -638,7 +695,7 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
                         : "bg-surface-2 text-ink-2 ring-line",
                     )}
                   >
-                    {IMPORT_ACTION_LABEL[r.action]}
+                    {importActionLabel(r.action, t)}
                   </span>
                   <span className="min-w-0 break-all font-mono text-xs text-ink">
                     {`${r.source || "—"} → ${r.target || "—"}${r.statusCode ? ` (${r.statusCode})` : ""}`}
@@ -646,12 +703,12 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
                 </p>
                 {r.errors.map((c) => (
                   <p key={`e-${c}`} className="text-xs text-danger">
-                    {ruleMessage(c)}
+                    {ruleMessage(c, t)}
                   </p>
                 ))}
                 {r.warnings.map((w) => (
                   <p key={`w-${w}`} className="text-xs text-amber-ink">
-                    {WARNINGS[w] ?? w}
+                    {warningMessage(w, t)}
                   </p>
                 ))}
               </li>
@@ -665,7 +722,7 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
               onClick={() => void run(false)}
             >
               <Icon name="upload" size={16} />
-              <span>{`Import ${changes} redirect${changes === 1 ? "" : "s"}`}</span>
+              <span>{t("seo.redirects.import.run", { count: changes })}</span>
             </button>
             <button
               type="button"
@@ -673,14 +730,14 @@ function ImportPanel({ api, onDone }: { api: string; onDone: (n: number) => void
               onClick={() => downloadText("redirects-check-report.csv", importReportCsv(result))}
             >
               <Icon name="download" size={16} />
-              <span>Download report</span>
+              <span>{t("seo.redirects.import.download")}</span>
             </button>
             <span className="text-xs text-ink-3">
               {result.summary.error > 0
-                ? "Fix the rows with errors and check the file again."
+                ? t("seo.redirects.import.fixErrors")
                 : changes === 0
-                  ? "Nothing to import: every row is already in place."
-                  : "The import writes exactly this result; if the redirects changed meanwhile, check again."}
+                  ? t("seo.redirects.import.nothing")
+                  : t("seo.redirects.import.exact")}
             </span>
           </div>
         </div>

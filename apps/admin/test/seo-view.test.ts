@@ -2,6 +2,7 @@
 // overview's notes and filters (lib/seo-overview.ts). Warnings only; nothing is refused here.
 import type { SeoOverviewItem } from "@dream/contracts";
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "../lib/i18n/translate";
 import {
   filterSeoItems,
   needsAttention,
@@ -18,6 +19,7 @@ import {
   type SeoDraft,
 } from "../lib/seo-view";
 
+const EN = createTranslator("en");
 const ORIGIN = "https://dreampetroleumbv.com";
 const draft = (d: Partial<SeoDraft> = {}): SeoDraft => ({
   path: "/about-us",
@@ -161,10 +163,12 @@ const item = (i: Partial<SeoOverviewItem>): SeoOverviewItem => ({
 
 describe("DP-209 SEO overview", () => {
   it("notes missing descriptions, long texts and canonicals", () => {
-    expect(seoNotes(item({}))).toEqual([]);
-    expect(seoNotes(item({ description: null }))).toEqual(["No meta description (fallback used)"]);
-    expect(seoNotes(item({ title: "x".repeat(61) }))).toEqual(["Title may be cut off"]);
-    expect(seoNotes(item({ canonicalPath: "/other" }))).toEqual(["Canonical → /en/other"]);
+    expect(seoNotes(item({}), EN)).toEqual([]);
+    expect(seoNotes(item({ description: null }), EN)).toEqual([
+      "No meta description (fallback used)",
+    ]);
+    expect(seoNotes(item({ title: "x".repeat(61) }), EN)).toEqual(["Title may be cut off"]);
+    expect(seoNotes(item({ canonicalPath: "/other" }), EN)).toEqual(["Canonical → /en/other"]);
     expect(seoPublicPath("/")).toBe("/en");
     expect(seoPublicPath("/products/x")).toBe("/en/products/x");
     expect(needsAttention(item({ canonicalPath: "/other" }))).toBe(false);

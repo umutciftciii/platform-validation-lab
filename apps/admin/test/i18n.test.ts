@@ -73,6 +73,14 @@ const SAME_IN_TR = new Set([
   "content.editor.translationTabs.menuWarnings.item",
   "content.menus.references.change",
   "content.pages.news.headingAfter",
+  // ML-12d: "SEO" and "Noindex" are technical terms; two formats with parameters only.
+  "seo.overview.filters.noindex",
+  "seo.overview.list.noindex",
+  "seo.overview.metaTitle",
+  "seo.overview.title",
+  "seo.redirects.find.withCount",
+  "seo.redirects.row.event",
+  "seo.tabs.label",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
@@ -96,13 +104,15 @@ describe("dictionary completeness (EN source, TR)", () => {
   it("counts the keys of this release", () => {
     // ML-11 scope: shell, navigation, auth, errors, 404 and the error boundary (ADR-028 D15);
     // ML-12a adds the Products/Catalog area (catalog.*), ML-12b the Company Review area, ML-12c
-    // the Content area (content.*).
+    // the Content area (content.*), ML-12d the SEO area (seo.*).
     expect(EN.length).toBe(TR.length);
     expect(EN.length).toBeGreaterThan(200);
     expect(EN.filter(([k]) => k.startsWith("catalog.")).length).toBeGreaterThan(1000);
     expect(EN.filter(([k]) => k.startsWith("companyReview.")).length).toBeGreaterThan(200);
     // ML-12c: the Content area (pages, news, editor, menus, CMS contract texts, API messages)
     expect(EN.filter(([k]) => k.startsWith("content.")).length).toBeGreaterThan(500);
+    // ML-12d: the SEO area (overview, redirects, rule messages, history).
+    expect(EN.filter(([k]) => k.startsWith("seo.")).length).toBeGreaterThan(200);
   });
 
   it("a missing or an extra Turkish key is a compile error", () => {

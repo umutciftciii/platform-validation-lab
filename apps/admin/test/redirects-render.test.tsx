@@ -7,6 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SeoRedirectImportResponse } from "@dream/contracts";
 
 const reads = new Map<string, unknown>();
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, has: () => false }),
+  headers: async () => new Headers(),
+}));
 vi.mock("../lib/server-api", () => ({
   serverRead: async (path: string, schema: { parse(v: unknown): unknown }) => {
     if (!reads.has(path)) return { ok: false, status: 404, code: "NOT_FOUND" };
@@ -21,6 +25,8 @@ vi.mock("next/navigation", () => ({
 const { default: RedirectsPage } = await import("../app/(console)/seo/redirects/page");
 const view = await import("../lib/redirects-view");
 const { redirectErrorMessage } = await import("../lib/redirects-client");
+const { createTranslator } = await import("../lib/i18n/translate");
+const EN = createTranslator("en");
 
 const BV = "0190f2a1-0000-7000-8000-0000000000b1";
 const AT = "2026-11-18T12:00:00.000Z";
@@ -185,9 +191,9 @@ describe("DP-211 view helpers", () => {
       "import:changed",
     ]) {
       expect(view.knownRule(code), code).toBe(true);
-      expect(view.ruleMessage(code)).not.toMatch(/^Check /);
+      expect(view.ruleMessage(code, EN)).not.toMatch(/^Check /);
     }
-    expect(view.ruleMessage("weird:thing")).toContain("Check weird");
+    expect(view.ruleMessage("weird:thing", EN)).toContain("Check weird");
     expect(
       redirectErrorMessage("CONFLICT_STATE", [
         { path: "source", rule: "duplicate" },
@@ -237,18 +243,21 @@ describe("DP-211 view helpers", () => {
   });
 
   it("summarises history events", () => {
-    expect(view.historyActionLabel("seo.redirect_created", { via: "import" })).toBe(
+    expect(view.historyActionLabel("seo.redirect_created", { via: "import" }, EN)).toBe(
       "Created (import)",
     );
     expect(
-      view.historySummary({
-        sourcePath: "/a",
-        sourceQuery: "x=1",
-        target: "/b",
-        statusCode: 302,
-        active: false,
-        changed: ["target"],
-      }),
+      view.historySummary(
+        {
+          sourcePath: "/a",
+          sourceQuery: "x=1",
+          target: "/b",
+          statusCode: 302,
+          active: false,
+          changed: ["target"],
+        },
+        EN,
+      ),
     ).toBe("/a?x=1 · → /b · 302 · inactive · changed: target");
   });
 });
