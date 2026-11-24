@@ -42,7 +42,7 @@ export const list: Messages["catalog"]["list"] = {
       sortCode: "Koda göre sırala",
       sortUpdated: "Son değişiklik",
       sortCreated: "Oluşturulma",
-      order: "Yön",
+      order: "Sıralama yönü",
       asc: "Artan",
       desc: "Azalan",
       apply: "Uygula",
@@ -53,7 +53,7 @@ export const list: Messages["catalog"]["list"] = {
     error: {
       title: "Ürün listesi yüklenemedi",
       forbidden: "Bu sitede ürünleri okuma yetkiniz yok.",
-      retry: "Birazdan tekrar deneyin.",
+      retry: "Biraz sonra tekrar deneyin.",
     },
     empty: {
       filteredTitle: "Bu filtrelere uyan ürün yok",
@@ -97,7 +97,7 @@ export const list: Messages["catalog"]["list"] = {
     error: {
       title: "İnceleme kuyruğu yüklenemedi",
       forbidden: "Rolleriniz ürünleri okuma yetkisi içermiyor.",
-      retry: "Birazdan tekrar deneyin.",
+      retry: "Biraz sonra tekrar deneyin.",
     },
     empty: {
       title: "İnceleme bekleyen kayıt yok",

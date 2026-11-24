@@ -227,7 +227,13 @@ export function ModuleSwitch({
         </button>
       </div>
       {open || step.pending ? (
-        <Dialog title={label} size="md" busy={busy} onClose={cancel}>
+        <Dialog
+          title={label}
+          size="md"
+          busy={busy}
+          closeLabel={t("common.dialog.close")}
+          onClose={cancel}
+        >
           {step.pending ? (
             <StepUpPrompt variant="dialog" retry={step.pending} onCancel={step.clear} />
           ) : (

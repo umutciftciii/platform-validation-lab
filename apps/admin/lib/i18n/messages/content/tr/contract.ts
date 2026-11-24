@@ -146,7 +146,7 @@ export const contract: Messages["content"]["contract"] = {
       "Site adı, varsayılan başlık, açıklama ve Open Graph görseli (DP-209). SEO altında yönetilir.",
     bvAboutUs:
       "Canlı siteden (DP-135). Pazar görselleri kullanılmadı: pazarlarla ilgisi olmayan stok fotoğraflar.",
-    bvEnergyTrading: "Canlı siteden (DP-135); kaynağı belirtilmemiş +12% rakamı çıkarıldı.",
+    bvEnergyTrading: "Canlı siteden (DP-135); kaynağı belirtilmemiş +%12 rakamı çıkarıldı.",
     bvLogistics: "Canlı siteden (DP-135).",
     bvContact:
       "DP-150. İletişim bilgileri yayındaki alt bilgiden gelir; form DP-151'e kadar hiçbir şey göndermez.",

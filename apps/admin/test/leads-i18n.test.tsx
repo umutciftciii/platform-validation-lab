@@ -452,7 +452,7 @@ describe("Leads in Turkish: labels, evidence, dates and the export", () => {
     expect(view.leadCount(1, TR, "tr")).toBe("1 talep");
     expect(view.leadCount(1234, TR, "tr")).toBe("1.234 talep");
     expect(view.exportSummaryText(21_234, 20_000, false, TR, "tr")).toBe(
-      "21.234 talep uyuyor. Bir dışa aktarma en fazla 20.000 talep içerir; dışa aktarmak için filtreleri (örneğin tarihleri) daraltın.",
+      "21.234 talep eşleşiyor. Bir dışa aktarma en fazla 20.000 talep içerir; dışa aktarmak için filtreleri (örneğin tarihleri) daraltın.",
     );
     expect(view.exportSummaryText(3, 20_000, true, TR, "tr")).toBe(
       "Bu filtrelere uyan 3 talep dışa aktarılacak.",

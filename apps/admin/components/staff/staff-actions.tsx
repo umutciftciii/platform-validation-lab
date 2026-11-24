@@ -200,7 +200,9 @@ export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string
       </button>
       {confirming ? (
         <ConfirmDialog
-          title={t("staff.remove.removeLabel", { label })}
+          // DP-274 (V-4): a short title; the role and the person are in the question below it.
+          title={t("staff.remove.title")}
+          text={t("staff.remove.question", { label })}
           confirmLabel={t("staff.remove.remove")}
           confirmAriaLabel={t("staff.remove.confirmLabel", { label })}
           cancelLabel={t("staff.remove.keep")}

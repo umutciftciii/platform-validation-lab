@@ -18,7 +18,7 @@ export const seo: Messages["seo"] = {
     noAccessText:
       "Rolleriniz Dream Petroleum BV'nin içeriklerini veya ürünlerini okuma yetkisi içermiyor.",
     forbidden: "Bu sitenin içeriklerini veya ürünlerini okuma yetkiniz yok.",
-    tryAgain: "Birazdan yeniden deneyin.",
+    tryAgain: "Biraz sonra tekrar deneyin.",
   },
   overview: {
     metaTitle: "SEO",
@@ -45,7 +45,7 @@ export const seo: Messages["seo"] = {
       view: "Varsayılanları görüntüle",
       pageNote: "Taslak, önizleme, yayınlama ve geçmiş her sayfadaki gibi çalışır.",
       builtInText:
-        "Site yerleşik varsayılanlarını kullanıyor. Düzenlemek için varsayılanları CMS'de oluşturun; site, varsayılanlar yayınlanana kadar yerleşik değerleri kullanmaya devam eder.",
+        "Site yerleşik varsayılanlarını kullanıyor. Düzenlemek için varsayılanları CMS'te oluşturun; site, varsayılanlar yayınlanana kadar yerleşik değerleri kullanmaya devam eder.",
       importTitle: "SEO varsayılanları",
     },
     list: {
@@ -98,7 +98,7 @@ export const seo: Messages["seo"] = {
       search: "Ara",
       searchPlaceholder: "Adres veya not",
       sortBy: "Sırala",
-      order: "Sıra",
+      order: "Sıralama yönü",
       descending: "Azalan",
       ascending: "Artan",
       apply: "Uygula",
@@ -290,7 +290,7 @@ export const seo: Messages["seo"] = {
       unknownRule: "geçersiz",
     },
     api: {
-      notSaved: "Değişiklik kaydedilemedi. Birazdan yeniden deneyin.",
+      notSaved: "Değişiklik kaydedilemedi. Biraz sonra tekrar deneyin.",
       unreachable: "Yönetim API'sine ulaşılamıyor.",
       forbidden: "Rolleriniz bu değişikliğe izin vermiyor.",
     },

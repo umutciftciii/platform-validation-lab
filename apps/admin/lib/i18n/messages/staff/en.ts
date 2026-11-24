@@ -170,6 +170,9 @@ export const staff = {
   remove: {
     remove: "Remove",
     removeLabel: "Remove {label}",
+    /** DP-274: the confirmation's short title and its question. */
+    title: "Remove role",
+    question: "Remove {label}?",
     confirmLabel: "Confirm removing {label}",
     keep: "Keep",
   },

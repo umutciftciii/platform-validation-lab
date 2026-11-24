@@ -3,6 +3,8 @@
 // again. This test proves the move changed markup only, never wording: for every render of those
 // four EN tests it compares the visible text and the accessible names (aria-label, title,
 // placeholder, alt) with the ML-12e recording kept in fixtures/dp268-en/<file>.json.gz.
+// ML-14: the DP-268 recording itself moved to fixtures/ml14-en (ML-14 recorded catalog-en again);
+// this test keeps comparing the two recordings of DP-268, ml14-en-texts.test.ts the next step.
 // - every text of the old render is still there (as often as before);
 // - a text that is new in a render (a dialog title, a trigger that now stays visible) is one the
 //   same EN test already showed somewhere before the change: no new or changed wording.
@@ -63,7 +65,7 @@ describe("DP-268: the dialogs keep every EN text (no new or changed wording)", (
   for (const file of FILES) {
     it(file, () => {
       const before = load("dp268-en", file);
-      const after = load("catalog-en", file);
+      const after = load("ml14-en", file);
       expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
       const known = new Set(Object.values(before).flatMap((h) => texts(h).map(words)));
       let changed = 0;

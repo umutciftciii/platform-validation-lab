@@ -39,7 +39,8 @@ describe("modal dialog (DP-268)", () => {
     const describedBy = attr(html, "dialog", "aria-describedby");
     expect(html).toContain(`<h2 id="${labelledBy}"`);
     expect(html).toContain(`id="${describedBy}"`);
-    expect(html).toContain(">Change CRM</h2>");
+    // ML-14 (DP-274): the title text sits in a span (room for the danger icon).
+    expect(html).toMatch(/>Change CRM<\/span><\/h2>/);
     // Not open in the HTML: the browser opens it with showModal() (top layer, inert page).
     expect(html).not.toMatch(/<dialog[^>]*\sopen[\s>=]/);
     // Scrollable body, action bar after it.
