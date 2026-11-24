@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { initials } from "../lib/format";
+import { DemoBadge } from "./demo-badge";
 import { Msg } from "./i18n/locale-provider";
 import { Icon, type IconKey } from "./icons";
 
@@ -30,22 +31,8 @@ export const buttonStyles = {
 
 // --- sample-data marker ---------------------------------------------------------------------
 
-/** Required on every widget that shows lib/demo-data.ts values. */
-export function DemoBadge({ className }: { className?: string }) {
-  return (
-    <span
-      data-demo-marker=""
-      title="Sample data for the design prototype. Not connected to any system."
-      className={cx(
-        "demo-hatch inline-flex shrink-0 items-center gap-1.5 rounded-md border border-amber/40 px-2 py-0.5 text-xs font-medium text-amber-ink",
-        className,
-      )}
-    >
-      <span className="size-1.5 rounded-full bg-amber" aria-hidden="true" />
-      Sample data
-    </span>
-  );
-}
+/** Required on every widget that shows lib/demo-data.ts values (ML-12e: components/demo-badge.tsx). */
+export { DemoBadge };
 
 // --- panels ---------------------------------------------------------------------------------
 

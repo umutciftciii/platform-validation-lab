@@ -8,27 +8,32 @@ import { PageHeader } from "../../../../components/catalog/parts";
 import { Icon } from "../../../../components/icons";
 import { NotificationSettingsForm } from "../../../../components/leads/notification-settings";
 import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../components/ui";
-import { NOTIFICATION_LABEL, NOTIFICATION_TONE } from "../../../../lib/leads-view";
+import { ADMIN_TIME_ZONE } from "../../../../lib/i18n/config";
+import { dateTimeFormat } from "../../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
+import type { Translate } from "../../../../lib/i18n/types";
+import { notificationLabel, NOTIFICATION_TONE } from "../../../../lib/leads-view";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Lead notifications" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("leads.notifications.title") };
+}
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
-
-const TRANSPORT_NOTE: Readonly<Record<MailTransport, string | null>> = {
-  smtp: null,
-  capture:
-    "This environment does not send real e-mail: notifications are recorded and kept inside the platform for testing.",
-  off: "E-mail delivery is off in this environment: notifications are recorded as not sent.",
+  timeZone: ADMIN_TIME_ZONE,
 };
+
+/** What a test environment does with the e-mail; nothing to say when it really sends. */
+function transportNote(transport: MailTransport, t: Translate): string | null {
+  return transport === "smtp" ? null : t(`leads.notifications.transport.${transport}`);
+}
 
 /**
  * DP-221 (ADR-026 D3): who is e-mailed when a contact-form message arrives, per site. Lead
@@ -36,6 +41,8 @@ const TRANSPORT_NOTE: Readonly<Record<MailTransport, string | null>> = {
  */
 export default async function LeadNotificationsPage() {
   await requireStaffSession();
+  const t = await getTranslator();
+  const DATE = dateTimeFormat(await getAdminLocale(), DATE_OPTIONS);
   const res = await serverRead(
     "/api/v1/admin/lead-notifications",
     LeadNotificationSettingsResponseSchema,
@@ -43,9 +50,9 @@ export default async function LeadNotificationsPage() {
   const header = (
     <PageHeader
       icon="bell"
-      title="Lead notifications"
-      back={{ href: "/leads", label: "All leads" }}
-      description="E-mail the sales team when someone writes through a site's contact form. Every message is stored as a lead first; the e-mail only points to it."
+      title={t("leads.notifications.title")}
+      back={{ href: "/leads", label: t("leads.common.allLeads") }}
+      description={t("leads.notifications.description")}
     />
   );
   if (!res.ok) {
@@ -54,19 +61,20 @@ export default async function LeadNotificationsPage() {
         {header}
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
           {res.status === 403 ? (
-            <EmptyState icon="shield" title="Only lead managers change notifications">
-              Staff who work a site&apos;s leads (Sales / CRM user there) and platform
-              administrators choose who is e-mailed about new contact-form messages.
+            <EmptyState icon="shield" title={t("leads.notifications.forbiddenTitle")}>
+              {t("leads.notifications.forbiddenText")}
             </EmptyState>
           ) : (
-            <ErrorState title="The settings could not be loaded">Try again in a moment.</ErrorState>
+            <ErrorState title={t("leads.notifications.loadError")}>
+              {t("leads.common.tryAgainLater")}
+            </ErrorState>
           )}
         </div>
       </div>
     );
   }
   const { transport, sites } = res.data;
-  const note = TRANSPORT_NOTE[transport];
+  const note = transportNote(transport, t);
   return (
     <div className="space-y-6 sm:space-y-8">
       {header}
@@ -83,21 +91,29 @@ export default async function LeadNotificationsPage() {
           title={s.site.name}
           description={
             s.updatedAt
-              ? `Last changed ${DATE.format(new Date(s.updatedAt))}${
-                  s.updatedBy ? ` by ${s.updatedBy.displayName}` : ""
-                }.`
-              : "Not set up yet: no e-mail is sent."
+              ? s.updatedBy
+                ? t("leads.notifications.lastChangedBy", {
+                    date: DATE.format(new Date(s.updatedAt)),
+                    name: s.updatedBy.displayName,
+                  })
+                : t("leads.notifications.lastChanged", { date: DATE.format(new Date(s.updatedAt)) })
+              : t("leads.notifications.notSetUp")
           }
         >
           <div className="space-y-6">
             <NotificationSettingsForm settings={s} />
             <div>
-              <h3 className="mb-2 text-sm font-medium text-ink">Last 30 days</h3>
-              <ul className="flex flex-wrap gap-2" aria-label="Notifications of the last 30 days">
+              <h3 className="mb-2 text-sm font-medium text-ink">
+                {t("leads.notifications.last30")}
+              </h3>
+              <ul
+                className="flex flex-wrap gap-2"
+                aria-label={t("leads.notifications.last30Label")}
+              >
                 {LEAD_NOTIFICATION_STATUSES.map((st) => (
                   <li key={st}>
                     <StatusPill tone={NOTIFICATION_TONE[st]}>
-                      {NOTIFICATION_LABEL[st]}: {s.recent[st] ?? 0}
+                      {`${notificationLabel(st, t)}: ${s.recent[st] ?? 0}`}
                     </StatusPill>
                   </li>
                 ))}

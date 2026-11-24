@@ -7,6 +7,8 @@
 // private main 7b543f6 with ML12B_RECORD_EN=1 (run only that file when recording).
 // ML-12c: the Content area (content-en.test.tsx) on private main a7b140f with ML12C_RECORD_EN=1.
 // ML-12d: the SEO area (seo-en.test.tsx) on private main fb6687d with ML12D_RECORD_EN=1.
+// ML-12e: Leads, Staff, Owner and the Overview (leads-en, staff-en, owner-en, dashboard-en .test.tsx)
+// on private main 10dec17 with ML12E_RECORD_EN=1.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -23,7 +25,8 @@ const RECORD =
   process.env["ML12A_RECORD_EN"] === "1" ||
   process.env["ML12B_RECORD_EN"] === "1" ||
   process.env["ML12C_RECORD_EN"] === "1" ||
-  process.env["ML12D_RECORD_EN"] === "1";
+  process.env["ML12D_RECORD_EN"] === "1" ||
+  process.env["ML12E_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

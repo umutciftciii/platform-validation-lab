@@ -13,11 +13,15 @@ import {
   leadListHref,
   leadListQuery,
   readLeadFilters,
-  STATUS_HINT,
-  STATUS_LABEL,
+  statusHint,
+  statusLabel,
   STATUS_TONE,
   textLanguageLabel,
 } from "../lib/leads-view";
+import { createTranslator } from "../lib/i18n/translate";
+
+// ML-12e: labels and texts take the UI language's t() (English here, as before).
+const EN = createTranslator("en");
 
 const SITE = "0190f3a0-0000-7000-8000-00000000000a";
 
@@ -85,14 +89,14 @@ describe("lead list filters", () => {
   });
   it("labels every status", () => {
     for (const s of LEAD_STATUSES) {
-      expect(STATUS_LABEL[s]).toBeTruthy();
+      expect(statusLabel(s, EN)).toBeTruthy();
       expect(STATUS_TONE[s]).toBeTruthy();
-      expect(STATUS_HINT[s]).toBeTruthy();
+      expect(statusHint(s, EN)).toBeTruthy();
     }
   });
   it("names countries and falls back to the code", () => {
-    expect(countryName("NL")).toBe("Netherlands");
-    expect(countryName("not-a-code")).toBe("not-a-code");
+    expect(countryName("NL", "en")).toBe("Netherlands");
+    expect(countryName("not-a-code", "en")).toBe("not-a-code");
   });
 });
 
@@ -141,17 +145,19 @@ describe("date range and export", () => {
   });
 
   it("says how many leads the export holds, or why there is nothing to export", () => {
-    expect(leadCount(1)).toBe("1 lead");
-    expect(leadCount(1234)).toBe("1,234 leads");
-    expect(exportSummaryText(0, 20000, true)).toBe(
+    expect(leadCount(1, EN, "en")).toBe("1 lead");
+    expect(leadCount(1234, EN, "en")).toBe("1,234 leads");
+    expect(exportSummaryText(0, 20000, true, EN, "en")).toBe(
       "No leads match these filters, so there is nothing to export.",
     );
-    expect(exportSummaryText(0, 20000, false)).toBe("There are no leads to export yet.");
-    expect(exportSummaryText(12, 20000, true)).toBe(
+    expect(exportSummaryText(0, 20000, false, EN, "en")).toBe("There are no leads to export yet.");
+    expect(exportSummaryText(12, 20000, true, EN, "en")).toBe(
       "12 leads match these filters and will be exported.",
     );
-    expect(exportSummaryText(1, 20000, false)).toBe("1 lead in total and will be exported.");
-    expect(exportSummaryText(20001, 20000, false)).toMatch(
+    expect(exportSummaryText(1, 20000, false, EN, "en")).toBe(
+      "1 lead in total and will be exported.",
+    );
+    expect(exportSummaryText(20001, 20000, false, EN, "en")).toMatch(
       /^20,001 leads match\. One export holds at most 20,000; narrow the filters/,
     );
   });
@@ -159,16 +165,16 @@ describe("date range and export", () => {
 
 describe("ML-10 form and text language labels", () => {
   it("shows the stored form language; a row from before ML-10 as English, marked not recorded", () => {
-    expect(formLanguageLabel("en")).toBe("English");
-    expect(formLanguageLabel("nl")).toBe("Dutch");
-    expect(formLanguageLabel(null)).toBe("English (not recorded, before ML-10)");
-    expect(formLanguageLabel("pt-BR")).toBe("pt-BR");
-    expect(formLanguageLabel("constructor")).toBe("constructor");
+    expect(formLanguageLabel("en", EN)).toBe("English");
+    expect(formLanguageLabel("nl", EN)).toBe("Dutch");
+    expect(formLanguageLabel(null, EN)).toBe("English (not recorded, before ML-10)");
+    expect(formLanguageLabel("pt-BR", EN)).toBe("pt-BR");
+    expect(formLanguageLabel("constructor", EN)).toBe("constructor");
   });
 
   it("names the language of a text version (older versions were English)", () => {
-    expect(textLanguageLabel("2026-11-12.en")).toBe("English");
-    expect(textLanguageLabel("2026-11-23.nl")).toBe("Dutch");
-    expect(textLanguageLabel("2026-11-11")).toBe("English");
+    expect(textLanguageLabel("2026-11-12.en", EN)).toBe("English");
+    expect(textLanguageLabel("2026-11-23.nl", EN)).toBe("Dutch");
+    expect(textLanguageLabel("2026-11-11", EN)).toBe("English");
   });
 });

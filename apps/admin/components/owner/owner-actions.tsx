@@ -4,6 +4,9 @@
  * chain verification, the protected audit trail and the one-time designation confirmation. Each
  * sensitive call may answer "step-up required"; the component then asks for an authenticator code
  * and retries once. The API decides everything (404 for anyone but the owner).
+ *
+ * ML-12e (DP-243): texts in the admin UI language; audit event codes, resource types, hashes,
+ * chain numbers and the API's module keys are shown unchanged.
  */
 import { useRouter } from "next/navigation";
 import { useId, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
@@ -13,25 +16,29 @@ import type {
   OwnerSite,
   ProtectedAuditEvent,
 } from "@dream/contracts";
+import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
+import { dateTimeFormat } from "../../lib/i18n/format";
 import {
   changeModule,
   confirmDesignation,
+  ownerModuleName,
   protectedAudit,
   verifyChain,
 } from "../../lib/owner-client";
 import { stepUp, type StaffCall } from "../../lib/staff-client";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner, StatusPill } from "../ui";
 
-const DATE_TIME = new Intl.DateTimeFormat("en-GB", {
+const DATE_TIME: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 // --- step-up ----------------------------------------------------------------------------------
 
@@ -56,6 +63,7 @@ function useStepUp() {
 }
 
 function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCancel: () => void }) {
+  const t = useT();
   const id = useId();
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,13 +85,9 @@ function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCance
     <form
       onSubmit={submit}
       className="space-y-3 rounded-xl border border-line bg-surface-2 p-4"
-      aria-label="Confirm with your authenticator"
+      aria-label={t("owner.stepUp.form")}
     >
-      <Field
-        label="Authenticator code"
-        htmlFor={id}
-        hint="This change needs a fresh confirmation from your authenticator app."
-      >
+      <Field label={t("owner.stepUp.code")} htmlFor={id} hint={t("owner.stepUp.hint")}>
         <input
           id={id}
           inputMode="numeric"
@@ -98,10 +102,10 @@ function StepUpPrompt({ retry, onCancel }: { retry: () => Promise<void>; onCance
       <div className="flex flex-wrap gap-2">
         <button type="submit" className={buttonStyles.primary} disabled={busy || !code.trim()}>
           {busy ? <Spinner size={14} /> : null}
-          <span>Confirm</span>
+          <span>{t("owner.stepUp.confirm")}</span>
         </button>
         <button type="button" className={buttonStyles.ghost} onClick={onCancel}>
-          Cancel
+          {t("owner.stepUp.cancel")}
         </button>
       </div>
     </form>
@@ -120,6 +124,7 @@ export function ModuleSwitch({
   enabled: boolean;
 }) {
   const router = useRouter();
+  const t = useT();
   const id = useId();
   const step = useStepUp();
   const [open, setOpen] = useState(false);
@@ -128,7 +133,7 @@ export function ModuleSwitch({
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
 
   if (module.isCore) {
-    return <StatusPill tone="success">Always on</StatusPill>;
+    return <StatusPill tone="success">{t("owner.switch.alwaysOn")}</StatusPill>;
   }
 
   async function submit(e: FormEvent) {
@@ -152,31 +157,37 @@ export function ModuleSwitch({
     setBusy(false);
   }
 
+  const name = ownerModuleName(module, t);
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusPill tone={enabled ? "success" : "neutral"}>{enabled ? "On" : "Off"}</StatusPill>
+        <StatusPill tone={enabled ? "success" : "neutral"}>
+          {enabled ? t("owner.switch.on") : t("owner.switch.off")}
+        </StatusPill>
         {open ? null : (
           <button
             type="button"
             className={buttonStyles.ghost}
             onClick={() => setOpen(true)}
-            aria-label={`${enabled ? "Switch off" : "Switch on"} ${module.name} on ${site.name}`}
+            aria-label={t(enabled ? "owner.switch.switchOffLabel" : "owner.switch.switchOnLabel", {
+              module: name,
+              site: site.name,
+            })}
           >
-            {enabled ? "Switch off" : "Switch on"}
+            {enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}
           </button>
         )}
       </div>
       {open ? (
-        <form onSubmit={submit} className="space-y-2" aria-label={`Change ${module.name}`}>
+        <form
+          onSubmit={submit}
+          className="space-y-2"
+          aria-label={t("owner.switch.form", { module: name })}
+        >
           <Field
-            label="Reason"
+            label={t("owner.switch.reason")}
             htmlFor={id}
-            hint={
-              enabled
-                ? "Switching off keeps all data; the module's functions stop for everyone."
-                : "Recorded in the protected audit trail."
-            }
+            hint={enabled ? t("owner.switch.hintOff") : t("owner.switch.hintOn")}
           >
             <input
               id={id}
@@ -196,7 +207,7 @@ export function ModuleSwitch({
               disabled={busy || reason.trim().length < 3}
             >
               {busy ? <Spinner size={14} /> : null}
-              <span>{enabled ? "Switch off" : "Switch on"}</span>
+              <span>{enabled ? t("owner.switch.switchOff") : t("owner.switch.switchOn")}</span>
             </button>
             <button
               type="button"
@@ -207,7 +218,7 @@ export function ModuleSwitch({
                 step.clear();
               }}
             >
-              Cancel
+              {t("owner.switch.cancel")}
             </button>
           </div>
         </form>
@@ -220,6 +231,8 @@ export function ModuleSwitch({
 // --- chain verification -------------------------------------------------------------------
 
 export function ChainStatus({ initial }: { initial: OwnerChainStatus }) {
+  const t = useT();
+  const locale = useAdminLocale();
   const [status, setStatus] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -237,28 +250,30 @@ export function ChainStatus({ initial }: { initial: OwnerChainStatus }) {
   return (
     <div className="space-y-3">
       <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-        <Fact label="State">
+        <Fact label={t("owner.chain.state")}>
           {status.intact ? (
             <StatusPill key="intact" tone="success">
-              Intact
+              {t("owner.chain.intact")}
             </StatusPill>
           ) : (
             <StatusPill key="broken" tone="danger">
-              Broken at #{status.firstBrokenSeq}
+              {t("owner.chain.broken", { seq: status.firstBrokenSeq ?? "" })}
             </StatusPill>
           )}
         </Fact>
-        <Fact label="Protected events">{status.events}</Fact>
-        <Fact label="Checked">{DATE_TIME.format(new Date(status.checkedAt))}</Fact>
+        <Fact label={t("owner.chain.events")}>{status.events}</Fact>
+        <Fact label={t("owner.chain.checked")}>
+          {dateTimeFormat(locale, DATE_TIME).format(new Date(status.checkedAt))}
+        </Fact>
         <div className="sm:col-span-3">
-          <dt className="text-ink-3">Head hash (#{status.headSeq})</dt>
+          <dt className="text-ink-3">{t("owner.chain.headHash", { seq: status.headSeq })}</dt>
           <dd className="break-all font-mono text-xs text-ink-2">{status.headHash ?? "—"}</dd>
         </div>
       </dl>
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       <button type="button" className={buttonStyles.secondary} onClick={verify} disabled={busy}>
         {busy ? <Spinner size={14} /> : null}
-        <span>Verify now</span>
+        <span>{t("owner.chain.verify")}</span>
       </button>
       {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}
     </div>
@@ -279,6 +294,8 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 const OUTCOME_TONE = { SUCCESS: "success", DENIED: "danger", FAILURE: "amber" } as const;
 
 export function ProtectedAuditLog() {
+  const t = useT();
+  const locale = useAdminLocale();
   const [items, setItems] = useState<ProtectedAuditEvent[]>([]);
   const [next, setNext] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -310,7 +327,7 @@ export function ProtectedAuditLog() {
       {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       {loaded && !items.length ? (
-        <p className="text-sm text-ink-3">No protected events yet.</p>
+        <p className="text-sm text-ink-3">{t("owner.audit.empty")}</p>
       ) : null}
       {items.length ? (
         <ol className="divide-y divide-line rounded-xl border border-line">
@@ -320,16 +337,18 @@ export function ProtectedAuditLog() {
               <div className="min-w-0">
                 <p className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-ink">{e.action}</span>
-                  <StatusPill tone={OUTCOME_TONE[e.outcome]}>{e.outcome.toLowerCase()}</StatusPill>
+                  <StatusPill tone={OUTCOME_TONE[e.outcome]}>
+                    {t(`owner.audit.outcome.${e.outcome}`)}
+                  </StatusPill>
                 </p>
                 <p className="truncate text-ink-3">
-                  {e.actorLabel ?? e.actorType.toLowerCase()} · {e.resourceType}
+                  {e.actorLabel ?? t(`owner.audit.actor.${e.actorType}`)} · {e.resourceType}
                   {e.resourceId ? ` ${e.resourceId}` : ""}
                   {e.reason ? ` · ${e.reason}` : ""}
                 </p>
               </div>
               <time className="text-xs text-ink-3" dateTime={e.occurredAt}>
-                {DATE_TIME.format(new Date(e.occurredAt))}
+                {dateTimeFormat(locale, DATE_TIME).format(new Date(e.occurredAt))}
               </time>
             </li>
           ))}
@@ -344,7 +363,7 @@ export function ProtectedAuditLog() {
             disabled={busy}
           >
             {busy ? <Spinner size={14} /> : null}
-            <span>Load protected events</span>
+            <span>{t("owner.audit.load")}</span>
           </button>
         ) : null}
         {next ? (
@@ -355,7 +374,7 @@ export function ProtectedAuditLog() {
             disabled={busy}
           >
             {busy ? <Spinner size={14} /> : null}
-            <span>Older events</span>
+            <span>{t("owner.audit.older")}</span>
           </button>
         ) : null}
       </div>
@@ -383,6 +402,7 @@ function useFragmentToken(): string | null {
 
 export function ConfirmDesignation() {
   const router = useRouter();
+  const t = useT();
   const token = useFragmentToken();
   const id = useId();
   const step = useStepUp();
@@ -401,11 +421,7 @@ export function ConfirmDesignation() {
   }
   if (token === null) return <Spinner />;
   if (!token) {
-    return (
-      <FormMessage kind="error">
-        This page needs the confirmation link from the operator. Open the full link again.
-      </FormMessage>
-    );
+    return <FormMessage kind="error">{t("owner.confirm.noLink")}</FormMessage>;
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -425,7 +441,7 @@ export function ConfirmDesignation() {
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
         setMessage({
           kind: "success",
-          text: "You are now the system owner. The owner console is in the navigation.",
+          text: t("owner.confirm.success"),
         });
         router.refresh();
       },
@@ -434,11 +450,11 @@ export function ConfirmDesignation() {
   }
   return (
     <div className="max-w-md space-y-4">
-      <form onSubmit={submit} className="space-y-4" aria-label="Confirm the owner designation">
+      <form onSubmit={submit} className="space-y-4" aria-label={t("owner.confirm.form")}>
         <Field
-          label="Your current password"
+          label={t("owner.confirm.password")}
           htmlFor={id}
-          hint="Confirms that this account belongs to you. The designation cannot be undone or handed on."
+          hint={t("owner.confirm.passwordHint")}
         >
           <input
             id={id}
@@ -453,7 +469,7 @@ export function ConfirmDesignation() {
         {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
         <button type="submit" className={cx(buttonStyles.primary)} disabled={busy || !password}>
           {busy ? <Spinner size={14} /> : null}
-          <span>Confirm designation</span>
+          <span>{t("owner.confirm.submit")}</span>
         </button>
       </form>
       {step.pending ? <StepUpPrompt retry={step.pending} onCancel={step.clear} /> : null}

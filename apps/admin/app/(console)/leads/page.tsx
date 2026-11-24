@@ -18,6 +18,9 @@ import {
   Panel,
   StatusPill,
 } from "../../../components/ui";
+import { ADMIN_TIME_ZONE } from "../../../lib/i18n/config";
+import { dateTimeFormat } from "../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../lib/i18n/server";
 import {
   countryName,
   hasLeadFilters,
@@ -25,23 +28,26 @@ import {
   leadListHref,
   leadListQuery,
   readLeadFilters,
-  SOURCE_LABEL,
-  STATUS_LABEL,
+  sourceLabel,
+  statusLabel,
   STATUS_TONE,
 } from "../../../lib/leads-view";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Leads" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("leads.list.title") };
+}
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 /**
  * DP-042 (ADR-016 D8): document requests left on the public sites. Customer data: the API answers
@@ -51,6 +57,9 @@ const DATE = new Intl.DateTimeFormat("en-GB", {
  */
 export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   await requireStaffSession();
+  const t = await getTranslator();
+  const locale = await getAdminLocale();
+  const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const filters = readLeadFilters(await searchParams);
   const [list, summary] = await Promise.all([
     serverRead(`/api/v1/admin/leads${leadListQuery(filters)}`, LeadListResponseSchema),
@@ -63,17 +72,16 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   if (!list.ok) {
     return (
       <div className="space-y-8">
-        <PageHeader icon="inbox" title="Leads" />
+        <PageHeader icon="inbox" title={t("leads.list.title")} />
         <div className="rounded-2xl border border-dashed border-line-strong bg-surface">
           {list.status === 403 ? (
-            <EmptyState icon="shield" title="No access to leads">
-              Leads are customer data. Platform administrators read them; other staff need a role
-              with lead access (Sales / CRM user for one site, or the customer-data officer), which
-              an administrator gives under Staff and access. Every view is recorded in the audit
-              log.
+            <EmptyState icon="shield" title={t("leads.common.noAccess")}>
+              {t("leads.list.noAccessText")}
             </EmptyState>
           ) : (
-            <ErrorState title="The leads could not be loaded">Try again in a moment.</ErrorState>
+            <ErrorState title={t("leads.list.loadError")}>
+              {t("leads.common.tryAgainLater")}
+            </ErrorState>
           )}
         </div>
       </div>
@@ -84,31 +92,35 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="inbox"
-        title="Leads"
-        description="People who wrote through a site's contact form or requested a lead-gated document, newest first. Work them through the sales pipeline. Customer data: every view is audited."
+        title={t("leads.list.title")}
+        description={t("leads.list.description")}
         actions={
           <Link href="/leads/notifications" className={buttonStyles.secondary}>
             <Icon name="bell" size={16} />
-            Notifications
+            {t("leads.list.notifications")}
           </Link>
         }
       />
       <Panel
         id="leads"
-        title="Leads"
-        description={`${items.length} shown${nextCursor ? ", more on the next page" : ""}`}
+        title={t("leads.list.title")}
+        description={
+          nextCursor
+            ? t("leads.list.shownMore", { n: items.length })
+            : t("leads.list.shown", { n: items.length })
+        }
         bodyClassName="px-0! pb-2! pt-3!"
       >
         <form
           method="get"
           action="/leads"
           role="search"
-          aria-label="Filter leads"
+          aria-label={t("leads.list.filterLabel")}
           className="space-y-3 border-b border-line px-5 pb-4 sm:px-6"
         >
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]">
             <label className="relative block">
-              <span className="sr-only">Search by name, company or e-mail</span>
+              <span className="sr-only">{t("leads.list.searchLabel")}</span>
               <Icon
                 name="search"
                 size={17}
@@ -119,14 +131,14 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                 name="q"
                 defaultValue={filters.q}
                 maxLength={100}
-                placeholder="Search name, company or e-mail"
+                placeholder={t("leads.list.searchPlaceholder")}
                 className={cx(FIELD, "pl-9")}
               />
             </label>
             <label>
-              <span className="sr-only">Site</span>
+              <span className="sr-only">{t("leads.list.site")}</span>
               <select name="site" defaultValue={filters.site} className={FIELD}>
-                <option value="">All my sites</option>
+                <option value="">{t("leads.list.allSites")}</option>
                 {sites.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -135,46 +147,50 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
               </select>
             </label>
             <label>
-              <span className="sr-only">Status</span>
+              <span className="sr-only">{t("leads.list.status")}</span>
               <select name="status" defaultValue={filters.status} className={FIELD}>
-                <option value="">Any status</option>
+                <option value="">{t("leads.list.anyStatus")}</option>
                 {LEAD_STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {STATUS_LABEL[s]}
+                    {statusLabel(s, t)}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              <span className="sr-only">Source</span>
+              <span className="sr-only">{t("leads.list.source")}</span>
               <select name="source" defaultValue={filters.source} className={FIELD}>
-                <option value="">Any source</option>
+                <option value="">{t("leads.list.anySource")}</option>
                 {LEAD_SOURCES.map((s) => (
                   <option key={s} value={s}>
-                    {SOURCE_LABEL[s]}
+                    {sourceLabel(s, t)}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              <span className="sr-only">Assigned to</span>
+              <span className="sr-only">{t("leads.common.assignedTo")}</span>
               <select name="assignee" defaultValue={filters.assignee} className={FIELD}>
-                <option value="">Anyone</option>
-                <option value="me">Assigned to me</option>
-                <option value="none">Unassigned</option>
+                <option value="">{t("leads.list.anyone")}</option>
+                <option value="me">{t("leads.list.assignedToMe")}</option>
+                <option value="none">{t("leads.common.unassigned")}</option>
               </select>
             </label>
             <button type="submit" className={buttonStyles.primary}>
-              Apply
+              {t("leads.list.apply")}
             </button>
           </div>
           <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-end">
             <label className="block min-w-0 sm:w-44">
-              <span className="mb-1 block text-xs font-medium text-ink-3">Created from</span>
+              <span className="mb-1 block text-xs font-medium text-ink-3">
+                {t("leads.list.createdFrom")}
+              </span>
               <input type="date" name="from" defaultValue={filters.from} className={FIELD} />
             </label>
             <label className="block min-w-0 sm:w-44">
-              <span className="mb-1 block text-xs font-medium text-ink-3">Created to</span>
+              <span className="mb-1 block text-xs font-medium text-ink-3">
+                {t("leads.list.createdTo")}
+              </span>
               <input type="date" name="to" defaultValue={filters.to} className={FIELD} />
             </label>
             {filtered ? (
@@ -186,7 +202,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                   "justify-self-start min-[360px]:col-span-2 sm:col-span-1",
                 )}
               >
-                Clear filters
+                {t("leads.list.clearFilters")}
               </Link>
             ) : null}
           </div>
@@ -206,14 +222,15 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
             role="alert"
             className="border-b border-line px-5 py-3 text-sm text-danger sm:px-6"
           >
-            The export is unavailable: the lead count could not be loaded (HTTP {summary.status}).
+            {t("leads.list.exportUnavailable", { status: summary.status })}
           </p>
         )}
         {items.length === 0 ? (
-          <EmptyState icon="inbox" title={filtered ? "No matching leads" : "No leads yet"}>
-            {filtered
-              ? "Try another search, filter or date range."
-              : "Contact-form messages and document requests from the public sites appear here."}
+          <EmptyState
+            icon="inbox"
+            title={filtered ? t("leads.list.noMatches") : t("leads.list.empty")}
+          >
+            {filtered ? t("leads.list.noMatchesText") : t("leads.list.emptyText")}
           </EmptyState>
         ) : (
           <ul className="divide-y divide-line">
@@ -226,42 +243,52 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                   <span className="min-w-0">
                     <span className="flex min-w-0 items-center gap-2">
                       <span className="truncate font-medium text-ink">
-                        {l.anonymisedAt ? "Anonymised lead" : l.fullName}
+                        {l.anonymisedAt ? t("leads.common.anonymised") : l.fullName}
                       </span>
-                      <StatusPill tone={STATUS_TONE[l.status]}>{STATUS_LABEL[l.status]}</StatusPill>
+                      <StatusPill tone={STATUS_TONE[l.status]}>
+                        {statusLabel(l.status, t)}
+                      </StatusPill>
                     </span>
                     <span className="block truncate text-sm text-ink-3">{l.email}</span>
                     <span className="mt-0.5 block truncate text-xs text-ink-3">
                       {l.assignedTo ? (
                         <>
-                          Assigned to{" "}
+                          {t("leads.common.assignedTo")}{" "}
                           <span className={l.assignedTo.active ? "text-ink-2" : "line-through"}>
                             {l.assignedTo.displayName}
                           </span>
-                          {l.assignedTo.active ? null : <span>{" (no longer has access)"}</span>}
+                          {l.assignedTo.active ? null : (
+                            <span>{t("leads.list.noLongerAccess")}</span>
+                          )}
                         </>
                       ) : (
-                        "Unassigned"
+                        t("leads.common.unassigned")
                       )}
                     </span>
                   </span>
                   <span className="min-w-0 text-sm text-ink-2">
                     <span className="block truncate">{l.company}</span>
-                    <span className="block truncate text-ink-3">{countryName(l.country)}</span>
+                    <span className="block truncate text-ink-3">
+                      {countryName(l.country, locale)}
+                    </span>
                   </span>
                   <span className="flex flex-wrap items-center gap-2 text-sm text-ink-3 sm:justify-end">
                     <StatusPill tone="neutral">{SITE_SHORT[l.siteKey]}</StatusPill>
                     <StatusPill tone={l.source === "CONTACT_FORM" ? "petrol" : "neutral"}>
-                      {SOURCE_LABEL[l.source]}
+                      {sourceLabel(l.source, t)}
                     </StatusPill>
-                    {l.retentionHold ? <StatusPill tone="amber">Hold</StatusPill> : null}
-                    {l.marketingConsentAt ? (
-                      <StatusPill tone="success">Marketing OK</StatusPill>
+                    {l.retentionHold ? (
+                      <StatusPill tone="amber">{t("leads.list.hold")}</StatusPill>
                     ) : null}
-                    {l.freeMailDomain ? <StatusPill tone="amber">Free mail</StatusPill> : null}
+                    {l.marketingConsentAt ? (
+                      <StatusPill tone="success">{t("leads.list.marketingOk")}</StatusPill>
+                    ) : null}
+                    {l.freeMailDomain ? (
+                      <StatusPill tone="amber">{t("leads.list.freeMail")}</StatusPill>
+                    ) : null}
                     <span className="tabular-nums">
                       {l.requestCount > 0
-                        ? `${l.requestCount} document request${l.requestCount === 1 ? "" : "s"} · `
+                        ? `${t("leads.list.documentRequests", { count: l.requestCount })} · `
                         : ""}
                       {DATE.format(new Date(l.lastRequestAt))}
                     </span>
@@ -278,7 +305,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                 href={leadListHref({ ...filters, cursor: "" })}
                 className={buttonStyles.secondary}
               >
-                First page
+                {t("leads.list.firstPage")}
               </Link>
             ) : (
               <span />
@@ -288,7 +315,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                 href={leadListHref({ ...filters, cursor: nextCursor })}
                 className={buttonStyles.secondary}
               >
-                Next page
+                {t("leads.list.nextPage")}
               </Link>
             ) : null}
           </div>

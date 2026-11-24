@@ -8,9 +8,24 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
 import type { AssignableRole, StaffMember, StaffSite } from "@dream/contracts";
+import { staff as STAFF_EN } from "../../lib/i18n/messages/staff/en";
+import type { Translate } from "../../lib/i18n/types";
 import { assignRole, endOfDayIso, inviteStaff, revokeRole, stepUp } from "../../lib/staff-client";
 import { Field, FIELD, FormMessage } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner } from "../ui";
+
+type RoleKey = keyof typeof STAFF_EN.roles;
+
+/**
+ * ML-12e: a role's name or description in the UI language, by its key, only while the API still
+ * sends the dictionary's English text; a renamed or unknown role shows the API's own text.
+ */
+function roleText(key: string, field: "name" | "description", apiText: string, t: Translate) {
+  return Object.hasOwn(STAFF_EN.roles, key) && STAFF_EN.roles[key as RoleKey][field] === apiText
+    ? t(`staff.roles.${key as RoleKey}.${field}`)
+    : apiText;
+}
 
 export function AssignRoleForm({
   staff,
@@ -24,6 +39,7 @@ export function AssignRoleForm({
   viewerId: string;
 }) {
   const router = useRouter();
+  const t = useT();
   const ids = { person: useId(), role: useId(), site: useId(), end: useId() };
   const people = staff.filter((s) => s.id !== viewerId && s.status !== "DEACTIVATED");
   const usable = roles.filter((r) => r.platform || r.siteIds.length > 0);
@@ -54,21 +70,25 @@ export function AssignRoleForm({
       setMessage({ kind: "error", text: res.message });
       return;
     }
-    const who = people.find((p) => p.id === person)?.displayName ?? "The person";
-    setMessage({ kind: "success", text: `${who} now has the role ${role.name}.` });
+    const who = people.find((p) => p.id === person)?.displayName ?? t("staff.assign.someone");
+    setMessage({
+      kind: "success",
+      text: t("staff.assign.success", {
+        name: who,
+        role: roleText(role.key, "name", role.name, t),
+      }),
+    });
     setEnd("");
     router.refresh();
   }
 
   if (!usable.length) {
-    return (
-      <p className="text-sm text-ink-3">Your roles do not allow you to give roles to others.</p>
-    );
+    return <p className="text-sm text-ink-3">{t("staff.assign.noRoles")}</p>;
   }
   return (
-    <form onSubmit={submit} className="space-y-4" aria-label="Give a role">
+    <form onSubmit={submit} className="space-y-4" aria-label={t("staff.assign.form")}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Staff member" htmlFor={ids.person}>
+        <Field label={t("staff.assign.person")} htmlFor={ids.person}>
           <select
             id={ids.person}
             required
@@ -76,7 +96,7 @@ export function AssignRoleForm({
             value={person}
             onChange={(e) => setPerson(e.target.value)}
           >
-            <option value="">Choose a person…</option>
+            <option value="">{t("staff.assign.choosePerson")}</option>
             {people.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.displayName} ({p.email})
@@ -84,7 +104,11 @@ export function AssignRoleForm({
             ))}
           </select>
         </Field>
-        <Field label="Role" htmlFor={ids.role} hint={role?.description}>
+        <Field
+          label={t("staff.assign.role")}
+          htmlFor={ids.role}
+          hint={role ? roleText(role.key, "description", role.description, t) : undefined}
+        >
           <select
             id={ids.role}
             required
@@ -95,17 +119,17 @@ export function AssignRoleForm({
               setSiteId("");
             }}
           >
-            <option value="">Choose a role…</option>
+            <option value="">{t("staff.assign.chooseRole")}</option>
             {usable.map((r) => (
               <option key={r.key} value={r.key}>
-                {r.name}
-                {r.customerData ? " · lead data" : ""}
+                {roleText(r.key, "name", r.name, t)}
+                {r.customerData ? t("staff.assign.leadData") : ""}
               </option>
             ))}
           </select>
         </Field>
         {needsSite ? (
-          <Field label="Site" htmlFor={ids.site}>
+          <Field label={t("staff.assign.site")} htmlFor={ids.site}>
             <select
               id={ids.site}
               required
@@ -123,7 +147,7 @@ export function AssignRoleForm({
         ) : (
           <div className="hidden lg:block" aria-hidden="true" />
         )}
-        <Field label="Ends on (optional)" htmlFor={ids.end} hint="Empty: no end date.">
+        <Field label={t("staff.assign.end")} htmlFor={ids.end} hint={t("staff.assign.endHint")}>
           <input
             id={ids.end}
             type="date"
@@ -136,7 +160,7 @@ export function AssignRoleForm({
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
       <button type="submit" className={buttonStyles.primary} disabled={busy || !person || !role}>
         {busy ? <Spinner size={14} /> : null}
-        <span>Give role</span>
+        <span>{t("staff.assign.submit")}</span>
       </button>
     </form>
   );
@@ -144,6 +168,7 @@ export function AssignRoleForm({
 
 export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string; label: string }) {
   const router = useRouter();
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,17 +193,17 @@ export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string
             className={cx(buttonStyles.primary, "h-8 px-3 text-sm")}
             disabled={busy}
             onClick={() => void remove()}
-            aria-label={`Confirm removing ${label}`}
+            aria-label={t("staff.remove.confirmLabel", { label })}
           >
             {busy ? <Spinner size={12} /> : null}
-            <span>Remove</span>
+            <span>{t("staff.remove.remove")}</span>
           </button>
           <button
             type="button"
             className={cx(buttonStyles.ghost, "h-8 text-sm")}
             onClick={() => setConfirming(false)}
           >
-            Keep
+            {t("staff.remove.keep")}
           </button>
         </span>
       ) : (
@@ -186,9 +211,9 @@ export function RemoveRoleButton({ assignmentId, label }: { assignmentId: string
           type="button"
           className={cx(buttonStyles.ghost, "h-8 px-2 text-sm text-danger")}
           onClick={() => setConfirming(true)}
-          aria-label={`Remove ${label}`}
+          aria-label={t("staff.remove.removeLabel", { label })}
         >
-          Remove
+          {t("staff.remove.remove")}
         </button>
       )}
       {error ? (
@@ -208,6 +233,7 @@ export function InviteForm({
   roles: readonly AssignableRole[];
 }) {
   const router = useRouter();
+  const t = useT();
   const ids = { email: useId(), name: useId(), site: useId(), role: useId(), code: useId() };
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -265,9 +291,9 @@ export function InviteForm({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4" aria-label="Invite a staff member">
+    <form onSubmit={submit} className="space-y-4" aria-label={t("staff.invite.form")}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="E-mail" htmlFor={ids.email}>
+        <Field label={t("staff.invite.email")} htmlFor={ids.email}>
           <input
             id={ids.email}
             type="email"
@@ -277,7 +303,7 @@ export function InviteForm({
             onChange={(e) => setEmail(e.target.value)}
           />
         </Field>
-        <Field label="Name" htmlFor={ids.name}>
+        <Field label={t("staff.invite.name")} htmlFor={ids.name}>
           <input
             id={ids.name}
             required
@@ -287,7 +313,7 @@ export function InviteForm({
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
-        <Field label="Site" htmlFor={ids.site}>
+        <Field label={t("staff.invite.site")} htmlFor={ids.site}>
           <select
             id={ids.site}
             className={FIELD}
@@ -304,17 +330,17 @@ export function InviteForm({
             ))}
           </select>
         </Field>
-        <Field label="Role (optional)" htmlFor={ids.role}>
+        <Field label={t("staff.invite.role")} htmlFor={ids.role}>
           <select
             id={ids.role}
             className={FIELD}
             value={roleKey}
             onChange={(e) => setRoleKey(e.target.value)}
           >
-            <option value="">No role yet</option>
+            <option value="">{t("staff.invite.noRole")}</option>
             {siteRoles.map((r) => (
               <option key={r.key} value={r.key}>
-                {r.name}
+                {roleText(r.key, "name", r.name, t)}
               </option>
             ))}
           </select>
@@ -322,9 +348,9 @@ export function InviteForm({
       </div>
       {needCode ? (
         <Field
-          label="Authenticator code"
+          label={t("staff.invite.code")}
           htmlFor={ids.code}
-          hint="Inviting someone needs a fresh confirmation."
+          hint={t("staff.invite.codeHint")}
           className="max-w-xs"
         >
           <input
@@ -340,8 +366,8 @@ export function InviteForm({
       {error ? <FormMessage kind="error">{error}</FormMessage> : null}
       {link ? (
         <FormMessage kind="success">
-          Invitation created. Send this one-time enrolment link to the person (it is shown only
-          once): <span className="break-all font-mono text-xs">{link}</span>
+          {t("staff.invite.created")}
+          <span className="break-all font-mono text-xs">{link}</span>
         </FormMessage>
       ) : null}
       <button
@@ -350,7 +376,7 @@ export function InviteForm({
         disabled={busy || (needCode && code.replace(/\s/g, "").length !== 6)}
       >
         {busy ? <Spinner size={14} /> : null}
-        <span>{needCode ? "Confirm and invite" : "Invite"}</span>
+        <span>{needCode ? t("staff.invite.confirmSubmit") : t("staff.invite.submit")}</span>
       </button>
     </form>
   );

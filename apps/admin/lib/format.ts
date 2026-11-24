@@ -5,12 +5,16 @@
  */
 export { formatClock, formatLongDate, formatNumber, greeting, relativeTime } from "./i18n/format";
 
-/** Signed change with one decimal: "+4.2%", "−1.0%" (true minus sign). */
-export function formatDelta(percent: number): string {
+/**
+ * Signed change with one decimal: "+4.2%", "−1.0%" (true minus sign). ML-12e: Turkish writes the
+ * percent sign first and a decimal comma: "+%4,2", "−%1,0".
+ */
+export function formatDelta(percent: number, locale: "en" | "tr" = "en"): string {
   const fixed = Math.abs(percent).toFixed(1);
-  if (percent > 0) return `+${fixed}%`;
-  if (percent < 0) return `−${fixed}%`;
-  return `${fixed}%`;
+  const value = locale === "tr" ? `%${fixed.replace(".", ",")}` : `${fixed}%`;
+  if (percent > 0) return `+${value}`;
+  if (percent < 0) return `−${value}`;
+  return value;
 }
 
 export function initials(name: string): string {

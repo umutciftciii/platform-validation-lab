@@ -2,9 +2,13 @@ import type { Metadata } from "next";
 import { PageHeader } from "../../../../components/catalog/parts";
 import { ConfirmDesignation } from "../../../../components/owner/owner-actions";
 import { Panel } from "../../../../components/ui";
+import { getTranslator } from "../../../../lib/i18n/server";
 import { requireStaffSession } from "../../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Confirm owner designation" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("owner.confirm.title") };
+}
 
 /**
  * One-time confirmation of the system owner designation (DP-110, ADR-018 D5). The operator's link
@@ -14,14 +18,15 @@ export const metadata: Metadata = { title: "Confirm owner designation" };
  */
 export default async function ConfirmOwnerPage() {
   await requireStaffSession();
+  const t = await getTranslator();
   return (
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="shield"
-        title="Confirm owner designation"
-        description="You were named as the system owner. After confirmation your account holds God Mode, which cannot be transferred to anyone else."
+        title={t("owner.confirm.title")}
+        description={t("owner.confirm.description")}
       />
-      <Panel id="confirm" title="Confirm with your password and authenticator">
+      <Panel id="confirm" title={t("owner.confirm.panel")}>
         <ConfirmDesignation />
       </Panel>
     </div>

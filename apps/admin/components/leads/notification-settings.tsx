@@ -13,11 +13,13 @@ import {
 } from "@dream/contracts";
 import { postJson } from "../../lib/staff-client";
 import { FormMessage } from "../catalog/parts";
+import { useT } from "../i18n/locale-provider";
 import { buttonStyles, cx, Spinner, StatusPill } from "../ui";
 
 type Message = { kind: "error" | "success"; text: string } | null;
 
 export function NotificationSettingsForm({ settings }: { settings: LeadNotificationSiteSettings }) {
+  const t = useT();
   const router = useRouter();
   const id = useId();
   const [enabled, setEnabled] = useState(settings.enabled);
@@ -54,7 +56,7 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
     e.preventDefault();
     if (!dirty) return;
     if (enabled && chosen.length === 0) {
-      setMessage({ kind: "error", text: "Choose at least one person, or switch the e-mail off." });
+      setMessage({ kind: "error", text: t("leads.notifications.form.chooseOne") });
       return;
     }
     setBusy(true);
@@ -68,7 +70,7 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
       setMessage({ kind: "error", text: res.message });
       return;
     }
-    setMessage({ kind: "success", text: "Saved. New messages follow these settings." });
+    setMessage({ kind: "success", text: t("leads.notifications.form.saved") });
     router.refresh();
   }
 
@@ -76,7 +78,7 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
     <form
       onSubmit={submit}
       className="space-y-5"
-      aria-label={`Notifications for ${settings.site.name}`}
+      aria-label={t("leads.notifications.form.label", { site: settings.site.name })}
     >
       <label
         htmlFor={`${id}-on`}
@@ -93,28 +95,25 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
           }}
         />
         <span>
-          <span className="block font-medium text-ink">
-            E-mail staff about new contact-form messages
-          </span>
+          <span className="block font-medium text-ink">{t("leads.notifications.form.enable")}</span>
           <span className="block text-sm text-ink-3">
-            The e-mail says only that a message arrived and links to the lead here. Names, e-mail
-            addresses and the message stay in the CRM.
+            {t("leads.notifications.form.enableHint")}
           </span>
         </span>
       </label>
 
       <fieldset className="space-y-2" disabled={busy}>
         <legend className="mb-1 text-sm font-medium text-ink">
-          Who gets the e-mail{" "}
+          {t("leads.notifications.form.who")}{" "}
           <span className="font-normal text-ink-3">
-            ({chosen.length} of at most {LEAD_NOTIFICATION_RECIPIENTS_MAX})
+            {t("leads.notifications.form.whoCount", {
+              n: chosen.length,
+              max: LEAD_NOTIFICATION_RECIPIENTS_MAX,
+            })}
           </span>
         </legend>
         {people.length === 0 ? (
-          <p className="text-sm text-ink-3">
-            Nobody can read this site&apos;s leads yet. Give someone a lead role under Staff and
-            access first.
-          </p>
+          <p className="text-sm text-ink-3">{t("leads.notifications.form.nobody")}</p>
         ) : (
           <ul className="divide-y divide-line rounded-xl border border-line">
             {people.map((p) => {
@@ -143,17 +142,18 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
                       </span>
                       <span className="block truncate text-xs text-ink-3">{p.email}</span>
                     </span>
-                    {p.eligible ? null : <StatusPill tone="amber">No lead access</StatusPill>}
+                    {p.eligible ? null : (
+                      <StatusPill tone="amber">
+                        {t("leads.notifications.form.noLeadAccess")}
+                      </StatusPill>
+                    )}
                   </label>
                 </li>
               );
             })}
           </ul>
         )}
-        <p className="text-xs text-ink-3">
-          Only staff who can read this site&apos;s leads are listed. If someone loses that access,
-          they stop getting the e-mail at once.
-        </p>
+        <p className="text-xs text-ink-3">{t("leads.notifications.form.onlyReaders")}</p>
       </fieldset>
 
       {message ? <FormMessage kind={message.kind}>{message.text}</FormMessage> : null}
@@ -161,7 +161,7 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={buttonStyles.primary} disabled={!dirty || busy}>
           {busy ? <Spinner /> : null}
-          <span>Save</span>
+          <span>{t("leads.notifications.form.save")}</span>
         </button>
         {dirty && !busy ? (
           <button
@@ -173,7 +173,7 @@ export function NotificationSettingsForm({ settings }: { settings: LeadNotificat
               setMessage(null);
             }}
           >
-            Undo changes
+            {t("leads.notifications.form.undo")}
           </button>
         ) : null}
       </div>

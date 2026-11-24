@@ -5,17 +5,24 @@ import { OwnerOverviewResponseSchema } from "@dream/contracts";
 import { PageHeader, SITE_SHORT } from "../../../components/catalog/parts";
 import { ChainStatus, ModuleSwitch } from "../../../components/owner/owner-actions";
 import { ErrorState, Panel, StatusPill, buttonStyles } from "../../../components/ui";
+import { ADMIN_TIME_ZONE } from "../../../lib/i18n/config";
+import { dateTimeFormat } from "../../../lib/i18n/format";
+import { getAdminLocale, getTranslator } from "../../../lib/i18n/server";
+import { ownerModuleDescription, ownerModuleName } from "../../../lib/owner-client";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
-export const metadata: Metadata = { title: "Owner console" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslator();
+  return { title: t("owner.console.title") };
+}
 
-const DATE = new Intl.DateTimeFormat("en-GB", {
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
   year: "numeric",
-  timeZone: "Europe/Amsterdam",
-});
+  timeZone: ADMIN_TIME_ZONE,
+};
 
 /**
  * System owner console (DP-110, ADR-018). The API answers 404 to anyone but the designated owner,
@@ -24,14 +31,16 @@ const DATE = new Intl.DateTimeFormat("en-GB", {
  */
 export default async function OwnerPage() {
   await requireStaffSession();
+  const t = await getTranslator();
+  const locale = await getAdminLocale();
   const res = await serverRead("/api/v1/admin/owner/overview", OwnerOverviewResponseSchema);
   if (!res.ok) {
     if (res.status === 404 || res.status === 403) notFound();
     return (
       <div className="space-y-8">
-        <PageHeader icon="shield" title="Owner console" />
-        <ErrorState title="The owner console could not be loaded">
-          Try again in a moment.
+        <PageHeader icon="shield" title={t("owner.console.title")} />
+        <ErrorState title={t("owner.console.loadError")}>
+          {t("owner.console.loadErrorText")}
         </ErrorState>
       </div>
     );
@@ -43,32 +52,32 @@ export default async function OwnerPage() {
     <div className="space-y-6 sm:space-y-8">
       <PageHeader
         icon="shield"
-        title="Owner console"
-        description="God Mode of the system owner. Switch optional modules per site and review the protected audit trail. Only you see this page; it cannot be handed on."
+        title={t("owner.console.title")}
+        description={t("owner.console.description")}
         actions={
           <Link href="/owner/audit" className={buttonStyles.secondary}>
-            Protected audit trail
+            {t("owner.console.auditLink")}
           </Link>
         }
       />
 
-      <Panel id="owner" title="System owner">
+      <Panel id="owner" title={t("owner.console.ownerPanel")}>
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
           <div>
-            <dt className="text-ink-3">Account</dt>
+            <dt className="text-ink-3">{t("owner.console.account")}</dt>
             <dd className="mt-0.5 font-medium text-ink">{owner.displayName ?? owner.email}</dd>
             <dd className="text-ink-3">{owner.email}</dd>
           </div>
           <div>
-            <dt className="text-ink-3">Designated</dt>
+            <dt className="text-ink-3">{t("owner.console.designated")}</dt>
             <dd className="mt-0.5 font-medium text-ink">
-              {DATE.format(new Date(owner.designatedAt))}
+              {dateTimeFormat(locale, DATE_OPTIONS).format(new Date(owner.designatedAt))}
             </dd>
           </div>
           <div>
-            <dt className="text-ink-3">Transfer</dt>
+            <dt className="text-ink-3">{t("owner.console.transfer")}</dt>
             <dd className="mt-0.5">
-              <StatusPill tone="petrol">Not transferable</StatusPill>
+              <StatusPill tone="petrol">{t("owner.console.notTransferable")}</StatusPill>
             </dd>
           </div>
         </dl>
@@ -76,8 +85,8 @@ export default async function OwnerPage() {
 
       <Panel
         id="modules"
-        title="Optional modules"
-        description="A module that is off keeps its data; its functions stay closed for everyone, you included, until it is switched on again. Every change needs a reason."
+        title={t("owner.console.modulesPanel")}
+        description={t("owner.console.modulesDescription")}
         bodyClassName="px-0! pb-1! pt-2!"
       >
         <div className="overflow-x-auto">
@@ -85,7 +94,7 @@ export default async function OwnerPage() {
             <thead>
               <tr className="text-left text-ink-3">
                 <th scope="col" className="px-5 py-2 font-medium sm:px-6">
-                  Module
+                  {t("owner.console.moduleColumn")}
                 </th>
                 {sites.map((s) => (
                   <th key={s.id} scope="col" className="px-3 py-2 font-medium">
@@ -98,8 +107,8 @@ export default async function OwnerPage() {
               {optional.map((m) => (
                 <tr key={m.key} className="border-t border-line align-top">
                   <th scope="row" className="px-5 py-3 text-left font-normal sm:px-6">
-                    <span className="font-medium text-ink">{m.name}</span>
-                    <span className="block text-ink-3">{m.description}</span>
+                    <span className="font-medium text-ink">{ownerModuleName(m, t)}</span>
+                    <span className="block text-ink-3">{ownerModuleDescription(m, t)}</span>
                   </th>
                   {sites.map((s) => {
                     const state = m.sites.find((x) => x.siteId === s.id);
@@ -107,7 +116,9 @@ export default async function OwnerPage() {
                       <td key={s.id} className="px-3 py-3">
                         <ModuleSwitch module={m} site={s} enabled={state?.enabled ?? false} />
                         {state?.reason ? (
-                          <p className="mt-1 text-xs text-ink-3">Last reason: {state.reason}</p>
+                          <p className="mt-1 text-xs text-ink-3">
+                            {t("owner.console.lastReason", { reason: state.reason })}
+                          </p>
                         ) : null}
                       </td>
                     );
@@ -118,14 +129,16 @@ export default async function OwnerPage() {
           </table>
         </div>
         <p className="border-t border-line px-5 py-3 text-xs text-ink-3 sm:px-6">
-          Always on (core): {core.map((m) => m.name).join(", ")}.
+          {t("owner.console.core", {
+            modules: core.map((m) => ownerModuleName(m, t)).join(", "),
+          })}
         </p>
       </Panel>
 
       <Panel
         id="chain"
-        title="Protected audit chain"
-        description="Your actions and every action aimed at your account are chained with SHA-256 and never shown on staff screens."
+        title={t("owner.console.chainPanel")}
+        description={t("owner.console.chainDescription")}
       >
         <ChainStatus initial={chain} />
       </Panel>

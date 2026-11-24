@@ -24,6 +24,10 @@ import { pages as contentPages } from "./content/tr/pages";
 import { editor as contentEditor } from "./content/tr/editor";
 import { menus as contentMenus } from "./content/tr/menus";
 import { seo } from "./seo/tr";
+import { leads } from "./leads/tr";
+import { staff } from "./staff/tr";
+import { owner } from "./owner/tr";
+import { dashboard } from "./dashboard/tr";
 
 export const tr: Messages = {
   common: {
@@ -376,4 +380,8 @@ export const tr: Messages = {
     menus: contentMenus,
   },
   seo,
+  leads,
+  staff,
+  owner,
+  dashboard,
 };

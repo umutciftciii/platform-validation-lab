@@ -16,10 +16,11 @@ import {
   LeadExportSeparatorSchema,
   type LeadExportSeparator,
 } from "@dream/contracts";
-import { downloadLeadExport, EXPORT_SEPARATOR_OPTIONS } from "../../lib/leads-client";
+import { downloadLeadExport, exportSeparatorOptions } from "../../lib/leads-client";
 import { exportSummaryText, leadCount } from "../../lib/leads-view";
 import { stepUp } from "../../lib/staff-client";
 import { FIELD } from "../catalog/parts";
+import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { Icon } from "../icons";
 import { buttonStyles, cx, Spinner } from "../ui";
 
@@ -37,12 +38,15 @@ export function LeadExport({
   query: string;
   filtered: boolean;
 }) {
+  const t = useT();
+  const locale = useAdminLocale();
+  const separatorOptions = exportSeparatorOptions(t);
   const codeId = useId();
   const separatorId = useId();
   const separatorHintId = useId();
   const [separator, setSeparator] = useState<LeadExportSeparator>(LEAD_EXPORT_DEFAULT_SEPARATOR);
   const separatorOption =
-    EXPORT_SEPARATOR_OPTIONS.find((o) => o.value === separator) ?? EXPORT_SEPARATOR_OPTIONS[0];
+    separatorOptions.find((o) => o.value === separator) ?? separatorOptions[0];
   const [busy, setBusy] = useState(false);
   const [needCode, setNeedCode] = useState(false);
   const [code, setCode] = useState("");
@@ -54,7 +58,7 @@ export function LeadExport({
     setBusy(true);
     setError(null);
     setDone(null);
-    const res = await downloadLeadExport(query, separator);
+    const res = await downloadLeadExport(query, separator, locale);
     setBusy(false);
     if (!res.ok) {
       if (res.stepUp) {
@@ -74,7 +78,7 @@ export function LeadExport({
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     const rows = res.rows ?? count;
-    setDone(`Downloaded ${res.filename} with ${leadCount(rows)}.`);
+    setDone(t("leads.export.done", { file: res.filename, leads: leadCount(rows, t, locale) }));
   }
 
   async function confirm(e: FormEvent) {
@@ -94,16 +98,16 @@ export function LeadExport({
   return (
     <div
       className="space-y-3 border-b border-line px-5 py-3 sm:px-6"
-      aria-label="Export leads"
+      aria-label={t("leads.export.region")}
       role="region"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="min-w-0 text-sm text-ink-2" aria-live="polite">
-          <span>{exportSummaryText(count, maxRows, filtered)}</span>
+          <span>{exportSummaryText(count, maxRows, filtered, t, locale)}</span>
         </p>
         <div className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 sm:flex sm:w-auto sm:shrink-0">
           <label htmlFor={separatorId} className="shrink-0 text-sm font-medium text-ink">
-            <span>Separator</span>
+            <span>{t("leads.export.separator")}</span>
           </label>
           <select
             id={separatorId}
@@ -116,7 +120,7 @@ export function LeadExport({
               if (next.success) setSeparator(next.data);
             }}
           >
-            {EXPORT_SEPARATOR_OPTIONS.map((o) => (
+            {separatorOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -130,14 +134,10 @@ export function LeadExport({
             )}
             disabled={!exportable || busy || needCode}
             onClick={() => void run()}
-            title={
-              canExport
-                ? "Download the filtered leads as a CSV file"
-                : "Needs the lead export permission"
-            }
+            title={canExport ? t("leads.export.buttonTitle") : t("leads.export.needsPermission")}
           >
             {busy ? <Spinner key="busy" /> : <Icon key="idle" name="download" size={16} />}
-            <span>{busy ? "Exporting…" : "Export CSV"}</span>
+            <span>{busy ? t("leads.export.busy") : t("leads.export.button")}</span>
           </button>
         </div>
       </div>
@@ -146,8 +146,7 @@ export function LeadExport({
       </p>
       {canExport ? null : (
         <p key="no-permission" className="text-xs text-ink-3">
-          Exporting needs the lead export permission (customer-data officer or platform
-          administrator). Every export is recorded in the audit log.
+          {t("leads.export.noPermission")}
         </p>
       )}
       {needCode ? (
@@ -155,11 +154,11 @@ export function LeadExport({
           key="step-up"
           onSubmit={confirm}
           className="flex flex-col gap-2 sm:flex-row sm:items-end"
-          aria-label="Confirm the export"
+          aria-label={t("leads.export.stepUpLabel")}
         >
           <div className="w-full sm:max-w-xs">
             <label htmlFor={codeId} className="mb-1.5 block text-sm font-medium text-ink">
-              Authenticator code
+              {t("leads.export.code")}
             </label>
             <input
               id={codeId}
@@ -171,12 +170,10 @@ export function LeadExport({
               value={code}
               onChange={(e) => setCode(e.target.value)}
             />
-            <p className="mt-1 text-xs text-ink-3">
-              Exporting customer data needs a fresh confirmation.
-            </p>
+            <p className="mt-1 text-xs text-ink-3">{t("leads.export.codeHint")}</p>
           </div>
           <button type="submit" className={buttonStyles.primary} disabled={busy || !code.trim()}>
-            <span>Confirm and export</span>
+            <span>{t("leads.export.confirm")}</span>
           </button>
           <button
             type="button"
@@ -187,7 +184,7 @@ export function LeadExport({
               setCode("");
             }}
           >
-            <span>Cancel</span>
+            <span>{t("leads.export.cancel")}</span>
           </button>
         </form>
       ) : null}
