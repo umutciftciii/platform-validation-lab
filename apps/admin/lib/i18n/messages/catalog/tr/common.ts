@@ -52,7 +52,7 @@ export const common: Messages["catalog"]["common"] = {
   tabs: {
     content: "İçerik",
     technical: "Teknik",
-    media: "Medya ve Belgeler",
+    media: "Medya ve belgeler",
     seo: "SEO",
     publication: "Yayın",
   },

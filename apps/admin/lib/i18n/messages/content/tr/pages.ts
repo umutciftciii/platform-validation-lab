@@ -79,7 +79,7 @@ export const pages: Messages["content"]["pages"] = {
     newsArticle: "Haber makalesi",
     lastSaved: "· son kayıt {date}, {name}",
     importedTitle: "İçe aktarıldıktan sonra düzenlenir",
-    thisDesignedPage: "Bu tasarım sayfası.",
+    thisDesignedPage: "Bu tasarım sayfası",
     importNotice:
       "{note} Alanları, sayfa CMS'e içe aktarıldığında kendi formlarını alır; o zamana kadar site içeriği koddan gösterir.",
   },

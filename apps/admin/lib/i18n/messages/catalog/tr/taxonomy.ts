@@ -65,7 +65,7 @@ export const taxonomy: Messages["catalog"]["taxonomy"] = {
     panelTitle: "Teknik özellik tanımları",
     defined: "{n} tanımlı",
     loadErrorTitle: "Teknik özellikler yüklenemedi",
-    loadErrorBody: "Birazdan tekrar deneyin.",
+    loadErrorBody: "Biraz sonra tekrar deneyin.",
   },
   definitions: {
     types: {

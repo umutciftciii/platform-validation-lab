@@ -26,7 +26,7 @@ export const staff: Messages["staff"] = {
       core_module: "Çekirdek modüller her zaman açıktır ve kapatılamaz.",
       reason_required: "Değişiklik için bir gerekçe girin.",
       already_designated: "Bir sistem sahibi zaten atanmış. Bu değiştirilemez.",
-      not_eligible: "Bu hesap sistem sahibi olamaz (bir parola ve bir kimlik doğrulayıcı gerekir).",
+      not_eligible: "Bu hesap sistem sahibi olamaz (bir parola ve bir doğrulayıcı gerekir).",
       stale:
         "Bu talep bu arada başka biri tarafından değiştirildi. Sayfayı yeniden yükleyip tekrar deneyin.",
       transition: "Bu durum değişikliğine mevcut durumdan izin verilmiyor.",
@@ -103,7 +103,7 @@ export const staff: Messages["staff"] = {
     },
     member: {
       name: "Üye",
-      description: "Bir public sitenin kayıtlı müşterisi.",
+      description: "Herkese açık bir sitenin kayıtlı müşterisi.",
     },
   },
   /** Hesap durumu rozetleri. */
@@ -167,6 +167,9 @@ export const staff: Messages["staff"] = {
   remove: {
     remove: "Kaldır",
     removeLabel: "Kaldır: {label}",
+    /** DP-274: onay modalının kısa başlığı ve sorusu. */
+    title: "Rolü kaldır",
+    question: "{label} kaldırılsın mı?",
     confirmLabel: "Kaldırmayı onaylayın: {label}",
     keep: "Vazgeç",
   },

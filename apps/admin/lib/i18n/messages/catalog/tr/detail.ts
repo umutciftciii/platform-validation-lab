@@ -6,7 +6,7 @@ export const detail: Messages["catalog"]["detail"] = {
     metaTitle: "Ürün",
     title: "Ürün",
     back: "Tüm ürünler",
-    tryAgain: "Birazdan tekrar deneyin.",
+    tryAgain: "Biraz sonra tekrar deneyin.",
     noAccess: {
       title: "Ürün kataloğuna erişiminiz yok",
       text: "Rolleriniz hiçbir sitede ürünleri okumayı kapsamıyor.",

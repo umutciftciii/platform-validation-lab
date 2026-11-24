@@ -41,6 +41,8 @@ export const en = {
     /** DP-268: components/dialog.tsx */
     dialog: {
       discard: "Discard the changes you have not saved?",
+      /** DP-274: the close (×) button of a dialog form. */
+      close: "Close",
     },
   },
   language: {

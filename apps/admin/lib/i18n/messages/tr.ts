@@ -39,6 +39,8 @@ export const tr: Messages = {
     /** DP-268: ortak modal. */
     dialog: {
       discard: "Kaydedilmemiş değişiklikler silinsin mi?",
+      /** DP-274: form modalının kapatma (×) düğmesi. */
+      close: "Kapat",
     },
   },
   language: {
@@ -99,7 +101,7 @@ export const tr: Messages = {
       leads: {
         label: "Talepler",
         summary:
-          "Public sitelerden gelen iletişim formu mesajları ve belge talepleri (müşteri verisi, denetim kaydı tutulur).",
+          "Herkese açık sitelerden gelen iletişim formu mesajları ve belge talepleri (müşteri verisi, denetim kaydı tutulur).",
       },
       sites: {
         label: "Siteler",

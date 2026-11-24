@@ -35,7 +35,7 @@ export const editor: Messages["content"]["editor"] = {
       title: "Taslak",
       version: "Sürüm {version}",
       unsaved: "· kaydedilmemiş değişiklikler",
-      note: "Kaydetme taslağı CMS'te saklar; site yalnızca yayınlananı gösterir.",
+      note: "Kaydetmek taslağı CMS'te saklar; site yalnızca yayınlananı gösterir.",
       save: "Taslağı kaydet",
       readOnly: "Bu sitede sizin için salt okunur.",
     },
@@ -46,7 +46,7 @@ export const editor: Messages["content"]["editor"] = {
     moveDown: "{n}. bölümü aşağı taşı",
     remove: "{n}. bölümü kaldır",
     unknown: "Bilinmeyen bölüm tipi. Sayfayı kaydetmek için bu bölümü kaldırın.",
-    add: "Bölüm ekleyin",
+    add: "Bölüm ekle",
   },
   /** components/cms/page-editor.tsx DesignFields: tasarım sayfasının üst düzey alanları. */
   designContent: "İçerik",
