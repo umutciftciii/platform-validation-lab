@@ -23,6 +23,7 @@ export * from "./admin/cms-publication.js";
 export * from "./admin/cms-translation.js";
 export * from "./admin/seo-admin.js";
 export * from "./admin/seo-redirects.js";
+export * from "./admin/translation-packages.js";
 export * from "./leads.js";
 export * from "./privacy.js";
 export * from "./legal-texts.js";
