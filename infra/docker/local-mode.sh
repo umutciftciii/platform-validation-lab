@@ -62,7 +62,7 @@ assert_volumes_free_for() {
 require_local_image() {
   local tag="$1"
   [[ -n "$(image_id "$LOCAL_REPO:$tag")" ]] ||
-    die "$LOCAL_REPO:$tag does not exist; build it with: infra/docker/stack.sh sync-main"
+    die "$LOCAL_REPO:$tag does not exist; first install: infra/docker/stack.sh sync-main --bootstrap (then switch local --yes); otherwise: infra/docker/stack.sh sync-main"
 }
 
 pg_running_dev() { # the running Postgres container serves the DEV database
@@ -205,19 +205,67 @@ local_up() {
   [[ -z "$backup" ]] || info "pre-migration backup: $backup"
 }
 
-# sync-main [--sha <sha>] [--no-deploy] [--check]: build one origin/main commit from an archive
+# Local-mode containers of this project, running or stopped ("<name>" per line).
+local_containers() {
+  docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+    --format '{{.Names}}|{{.Label "com.docker.compose.project.config_files"}}' |
+    while IFS='|' read -r name files; do
+      # `if`, not `&&`: a last non-local line must not make the loop (and set -e callers) fail.
+      if [[ -n "$name" && "$(mode_of_files "$files")" == local ]]; then echo "$name"; fi
+    done
+}
+
+# DP-280: first-install bootstrap. Before anything is built: allowed only when there is no
+# :current yet (first install, and no local-mode container exists) or when :current already is
+# this commit (a repeated run, a no-op). An existing installation is updated by the normal
+# sync-main (backup, deploy, verify, :previous), never by the bootstrap.
+bootstrap_precheck() {
+  local sha="$1" cur_sha leftover
+  if [[ -n "$(image_id "$LOCAL_REPO:current")" ]]; then
+    cur_sha="$(image_sha "$LOCAL_REPO:current")"
+    [[ "$cur_sha" == "$sha" ]] ||
+      die "an installation exists ($LOCAL_REPO:current = ${cur_sha:0:12}); --bootstrap is for the first install only. Update with: infra/docker/stack.sh sync-main (nothing changed)"
+    return 0
+  fi
+  leftover="$(local_containers | tr '\n' ' ')"
+  [[ -z "${leftover// /}" ]] ||
+    die "no $LOCAL_REPO:current, but local-mode containers exist (${leftover% }); refusing to bootstrap (nothing changed)"
+}
+
+# DP-280: after build and tests passed, make the tested image :current if there is none. Never
+# touches :previous; never replaces another image; a repeated run with the same image is a no-op.
+bootstrap_promote() {
+  local image="$1" sha="$2" cur_id new_id
+  new_id="$(image_id "$image")"
+  [[ -n "$new_id" && "$(image_sha "$image")" == "$sha" ]] || die "$image is not the tested image of ${sha:0:12}; nothing promoted"
+  cur_id="$(image_id "$LOCAL_REPO:current")"
+  if [[ -z "$cur_id" ]]; then
+    [[ -z "$(local_containers)" ]] || die "local-mode containers appeared; nothing promoted"
+    docker tag "$image" "$LOCAL_REPO:current" || die "could not tag $LOCAL_REPO:current"
+    log_history "bootstrap ${sha:0:12} -> current"
+    info "first install: $image is now $LOCAL_REPO:current (no :previous). Next: infra/docker/stack.sh switch local --yes"
+  elif [[ "$cur_id" == "$new_id" ]]; then
+    info "$LOCAL_REPO:current already is ${sha:0:12}; nothing changed"
+  else
+    die "$LOCAL_REPO:current changed to another image during the run; nothing promoted"
+  fi
+}
+
+# sync-main [--sha <sha>] [--no-deploy | --bootstrap] [--check]: build one origin/main commit from an archive
 # (never the working tree), test the image in the disposable test project, back up the DEV data,
 # deploy, verify, then promote; on failure roll back the code (no migration applied) or stop
-# safely (a migration was applied).
+# safely (a migration was applied). --bootstrap (DP-280) builds and tests like --no-deploy and then
+# makes the image :current on a first install only (see bootstrap_precheck).
 sync_main() {
-  local want="" deploy=1 check=0 arg
+  local want="" deploy=1 check=0 bootstrap=0 arg
   while (( $# )); do
     arg="$1"; shift
     case "$arg" in
       --sha) want="${1:?--sha <commit>}"; shift ;;
       --no-deploy) deploy=0 ;;
+      --bootstrap) deploy=0; bootstrap=1 ;;
       --check) check=1 ;;
-      *) die "sync-main [--sha <commit>] [--no-deploy] [--check]" ;;
+      *) die "sync-main [--sha <commit>] [--no-deploy | --bootstrap] [--check]" ;;
     esac
   done
   command -v git >/dev/null || die "git is required on the host"
@@ -245,6 +293,9 @@ sync_main() {
   if (( deploy )) && [[ -n "$modes" && "$modes" != local ]]; then
     die "the $modes stack is running; deploy only into local mode (stack.sh switch local), or build with --no-deploy"
   fi
+
+  # DP-280: refuse a bootstrap over an existing installation before anything is built.
+  (( ! bootstrap )) || bootstrap_precheck "$sha"
 
   acquire_heavy_lock "sync-main $sha12"
 
@@ -281,8 +332,15 @@ sync_main() {
     die "migration safety tests failed for $image; nothing deployed"
   DP_TEST_APP_IMAGE="$image" "$work/src/tools/test/db-roles-test.sh" ||
     die "database role tests failed for $image; nothing deployed"
+  # Test hook (DP-280 fixture only): the tests count as failed, so nothing is promoted or deployed.
+  [[ "${DREAM_SYNC_FAULT:-}" != test ]] ||
+    die "fault injection (test only): tests forced to fail for $image; nothing promoted or deployed"
   log_history "built $sha12 tested"
 
+  if (( bootstrap )); then
+    bootstrap_promote "$image" "$sha"
+    return 0
+  fi
   if (( ! deploy )); then
     info "built and tested $image; not deployed (--no-deploy). Deploy: infra/docker/stack.sh sync-main --sha $sha12"
     return 0
