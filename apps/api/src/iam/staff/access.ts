@@ -32,6 +32,7 @@ import type { Db } from "../db.js";
 import { leadAssigneesBySite, staffNames, type LeadStaffUser } from "../lead-assignees.js";
 import { inStaffContext, notificationCandidates } from "../iam-context.js";
 import { inLeadContext } from "../lead-data.js";
+import { boundedTransaction, type TransactionLimits } from "../bounded-transaction.js";
 import { ApiError } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
 import type { RequestContext } from "../http/request-context.js";
@@ -168,6 +169,18 @@ export class StaffAccess {
   /** The site-scoped client. Pass only sites the caller was authorised for. */
   db(scope: SiteScope): SiteScopedClient {
     return withSiteScope(this.prisma, scope);
+  }
+
+  /**
+   * DP-285: one site-scoped interactive transaction whose lock waits, statements and total run are
+   * limited (bounded-transaction.ts); map a refusal with `transientDbError`.
+   */
+  boundedTx<T>(
+    scope: SiteScope,
+    limits: TransactionLimits,
+    fn: (db: SiteScopedClient) => Promise<T>,
+  ): Promise<T> {
+    return boundedTransaction(this.prisma, scope, limits, fn);
   }
 
   /**

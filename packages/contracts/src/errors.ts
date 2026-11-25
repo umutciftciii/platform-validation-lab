@@ -32,6 +32,12 @@ export const ERROR_STATUS = {
   BAD_GATEWAY: 502,
   /** PM-2: the media storage is not configured or did not answer. */
   STORAGE_UNAVAILABLE: 503,
+  /**
+   * DP-285: the database did not answer in time or the connection failed (details
+   * `{ path: "transaction", rule: "timeout" | "busy" | "connection" }`). "timeout" and "busy":
+   * the transaction was rolled back, nothing was written; "connection": the outcome is unknown.
+   */
+  DATABASE_UNAVAILABLE: 503,
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_STATUS;
@@ -89,6 +95,7 @@ export const DEFAULT_ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   INTERNAL_ERROR: "Something went wrong.",
   BAD_GATEWAY: "The service is unavailable.",
   STORAGE_UNAVAILABLE: "File storage is not available right now. Try again later.",
+  DATABASE_UNAVAILABLE: "The database is not available right now. Try again later.",
 };
 
 export function errorBody(

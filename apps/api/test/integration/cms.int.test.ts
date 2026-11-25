@@ -54,6 +54,15 @@ import {
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../../src/generated/prisma/client.js";
+import {
+  boundedTransaction,
+  transientDbError,
+  transientDbRule,
+  worstCaseMs,
+  type TransactionLimits,
+} from "../../src/iam/bounded-transaction.js";
+import type { SiteScopedClient } from "../../src/iam/site-scope.js";
+import { DRY_RUN_LIMITS, IMPORT_LIMITS } from "../../src/translation-packages/limits.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 import { DP_212_PAIRS, ML_4_PAIRS } from "../fixtures/legacy-url-map.js";
 
@@ -120,7 +129,7 @@ class Staff {
     private readonly token: string,
   ) {}
 
-  async call(method: string, p: string, body?: unknown): Promise<Res> {
+  async call(method: string, p: string, body?: unknown, signal?: AbortSignal): Promise<Res> {
     const headers: Record<string, string> = {
       "x-dp-proxy-key": TEST_KEYS.admin,
       "x-dp-client-ip": "10.20.30.40",
@@ -134,6 +143,7 @@ class Staff {
         method,
         headers,
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+        ...(signal ? { signal } : {}),
       }),
     );
   }
@@ -6366,5 +6376,329 @@ describe("23. translation packages (ML-13a, DP-244, ADR-028 D13)", () => {
     expect((await nlPage(groupC))?.path).toBe("/ml13-nl-dubbel");
     expect((await nlPage(groupB))?.path).toBe("/ml13-services");
     expect(r2.written.cmsPagesCreated).toBe(2);
+  });
+
+  // --- DP-285: bounded transaction of the dry run and the import ------------------------------
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const NOTHING_WRITTEN = {
+    cmsPagesCreated: 0,
+    cmsPagesUpdated: 0,
+    listings: 0,
+    categories: 0,
+    specs: 0,
+    images: 0,
+  };
+  /** Another session holds a table lock until `release` (dp_migrator as the table owner). */
+  async function holdLock(table: string, mode: "EXCLUSIVE" | "ACCESS EXCLUSIVE") {
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const done = owner.$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe(`LOCK TABLE "${table}" IN ${mode} MODE`);
+        locked();
+        await released;
+      },
+      { timeout: 60_000, maxWait: 5_000 },
+    );
+    await Promise.race([isLocked, done]);
+    return async () => {
+      release();
+      await done;
+    };
+  }
+  /** Resolves once a session waits for a lock (the request reached the locked table). */
+  async function someoneWaitsForALock() {
+    for (let i = 0; i < 200; i++) {
+      const [row] = await owner.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`;
+      if ((row?.n ?? 0) > 0) return;
+      await sleep(25);
+    }
+    throw new Error("no session waits for a lock");
+  }
+  async function refusal(p: Promise<unknown>): Promise<unknown> {
+    try {
+      await p;
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected a refusal");
+  }
+  /** A package that updates the Dutch page of group A, the listing and the image (last write). */
+  const freshPackage = async (tag: string) =>
+    fill(await exported(), {
+      [key("cms", groupA, "title")]: `Over ML-13 ${tag}`,
+      [key("listing", listingId, "title")]: `ML-13 Basisolie 4 ${tag}`,
+      [key("image", imageId, "alt")]: `Een blauw ML-13 vat ${tag}`,
+    });
+  const summaries = () =>
+    owner.auditEvent.count({ where: { action: "translation.package_imported" } });
+
+  it("DP-285: a write lock longer than lock_timeout ends the import with 409 {transaction, locked} in ~5 s; the CMS and catalogue rows written before it are rolled back", async () => {
+    const pkg = await freshPackage("lock");
+    const st = statusOf(await report(root, "dry-run", pkg));
+    expect(st[key("cms", groupA, "title")]).toBe("update");
+    expect(st[key("listing", listingId, "title")]).toBe("update");
+    expect(st[key("image", imageId, "alt")]).toBe("update");
+    const fp = await fingerprint();
+    const live = await liveFingerprint();
+    const audits = await auditCount();
+    // The image texts are the import's last write: the page, the listing, the category and the
+    // specification are written before the import meets the lock.
+    const release = await holdLock("ProductImageText", "EXCLUSIVE");
+    let ms = 0;
+    try {
+      const started = Date.now();
+      const res = await run(root, "import", pkg);
+      ms = Date.now() - started;
+      expectError(res, 409, "CONFLICT_STATE", { path: "transaction", rule: "locked" });
+    } finally {
+      await release();
+    }
+    expect(ms).toBeGreaterThanOrEqual(IMPORT_LIMITS.lockTimeoutMs - 250);
+    expect(ms).toBeLessThan(IMPORT_LIMITS.lockTimeoutMs + 5_000);
+    // Rolled back as a whole: no row, no version, no audit event, nothing published.
+    expect(await fingerprint()).toBe(fp);
+    expect(await liveFingerprint()).toBe(live);
+    expect(await auditCount()).toBe(audits);
+    // After the release the same package imports normally.
+    const r = await report(root, "import", pkg);
+    expect(r.written).toMatchObject({ cmsPagesUpdated: 1, listings: 1, images: 1 });
+    expect(await liveFingerprint()).toBe(live);
+  });
+
+  it("DP-285: the dry run reads in one read-only bounded transaction: behind an exclusive lock it is 409 {transaction, locked}, not a hang", async () => {
+    const pkg = await freshPackage("dry");
+    const audits = await auditCount();
+    const release = await holdLock("ProductListingText", "ACCESS EXCLUSIVE");
+    let ms = 0;
+    try {
+      const started = Date.now();
+      const res = await run(root, "dry-run", pkg);
+      ms = Date.now() - started;
+      expectError(res, 409, "CONFLICT_STATE", { path: "transaction", rule: "locked" });
+    } finally {
+      await release();
+    }
+    expect(ms).toBeLessThan(DRY_RUN_LIMITS.lockTimeoutMs + 5_000);
+    expect(await auditCount()).toBe(audits);
+    expect((await report(root, "dry-run", pkg)).dryRun).toBe(true);
+  });
+
+  it("DP-285: bounded transaction — lock, statement and transaction limits are refusals the API maps; what was written is rolled back; the settings end with the transaction", async () => {
+    const scope = { siteIds: [BV], includePlatform: true };
+    // One pooled connection only: the settings after the transaction are read on the same one.
+    const single = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: urls.app, max: 1 }),
+    });
+    const where = { categoryId, locale: "nl" };
+    const catText = () =>
+      owner.productCategoryText.findUniqueOrThrow({ where: { categoryId_locale: where } });
+    const before = await catText();
+    const limits = (l: Partial<TransactionLimits>): TransactionLimits => ({
+      lockTimeoutMs: 10_000,
+      statementTimeoutMs: 10_000,
+      timeoutMs: 10_000,
+      maxWaitMs: 2_000,
+      ...l,
+    });
+    const writeThen =
+      (next: (db: SiteScopedClient) => Promise<unknown>) => async (db: SiteScopedClient) => {
+        await db.productCategoryText.updateMany({
+          where,
+          data: { description: "DP-285 rolled back" },
+        });
+        await next(db);
+      };
+    try {
+      // lock_timeout: SQLSTATE 55P03 -> 409 locked.
+      let release = await holdLock("ProductImageText", "ACCESS EXCLUSIVE");
+      let e: unknown;
+      let started = Date.now();
+      try {
+        e = await refusal(
+          boundedTransaction(
+            single,
+            scope,
+            limits({ lockTimeoutMs: 300 }),
+            writeThen((db) => db.productImageText.findMany({ take: 1 })),
+          ),
+        );
+      } finally {
+        await release();
+      }
+      expect(Date.now() - started).toBeLessThan(3_000);
+      expect(transientDbRule(e)).toBe("locked");
+      expect(transientDbError(e)).toMatchObject({
+        code: "CONFLICT_STATE",
+        status: 409,
+        details: [{ path: "transaction", rule: "locked" }],
+      });
+      expect(await catText()).toEqual(before);
+
+      // statement_timeout: a statement still waiting at its limit, SQLSTATE 57014 -> 503 timeout.
+      release = await holdLock("ProductImageText", "ACCESS EXCLUSIVE");
+      started = Date.now();
+      try {
+        e = await refusal(
+          boundedTransaction(
+            single,
+            scope,
+            limits({ statementTimeoutMs: 300 }),
+            writeThen((db) => db.productImageText.findMany({ take: 1 })),
+          ),
+        );
+      } finally {
+        await release();
+      }
+      expect(Date.now() - started).toBeLessThan(3_000);
+      expect(transientDbRule(e)).toBe("timeout");
+      expect(transientDbError(e)).toMatchObject({
+        code: "DATABASE_UNAVAILABLE",
+        status: 503,
+        details: [{ path: "transaction", rule: "timeout" }],
+      });
+      expect(await catText()).toEqual(before);
+
+      // The transaction's own limit (Prisma timeout): expired between two statements -> P2028.
+      e = await refusal(
+        boundedTransaction(
+          single,
+          scope,
+          limits({ timeoutMs: 300 }),
+          writeThen(async (db) => {
+            await sleep(800);
+            await db.productCategoryText.findMany({ take: 1 });
+          }),
+        ),
+      );
+      expect(transientDbRule(e)).toBe("timeout");
+      expect(await catText()).toEqual(before);
+
+      // The worst case holds: a statement blocked for longer than every limit still ends in time.
+      const small = limits({ lockTimeoutMs: 2_000, statementTimeoutMs: 600, timeoutMs: 400 });
+      release = await holdLock("ProductImageText", "ACCESS EXCLUSIVE");
+      started = Date.now();
+      try {
+        e = await refusal(
+          boundedTransaction(
+            single,
+            scope,
+            small,
+            writeThen((db) => db.productImageText.findMany({ take: 1 })),
+          ),
+        );
+      } finally {
+        await release();
+      }
+      expect(Date.now() - started).toBeLessThan(worstCaseMs(small) + 1_000);
+      expect(transientDbRule(e)).toBe("timeout");
+      expect(await catText()).toEqual(before);
+
+      // Read only: a write is refused by the database, and that is NOT a transient refusal.
+      e = await refusal(
+        boundedTransaction(
+          single,
+          scope,
+          limits({ readOnly: true }),
+          writeThen(async () => {}),
+        ),
+      );
+      expect(JSON.stringify(e, Object.getOwnPropertyNames(e)) + String(e)).toMatch(
+        /read-only|25006/,
+      );
+      expect(transientDbRule(e)).toBeNull();
+      // Other database refusals stay unexpected too (unique key -> the caller's normal mapping).
+      e = await refusal(
+        boundedTransaction(single, scope, limits({}), (db) =>
+          db.productCategoryText.create({
+            data: { categoryId, siteId: BV, locale: "nl", name: "duplicate" },
+          }),
+        ),
+      );
+      expect(transientDbRule(e)).toBeNull();
+      expect(await catText()).toEqual(before);
+
+      // A committed bounded transaction; afterwards the same connection has the defaults again.
+      await boundedTransaction(single, scope, limits({ readOnly: true }), (db) =>
+        db.productCategoryText.findMany({ take: 1 }),
+      );
+      const settings = await single.$queryRaw<{ l: string; s: string; r: string }[]>`
+        SELECT current_setting('lock_timeout') AS l, current_setting('statement_timeout') AS s,
+          current_setting('transaction_read_only') AS r`;
+      expect(settings).toEqual([{ l: "0", s: "0", r: "off" }]);
+      await expect(
+        boundedTransaction(single, scope, limits({ lockTimeoutMs: 0 }), async () => 1),
+      ).rejects.toThrow(/positive ms/);
+    } finally {
+      await single.$disconnect();
+    }
+  });
+
+  it("DP-285: concurrent imports of the same package write it once; the others are stale (409) or find nothing to write; never a 500", async () => {
+    const pkg = await freshPackage("parallel");
+    const listingVersion = async () =>
+      (await owner.productSiteListing.findUniqueOrThrow({ where: { id: listingId } })).version;
+    const pageVersion = async () => (await nlPage(groupA))!.version;
+    const [lv, pv, before] = [await listingVersion(), await pageVersion(), await summaries()];
+    const live = await liveFingerprint();
+    const results = await Promise.all([1, 2, 3].map(() => run(root, "import", pkg)));
+    for (const r of results) {
+      expect([200, 409], JSON.stringify(r.body).slice(0, 500)).toContain(r.status);
+      if (r.status === 409) expect(r.body.error.code).toBe("CONFLICT_STATE");
+    }
+    const ok = results
+      .filter((r) => r.status === 200)
+      .map((r) => TranslationImportReportSchema.parse(r.body));
+    expect(ok.length).toBeGreaterThanOrEqual(1);
+    expect(ok.filter((r) => r.written.listings === 1)).toHaveLength(1);
+    expect(ok.filter((r) => r.written.cmsPagesUpdated === 1)).toHaveLength(1);
+    expect(await listingVersion()).toBe(lv + 1);
+    expect(await pageVersion()).toBe(pv + 1);
+    expect(await summaries()).toBe(before + ok.length);
+    expect(await liveFingerprint()).toBe(live);
+    // Afterwards the package is fully imported: the repeat writes nothing.
+    expect((await report(root, "import", pkg)).written).toEqual(NOTHING_WRITTEN);
+  });
+
+  it("DP-285: a lost answer — the API still commits; the dry run then shows the units unchanged and a repeated import writes nothing twice", async () => {
+    const pkg = await freshPackage("lost");
+    const imageAlt = async () =>
+      (
+        await owner.productImageText.findUnique({
+          where: { imageId_locale: { imageId, locale: "nl" } },
+        })
+      )?.altText;
+    const release = await holdLock("ProductImageText", "EXCLUSIVE");
+    const giveUp = new AbortController();
+    try {
+      const pending = root.call("POST", `${API}/import`, { package: pkg }, giveUp.signal).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      await someoneWaitsForALock(); // the import is inside its transaction
+      giveUp.abort(); // the browser (or the proxy) gives up: the answer is lost
+      expect(await pending).toBeInstanceOf(Error);
+    } finally {
+      await release(); // well within lock_timeout
+    }
+    // The API finishes on its own: the import is committed although nobody got the answer.
+    for (let i = 0; i < 100 && (await imageAlt()) !== "Een blauw ML-13 vat lost"; i++) {
+      await sleep(50);
+    }
+    expect(await imageAlt()).toBe("Een blauw ML-13 vat lost");
+    // What the admin is told to do next: the dry run shows nothing left to write.
+    const dry = await report(root, "dry-run", pkg);
+    expect(dry.counts).toMatchObject({ create: 0, update: 0 });
+    const st = statusOf(dry);
+    expect(st[key("cms", groupA, "title")]).toBe("unchanged");
+    expect(st[key("listing", listingId, "title")]).toBe("unchanged");
+    expect(st[key("image", imageId, "alt")]).toBe("unchanged");
+    const fp = await fingerprint();
+    expect((await report(root, "import", pkg)).written).toEqual(NOTHING_WRITTEN);
+    expect(await fingerprint()).toBe(fp);
   });
 });

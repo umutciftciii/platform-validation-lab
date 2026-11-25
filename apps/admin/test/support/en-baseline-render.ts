@@ -23,6 +23,9 @@
 // company-review-render and product-tabs; they were recorded again with DP275_RECORD_EN=1. The
 // ML-14 recording they replace is kept in fixtures/dp275-en, and test/dp275-en-texts.test.ts
 // allows only the approved wording changes against it.
+// DP-285: the new API error code DATABASE_UNAVAILABLE adds one entry to the Staff client's table of
+// every error code (staff-en, "explains every refusal a call can meet"); staff-en was recorded
+// again with DP285_RECORD_EN=1 (only that file), and nothing else in it changed.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -43,7 +46,8 @@ const RECORD =
   process.env["ML12E_RECORD_EN"] === "1" ||
   process.env["DP268_RECORD_EN"] === "1" ||
   process.env["ML14_RECORD_EN"] === "1" ||
-  process.env["DP275_RECORD_EN"] === "1";
+  process.env["DP275_RECORD_EN"] === "1" ||
+  process.env["DP285_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

@@ -8,7 +8,9 @@
 // - every other text and accessible name is unchanged (as often as before), in every render.
 // DP-270/272/275 recorded content-en and seo-en again; the ML-14 recording of those two moved to
 // fixtures/dp275-en, so this test keeps comparing the two recordings of ML-14 and
-// dp275-en-texts.test.ts takes the next step.
+// dp275-en-texts.test.ts takes the next step. DP-285 recorded staff-en again (one new error code in
+// the Staff client's table); its ML-14 recording moved to fixtures/dp285-en and
+// dp285-en-texts.test.ts takes that step.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,7 +61,9 @@ describe("ML-14: the EN wording changes only where approved", () => {
     it(file, () => {
       const before = load("ml14-en", file);
       const after = load(
-        existsSync(path.join(FIXTURES, "dp275-en", `${file}.json.gz`)) ? "dp275-en" : "catalog-en",
+        ["dp275-en", "dp285-en"].find((d) =>
+          existsSync(path.join(FIXTURES, d, `${file}.json.gz`)),
+        ) ?? "catalog-en",
         file,
       );
       expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());

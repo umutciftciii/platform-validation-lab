@@ -458,6 +458,49 @@ describe("client calls (contract paths, bodies, refusals)", () => {
     expect(await msg("dryRun", 429, err("RATE_LIMITED"))).toBe(EN("errors.RATE_LIMITED"));
   });
 
+  it("DP-285: a lock or a database timeout says nothing was written; an unknown outcome asks for the check", async () => {
+    ui.locale = "en";
+    const msg = async (action: "dryRun" | "import", status: number, body: unknown) => {
+      const r =
+        action === "dryRun"
+          ? await client.dryRunPackage(pkg(), fake(status, body))
+          : await client.importPackage(pkg(), fake(status, body));
+      return r.ok ? "ok" : r.message;
+    };
+    const tx = (rule: string) => [{ path: "transaction", rule }];
+    for (const action of ["dryRun", "import"] as const) {
+      expect(await msg(action, 409, err("CONFLICT_STATE", tx("locked")))).toBe(
+        EN("translationPackages.api.locked"),
+      );
+      for (const rule of ["timeout", "busy"]) {
+        expect(await msg(action, 503, err("DATABASE_UNAVAILABLE", tx(rule)))).toBe(
+          EN("translationPackages.api.databaseBusy"),
+        );
+      }
+    }
+    // A lost connection may have committed: like a missing answer, the check comes first.
+    expect(await msg("import", 503, err("DATABASE_UNAVAILABLE", tx("connection")))).toBe(
+      EN("translationPackages.api.importNoAnswer"),
+    );
+    expect(await msg("dryRun", 503, err("DATABASE_UNAVAILABLE", tx("connection")))).toBe(
+      EN("translationPackages.api.unreachable"),
+    );
+    expect(await msg("import", 504, null)).toBe(EN("translationPackages.api.importNoAnswer"));
+    // Other 409s keep their meaning; a 500 of the import is an unknown outcome, of the check not.
+    expect(
+      await msg("import", 409, err("CONFLICT_STATE", [{ path: "version", rule: "stale" }])),
+    ).toBe(EN("translationPackages.api.importStale"));
+    expect(await msg("import", 500, err("INTERNAL_ERROR"))).toBe(
+      EN("translationPackages.api.importUnknown"),
+    );
+    expect(await msg("dryRun", 500, err("INTERNAL_ERROR"))).toBe(
+      EN("translationPackages.api.failed"),
+    );
+    expect(TR("translationPackages.api.locked")).toMatch(/Hiçbir şey yazılmadı/);
+    expect(TR("translationPackages.api.databaseBusy")).toMatch(/Hiçbir şey yazılmadı/);
+    expect(TR("translationPackages.api.importUnknown")).toMatch(/kontrolü tekrar çalıştırın/);
+  });
+
   it("an unreachable service during an import says it may have finished (repeat is safe)", async () => {
     const down = (async () => {
       throw new TypeError("network");
