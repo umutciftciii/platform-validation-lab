@@ -4,7 +4,8 @@
 #   infra/docker/stack.sh dev  up [svc...]|down|ps|logs [svc]|restart [svc]
 #   infra/docker/stack.sh prod up|down|ps|logs [svc]
 #   infra/docker/stack.sh local up|down|ps|logs [svc]|restart [svc]|rollback   # DP-277, ADR-029
-#   infra/docker/stack.sh      sync-main [--sha <c>] [--no-deploy] [--check]   # origin/main -> local
+#   infra/docker/stack.sh      sync-main [--sha <c>] [--no-deploy | --bootstrap] [--check]  # origin/main -> local
+#                              (--bootstrap: first install only, makes the tested image :current; DP-280)
 #   infra/docker/stack.sh      switch local|dev --yes   # move the DEV data between dev and local
 #   infra/docker/stack.sh dev  reset --yes       # dev caches only (node_modules, .next, dist)
 #   infra/docker/stack.sh dev  tls-ca            # DP-119: export the DEV HTTPS root (Safari)
@@ -484,5 +485,5 @@ case "${1:-}" in
     require_running_mode "$mode"
     db="$(env_value "$(mode_prefix "$mode")POSTGRES_DB")"
     compose "$mode" exec -T api node dist/media/media-cli.js cleanup --confirm-database "$db" "$@" ;;
-  *) sed -n '2,26p' "$0"; exit 1 ;;
+  *) sed -n '2,27p' "$0"; exit 1 ;;
 esac
