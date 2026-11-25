@@ -30,6 +30,7 @@ import { leads } from "./leads/en";
 import { staff } from "./staff/en";
 import { owner } from "./owner/en";
 import { dashboard } from "./dashboard/en";
+import { translationPackages } from "./translations/en";
 
 export const en = {
   common: {
@@ -88,6 +89,10 @@ export const en = {
       products: {
         label: "Products",
         summary: "Keep product data sheets and specifications current.",
+      },
+      translations: {
+        label: "Translations",
+        summary: "Export texts for translation and import reviewed translations as drafts.",
       },
       seo: { label: "SEO", summary: "Search results and link previews of the BV site." },
       companyReview: {
@@ -385,4 +390,6 @@ export const en = {
   staff,
   owner,
   dashboard,
+  /** ML-13b (DP-244): Translations — translation packages (./translations/). */
+  translationPackages,
 } as const;

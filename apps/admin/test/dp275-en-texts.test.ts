@@ -76,7 +76,11 @@ describe("DP-275: the English dictionary changed only where approved", () => {
 
   it("removes nothing and adds only DP-270's message", () => {
     expect(Object.keys(before).filter((k) => !(k in now))).toEqual([]);
-    expect(Object.keys(now).filter((k) => !(k in before))).toEqual([
+    // ML-13b (DP-244) adds a new screen: its own module and its navigation entry, nothing else.
+    const ml13b = (k: string) =>
+      k.startsWith("translationPackages.") || k.startsWith("nav.items.translations.");
+    expect(Object.keys(before).filter(ml13b)).toEqual([]);
+    expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k))).toEqual([
       "content.editor.translationTabs.summary.notPublishedNoSource",
     ]);
     expect(now["content.editor.translationTabs.summary.notPublishedNoSource"]).toBe(

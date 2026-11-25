@@ -50,13 +50,17 @@ const { Sidebar } = await import("../components/shell/sidebar");
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "en-baseline");
 const RECORD = process.env["ML11_RECORD_EN"] === "1";
 
+/** ML-13b (DP-244): the one navigation entry added since the recording (Translations). */
+const TRANSLATIONS_NAV = /<li><a [^>]*href="\/translations">[\s\S]*?<\/a><\/li>/g;
+
 /**
- * Removes the ML-11 language switch (and its phone-only row), the DP-273 theme-switch tabindex and
- * text-node separators.
+ * Removes the ML-11 language switch (and its phone-only row), the DP-273 theme-switch tabindex,
+ * the ML-13b Translations navigation entry and text-node separators.
  */
 export function normalize(html: string): string {
   return (
     html
+      .replace(TRANSLATIONS_NAV, "")
       .replace(
         /<div class="mt-3 flex items-center justify-between text-xs text-ink-3 sm:hidden"><span>Language<\/span><div role="radiogroup" aria-label="Language"[\s\S]*?<\/div><\/div>/g,
         "",

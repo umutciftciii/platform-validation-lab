@@ -28,6 +28,7 @@ import { leads } from "./leads/tr";
 import { staff } from "./staff/tr";
 import { owner } from "./owner/tr";
 import { dashboard } from "./dashboard/tr";
+import { translationPackages } from "./translations/tr";
 
 export const tr: Messages = {
   common: {
@@ -89,6 +90,11 @@ export const tr: Messages = {
       products: {
         label: "Ürünler",
         summary: "Ürün bilgi föylerini ve teknik özellikleri güncel tutun.",
+      },
+      translations: {
+        label: "Çeviri yönetimi",
+        summary:
+          "Metinleri çeviri için dışa aktarın, gözden geçirilmiş çevirileri taslak olarak içe aktarın.",
       },
       seo: {
         label: "SEO",
@@ -390,4 +396,6 @@ export const tr: Messages = {
   staff,
   owner,
   dashboard,
+  /** ML-13b (DP-244): Translations — translation packages (./translations/). */
+  translationPackages,
 };

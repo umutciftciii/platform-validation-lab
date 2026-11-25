@@ -363,10 +363,13 @@ describe("Owner console (EN)", () => {
     // …so the super admin sees the ordinary not-found page.
     expect(renderToStaticMarkup(await NotFound())).toContain("404");
     // The owner console is in the navigation of the owner only.
-    record({
-      owner: navGroupsFor(true).flatMap((g) => g.items.map((i) => i.href)),
-      superAdmin: navGroupsFor(false).flatMap((g) => g.items.map((i) => i.href)),
-    });
+    // ML-13b (DP-244): Translations is the one entry added since the recording, for everyone.
+    const hrefs = (owner: boolean) =>
+      navGroupsFor(owner).flatMap((g) => g.items.map((i) => i.href));
+    expect(hrefs(true)).toContain("/translations");
+    expect(hrefs(false)).toContain("/translations");
+    const recorded = (owner: boolean) => hrefs(owner).filter((h) => h !== "/translations");
+    record({ owner: recorded(true), superAdmin: recorded(false) });
   });
 
   it("page titles", async () => {
