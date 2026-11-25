@@ -7,7 +7,7 @@
 #   infra/docker/stack.sh      sync-main [--sha <c>] [--no-deploy | --bootstrap] [--check]  # origin/main -> local
 #                              (--bootstrap: first install only, makes the tested image :current; DP-280)
 #   infra/docker/stack.sh      switch local|dev --yes   # move the DEV data between dev and local
-#   infra/docker/stack.sh dev  reset --yes       # dev caches only (node_modules, .next, dist)
+#   infra/docker/stack.sh dev  reset --yes       # dev caches only (allow-list; refused if another mode has containers)
 #   infra/docker/stack.sh dev  tls-ca            # DP-119: export the DEV HTTPS root (Safari)
 #   infra/docker/stack.sh      reset-db dev|prod --yes [--dry-run]  # that mode's Postgres volume only
 #   infra/docker/stack.sh      migrate dev|prod|local  # migrate dev | deploy | backup + deploy
@@ -132,7 +132,6 @@ preflight() {
   info "preflight $mode: no conflicts on ${PORTS[*]}"
 }
 
-# Volumes of this project created by the dev overlay (names ..._dev-*). Never Postgres data.
 # Base of the links the operator commands print. DEV may use the HTTPS proxy (DP-119) once its
 # CA is trusted: DEV_DP_ADMIN_BASE_URL in .env, the same value the DEV API uses.
 admin_base_url() {
@@ -141,8 +140,68 @@ admin_base_url() {
   echo "${v:-http://admin.localhost:3112}"
 }
 
-dev_volumes() {
-  docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | grep -E "^${PROJECT}_dev-" || true
+# DP-283: the only volumes `dev reset` may remove — rebuildable caches of the dev overlay
+# (node_modules, .next, dist, generated client, pnpm store, turbo). An explicit allow-list, never
+# a name pattern: `dev-media` (product images), `postgres-data-dev`, the prod data and the DEV
+# TLS CA share prefixes with these and must never match. tools/smoke/dev-reset.test.mjs checks
+# this list against compose.dev.yaml.
+DEV_CACHE_VOLUME_KEYS=(
+  dev-pnpm-store dev-turbo dev-nm-root
+  dev-nm-web-bv dev-next-web-bv dev-nm-web-corporate dev-next-web-corporate
+  dev-nm-admin dev-next-admin dev-nm-api dev-dist-api dev-generated-api
+  dev-nm-config dev-nm-ui dev-nm-contracts dev-dist-contracts
+  dev-nm-content-schema dev-dist-content-schema dev-nm-test-utils dev-dist-test-utils
+  dev-nm-smoke dev-nm-visual-qa dev-nm-migrations
+  dev-turbo-contracts dev-turbo-content-schema dev-turbo-test-utils
+)
+# Data volumes no reset may ever remove (a second guard on top of the allow-list).
+PROTECTED_VOLUME_KEYS=(postgres-data postgres-data-dev media-data dev-media tls-ca-dev tls-config-dev)
+
+# dev reset --yes (DP-283). Refuses, changing nothing, unless every container of this project
+# (running or stopped) belongs to the dev mode: a local or prod container (including the local
+# mode on the same DEV data) means the reset could stop or remove another mode's stack. Then
+# it stops the dev stack (containers removed, volumes kept), checks every allow-listed volume
+# that exists (this project's Compose labels, no container attached, not protected), prints the
+# list and only then removes exactly those names. Any unexpected state stops before the first
+# removal.
+dev_reset() {
+  require_yes "$@"
+  local name files mode others="" key vol labels users k plan=()
+  while IFS='|' read -r name files; do
+    [[ -z "$name" ]] && continue
+    mode="$(mode_of_files "$files")"
+    if [[ "$mode" != dev ]]; then others="$others $name($mode)"; fi
+  done < <(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+    --format '{{.Names}}|{{.Label "com.docker.compose.project.config_files"}}')
+  [[ -z "$others" ]] ||
+    die "containers of another mode exist:$others. dev reset only clears the dev mode's caches and never touches another mode; nothing changed"
+  for key in "${DEV_CACHE_VOLUME_KEYS[@]}"; do
+    for k in "${PROTECTED_VOLUME_KEYS[@]}"; do
+      [[ "$key" != "$k" ]] || die "internal error: protected volume $k in the reset list; nothing changed"
+    done
+  done
+  # Stop the dev stack first (only dev-mode containers exist, checked above).
+  compose dev down || die "could not stop the dev mode; nothing removed"
+  # Validate every volume before removing any.
+  for key in "${DEV_CACHE_VOLUME_KEYS[@]}"; do
+    vol="${PROJECT}_${key}"
+    docker volume inspect "$vol" >/dev/null 2>&1 || continue
+    labels="$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.volume"}}' "$vol")"
+    [[ "$labels" == "$PROJECT|$key" ]] ||
+      die "$vol is not this project's '$key' volume (labels: $labels); nothing removed"
+    users="$(docker ps -a --filter "volume=$vol" --format '{{.Names}}' | tr '\n' ' ')"
+    [[ -z "${users// /}" ]] || die "$vol is used by container(s): ${users% }; nothing removed"
+    plan+=("$vol")
+  done
+  if (( ${#plan[@]} == 0 )); then
+    info "no dev cache volumes exist; nothing to remove"; return 0
+  fi
+  info "removing ${#plan[@]} dev cache volume(s); kept: ${PROTECTED_VOLUME_KEYS[*]}"
+  printf '  %s\n' "${plan[@]}" >&2
+  for vol in "${plan[@]}"; do
+    docker volume rm "$vol" >/dev/null || die "could not remove $vol; stopped (removed so far are listed above)"
+  done
+  info "dev caches removed; DEV database, media, TLS CA and prod data kept"
 }
 
 require_yes() { [[ " $* " == *" --yes "* ]] || die "this deletes data; repeat with --yes"; }
@@ -277,14 +336,8 @@ cmd_mode() {
     restart) compose "$mode" restart "$@" ;;
     reset)
       [[ "$mode" == dev ]] || die "reset applies to dev caches only"
-      require_yes "$@"
-      compose dev down --remove-orphans
-      local vols; vols="$(dev_volumes)"
-      if [[ -n "$vols" ]]; then
-        info "removing dev volumes:"; echo "$vols" >&2
-        echo "$vols" | xargs docker volume rm >/dev/null
-      fi
-      info "dev caches removed; Postgres data kept" ;;
+      acquire_heavy_lock "dev reset"
+      dev_reset "$@" ;;
     tls-ca)
       # DP-119: copy the root certificate of the DEV HTTPS proxy (Caddy's local CA) out of its
       # volume. Only the public certificate; the CA key never leaves the volume. Trusting it is
