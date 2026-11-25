@@ -44,6 +44,10 @@ const RAW_SQL_ALLOWED = [
   // SECURITY DEFINER functions (counts, ancestry, admin target, operator state, /enrol, lead
   // assignees, legacy sweep); parameterised tagged templates only, no table access.
   "src/iam/iam-context.ts",
+  // DP-285: the transaction-local lock_timeout / statement_timeout / transaction_read_only of a
+  // bounded transaction (SELECT set_config(..., true)); parameterised tagged templates only, no
+  // table access.
+  "src/iam/bounded-transaction.ts",
   // DP-096 (ADR-003 §5): SET LOCAL ROLE dp_lead_retention, the run's advisory lock and the
   // field-by-field anonymisation (UPDATE … SET column = cleared value, = ANY(uuid[])); tagged
   // templates only, never *Unsafe. The database limits the role (migration dp_096).

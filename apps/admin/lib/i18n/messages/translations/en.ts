@@ -205,6 +205,12 @@ export const translationPackages = {
   },
   api: {
     unreachable: "The admin service could not be reached or did not answer in time. Try again.",
+    locked:
+      "This content is locked by another operation right now. Nothing was written; try again in a moment.",
+    databaseBusy:
+      "The database did not answer in time. Nothing was written; try again in a moment.",
+    importUnknown:
+      "The import stopped with an unexpected error. Its outcome is unknown: run the check again before importing again (a repeated import writes nothing twice).",
     importNoAnswer:
       "The import did not answer in time. It may still have finished: run the check again before importing again (a repeated import writes nothing twice).",
     forbidden: "You are not allowed to read these parts of this site.",

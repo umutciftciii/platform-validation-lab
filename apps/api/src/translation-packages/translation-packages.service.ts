@@ -18,6 +18,14 @@
  * digest and the counts; never a text). A concurrent change of a row the import writes makes the
  * whole import stale (409); nothing is written then.
  *
+ * DP-285: the dry run (read only) and the import each run in ONE bounded transaction
+ * (IMPORT_LIMITS, DRY_RUN_LIMITS): the languages, the plan and every write see the same
+ * transaction, lock waits and statements are limited by PostgreSQL, and a refusal is 409
+ * `{transaction, locked}` or 503 DATABASE_UNAVAILABLE `{transaction, timeout|busy|connection}`
+ * instead of a 500 after the lock is released. Every refusal but "connection" is a rollback
+ * (nothing written, nothing published); after a lost answer the admin runs the dry run again,
+ * which shows the units already imported as unchanged (re-importing writes nothing twice).
+ *
  * Idempotency: importing the same package again changes no row and raises no version (content and
  * versions are compared before anything is written). The summary audit event is still written
  * for every import, by design (the attempt is accountable); per-row events only for changed rows.
@@ -35,6 +43,7 @@ import {
   type TranslationUnitStatus,
 } from "@dream/contracts";
 import { ApiError, parseBody } from "../iam/http/api-error.js";
+import { transientDbError } from "../iam/bounded-transaction.js";
 import { Clock } from "../iam/http/clock.js";
 import type { RequestContext } from "../iam/http/request-context.js";
 import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
@@ -44,6 +53,7 @@ import { siteLocalesOf } from "../cms/site-locales.js";
 import { keepsOldAddress } from "../seo/redirects.js";
 import { applyCatalog, exportCatalog, planCatalog, type CatalogPlan } from "./catalog-part.js";
 import { applyCms, exportCms, planCms, type CmsEnv, type CmsPlan } from "./cms-part.js";
+import { DRY_RUN_LIMITS, IMPORT_LIMITS } from "./limits.js";
 import { canonicalDigest, textHash } from "./units.js";
 
 const RESOURCE = "translation_package";
@@ -51,7 +61,6 @@ const READ: Record<TranslationPackageType, string> = {
   cms: "content:read",
   catalog: "product:read",
 };
-const TX = { timeout: 60_000, maxWait: 10_000 } as const;
 
 type Edit = { permission: string; scope: "site" | "platform" };
 const EDIT_OF = {
@@ -70,8 +79,22 @@ export class TranslationPackagesService {
   ) {}
 
   /** The site's languages: the default one, and `target` must be another enabled one. */
-  private static async env(a: StaffAccess, siteId: string, target: string): Promise<CmsEnv> {
-    const db = a.db({ siteIds: [siteId], includePlatform: false });
+  private static env(a: StaffAccess, siteId: string, target: string): Promise<CmsEnv> {
+    return TranslationPackagesService.envIn(
+      a.db({ siteIds: [siteId], includePlatform: false }),
+      a,
+      siteId,
+      target,
+    );
+  }
+
+  /** `env` read through `db` (DP-285: the dry run's or the import's transaction). */
+  private static async envIn(
+    db: CmsDb,
+    a: StaffAccess,
+    siteId: string,
+    target: string,
+  ): Promise<CmsEnv> {
     const locales = (await siteLocalesOf(db, [siteId])).get(siteId) ?? [];
     const def = locales.find((l) => l.isDefault)?.locale;
     if (!def) throw new ApiError("INTERNAL_ERROR");
@@ -196,33 +219,34 @@ export class TranslationPackagesService {
     if (site.key !== pkg.site.key) {
       throw new ApiError("VALIDATION_FAILED", [{ path: "package.site.key", rule: "mismatch" }]);
     }
-    const env = await TranslationPackagesService.env(a, siteId, pkg.targetLocale);
-    if (env.defaultLocale !== pkg.sourceLocale) {
-      throw new ApiError("CONFLICT_STATE", [{ path: "package.sourceLocale", rule: "changed" }]);
-    }
     const digest = canonicalDigest(pkg);
-    const db = a.db({ siteIds: [siteId], includePlatform: true });
-    const plan = async (d: CmsDb) => ({
-      cms: await planCms(d, env, pkg),
-      catalog: await planCatalog(d, env, pkg),
-    });
+    const scope = { siteIds: [siteId], includePlatform: true };
+    const prepare = async (d: CmsDb) => {
+      const env = await TranslationPackagesService.envIn(d, a, siteId, pkg.targetLocale);
+      if (env.defaultLocale !== pkg.sourceLocale) {
+        throw new ApiError("CONFLICT_STATE", [{ path: "package.sourceLocale", rule: "changed" }]);
+      }
+      return { env, cms: await planCms(d, env, pkg), catalog: await planCatalog(d, env, pkg) };
+    };
 
-    if (dryRun) {
-      const p = await plan(db);
-      return report({ pkg, env, digest, dryRun, missingPermissions, ...p, written: EMPTY_WRITTEN });
-    }
     try {
-      return await db.$transaction(async (tx) => {
-        const p = await plan(tx);
+      if (dryRun) {
+        return await a.boundedTx(scope, DRY_RUN_LIMITS, async (tx) => {
+          const p = await prepare(tx);
+          return report({ pkg, digest, dryRun, missingPermissions, ...p, written: EMPTY_WRITTEN });
+        });
+      }
+      return await a.boundedTx(scope, IMPORT_LIMITS, async (tx) => {
+        const p = await prepare(tx);
         const now = this.clock.now();
-        const cms = await applyCms(tx, a, env, p.cms, { now, digest });
-        const catalog = await applyCatalog(tx, a, env, p.catalog, { digest });
+        const cms = await applyCms(tx, a, p.env, p.cms, { now, digest });
+        const catalog = await applyCatalog(tx, a, p.env, p.catalog, { digest });
         const written = {
           cmsPagesCreated: cms.created,
           cmsPagesUpdated: cms.updated,
           ...catalog,
         };
-        const out = report({ pkg, env, digest, dryRun, missingPermissions: [], ...p, written });
+        const out = report({ pkg, digest, dryRun, missingPermissions: [], ...p, written });
         await a.audit(tx, {
           action: "translation.package_imported",
           resourceType: RESOURCE,
@@ -240,8 +264,10 @@ export class TranslationPackagesService {
           },
         });
         return out;
-      }, TX);
+      });
     } catch (e) {
+      const transient = transientDbError(e);
+      if (transient) throw transient;
       return mapCmsDbError(e);
     }
   }

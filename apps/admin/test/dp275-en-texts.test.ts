@@ -80,9 +80,14 @@ describe("DP-275: the English dictionary changed only where approved", () => {
     const ml13b = (k: string) =>
       k.startsWith("translationPackages.") || k.startsWith("nav.items.translations.");
     expect(Object.keys(before).filter(ml13b)).toEqual([]);
+    // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
     expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k))).toEqual([
+      "errors.DATABASE_UNAVAILABLE",
       "content.editor.translationTabs.summary.notPublishedNoSource",
     ]);
+    expect(now["errors.DATABASE_UNAVAILABLE"]).toBe(
+      "The database is not available right now. Try again later.",
+    );
     expect(now["content.editor.translationTabs.summary.notPublishedNoSource"]).toBe(
       "The source-language page has not been published yet.",
     );

@@ -55,6 +55,15 @@ export function packageErrorMessage(
     );
   // i18n-ignore: a dictionary key prefix
   const k = "translationPackages.api" as const;
+  // DP-285: the API's bounded transaction. A lock or a timeout is a rollback (nothing written);
+  // a lost database connection leaves the import's outcome unknown, like a missing answer.
+  if (has("transaction", "locked")) return t(`${k}.locked`);
+  if (
+    code === "DATABASE_UNAVAILABLE" &&
+    (has("transaction", "timeout") || has("transaction", "busy"))
+  ) {
+    return t(`${k}.databaseBusy`);
+  }
   if (status === 0 || status === 502 || status === 503 || status === 504) {
     return action === "import" ? t(`${k}.importNoAnswer`) : t(`${k}.unreachable`);
   }
@@ -75,6 +84,8 @@ export function packageErrorMessage(
   }
   if (code === "RATE_LIMITED") return t("errors.RATE_LIMITED");
   if (code === "UNSUPPORTED_MEDIA_TYPE") return t("errors.UNSUPPORTED_MEDIA_TYPE");
+  // DP-285: an unexpected failure of the import cannot prove that nothing was committed.
+  if (action === "import" && status >= 500) return t(`${k}.importUnknown`);
   return t(`${k}.failed`);
 }
 
