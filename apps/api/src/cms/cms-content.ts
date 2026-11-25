@@ -388,6 +388,22 @@ export function validateContent(
   return parsed.data as Record<string, unknown>;
 }
 
+/**
+ * ML-13a (DP-244): the dot paths of the content's schema issues (empty: valid), or null when the
+ * page has no editable template. A translation draft may hold empty texts; the translation
+ * package import uses this to refuse only the texts it would make invalid itself.
+ */
+export function contentIssuePaths(
+  kind: CmsPage["kind"],
+  templateKey: string,
+  content: unknown,
+): string[] | null {
+  const schema = schemaFor(kind, templateKey);
+  if (!schema) return null;
+  const parsed = schema.safeParse(content);
+  return parsed.success ? [] : parsed.error.issues.map((i) => i.path.map(String).join("."));
+}
+
 /** The same check without throwing: for content read back from the database. */
 export function contentIsValid(
   kind: CmsPage["kind"],

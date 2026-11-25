@@ -8,12 +8,21 @@ import { IamModule } from "./iam/iam.module.js";
 import { MediaModule } from "./media/media.module.js";
 import { PrismaModule } from "./prisma/prisma.module.js";
 import { SeoModule } from "./seo/seo.module.js";
+import { TranslationPackagesModule } from "./translation-packages/translation-packages.module.js";
 
 // Modular monolith root. Business modules (CMS, catalog, leads) are added per backlog item.
 // Start the API through createApiApp (app.factory.ts): it installs the proxy-key, CSRF and body
 // limits in front of every route.
 @Module({
-  imports: [PrismaModule, IamModule, MediaModule, CatalogModule, CmsModule, SeoModule],
+  imports: [
+    PrismaModule,
+    IamModule,
+    MediaModule,
+    CatalogModule,
+    CmsModule,
+    SeoModule,
+    TranslationPackagesModule,
+  ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
 })
