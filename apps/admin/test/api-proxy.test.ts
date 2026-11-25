@@ -2,14 +2,23 @@
 // Covers AC-PX-6, NT-P3, NT-P4, NT-P5, NT-P6 and the proxy part of AC-PX-7 / AC-SEC-2.
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { LEAD_EXPORT_PATH } from "@dream/contracts";
+import {
+  LEAD_EXPORT_PATH,
+  TRANSLATION_PACKAGE_API,
+  TRANSLATION_PACKAGE_MAX_BODY_BYTES,
+} from "@dream/contracts";
 import {
   bodyLimit,
   clientIpFrom,
+  EXPORT_TIMEOUT_MS,
   isStreamedPath,
   loadProxyConfig,
   MAX_BODY_BYTES,
   proxyRequest,
+  TRANSLATION_IMPORT_TIMEOUT_MS,
+  TRANSLATION_PACKAGE_TIMEOUT_MS,
+  UPSTREAM_TIMEOUT_MS,
+  upstreamTimeout,
   type ProxyConfig,
 } from "../lib/api-proxy";
 
@@ -397,5 +406,162 @@ describe("lead CSV export streaming (DP-227)", () => {
     expect(isStreamedPath(LEAD_EXPORT_PATH)).toBe(true);
     expect(isStreamedPath("/api/v1/admin/leads")).toBe(false);
     expect(isStreamedPath(`${LEAD_EXPORT_PATH}/x`)).toBe(false);
+  });
+});
+
+describe("translation packages (ML-13b, DP-244)", () => {
+  const dryRun = `${TRANSLATION_PACKAGE_API}/dry-run`;
+  const importPath = `${TRANSLATION_PACKAGE_API}/import`;
+  const exportPath = `${TRANSLATION_PACKAGE_API}/export`;
+  const post = (
+    deps: ReturnType<typeof upstream>["deps"],
+    p: string,
+    body: BodyInit,
+    len?: number,
+  ) =>
+    proxyRequest(
+      req(p, {
+        method: "POST",
+        body,
+        headers: {
+          "content-type": "application/json",
+          ...(len === undefined ? {} : { "content-length": String(len) }),
+        },
+      }),
+      CONFIG,
+      deps,
+    );
+
+  it("takes up to 4 MB on the dry run and the import only; every other route keeps 16 KB", async () => {
+    expect(TRANSLATION_PACKAGE_MAX_BODY_BYTES).toBe(4 * 1024 * 1024);
+    expect(bodyLimit(dryRun)).toBe(TRANSLATION_PACKAGE_MAX_BODY_BYTES);
+    expect(bodyLimit(importPath)).toBe(TRANSLATION_PACKAGE_MAX_BODY_BYTES);
+    for (const p of [
+      exportPath,
+      `${TRANSLATION_PACKAGE_API}/import/x`,
+      `${TRANSLATION_PACKAGE_API}/dry-runs`,
+      "/api/v1/admin/cms/pages",
+      "/api/v1/auth/staff/login",
+    ]) {
+      expect(bodyLimit(p), p).toBe(MAX_BODY_BYTES);
+    }
+    const u = upstream(ok);
+    // A package just below the limit: exactly 4 MB of JSON passes, one byte more does not.
+    const fill = TRANSLATION_PACKAGE_MAX_BODY_BYTES - JSON.stringify({ package: { x: "" } }).length;
+    const atLimit = JSON.stringify({ package: { x: "a".repeat(fill) } });
+    expect(atLimit.length).toBe(TRANSLATION_PACKAGE_MAX_BODY_BYTES);
+    expect((await post(u.deps, dryRun, atLimit)).status).toBe(200);
+    expect((await post(u.deps, importPath, atLimit, atLimit.length)).status).toBe(200);
+    expect(u.seen).toHaveLength(2);
+    expect(new Uint8Array(u.seen[1]!.init.body as Uint8Array).byteLength).toBe(atLimit.length);
+    const over = `${atLimit} `;
+    // Declared and streamed (no Content-Length) bodies above the limit: 413, the API is not called.
+    expect((await post(u.deps, importPath, over, over.length)).status).toBe(413);
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(over));
+        c.close();
+      },
+    });
+    const streamed = await proxyRequest(
+      req(dryRun, {
+        method: "POST",
+        body: stream,
+        headers: { "content-type": "application/json" },
+        duplex: "half",
+      } as RequestInit),
+      CONFIG,
+      u.deps,
+    );
+    expect(streamed.status).toBe(413);
+    // The large limit does not leak to other admin routes.
+    expect(
+      (await post(u.deps, "/api/v1/admin/cms/pages", "x".repeat(MAX_BODY_BYTES + 1))).status,
+    ).toBe(413);
+    expect(u.seen).toHaveLength(2);
+  });
+
+  it("a JSON package must still be sent as JSON", async () => {
+    const u = upstream(ok);
+    const res = await proxyRequest(
+      req(importPath, { method: "POST", body: "{}", headers: { "content-type": "text/plain" } }),
+      CONFIG,
+      u.deps,
+    );
+    expect(res.status).toBe(415);
+    expect(u.seen).toHaveLength(0);
+  });
+
+  it("waits 90 s for the import, 60 s for the export and the dry run, 10 s elsewhere", () => {
+    expect(upstreamTimeout(importPath)).toBe(TRANSLATION_IMPORT_TIMEOUT_MS);
+    expect(TRANSLATION_IMPORT_TIMEOUT_MS).toBe(90_000);
+    // Longer than the API's import transaction (60 s) plus its wait for a connection (10 s).
+    expect(TRANSLATION_IMPORT_TIMEOUT_MS).toBeGreaterThan(70_000);
+    expect(upstreamTimeout(dryRun)).toBe(TRANSLATION_PACKAGE_TIMEOUT_MS);
+    expect(upstreamTimeout(exportPath)).toBe(TRANSLATION_PACKAGE_TIMEOUT_MS);
+    expect(upstreamTimeout(LEAD_EXPORT_PATH)).toBe(EXPORT_TIMEOUT_MS);
+    for (const p of [`${importPath}/x`, "/api/v1/admin/cms/pages", "/api/v1/auth/staff/session"]) {
+      expect(upstreamTimeout(p), p).toBe(UPSTREAM_TIMEOUT_MS);
+    }
+  });
+
+  it("gives the API the import's timeout signal and answers a generic 502 when it fires", async () => {
+    let signal: AbortSignal | undefined;
+    const logs: string[] = [];
+    const slow = (async (_url: string, init: RequestInit) => {
+      signal = init.signal ?? undefined;
+      // The proxy's timer fired: fetch rejects with the abort reason (a TimeoutError).
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }) as unknown as typeof fetch;
+    const res = await post({ fetch: slow, log: (l) => logs.push(l) }, importPath, '{"package":{}}');
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("BAD_GATEWAY");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).not.toContain("package");
+  });
+
+  it("a slow API: the real fetch is aborted when the path's timer fires (shortened here)", async () => {
+    const { createServer } = await import("node:http");
+    let closed = false;
+    const server = createServer((_req, res) => {
+      // Answers only after 5 s; the request must be given up long before.
+      const t = setTimeout(() => res.end("{}"), 5_000);
+      res.on("close", () => {
+        clearTimeout(t);
+        closed = true;
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    const seen: string[] = [];
+    try {
+      const started = Date.now();
+      const res = await proxyRequest(
+        req(importPath, {
+          method: "POST",
+          body: '{"package":{}}',
+          headers: { "content-type": "application/json" },
+        }),
+        { ...CONFIG, apiUrl: `http://127.0.0.1:${port}` },
+        {
+          fetch: globalThis.fetch,
+          log: () => {},
+          timeout: (p) => {
+            seen.push(p);
+            return upstreamTimeout(p) === TRANSLATION_IMPORT_TIMEOUT_MS ? 200 : 10;
+          },
+        },
+      );
+      expect(res.status).toBe(502);
+      expect(seen).toEqual([importPath]);
+      const took = Date.now() - started;
+      expect(took).toBeGreaterThanOrEqual(150);
+      expect(took).toBeLessThan(3_000);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(closed).toBe(true);
+    } finally {
+      server.close();
+    }
   });
 });

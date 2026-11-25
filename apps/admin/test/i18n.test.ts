@@ -93,6 +93,10 @@ const SAME_IN_TR = new Set([
   "staff.page.roleSite",
   "staff.page.membershipNotActive",
   "owner.modules.crm.name",
+  // ML-13b: the word "Site", the technical term CMS, and a format made only of parameters
+  "translationPackages.export.site",
+  "translationPackages.types.cms",
+  "translationPackages.report.filterChip",
 ]);
 
 describe("dictionary completeness (EN source, TR)", () => {
