@@ -18,7 +18,8 @@ export type IconName =
   | "staff"
   | "shield"
   | "audit"
-  | "settings";
+  | "settings"
+  | "translate";
 
 export type NavItemId = keyof typeof en.nav.items;
 export type NavGroupId = keyof typeof en.nav.groups;
@@ -72,6 +73,16 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: en.nav.items.products.label,
         icon: "products",
         summary: en.nav.items.products.summary,
+        ready: true,
+      },
+      {
+        // ML-13b (DP-244): translation packages — export, dry run, import as drafts.
+        id: "translations",
+        slug: "translations",
+        href: "/translations",
+        label: en.nav.items.translations.label,
+        icon: "translate",
+        summary: en.nav.items.translations.summary,
         ready: true,
       },
       {

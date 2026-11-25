@@ -8,12 +8,18 @@
  *   others are dropped. Forwarded: Origin, Sec-Fetch-Site, Content-Type, Accept, User-Agent,
  *   Accept-Language. Added: X-DP-Proxy-Key, X-DP-Client-IP, X-DP-Request-Id.
  * - Cookies: only `__Host-dp_admin_session` and `__Host-dp_admin_challenge`, both ways.
- * - Body: at most 16 KB, POST only as `application/json` (413 / 415).
+ * - Body: at most 16 KB (larger on the routes named below), POST only as `application/json`
+ *   (413 / 415).
  * - Client IP: from the hosting edge's `X-Forwarded-For`, counted DP_TRUSTED_PROXY_HOPS from the
  *   right; with 0 hops (local development) none is sent.
- * - `Cache-Control: no-store`; 10 s timeout; an unreachable API gives a generic 502.
+ * - `Cache-Control: no-store`; 10 s timeout (longer on the routes named below); an unreachable or
+ *   too slow API gives a generic 502.
  * - DP-227: the lead CSV export (`LEAD_EXPORT_PATH`) streams through unbuffered (bounded memory
  *   for large files) and may take up to 120 s; every other response is read whole, as before.
+ * - ML-13b (DP-244): the translation package dry run and import accept a JSON body of up to 4 MB
+ *   (`TRANSLATION_PACKAGE_BODY_PATH`, the API's own limit of these two routes); the import may
+ *   take up to 90 s (its API transaction allows 60 s plus 10 s waiting for a connection), the
+ *   export and the dry run up to 60 s. Every other route keeps 16 KB and 10 s.
  * - Logs: never a body, cookie or key; only the request id on upstream failure.
  *
  * The key is read from the server environment at request time (DP_PROXY_KEY_ADMIN, never a
@@ -30,22 +36,46 @@ import {
   LEAD_EXPORT_PATH,
   SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
   SEO_REDIRECT_IMPORT_PATH,
+  TRANSLATION_PACKAGE_API,
+  TRANSLATION_PACKAGE_BODY_PATH,
+  TRANSLATION_PACKAGE_MAX_BODY_BYTES,
 } from "@dream/contracts";
 
 export const MAX_BODY_BYTES = 16 * 1024;
 
 /**
- * DP-212: the body limit of a POST: 16 KB, except the redirect CSV import (320 KB, the same
- * limit the API applies to that one route).
+ * DP-212: the body limit of a POST: 16 KB, except the redirect CSV import (320 KB) and, ML-13b,
+ * the translation package dry run and import (4 MB) — the same limits the API applies to those
+ * routes.
  */
 export function bodyLimit(pathname: string): number {
-  return SEO_REDIRECT_IMPORT_PATH.test(pathname)
-    ? SEO_REDIRECT_IMPORT_MAX_BODY_BYTES
-    : MAX_BODY_BYTES;
+  if (SEO_REDIRECT_IMPORT_PATH.test(pathname)) return SEO_REDIRECT_IMPORT_MAX_BODY_BYTES;
+  if (TRANSLATION_PACKAGE_BODY_PATH.test(pathname)) return TRANSLATION_PACKAGE_MAX_BODY_BYTES;
+  return MAX_BODY_BYTES;
 }
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 /** DP-227: the lead CSV export streams a larger body. */
 export const EXPORT_TIMEOUT_MS = 120_000;
+/** ML-13b: the translation package export and dry run (whole-site reads, up to 20 000 units). */
+export const TRANSLATION_PACKAGE_TIMEOUT_MS = 60_000;
+/**
+ * ML-13b: the translation package import — one API transaction of at most 60 s that may wait
+ * 10 s for a connection, plus a margin, so the proxy does not give up before the API answers.
+ */
+export const TRANSLATION_IMPORT_TIMEOUT_MS = 90_000;
+
+/** How long the proxy waits for the API on this path. */
+export function upstreamTimeout(pathname: string): number {
+  if (isStreamedPath(pathname)) return EXPORT_TIMEOUT_MS;
+  if (pathname === `${TRANSLATION_PACKAGE_API}/import`) return TRANSLATION_IMPORT_TIMEOUT_MS;
+  if (
+    pathname === `${TRANSLATION_PACKAGE_API}/export` ||
+    pathname === `${TRANSLATION_PACKAGE_API}/dry-run`
+  ) {
+    return TRANSLATION_PACKAGE_TIMEOUT_MS;
+  }
+  return UPSTREAM_TIMEOUT_MS;
+}
 
 /** DP-227: the one path whose response streams through unbuffered. */
 export function isStreamedPath(pathname: string): boolean {
@@ -164,6 +194,8 @@ async function readBody(request: Request, maxBytes: number): Promise<Uint8Array 
 export interface ProxyDeps {
   fetch: typeof fetch;
   log: (line: string) => void;
+  /** The wait per path; `upstreamTimeout` unless a test shortens it. */
+  timeout?: (pathname: string) => number;
 }
 
 export async function proxyRequest(
@@ -212,9 +244,7 @@ export async function proxyRequest(
       ...(body ? { body: body as BodyInit } : {}),
       redirect: "manual",
       cache: "no-store",
-      signal: AbortSignal.timeout(
-        isStreamedPath(url.pathname) ? EXPORT_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
-      ),
+      signal: AbortSignal.timeout((deps.timeout ?? upstreamTimeout)(url.pathname)),
     });
   } catch {
     deps.log(`api proxy: upstream unavailable (request ${requestId})`);
