@@ -1,0 +1,134 @@
+# Local production-mode overlay (DP-277, ADR-029): the DEV data served by production builds.
+#
+#   infra/docker/stack.sh local up|down|ps|logs   # never call `docker compose` with this file
+#   infra/docker/stack.sh sync-main               # build origin/main, test, back up, promote
+#
+# Runs the runtime services of compose.yaml (`next start`, `node dist/main.js`, no watcher, no
+# bind-mounted source, no shared node_modules volume) on the DEV database and DEV media:
+#   - Postgres serves the volume postgres-data-dev with the DEV identity (DEV_POSTGRES_*,
+#     DEV_DP_*_PASSWORD), the API uses the DEV proxy keys and IAM/MFA keys (DEV_*). Existing staff
+#     accounts, sessions and authenticator enrolments stay valid because the keys are the same
+#     values; they are read from .env by Compose and never written anywhere else.
+#   - The API stores media on the volume dev-media; admin-tls (DP-119) keeps its CA volumes.
+#   - The production-mode volumes postgres-data and media-data are not mounted by any service.
+#
+# Same Compose project, container names and ports as the dev and prod modes, so the three modes
+# can never run side by side: stack.sh refuses `local up` while a dev or prod container exists,
+# and refuses `dev up` while a local container exists. A database or media volume is therefore
+# never attached to two stacks at once (ADR-029 D3).
+#
+# Images: never built from the working tree. `stack.sh sync-main` builds the runtime target of
+# infra/docker/Dockerfile from an archive of one origin/main commit and tags it
+# dream-petroleum-platform-local:<sha12>; promotion moves :current (and :previous). Compose only
+# runs the tag it is given (DP_LOCAL_TAG, default current) and never pulls it.
+
+x-local-image: &local-image
+  image: ${DP_LOCAL_IMAGE_REPO:-dream-petroleum-platform-local}:${DP_LOCAL_TAG:-current}
+  build: !reset null
+  pull_policy: never
+
+services:
+  postgres:
+    labels:
+      # The database served is the DEV database (ADR-009); the mode that serves it is "local".
+      com.dream-petroleum.platform.db-env: dev
+    environment:
+      POSTGRES_DB: ${DEV_POSTGRES_DB:?set DEV_POSTGRES_DB in .env}
+      POSTGRES_USER: ${DEV_POSTGRES_USER:?set DEV_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:?set DEV_POSTGRES_PASSWORD in .env}
+      DP_ROLES_PROFILE: dev
+      DP_APP_PASSWORD: ${DEV_DP_APP_PASSWORD:?set DEV_DP_APP_PASSWORD in .env}
+      DP_MIGRATOR_PASSWORD: ${DEV_DP_MIGRATOR_PASSWORD:?set DEV_DP_MIGRATOR_PASSWORD in .env}
+      DP_IAM_BOOTSTRAP_PASSWORD: ${DEV_DP_IAM_BOOTSTRAP_PASSWORD:?set DEV_DP_IAM_BOOTSTRAP_PASSWORD in .env}
+    volumes:
+      # Replaces the prod entry (Compose merges service volumes by container path).
+      - postgres-data-dev:/var/lib/postgresql/data
+
+  # prisma migrate deploy only (committed migrations of the promoted image), as dp_migrator.
+  migrate:
+    <<: *local-image
+    environment:
+      MIGRATE_DATABASE_URL: postgresql://dp_migrator:${DEV_DP_MIGRATOR_PASSWORD}@postgres:5432/${DEV_POSTGRES_DB}?schema=public
+
+  api:
+    <<: *local-image
+    # DP-277 owner decision (2026-11-25): the API on the full DEV data peaked at 226 of 256 MiB
+    # in the isolated fixture. Local mode only; the prod limit in compose.yaml stays 256m.
+    mem_limit: 384m
+    memswap_limit: 384m
+    environment:
+      DATABASE_URL: postgresql://dp_app:${DEV_DP_APP_PASSWORD}@postgres:5432/${DEV_POSTGRES_DB}?schema=public
+      DB_ENV: dev
+      DB_EXPECTED_NAME: ${DEV_POSTGRES_DB}
+      DP_PROXY_KEY_ADMIN: ${DEV_DP_PROXY_KEY_ADMIN:?set DEV_DP_PROXY_KEY_ADMIN in .env}
+      DP_PROXY_KEY_WEB_BV: ${DEV_DP_PROXY_KEY_WEB_BV:?set DEV_DP_PROXY_KEY_WEB_BV in .env}
+      DP_PROXY_KEY_WEB_CORPORATE: ${DEV_DP_PROXY_KEY_WEB_CORPORATE:?set DEV_DP_PROXY_KEY_WEB_CORPORATE in .env}
+      DP_PROXY_KEY_ADMIN_NEXT: ${DEV_DP_PROXY_KEY_ADMIN_NEXT:-}
+      DP_PROXY_KEY_WEB_BV_NEXT: ${DEV_DP_PROXY_KEY_WEB_BV_NEXT:-}
+      DP_PROXY_KEY_WEB_CORPORATE_NEXT: ${DEV_DP_PROXY_KEY_WEB_CORPORATE_NEXT:-}
+      IAM_MFA_ENC_KEYS: ${DEV_IAM_MFA_ENC_KEYS:?set DEV_IAM_MFA_ENC_KEYS in .env}
+      IAM_HMAC_KEY: ${DEV_IAM_HMAC_KEY:?set DEV_IAM_HMAC_KEY in .env}
+      # DP-119: the https origins of the admin-tls proxy next to the plain http ones.
+      DP_ALLOWED_ORIGINS_ADMIN: http://localhost:3112,http://admin.localhost:3112,https://admin.localhost:3114,https://localhost:3114
+      DP_ADMIN_BASE_URL: ${DEV_DP_ADMIN_BASE_URL:-http://admin.localhost:3112}
+    volumes:
+      # Replaces media-data (same container path): the DEV product images and documents.
+      - dev-media:/data/media
+
+  web-bv:
+    <<: *local-image
+    environment:
+      DP_PROXY_KEY_WEB_BV: ${DEV_DP_PROXY_KEY_WEB_BV:?set DEV_DP_PROXY_KEY_WEB_BV in .env}
+
+  web-corporate:
+    <<: *local-image
+
+  admin:
+    <<: *local-image
+    environment:
+      DP_PROXY_KEY_ADMIN: ${DEV_DP_PROXY_KEY_ADMIN:?set DEV_DP_PROXY_KEY_ADMIN in .env}
+
+  # DP-119: HTTPS for the admin console (Safari keeps Secure cookies only on https). Same image,
+  # config and CA volumes as in dev mode, so a CA already trusted on the Mac stays trusted.
+  # DP-182: init reaps the healthcheck's ssl_client children; restarts unless stopped.
+  admin-tls:
+    image: caddy:2.11.6-alpine
+    pull_policy: never
+    container_name: dream-platform-admin-tls
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.25
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3114:443"
+    volumes:
+      - ./caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - tls-ca-dev:/data
+      - tls-config-dev:/config
+    depends_on:
+      admin:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "--no-check-certificate",
+          "https://localhost/api/health",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+# The DEV volumes, by the same keys as compose.dev.yaml: inside the project
+# dream-petroleum-platform they are the existing volumes, never new or copied ones.
+volumes:
+  postgres-data-dev:
+  dev-media:
+  tls-ca-dev:
+  tls-config-dev:

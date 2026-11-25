@@ -3,10 +3,13 @@
 #
 #   infra/docker/stack.sh dev  up [svc...]|down|ps|logs [svc]|restart [svc]
 #   infra/docker/stack.sh prod up|down|ps|logs [svc]
+#   infra/docker/stack.sh local up|down|ps|logs [svc]|restart [svc]|rollback   # DP-277, ADR-029
+#   infra/docker/stack.sh      sync-main [--sha <c>] [--no-deploy] [--check]   # origin/main -> local
+#   infra/docker/stack.sh      switch local|dev --yes   # move the DEV data between dev and local
 #   infra/docker/stack.sh dev  reset --yes       # dev caches only (node_modules, .next, dist)
 #   infra/docker/stack.sh dev  tls-ca            # DP-119: export the DEV HTTPS root (Safari)
 #   infra/docker/stack.sh      reset-db dev|prod --yes [--dry-run]  # that mode's Postgres volume only
-#   infra/docker/stack.sh      migrate dev|prod  # prisma migrate dev | deploy in the running mode
+#   infra/docker/stack.sh      migrate dev|prod|local  # migrate dev | deploy | backup + deploy
 #   infra/docker/stack.sh      db-roles dev|prod --yes   # ADR-012A roles on an EXISTING database
 #   infra/docker/stack.sh      iam sync dev|prod         # mirror the IAM catalogue (dp_migrator)
 #   infra/docker/stack.sh      iam bootstrap dev|prod --email <e> [--name <n>]  # dp_iam_bootstrap
@@ -17,15 +20,18 @@
 #   infra/docker/stack.sh      iam owner-status dev|prod                         # dp_iam_bootstrap
 #   infra/docker/stack.sh      leads retention|erase|hold dev|prod [args] [--apply] # DP-096, dry run default
 #   infra/docker/stack.sh      media cleanup dev|prod [--grace-hours <n>] [--apply] # orphan files (PM-3)
-#   infra/docker/stack.sh      preflight dev|prod
+#   infra/docker/stack.sh      preflight dev|prod|local
+#   (iam, leads, media, migrate, budget and preflight take `local` too: the DEV database.)
 #   infra/docker/stack.sh      smoke             # HTTP smoke test in a throwaway container
-#   infra/docker/stack.sh      budget [dev|prod] # memory/CPU budget vs. free memory in the VM
+#   infra/docker/stack.sh      budget [dev|prod|local] # memory/CPU budget vs. free memory in the VM
 #   infra/docker/stack.sh      check             # quality gate build (docker build --target check)
 #   infra/docker/stack.sh      test unit|integration|migrations|roles   # test suites (ADR-010)
 #
-# dev = compose.yaml + compose.dev.yaml (hot reload); prod = compose.yaml (production builds).
-# Both use the Compose project "dream-petroleum-platform" and the same ports, so they are
-# mutually exclusive. `up` fails fast if the other mode is running or a port is taken.
+# dev = compose.yaml + compose.dev.yaml (hot reload); prod = compose.yaml (production builds);
+# local = compose.yaml + compose.local.yaml (production builds of origin/main on the DEV data,
+# ADR-029). All use the Compose project "dream-petroleum-platform" and the same ports, so they are
+# mutually exclusive. `up` fails fast if another mode is running or a port is taken; dev and local
+# also refuse while the other one still has a container on the DEV data volumes.
 # `up` and `check` are heavy jobs: they run one at a time (lock) and fail fast unless the Docker
 # VM keeps a reserve plus a safety margin free for other projects after the job's estimated peak
 # (lib.sh, resource-policy.mjs).
@@ -34,18 +40,28 @@
 # project's own containers and volumes.
 set -euo pipefail
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"
-ENV_FILE="$ROOT/.env"
-PORTS=(3110 3111 3112 3113 3114 5440)
+ENV_FILE="${DREAM_ENV_FILE:-$ROOT/.env}"
+read -r -a PORTS <<<"${DREAM_PORTS:-3110 3111 3112 3113 3114 5440}"
 # shellcheck source=lib.sh
 source "$DIR/lib.sh"
+# shellcheck source=local-mode.sh
+source "$DIR/local-mode.sh"
 
 compose_args() { # prints nothing; fills COMPOSE_ARGS for a mode
   local mode="$1"
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE missing. Run: cp .env.example .env (then set a local password)"
   COMPOSE_ARGS=(-p "$PROJECT" -f "$DIR/compose.yaml")
-  [[ "$mode" == dev ]] && COMPOSE_ARGS+=(-f "$DIR/compose.dev.yaml")
+  case "$mode" in
+    dev) COMPOSE_ARGS+=(-f "$DIR/compose.dev.yaml") ;;
+    local)
+      COMPOSE_ARGS+=(-f "$DIR/compose.local.yaml")
+      # Test hook (DP-277 fixture only): an extra overlay that renames containers and ports.
+      [[ -z "${DREAM_LOCAL_OVERLAY:-}" ]] || COMPOSE_ARGS+=(-f "$DREAM_LOCAL_OVERLAY") ;;
+    prod) ;;
+    *) die "mode must be dev, prod or local" ;;
+  esac
   COMPOSE_ARGS+=(--env-file "$ENV_FILE")
 }
 
@@ -55,33 +71,42 @@ compose() {
   docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
 
-# Mode of each running container of this project: "dev" if it was created with the dev overlay.
+# Mode of a container from its Compose config files: dev overlay, local overlay, else prod.
+mode_of_files() {
+  case "$1" in
+    *compose.dev.yaml*) echo dev ;;
+    *compose.local.yaml*) echo local ;;
+    *) echo prod ;;
+  esac
+}
+
+# Mode of each running container of this project ("<mode> <name>" per line).
 running_modes() {
   docker ps --filter "label=com.docker.compose.project=$PROJECT" \
     --format '{{.Names}}|{{.Label "com.docker.compose.project.config_files"}}' |
     while IFS='|' read -r name files; do
       [[ -z "$name" ]] && continue
-      if [[ "$files" == *compose.dev.yaml* ]]; then echo "dev $name"; else echo "prod $name"; fi
+      echo "$(mode_of_files "$files") $name"
     done
 }
 
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
 preflight() {
-  local mode="$1" other failed=0
-  [[ "$mode" == dev ]] && other=prod || other=dev
+  local mode="$1" failed=0
 
-  local clash
-  clash="$(running_modes | awk -v o="$other" '$1==o {print $2}')"
+  local clash other
+  clash="$(running_modes | awk -v m="$mode" '$1!=m {print $2}')"
   if [[ -n "$clash" ]]; then
-    echo "FAIL: the $other stack is running ($(echo $clash | tr '\n' ' '))." >&2
-    echo "      Stop it first: infra/docker/stack.sh $other down" >&2
+    other="$(running_modes | awk -v m="$mode" '$1!=m {print $1}' | sort -u | tr '\n' ' ')"
+    echo "FAIL: the ${other% } stack is running ($(echo $clash | tr '\n' ' '))." >&2
+    echo "      Stop it first: infra/docker/stack.sh ${other%% *} down" >&2
     failed=1
   fi
 
   # Containers named dream-platform-* that belong to another Compose project.
   local foreign
-  foreign="$(docker ps -a --filter 'name=^/dream-platform-' \
+  foreign="$(docker ps -a --filter "name=^/${CONTAINER_PREFIX}-" \
     --format '{{.Names}}|{{.Label "com.docker.compose.project"}}' | awk -F'|' -v p="$PROJECT" '$2!=p {print $1}')"
   if [[ -n "$foreign" ]]; then
     echo "FAIL: container name(s) used by another project: $foreign" >&2
@@ -111,7 +136,7 @@ preflight() {
 # CA is trusted: DEV_DP_ADMIN_BASE_URL in .env, the same value the DEV API uses.
 admin_base_url() {
   local v=""
-  [[ "$1" == dev ]] && v="$(env_value DEV_DP_ADMIN_BASE_URL)"
+  [[ "$1" == dev || "$1" == local ]] && v="$(env_value DEV_DP_ADMIN_BASE_URL)"
   echo "${v:-http://admin.localhost:3112}"
 }
 
@@ -172,13 +197,16 @@ check_auth_secrets() {
   for k in "${AUTH_SECRET_KEYS[@]}"; do
     v="$(env_value "${prefix}$k")"
     [[ -n "$v" ]] || die "${prefix}$k is not set in .env (F1-002: generate it as in .env.example; the API does not start without it)"
-    if [[ "$mode" == dev ]]; then other="$(env_value "$k")"; else other="$(env_value "DEV_$k")"; fi
+    if [[ "$mode" == prod ]]; then other="$(env_value "DEV_$k")"; else other="$(env_value "$k")"; fi
     [[ "$v" != "$other" ]] || die "${prefix}$k must differ between dev and prod (one key per environment)"
   done
 }
 
-# .env key prefix of a mode's role passwords and database name.
-mode_prefix() { [[ "$1" == dev ]] && echo "DEV_" || echo ""; }
+# .env key prefix of a mode's role passwords and database name (local serves the DEV database).
+mode_prefix() { [[ "$1" == dev || "$1" == local ]] && echo "DEV_" || echo ""; }
+
+# The database a mode serves: the label db-env of its Postgres container (ADR-009).
+mode_db_env() { [[ "$1" == local ]] && echo dev || echo "$1"; }
 
 # The running stack must be exactly this mode, and its Postgres must serve this mode's database.
 require_running_mode() {
@@ -186,33 +214,47 @@ require_running_mode() {
   running="$(running_modes | awk '{print $1}' | sort -u)"
   [[ "$running" == "$mode" ]] || die "the $mode stack is not running (running: ${running:-none}); nothing changed"
   local label
-  label="$(docker inspect -f '{{index .Config.Labels "com.dream-petroleum.platform.db-env"}}' dream-platform-postgres 2>/dev/null)" ||
-    die "dream-platform-postgres is not running; start it with: infra/docker/stack.sh $mode up postgres"
-  [[ "$label" == "$mode" ]] || die "dream-platform-postgres serves '$label', not '$mode'; nothing changed"
+  label="$(docker inspect -f '{{index .Config.Labels "com.dream-petroleum.platform.db-env"}}' "$CONTAINER_PREFIX-postgres" 2>/dev/null)" ||
+    die "$CONTAINER_PREFIX-postgres is not running; start it with: infra/docker/stack.sh $mode up postgres"
+  [[ "$label" == "$(mode_db_env "$mode")" ]] || die "$CONTAINER_PREFIX-postgres serves '$label', not '$(mode_db_env "$mode")'; nothing changed"
 }
 
 smoke() {
-  mkdir -p "$ROOT/tools/smoke/output"
+  # SMOKE_ROOT: the tree whose smoke tool runs (sync-main uses the commit being deployed).
+  local root="${SMOKE_ROOT:-$ROOT}"
+  mkdir -p "$ROOT/tools/smoke/output" "$root/tools/smoke/output"
   # Ports are bound to 127.0.0.1. Docker Desktop reaches them via host.docker.internal; on a
   # Linux engine (CI runners) only the host network namespace can.
   local net=(-e SMOKE_HOST=host.docker.internal)
-  if [[ "$(docker info -f '{{.OperatingSystem}}')" != *"Docker Desktop"* ]]; then
+  if [[ -n "${DREAM_SMOKE_NETNS:-}" ]]; then
+    # Test hook (DP-277 fixture only): the fixture's port-forwarding container serves 3110-3114.
+    net=(--network "container:$DREAM_SMOKE_NETNS" -e SMOKE_HOST=127.0.0.1)
+  elif [[ "$(docker info -f '{{.OperatingSystem}}')" != *"Docker Desktop"* ]]; then
     net=(--network host -e SMOKE_HOST=127.0.0.1)
   fi
   docker run --rm --label "com.dream-petroleum.platform=smoke" --memory 256m --memory-swap 256m \
     "${net[@]}" -e SMOKE_TIMEOUT_MS="${SMOKE_TIMEOUT_MS:-120000}" \
-    -v "$ROOT:/repo:ro" -v "$ROOT/tools/smoke/output:/repo/tools/smoke/output" \
+    -v "$root:/repo:ro" -v "$ROOT/tools/smoke/output:/repo/tools/smoke/output" \
     "$NODE_IMAGE" node /repo/tools/smoke/smoke.mjs --report /repo/tools/smoke/output/smoke.json
 }
 
 cmd_mode() {
   local mode="$1" action="${2:-}"; shift 2 || true
+  if [[ "$mode" == local ]]; then
+    case "$action" in
+      up) local_up "$@"; return ;;
+      rollback) local_rollback; return ;;
+      reset) die "reset applies to dev caches only; local mode keeps no caches" ;;
+    esac
+  fi
   case "$action" in
     up)
       acquire_heavy_lock "$mode up"
       check_db_identity
       check_auth_secrets "$mode"
       preflight "$mode"
+      # ADR-029 D3: dev and local share the DEV data volumes; never attach them twice.
+      [[ "$mode" != dev ]] || assert_volumes_free_for dev
       # Image build budget: the dev image is only the toolchain; prod builds every app.
       local build_mb=512
       [[ "$mode" == prod ]] && build_mb="$BUILD_BUDGET_MB"
@@ -246,7 +288,7 @@ cmd_mode() {
       # DP-119: copy the root certificate of the DEV HTTPS proxy (Caddy's local CA) out of its
       # volume. Only the public certificate; the CA key never leaves the volume. Trusting it is
       # the owner's step on the Mac (a Keychain change), so the command is printed, not run.
-      [[ "$mode" == dev ]] || die "tls-ca applies to dev only"
+      [[ "$mode" != prod ]] || die "tls-ca applies to dev and local only"
       local out="$HOME/.dream-petroleum-platform/dev-tls"
       mkdir -p "$out"
       docker cp dream-platform-admin-tls:/data/caddy/pki/authorities/local/root.crt "$out/root.crt" >/dev/null ||
@@ -265,16 +307,21 @@ EOT
   esac
 }
 
+# Tests (tools/smoke/local-mode.test.mjs) source this file for its functions only.
+if [[ "${DREAM_STACK_SOURCE_ONLY:-}" == 1 ]]; then return 0 2>/dev/null || exit 0; fi
+
 case "${1:-}" in
-  dev|prod) cmd_mode "$@" ;;
-  preflight) preflight "${2:?preflight dev|prod}" ;;
+  dev|prod|local) cmd_mode "$@" ;;
+  sync-main) shift; sync_main "$@" ;;
+  switch) shift; acquire_heavy_lock "switch"; switch_mode "$@" ;;
+  preflight) preflight "${2:?preflight dev|prod|local}" ;;
   smoke) smoke ;;
   budget)
     mode="${2:-}"
     if [[ -z "$mode" ]]; then # the mode that is running, else dev
       mode="$(running_modes | awk 'NR==1 {print $1}')"; mode="${mode:-dev}"
     fi
-    [[ "$mode" == dev || "$mode" == prod ]] || die "budget dev|prod"
+    [[ "$mode" == dev || "$mode" == prod || "$mode" == local ]] || die "budget dev|prod|local"
     compose_args "$mode"
     resource_check report 0 "${COMPOSE_ARGS[@]}"
     echo "Heavy one-off jobs: toolbox $TOOLBOX_MEM (hard limit, ${TOOLBOX_CPUS} cpus, heap ${TOOLBOX_HEAP_MB} MiB), check/prod image build ${BUILD_BUDGET_MB} MiB (budgeted)" ;;
@@ -329,10 +376,16 @@ case "${1:-}" in
     # Runs only in the mode that is running, in a one-shot container of that mode's `migrate`
     # service, so it connects as dp_migrator (ADR-012A). The API's dp_app role cannot run DDL.
     mode="${2:-}"
-    [[ "$mode" == dev || "$mode" == prod ]] || die "migrate dev|prod"
+    [[ "$mode" == dev || "$mode" == prod || "$mode" == local ]] || die "migrate dev|prod|local"
     shift 2
     require_running_mode "$mode"
-    if [[ "$mode" == dev ]]; then
+    if [[ "$mode" == local ]]; then
+      # ADR-029: committed migrations of the running image only, after a backup of the DEV data.
+      acquire_heavy_lock "migrate local"
+      bk="$(backup_dev_data "migrate")" || die "backup failed; nothing migrated"
+      info "backup: $bk"
+      compose local run --rm --no-deps migrate node_modules/.bin/prisma migrate deploy "$@"
+    elif [[ "$mode" == dev ]]; then
       compose dev run --rm --no-deps migrate node_modules/.bin/prisma migrate dev "$@"  # creates + applies
     else
       compose prod run --rm --no-deps migrate node_modules/.bin/prisma migrate deploy "$@"  # applies committed only
@@ -366,12 +419,12 @@ case "${1:-}" in
       owner-designate | owner-recover | owner-status) ;;
       *) die "iam sync|bootstrap|enrol-link|reset-link|recover-admin|cleanup|owner-designate|owner-recover|owner-status dev|prod [args]" ;;
     esac
-    [[ "$mode" == dev || "$mode" == prod ]] || die "iam $sub dev|prod"
+    [[ "$mode" == dev || "$mode" == prod || "$mode" == local ]] || die "iam $sub dev|prod|local"
     shift 3
     check_db_identity
     require_running_mode "$mode"
     prefix="$(mode_prefix "$mode")"
-    if [[ "$mode" == dev ]]; then db="$(env_value DEV_POSTGRES_DB)"; else db="$(env_value POSTGRES_DB)"; fi
+    db="$(env_value "$(mode_prefix "$mode")POSTGRES_DB")"
     if [[ "$sub" == sync ]]; then
       compose "$mode" run --rm --no-deps -T migrate node dist/iam/iam-cli.js sync --confirm-database "$db"
     elif [[ "$sub" == owner-* ]]; then
@@ -409,12 +462,12 @@ case "${1:-}" in
       retention | erase | hold) ;;
       *) die "leads retention|erase|hold dev|prod [args] (see apps/api/src/leads/leads-cli.ts)" ;;
     esac
-    [[ "$mode" == dev || "$mode" == prod ]] || die "leads $sub dev|prod"
+    [[ "$mode" == dev || "$mode" == prod || "$mode" == local ]] || die "leads $sub dev|prod|local"
     shift 3
     check_db_identity
     require_running_mode "$mode"
     prefix="$(mode_prefix "$mode")"
-    if [[ "$mode" == dev ]]; then db="$(env_value DEV_POSTGRES_DB)"; else db="$(env_value POSTGRES_DB)"; fi
+    db="$(env_value "$(mode_prefix "$mode")POSTGRES_DB")"
     IAM_BOOTSTRAP_DATABASE_URL="postgresql://dp_iam_bootstrap:$(env_value "${prefix}DP_IAM_BOOTSTRAP_PASSWORD")@postgres:5432/${db}?schema=public"
     export IAM_BOOTSTRAP_DATABASE_URL
     compose "$mode" run --rm --no-deps -T -e MIGRATE_DATABASE_URL= -e DATABASE_URL= \
@@ -426,10 +479,10 @@ case "${1:-}" in
     # own dp_app credential; nothing else is passed in. Dry run unless --apply.
     sub="${2:-}"; mode="${3:-}"
     [[ "$sub" == cleanup ]] || die "media cleanup dev|prod [--grace-hours <n>] [--apply]"
-    [[ "$mode" == dev || "$mode" == prod ]] || die "media cleanup dev|prod"
+    [[ "$mode" == dev || "$mode" == prod || "$mode" == local ]] || die "media cleanup dev|prod|local"
     shift 3
     require_running_mode "$mode"
-    if [[ "$mode" == dev ]]; then db="$(env_value DEV_POSTGRES_DB)"; else db="$(env_value POSTGRES_DB)"; fi
+    db="$(env_value "$(mode_prefix "$mode")POSTGRES_DB")"
     compose "$mode" exec -T api node dist/media/media-cli.js cleanup --confirm-database "$db" "$@" ;;
-  *) sed -n '2,21p' "$0"; exit 1 ;;
+  *) sed -n '2,26p' "$0"; exit 1 ;;
 esac
