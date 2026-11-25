@@ -205,6 +205,12 @@ export const translationPackages: Messages["translationPackages"] = {
   },
   api: {
     unreachable: "Yönetim servisine ulaşılamadı veya zamanında yanıt vermedi. Tekrar deneyin.",
+    locked:
+      "Bu içerik şu anda başka bir işlem tarafından kilitli. Hiçbir şey yazılmadı; biraz sonra tekrar deneyin.",
+    databaseBusy:
+      "Veritabanı zamanında yanıt vermedi. Hiçbir şey yazılmadı; biraz sonra tekrar deneyin.",
+    importUnknown:
+      "İçe aktarma beklenmeyen bir hatayla durdu. Sonucu belirsiz: yeniden içe aktarmadan önce kontrolü tekrar çalıştırın (tekrarlanan içe aktarma hiçbir şeyi iki kez yazmaz).",
     importNoAnswer:
       "İçe aktarma zamanında yanıt vermedi. Yine de tamamlanmış olabilir: yeniden içe aktarmadan önce kontrolü tekrar çalıştırın (tekrarlanan içe aktarma hiçbir şeyi iki kez yazmaz).",
     forbidden: "Bu sitenin bu bölümlerini okuma yetkiniz yok.",

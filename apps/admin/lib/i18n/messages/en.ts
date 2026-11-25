@@ -176,6 +176,7 @@ export const en = {
     INTERNAL_ERROR: "Something went wrong.",
     BAD_GATEWAY: "The service is unavailable.",
     STORAGE_UNAVAILABLE: "File storage is not available right now. Try again later.",
+    DATABASE_UNAVAILABLE: "The database is not available right now. Try again later.",
   },
   auth: {
     railTitle: "One console for both sites.",

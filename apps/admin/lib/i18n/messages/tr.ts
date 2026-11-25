@@ -183,6 +183,7 @@ export const tr: Messages = {
     INTERNAL_ERROR: "Bir sorun oluştu.",
     BAD_GATEWAY: "Hizmet şu anda kullanılamıyor.",
     STORAGE_UNAVAILABLE: "Dosya depolama şu anda kullanılamıyor. Daha sonra tekrar deneyin.",
+    DATABASE_UNAVAILABLE: "Veritabanı şu anda kullanılamıyor. Daha sonra tekrar deneyin.",
   },
   auth: {
     railTitle: "İki site için tek konsol.",
