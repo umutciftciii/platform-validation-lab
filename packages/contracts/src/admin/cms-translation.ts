@@ -79,28 +79,61 @@ export function cmsAddressLocale(
 
 type Json = unknown;
 
-function blankFields(fields: readonly CmsField[], value: Json): Json {
+/**
+ * ML-13 (DP-244): one translatable text of a page's content. `path` is a dot path into the
+ * content; a section of a TEMPLATE page is addressed by its id (`sections.@<id>`), so the path is
+ * the same in every language of a group (the ids are copied by "Create translation").
+ */
+export interface CmsTextSlot {
+  path: string;
+  /** The field's length limit where the field descriptor has one (menus: checked by the schema). */
+  max: number | null;
+  multiline: boolean;
+}
+
+/**
+ * Called for every translatable text of a content tree with its current value (a string, or null
+ * for an optional text field that holds no value); returns the new value. Returning the given
+ * value leaves the text unchanged.
+ */
+type TextMap = (slot: CmsTextSlot, value: string | null) => string | null;
+
+const join = (path: string, key: string) => (path ? `${path}.${key}` : key);
+
+function mapFields(fields: readonly CmsField[], value: Json, path: string, fn: TextMap): Json {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const src = value as Record<string, unknown>;
   const out: Record<string, unknown> = { ...src };
   for (const f of fields) {
     if (!(f.key in src)) continue;
     const v = src[f.key];
+    const at = join(path, f.key);
     switch (f.type) {
       case "text":
         // Anchors, focal points and link targets are structure; every other text is translated.
-        if (!f.format && typeof v === "string") out[f.key] = "";
+        if (!f.format && (typeof v === "string" || v === null)) {
+          out[f.key] = fn({ path: at, max: f.max, multiline: f.multiline === true }, v);
+        }
         break;
       case "link":
         if (v && typeof v === "object" && !Array.isArray(v)) {
-          out[f.key] = { ...(v as Record<string, unknown>), label: "" };
+          const link = v as Record<string, unknown>;
+          const label = link["label"];
+          if (typeof label === "string") {
+            out[f.key] = {
+              ...link,
+              label: fn({ path: `${at}.label`, max: 80, multiline: false }, label),
+            };
+          }
         }
         break;
       case "list":
-        if (Array.isArray(v)) out[f.key] = v.map((item) => blankFields(f.fields, item));
+        if (Array.isArray(v)) {
+          out[f.key] = v.map((item, i) => mapFields(f.fields, item, `${at}.${i}`, fn));
+        }
         break;
       case "group":
-        out[f.key] = blankFields(f.fields, v);
+        out[f.key] = mapFields(f.fields, v, at, fn);
         break;
       case "asset":
         break;
@@ -109,15 +142,24 @@ function blankFields(fields: readonly CmsField[], value: Json): Json {
   return out;
 }
 
-function blankSections(sections: Json): Json {
+/** A section's path segment: its id when it has one (stable across languages), else its index. */
+function sectionSegment(section: unknown, index: number): string {
+  const id = (section as { id?: unknown } | null)?.id;
+  return typeof id === "string" && /^[a-z0-9-]{8,40}$/.test(id) ? `@${id}` : `${index}`;
+}
+
+function mapSections(sections: Json, fn: TextMap): Json {
   if (!Array.isArray(sections)) return sections;
-  return sections.map((s) => {
+  return sections.map((s, i) => {
     if (!s || typeof s !== "object") return s;
     const type = (s as { type?: unknown }).type;
     const def = CMS_SECTION_TYPES.find((t) => t.type === type);
-    return def ? blankFields(def.fields, s) : s;
+    return def ? mapFields(def.fields, s, `sections.${sectionSegment(s, i)}`, fn) : s;
   });
 }
+
+/** The draft-creation rule (ML-2): every text becomes empty; a field without a value stays so. */
+const BLANK: TextMap = (_slot, value) => (value === null ? null : "");
 
 /**
  * Menu texts (labels, column and contact titles, address-free notes, the footer's headline, intro
@@ -141,21 +183,76 @@ const MENU_SHARED = [
   /^contact\.(phone|email)\.label$/,
   /^social\.\d+\.label$/,
 ];
-type MenuFill = (path: string, english: string) => string;
-function blankMenu(value: Json, path = "", fill: MenuFill = () => ""): Json {
-  if (Array.isArray(value))
-    return value.map((v, i) => blankMenu(v, path ? `${path}.${i}` : `${i}`, fill));
+function mapMenu(value: Json, path: string, fn: TextMap): Json {
+  if (Array.isArray(value)) return value.map((v, i) => mapMenu(v, join(path, `${i}`), fn));
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    const at = path ? `${path}.${k}` : k;
+    const at = join(path, k);
     // A menu target (`{ type: "page", pageId }`) keeps everything.
     if (k === "target") out[k] = v;
     else if (MENU_TEXT_KEYS.has(k) && typeof v === "string") {
-      out[k] = MENU_SHARED.some((r) => r.test(at)) ? v : fill(at, v);
-    } else out[k] = blankMenu(v, at, fill);
+      out[k] = MENU_SHARED.some((r) => r.test(at))
+        ? v
+        : fn({ path: at, max: null, multiline: k === "intro" }, v);
+    } else out[k] = mapMenu(v, at, fn);
   }
   return out;
+}
+
+/**
+ * Applies `fn` to every translatable text of a page's content (the same texts "Create
+ * translation" empties): TEMPLATE pages their sections (articles also summary and cover alt text),
+ * menus their labels and notes except the shared contact details, other designed pages and
+ * fragments the plain texts of their template fields.
+ */
+function mapCmsTexts(
+  page: { kind: string; templateKey: string },
+  content: Record<string, unknown>,
+  fn: TextMap,
+): Record<string, unknown> {
+  if (page.kind === "TEMPLATE") {
+    const base =
+      page.templateKey === "article"
+        ? (mapFields(CMS_ARTICLE_FIELDS, content, "", fn) as Record<string, unknown>)
+        : { ...content };
+    return { ...base, sections: mapSections(content["sections"], fn) };
+  }
+  if (cmsIsMenu(page.templateKey)) return mapMenu(content, "", fn) as Record<string, unknown>;
+  const template = cmsDesignTemplate(page.templateKey);
+  if (template?.fields)
+    return mapFields(template.fields, content, "", fn) as Record<string, unknown>;
+  // A template with its own schema and no field list: its plain texts by key (as the menus).
+  return mapMenu(content, "", fn) as Record<string, unknown>;
+}
+
+/**
+ * ML-13 (DP-244): the translatable texts of a page's content with their values (a text field
+ * without a value is listed with `null`), in document order.
+ */
+export function cmsContentTexts(
+  page: { kind: string; templateKey: string },
+  content: Record<string, unknown>,
+): (CmsTextSlot & { value: string | null })[] {
+  const out: (CmsTextSlot & { value: string | null })[] = [];
+  mapCmsTexts(page, content, (slot, value) => {
+    out.push({ ...slot, value });
+    return value;
+  });
+  return out;
+}
+
+/**
+ * ML-13 (DP-244): the content with the texts at the given paths replaced; every other value
+ * (structure, images, links, menu targets, texts not named) stays as it is. Paths that are not a
+ * text of this content are ignored (the caller checks them with `cmsContentTexts`).
+ */
+export function cmsWithContentTexts(
+  page: { kind: string; templateKey: string },
+  content: Record<string, unknown>,
+  texts: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  return mapCmsTexts(page, content, (slot, value) => texts.get(slot.path) ?? value);
 }
 
 /** Languages and templates with a reviewed-pending proposal for "Create translation" (ML-7). */
@@ -177,24 +274,16 @@ export function cmsTranslationDraft(
    */
   proposal?: { locale: string },
 ): Record<string, unknown> {
-  if (page.kind === "TEMPLATE") {
-    const base =
-      page.templateKey === "article"
-        ? (blankFields(CMS_ARTICLE_FIELDS, content) as Record<string, unknown>)
-        : { ...content };
-    return { ...base, sections: blankSections(content["sections"]) };
+  if (
+    cmsIsMenu(page.templateKey) &&
+    proposal &&
+    cmsTranslationHasProposal(page.templateKey, proposal.locale)
+  ) {
+    return mapCmsTexts(page, content, (slot, en) =>
+      en === null ? null : menuNlProposal(page.templateKey, slot.path, en),
+    );
   }
-  if (cmsIsMenu(page.templateKey)) {
-    const fill: MenuFill | undefined =
-      proposal && cmsTranslationHasProposal(page.templateKey, proposal.locale)
-        ? (path, en) => menuNlProposal(page.templateKey, path, en)
-        : undefined;
-    return blankMenu(content, "", fill) as Record<string, unknown>;
-  }
-  const template = cmsDesignTemplate(page.templateKey);
-  if (template?.fields) return blankFields(template.fields, content) as Record<string, unknown>;
-  // A template with its own schema and no field list: keep the structure, empty plain texts.
-  return blankMenu(content) as Record<string, unknown>;
+  return mapCmsTexts(page, content, BLANK);
 }
 
 // --- structure warnings -------------------------------------------------------------------------

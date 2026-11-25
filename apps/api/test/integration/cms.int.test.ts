@@ -10,6 +10,9 @@
 // audit events); creating TEMPLATE pages, reserved and taken slugs; saving drafts (validation of
 // the section schema, optimistic versions, audit metadata without values); DESIGN pages are not
 // editable before the S2 import.
+//
+// ML-13a (DP-244, section 23): translation packages — export, read-only dry run and import as
+// drafts (pages, catalogue texts), with the permission, conflict and idempotency rules.
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -40,8 +43,13 @@ import {
   SeoRedirectImportResponseSchema,
   SeoRedirectListResponseSchema,
   SeoRedirectResponseSchema,
+  ProductTranslationsResponseSchema,
+  TranslationImportReportSchema,
+  TranslationPackageSchema,
   menuReferencePlan,
   menuTargetCheck,
+  translationUnitKey,
+  type TranslationPackage,
 } from "@dream/contracts";
 import { assertTestDatabaseUrl } from "@dream/test-utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -5496,5 +5504,867 @@ describe("22. translation groups and pages per language (ML-2, DP-074, ADR-028 D
     } finally {
       await setNlPublic(false);
     }
+  });
+});
+
+describe("23. translation packages (ML-13a, DP-244, ADR-028 D13)", () => {
+  const API = "/api/v1/admin/translation-packages";
+  type Pkg = TranslationPackage;
+  let productEditor: Staff; // product_editor @ BV: product:read/edit, no content permission
+  let groupA: string; // published English page with sections and SEO
+  let groupB: string; // published English page, second slug test
+  let groupC: string; // published English page, no title translation
+  let listingId: string;
+  let productId: string;
+  let categoryId: string;
+  let definitionId: string;
+  let imageId: string;
+
+  const pageOf = async (id: string) => CmsPageResponseSchema.parse((await page(id)).body);
+  const hex = (n: number) => randomBytes(n).toString("hex");
+  const exportAs = (s: Staff, query = `siteId=${BV}&locale=nl`) => s.get(`${API}/export?${query}`);
+  const exported = async (s: Staff = root, query?: string): Promise<Pkg> => {
+    const res = await exportAs(s, query);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return TranslationPackageSchema.parse(res.body);
+  };
+  const key = (kind: "cms" | "listing" | "category" | "spec" | "image", id: string, f: string) =>
+    translationUnitKey(kind, id, f);
+  const fill = (
+    pkg: Pkg,
+    targets: Record<string, string | null>,
+    extra: Pkg["units"] = [],
+  ): Pkg => ({
+    ...pkg,
+    units: [
+      ...pkg.units.map((u) => (u.key in targets ? { ...u, target: targets[u.key] ?? null } : u)),
+      ...extra,
+    ],
+  });
+  const statusOf = (report: { units: { key: string; status: string; rule: string | null }[] }) =>
+    Object.fromEntries(
+      report.units.map((u) => [u.key, u.rule ? `${u.status}:${u.rule}` : u.status]),
+    );
+  const run = async (s: Staff, mode: "dry-run" | "import", pkg: unknown) =>
+    s.post(`${API}/${mode}`, { package: pkg });
+  const report = async (s: Staff, mode: "dry-run" | "import", pkg: unknown) => {
+    const res = await run(s, mode, pkg);
+    expect(res.status, JSON.stringify(res.body).slice(0, 2000)).toBe(200);
+    return TranslationImportReportSchema.parse(res.body);
+  };
+
+  /** Every row the import may write or must not touch, hashed (audit events counted apart). */
+  async function fingerprint(): Promise<string> {
+    const [
+      pages,
+      revisions,
+      pubs,
+      listings,
+      listingTexts,
+      cats,
+      catTexts,
+      defs,
+      defTexts,
+      imgs,
+      imgTexts,
+      products,
+      productPubs,
+      locales,
+    ] = await Promise.all([
+      owner.cmsPage.findMany({ orderBy: { id: "asc" } }),
+      owner.cmsPageRevision.findMany({ orderBy: { id: "asc" } }),
+      owner.cmsPagePublication.findMany({ orderBy: { pageId: "asc" } }),
+      owner.productSiteListing.findMany({ orderBy: { id: "asc" } }),
+      owner.productListingText.findMany({ orderBy: [{ listingId: "asc" }, { locale: "asc" }] }),
+      owner.productCategory.findMany({ orderBy: { id: "asc" } }),
+      owner.productCategoryText.findMany({ orderBy: [{ categoryId: "asc" }, { locale: "asc" }] }),
+      owner.specDefinition.findMany({ orderBy: { id: "asc" } }),
+      owner.specDefinitionText.findMany({ orderBy: [{ definitionId: "asc" }, { locale: "asc" }] }),
+      owner.productImage.findMany({ orderBy: { id: "asc" } }),
+      owner.productImageText.findMany({ orderBy: [{ imageId: "asc" }, { locale: "asc" }] }),
+      owner.product.findMany({ orderBy: { id: "asc" } }),
+      owner.productPublication.findMany({ orderBy: { id: "asc" } }),
+      owner.siteLocale.findMany({ orderBy: [{ siteId: "asc" }, { locale: "asc" }] }),
+    ]);
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          pages,
+          revisions,
+          pubs,
+          listings,
+          listingTexts,
+          cats,
+          catTexts,
+          defs,
+          defTexts,
+          imgs,
+          imgTexts,
+          products,
+          productPubs,
+          locales,
+        }),
+      )
+      .digest("hex");
+  }
+  /** The publication side only: what visitors can see. */
+  async function liveFingerprint(): Promise<string> {
+    const [pubs, revisions, productPubs, locales] = await Promise.all([
+      owner.cmsPagePublication.findMany({ orderBy: { pageId: "asc" } }),
+      owner.cmsPageRevision.findMany({ orderBy: { id: "asc" } }),
+      owner.productPublication.findMany({ orderBy: { id: "asc" } }),
+      owner.siteLocale.findMany({ orderBy: [{ siteId: "asc" }, { locale: "asc" }] }),
+    ]);
+    return createHash("sha256")
+      .update(JSON.stringify({ pubs, revisions, productPubs, locales }))
+      .digest("hex");
+  }
+  const auditCount = () => owner.auditEvent.count();
+
+  async function englishPage(slug: string, title: string, sections: unknown[]) {
+    const created = await bvEditor.post(`/sites/${BV}/pages`, { title, slug });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const saved = await bvEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title,
+      slug,
+      seo: { ...SEO, title: `${title} SEO`, description: `${title} description` },
+      content: { sections },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const published = await bvPublisher.post(`/pages/${p.id}/publish`, { version: p.version + 1 });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    return p.id;
+  }
+  /** Saves a page's draft with changes (the editor's normal save). */
+  type EditorPage = Awaited<ReturnType<typeof pageOf>>["page"];
+  async function saveDraft(id: string, change: (p: EditorPage) => Record<string, unknown>) {
+    const p = (await pageOf(id)).page;
+    const res = await bvEditor.post(`/pages/${id}/draft`, {
+      version: p.version,
+      title: p.title,
+      slug: p.slug,
+      seo: p.seo,
+      content: p.content,
+      ...change(p),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  const nlPage = (group: string) =>
+    owner.cmsPage.findFirst({ where: { translationGroupId: group, locale: "nl" } });
+
+  const HERO_A = { id: "ml13-hero-0001", type: "hero", title: "About ML-13", intro: "Who we are." };
+  const TEXT_A = {
+    id: "ml13-text-0002",
+    type: "text",
+    title: "Our story",
+    body: "Founded in 1990.",
+  };
+
+  beforeAll(async () => {
+    productEditor = await staff(
+      "ml13-product-editor",
+      [{ role: "product_editor", site: BV }],
+      root.userId,
+    );
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: BV, locale: "nl" } },
+      data: { enabled: true, public: false },
+    });
+    groupA = await englishPage("ml13-about", "About ML-13", [HERO_A, TEXT_A]);
+    groupB = await englishPage("ml13-services", "Services ML-13", [
+      { id: "ml13-hero-0003", type: "hero", title: "Services", intro: "What we do." },
+    ]);
+    groupC = await englishPage("ml13-careers", "Careers ML-13", [
+      { id: "ml13-text-0004", type: "text", title: "Join us", body: "Open roles." },
+    ]);
+
+    const now = new Date();
+    categoryId = (
+      await owner.productCategory.create({
+        data: {
+          siteId: BV,
+          name: "ML-13 Base oils",
+          description: "Group III base oils",
+          slug: "ml13-base-oils",
+        },
+      })
+    ).id;
+    productId = (
+      await owner.product.create({
+        data: {
+          code: "ML13-OIL",
+          slug: "ml13-oil",
+          name: "ML-13 Base Oil",
+          summary: "A clear base oil.",
+          description: "Shared product description.",
+          status: "APPROVED",
+          approvedAt: now,
+          approvedById: root.userId,
+          approvedVersion: 1,
+        } as never,
+      })
+    ).id;
+    listingId = (
+      await owner.productSiteListing.create({
+        data: { productId, siteId: BV, categoryId, visibility: "VISIBLE" },
+      })
+    ).id;
+    await owner.productListingText.upsert({
+      where: { listingId_locale: { listingId, locale: "en" } },
+      create: {
+        listingId,
+        siteId: BV,
+        locale: "en",
+        title: "ML-13 Base Oil 4",
+        seoTitle: "ML-13 Base Oil 4 SEO",
+      },
+      update: { title: "ML-13 Base Oil 4", seoTitle: "ML-13 Base Oil 4 SEO" },
+    });
+    definitionId = (
+      await owner.specDefinition.create({
+        data: {
+          key: `ml13_viscosity_${hex(3)}`,
+          name: "Kinematic viscosity ML-13",
+          dataType: "NUMBER",
+        },
+      })
+    ).id;
+    await owner.productSpecValue.create({
+      data: { productId, definitionId, numberValue: 4.2 },
+    });
+    imageId = (
+      await owner.productImage.create({
+        data: {
+          productId,
+          storageKey: `products/${hex(16)}/original`,
+          mimeType: "image/webp",
+          byteSize: 1000,
+          width: 1200,
+          height: 800,
+          sha256: hex(32),
+          originalFilename: "ml13-drum.webp",
+          altText: "A blue ML-13 drum",
+          isPublic: true,
+        },
+      })
+    ).id;
+  });
+
+  it("export: read permissions of each part, the site's languages, every source text with a stable key", async () => {
+    expectError(await exportAs(nobody), 403, "FORBIDDEN");
+    expectError(await exportAs(comEditor), 403, "FORBIDDEN");
+    expectError(await exportAs(productEditor), 403, "FORBIDDEN"); // cms needs content:read
+    expectError(await exportAs(root, `siteId=${BV}&locale=en`), 400, "VALIDATION_FAILED", {
+      path: "locale",
+      rule: "is_source",
+    });
+    expectError(await exportAs(root, `siteId=${BV}&locale=de`), 409, "CONFLICT_STATE", {
+      path: "locale",
+      rule: "not_enabled",
+    });
+    expectError(
+      await exportAs(root, `siteId=${BV}&locale=nl&types=media`),
+      400,
+      "VALIDATION_FAILED",
+    );
+
+    const catalogOnly = await exported(productEditor, `siteId=${BV}&locale=nl&types=catalog`);
+    expect(catalogOnly.types).toEqual(["catalog"]);
+    expect(catalogOnly.pages).toEqual([]);
+    expect(catalogOnly.units.some((u) => u.kind === "cms")).toBe(false);
+
+    const before = await auditCount();
+    const pkg = await exported(bvReader); // read_only: content:read and product:read
+    expect(pkg).toMatchObject({
+      site: { id: BV, key: "BV" },
+      sourceLocale: "en",
+      targetLocale: "nl",
+    });
+    expect(pkg.pages.find((p) => p.groupId === groupA)).toMatchObject({
+      sourcePageId: groupA,
+      sourceRevisionNumber: 1,
+      kind: "TEMPLATE",
+      templateKey: "standard",
+      path: "/ml13-about",
+      targetPageId: null,
+    });
+    const byKey = new Map(pkg.units.map((u) => [u.key, u]));
+    const src = (k: string) => byKey.get(k)?.source;
+    expect(src(key("cms", groupA, "title"))).toBe("About ML-13");
+    expect(src(key("cms", groupA, "slug"))).toBe("ml13-about");
+    expect(src(key("cms", groupA, "seo.title"))).toBe("About ML-13 SEO");
+    expect(src(key("cms", groupA, "content.sections.@ml13-hero-0001.title"))).toBe("About ML-13");
+    expect(src(key("cms", groupA, "content.sections.@ml13-text-0002.body"))).toBe(
+      "Founded in 1990.",
+    );
+    expect(byKey.has(key("cms", groupA, "seo.ogTitle"))).toBe(false); // no source text
+    expect(byKey.get(key("cms", groupA, "title"))).toMatchObject({
+      current: null,
+      currentHash: null,
+      target: null,
+      maxLength: 200,
+      sourceHash: createHash("sha256").update("About ML-13").digest("hex"),
+    });
+    expect(byKey.get(key("cms", groupA, "content.sections.@ml13-hero-0001.title"))?.maxLength).toBe(
+      120,
+    );
+    // The site's menus are in the package as well (published fragments).
+    expect(pkg.pages.some((p) => p.templateKey === "bv.site-nav")).toBe(true);
+    // Catalogue: own listing text, else the shared product text; SEO; category; spec; alt text.
+    expect(src(key("listing", listingId, "title"))).toBe("ML-13 Base Oil 4");
+    expect(src(key("listing", listingId, "summary"))).toBe("A clear base oil.");
+    expect(src(key("listing", listingId, "description"))).toBe("Shared product description.");
+    expect(src(key("listing", listingId, "seo.title"))).toBe("ML-13 Base Oil 4 SEO");
+    expect(byKey.has(key("listing", listingId, "seo.description"))).toBe(false);
+    expect(src(key("category", categoryId, "name"))).toBe("ML-13 Base oils");
+    expect(src(key("category", categoryId, "description"))).toBe("Group III base oils");
+    expect(src(key("spec", definitionId, "name"))).toBe("Kinematic viscosity ML-13");
+    expect(src(key("image", imageId, "alt"))).toBe("A blue ML-13 drum");
+    expect(byKey.get(key("listing", listingId, "title"))?.context).toBe(
+      "ML13-OIL · ML-13 Base Oil",
+    );
+    // One audit event; counts, never texts.
+    expect(await auditCount()).toBe(before + 1);
+    const audit = await lastAudit("translation.package_exported");
+    expect(audit).toMatchObject({ actorUserId: bvReader.userId, siteId: BV, outcome: "SUCCESS" });
+    expect(audit?.metadata).toMatchObject({
+      locale: "nl",
+      types: ["cms", "catalog"],
+      units: pkg.units.length,
+    });
+    expect(JSON.stringify(audit?.metadata)).not.toMatch(/ML-13|Founded/);
+  });
+
+  let filled: Pkg;
+
+  it("dry run: a per-unit report, the missing edit permissions; nothing written, no audit event", async () => {
+    const pkg = await exported();
+    filled = fill(pkg, {
+      [key("cms", groupA, "title")]: "Over ML-13",
+      [key("cms", groupA, "slug")]: "over-ml13",
+      [key("cms", groupA, "seo.title")]: "Over ML-13 SEO",
+      [key("cms", groupA, "content.sections.@ml13-hero-0001.title")]: "Over ML-13",
+      [key("cms", groupA, "content.sections.@ml13-text-0002.title")]: "Ons verhaal",
+      [key("cms", groupA, "content.sections.@ml13-text-0002.body")]: "Opgericht in 1990.",
+      [key("listing", listingId, "title")]: "ML-13 Basisolie 4",
+      [key("listing", listingId, "summary")]: "  Een heldere basisolie.  ",
+      [key("category", categoryId, "name")]: "ML-13 Basisoliën",
+      [key("spec", definitionId, "name")]: "Kinematische viscositeit ML-13",
+      [key("image", imageId, "alt")]: "Een blauw ML-13 vat",
+    });
+    const fp = await fingerprint();
+    const audits = await auditCount();
+    const r = await report(bvEditor, "dry-run", filled);
+    expect(r).toMatchObject({ dryRun: true, siteId: BV, canImport: false });
+    expect(r.missingPermissions.sort()).toEqual(["product:edit", "product_master:edit"]);
+    const st = statusOf(r);
+    expect(st[key("cms", groupA, "title")]).toBe("create");
+    expect(st[key("cms", groupA, "content.sections.@ml13-hero-0001.intro")]).toBe("empty");
+    expect(st[key("listing", listingId, "summary")]).toBe("create");
+    expect(st[key("image", imageId, "alt")]).toBe("create");
+    expect(r.pages.find((p) => p.groupId === groupA)).toMatchObject({
+      action: "create",
+      targetPageId: null,
+    });
+    expect(r.pages.find((p) => p.groupId === groupB)).toMatchObject({
+      action: "skipped",
+      rule: "nothing_to_write",
+    });
+    expect(r.counts.create).toBe(11);
+    expect(r.written).toEqual({
+      cmsPagesCreated: 0,
+      cmsPagesUpdated: 0,
+      listings: 0,
+      categories: 0,
+      specs: 0,
+      images: 0,
+    });
+    expect(await fingerprint()).toBe(fp);
+    expect(await auditCount()).toBe(audits);
+    // A dry run needs the read permissions of the declared parts.
+    expectError(await run(nobody, "dry-run", filled), 403, "FORBIDDEN");
+    expectError(await run(comEditor, "dry-run", filled), 403, "FORBIDDEN");
+  });
+
+  it("a broken package, another site key or a missing permission refuses the whole import", async () => {
+    const fp = await fingerprint();
+    // content_editor holds content:edit but not product:edit / product_master:edit.
+    expectError(await run(bvEditor, "import", filled), 403, "FORBIDDEN");
+    const tampered = {
+      ...filled,
+      units: filled.units.map((u, i) => (i === 0 ? { ...u, source: `${u.source}!` } : u)),
+    };
+    expectError(await run(root, "import", tampered), 400, "VALIDATION_FAILED", {
+      path: "package.units.0.sourceHash",
+      rule: "mismatch",
+    });
+    expectError(
+      await run(root, "import", { ...filled, site: { id: BV, key: "CORPORATE" } }),
+      400,
+      "VALIDATION_FAILED",
+      {
+        path: "package.site.key",
+        rule: "mismatch",
+      },
+    );
+    expectError(
+      await run(root, "import", { ...filled, units: [{ ...filled.units[0], extra: 1 }] }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await run(root, "import", { ...filled, sourceLocale: "de" }),
+      409,
+      "CONFLICT_STATE",
+      {
+        path: "package.sourceLocale",
+        rule: "changed",
+      },
+    );
+    expectError(
+      await run(root, "import", { ...filled, targetLocale: "de" }),
+      409,
+      "CONFLICT_STATE",
+      {
+        path: "locale",
+        rule: "not_enabled",
+      },
+    );
+    expect(await fingerprint()).toBe(fp);
+  });
+
+  it("import writes drafts only: the Dutch page is created, catalogue rows written, nothing published", async () => {
+    const live = await liveFingerprint();
+    const listingBefore = await owner.productSiteListing.findUniqueOrThrow({
+      where: { id: listingId },
+    });
+    const r = await report(root, "import", filled);
+    expect(r.dryRun).toBe(false);
+    expect(r.written).toEqual({
+      cmsPagesCreated: 1,
+      cmsPagesUpdated: 0,
+      listings: 1,
+      categories: 1,
+      specs: 1,
+      images: 1,
+    });
+    expect(r.counts.create).toBe(11);
+    const nl = await nlPage(groupA);
+    expect(nl).toMatchObject({
+      locale: "nl",
+      kind: "TEMPLATE",
+      path: "/over-ml13",
+      title: "Over ML-13",
+      seoTitle: "Over ML-13 SEO",
+      seoDescription: null,
+      version: 1,
+    });
+    expect(r.pages.find((p) => p.groupId === groupA)).toMatchObject({
+      action: "create",
+      targetPageId: nl?.id,
+    });
+    const enRev = await owner.cmsPageRevision.findFirstOrThrow({
+      where: { pageId: groupA },
+      orderBy: { revisionNumber: "desc" },
+    });
+    expect(nl?.translationSourceRevisionId).toBe(enRev.id);
+    // The source's structure (ids, types, the empty optional fields) with the translated texts;
+    // a text without a translation is empty.
+    const enContent = enRev.content as { sections: Record<string, unknown>[] };
+    expect(nl?.content).toEqual({
+      sections: [
+        { ...enContent.sections[0], title: "Over ML-13", intro: "" },
+        { ...enContent.sections[1], title: "Ons verhaal", body: "Opgericht in 1990." },
+      ],
+    });
+    // A draft only: no revision, no publication; visitors see nothing new.
+    expect(await owner.cmsPageRevision.count({ where: { pageId: nl!.id } })).toBe(0);
+    expect(await owner.cmsPagePublication.count({ where: { pageId: nl!.id } })).toBe(0);
+    expect(await liveFingerprint()).toBe(live);
+    expect(
+      (
+        await owner.siteLocale.findUniqueOrThrow({
+          where: { siteId_locale: { siteId: BV, locale: "nl" } },
+        })
+      ).public,
+    ).toBe(false);
+    // The editor sees the page with the same structure as its source.
+    expect((await pageOf(nl!.id)).page.structureWarnings).toEqual([]);
+
+    const text = await owner.productListingText.findUniqueOrThrow({
+      where: { listingId_locale: { listingId, locale: "nl" } },
+    });
+    expect(text).toMatchObject({
+      title: "ML-13 Basisolie 4",
+      summary: "Een heldere basisolie.",
+      description: null,
+    });
+    expect(
+      (await owner.productSiteListing.findUniqueOrThrow({ where: { id: listingId } })).version,
+    ).toBe(listingBefore.version + 1);
+    expect(
+      await owner.productCategoryText.findUniqueOrThrow({
+        where: { categoryId_locale: { categoryId, locale: "nl" } },
+      }),
+    ).toMatchObject({ name: "ML-13 Basisoliën", description: null });
+    expect(
+      (
+        await owner.specDefinitionText.findUniqueOrThrow({
+          where: { definitionId_locale: { definitionId, locale: "nl" } },
+        })
+      ).name,
+    ).toBe("Kinematische viscositeit ML-13");
+    expect(
+      (
+        await owner.productImageText.findUniqueOrThrow({
+          where: { imageId_locale: { imageId, locale: "nl" } },
+        })
+      ).altText,
+    ).toBe("Een blauw ML-13 vat");
+    // The translation states agree: the written parts are not "outdated".
+    const tr = ProductTranslationsResponseSchema.parse(
+      (
+        await root.get(
+          `/api/v1/admin/catalog/products/${productId}/translations?siteId=${BV}&locale=nl`,
+        )
+      ).body,
+    );
+    expect(tr.listing?.state).not.toBe("OUTDATED");
+    expect(tr.category?.state).not.toBe("OUTDATED");
+    expect(tr.specs.find((s) => s.definitionId === definitionId)?.state).not.toBe("OUTDATED");
+    expect(tr.images.find((i) => i.id === imageId)?.state).not.toBe("OUTDATED");
+
+    // Audit: one event per written row (origin and digest) and one summary; never a text.
+    const summary = await lastAudit("translation.package_imported");
+    expect(summary).toMatchObject({ actorUserId: root.userId, siteId: BV, outcome: "SUCCESS" });
+    expect(summary?.metadata).toMatchObject({
+      digest: r.digest,
+      targetLocale: "nl",
+      written: r.written,
+    });
+    expect(await lastAudit("cms.translation_created")).toMatchObject({ resourceId: nl!.id });
+    expect((await lastAudit("catalog.listing_translation_updated"))?.metadata).toMatchObject({
+      origin: "translation_package",
+      digest: r.digest,
+      checked: ["texts", "seo"],
+    });
+    for (const action of [
+      "translation.package_imported",
+      "catalog.listing_translation_updated",
+      "cms.translation_created",
+    ]) {
+      expect(JSON.stringify((await lastAudit(action))?.metadata)).not.toMatch(
+        /Basisolie|Over ML|verhaal/,
+      );
+    }
+  });
+
+  it("a repeated import is idempotent: every unit unchanged, no version raised, nothing written", async () => {
+    const fp = await fingerprint();
+    const r = await report(root, "import", filled);
+    expect(r.counts).toMatchObject({ create: 0, update: 0, unchanged: 11 });
+    expect(r.written).toEqual({
+      cmsPagesCreated: 0,
+      cmsPagesUpdated: 0,
+      listings: 0,
+      categories: 0,
+      specs: 0,
+      images: 0,
+    });
+    expect(r.pages.find((p) => p.groupId === groupA)).toMatchObject({ action: "unchanged" });
+    expect(await fingerprint()).toBe(fp);
+  });
+
+  it("a repeated import writes exactly one audit event, by design: the summary of the attempt (no per-row event)", async () => {
+    const audits = await auditCount();
+    const fp = await fingerprint();
+    const r = await report(root, "import", filled);
+    expect(r.counts).toMatchObject({ create: 0, update: 0 });
+    // Content and versions: unchanged (as above).
+    expect(await fingerprint()).toBe(fp);
+    expect(await auditCount()).toBe(audits + 1);
+    const events = await owner.auditEvent.findMany({ orderBy: { occurredAt: "desc" }, take: 1 });
+    expect(events.map((e) => e.action)).toEqual(["translation.package_imported"]);
+    expect(events[0]).toMatchObject({ actorUserId: root.userId, siteId: BV, outcome: "SUCCESS" });
+    expect(events[0]?.metadata).toMatchObject({
+      digest: r.digest,
+      written: {
+        cmsPagesCreated: 0,
+        cmsPagesUpdated: 0,
+        listings: 0,
+        categories: 0,
+        specs: 0,
+        images: 0,
+      },
+      counts: expect.objectContaining({ create: 0, update: 0, unchanged: 11 }),
+    });
+  });
+
+  it("CMS source is the published revision: a newer draft is not exported or compared; a page that is not live is out of scope", async () => {
+    const unit = (pkg: Pkg, field: string) =>
+      pkg.units.find((u) => u.key === key("cms", groupA, field));
+    const before = await exported();
+    // An English draft newer than the live revision (saved, not published).
+    await saveDraft(groupA, () => ({
+      title: "About ML-13 (draft only)",
+      content: { sections: [{ ...HERO_A, title: "Draft-only hero" }, TEXT_A] },
+    }));
+    const after = await exported();
+    expect(after.pages.find((p) => p.groupId === groupA)?.sourceRevisionNumber).toBe(1);
+    for (const field of ["title", "content.sections.@ml13-hero-0001.title"]) {
+      expect(unit(after, field)).toMatchObject({
+        source: "About ML-13",
+        sourceHash: unit(before, field)?.sourceHash,
+      });
+    }
+    expect(JSON.stringify(after.units)).not.toContain("draft only");
+    expect(JSON.stringify(after.units)).not.toContain("Draft-only");
+    // The import compares with the same published text: nothing of the page is outdated.
+    const r = await report(root, "dry-run", filled);
+    const groupUnits = r.units.filter((u) => u.key.startsWith(`cms:${groupA}:`));
+    expect(groupUnits.length).toBeGreaterThan(0);
+    expect(groupUnits.filter((u) => u.status === "outdated")).toEqual([]);
+    expect(statusOf(r)[key("cms", groupA, "title")]).toBe("unchanged");
+    // The English draft is put back (the later sections publish this page).
+    await saveDraft(groupA, () => ({
+      title: "About ML-13",
+      content: { sections: [HERO_A, TEXT_A] },
+    }));
+
+    // A page that was never published is not exported.
+    const draftOnly = await bvEditor.post(`/sites/${BV}/pages`, {
+      title: "Never published ML-13",
+      slug: "ml13-never-published",
+    });
+    expect(draftOnly.status).toBe(201);
+    const draftGroup = CmsPageResponseSchema.parse(draftOnly.body).page.id;
+    // A live page, exported, then taken off the site.
+    const liveGroup = await englishPage("ml13-unpublished", "Unpublished ML-13", [
+      { id: "ml13-text-0005", type: "text", title: "Gone", body: "Soon gone." },
+    ]);
+    const pkg = await exported();
+    expect(pkg.pages.some((p) => p.groupId === draftGroup)).toBe(false);
+    expect(pkg.pages.some((p) => p.groupId === liveGroup)).toBe(true);
+    const live = (await pageOf(liveGroup)).page;
+    const off = await bvPublisher.post(`/pages/${liveGroup}/unpublish`, {
+      publicationVersion: live.publication!.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await exported()).pages.some((p) => p.groupId === liveGroup)).toBe(false);
+    // Its units in an earlier package are skipped, and nothing is created for it.
+    const fp = await fingerprint();
+    const r2 = await report(
+      root,
+      "import",
+      fill(pkg, {
+        [key("cms", liveGroup, "title")]: "Niet meer online ML-13",
+        [key("cms", liveGroup, "content.sections.@ml13-text-0005.body")]: "Binnenkort weg.",
+      }),
+    );
+    expect(statusOf(r2)[key("cms", liveGroup, "title")]).toBe("outdated:source_unpublished");
+    expect(statusOf(r2)[key("cms", liveGroup, "content.sections.@ml13-text-0005.body")]).toBe(
+      "outdated:source_unpublished",
+    );
+    expect(r2.pages.find((p) => p.groupId === liveGroup)).toMatchObject({
+      action: "skipped",
+      rule: "source_unpublished",
+    });
+    expect(r2.written).toMatchObject({ cmsPagesCreated: 0, cmsPagesUpdated: 0 });
+    expect(await nlPage(liveGroup)).toBeNull();
+    expect(await fingerprint()).toBe(fp);
+  });
+
+  it("outdated, conflicting, mis-structured and invalid units are skipped; the valid ones are written", async () => {
+    const pkg = await exported();
+    const nlId = (await nlPage(groupA))!.id;
+    expect(pkg.pages.find((p) => p.groupId === groupA)?.targetPageId).toBe(nlId);
+    expect(pkg.units.find((u) => u.key === key("cms", groupA, "title"))).toMatchObject({
+      current: "Over ML-13",
+    });
+    // After the export: the English title changes (new revision) and an editor changes the
+    // Dutch SEO title.
+    await saveDraft(groupA, () => ({ title: "About ML-13 (new)" }));
+    const en = (await pageOf(groupA)).page;
+    expect(
+      (await bvPublisher.post(`/pages/${groupA}/publish`, { version: en.version })).status,
+    ).toBe(200);
+    await saveDraft(nlId, (p) => ({ seo: { ...p.seo, title: "Over ML-13 (redactie)" } }));
+    const r = await report(
+      root,
+      "import",
+      fill(
+        pkg,
+        {
+          [key("cms", groupA, "title")]: "Over ML-13 (nieuw)", // source changed → outdated
+          [key("cms", groupA, "seo.title")]: "Over ML-13 SEO 2", // target changed → conflict
+          [key("cms", groupA, "seo.description")]: "x".repeat(321), // → invalid too_long
+          [key("cms", groupA, "content.sections.@ml13-hero-0001.intro")]: "Wie wij zijn.", // written
+          [key("cms", groupA, "content.sections.@ml13-text-0002.title")]: "y".repeat(121), // too_long
+          [key("listing", listingId, "description")]: "Gedeelde\u0007omschrijving", // control chars
+          [key("listing", listingId, "seo.title")]: "ML-13 Basisolie 4 SEO", // written
+          [key("category", categoryId, "description")]: "Groep III basisoliën", // written
+        },
+        // A unit of a listing that does not exist (any more).
+        [
+          {
+            key: key("listing", "0190f2a1-0000-7000-8000-0000000000ff", "title"),
+            kind: "listing",
+            context: "gone",
+            maxLength: 200,
+            multiline: false,
+            source: "Gone",
+            sourceHash: createHash("sha256").update("Gone").digest("hex"),
+            current: null,
+            currentHash: null,
+            target: "Weg",
+          },
+        ],
+      ),
+    );
+    const st = statusOf(r);
+    expect(st[key("cms", groupA, "title")]).toBe("outdated:source_changed");
+    expect(st[key("cms", groupA, "seo.title")]).toBe("conflict:target_changed");
+    expect(st[key("cms", groupA, "seo.description")]).toBe("invalid:too_long");
+    expect(st[key("cms", groupA, "content.sections.@ml13-hero-0001.intro")]).toBe("create");
+    expect(st[key("cms", groupA, "content.sections.@ml13-text-0002.title")]).toBe(
+      "invalid:too_long",
+    );
+    expect(st[key("listing", listingId, "description")]).toBe("invalid:control_characters");
+    expect(st[key("listing", listingId, "seo.title")]).toBe("create");
+    expect(st[key("category", categoryId, "description")]).toBe("create");
+    expect(st[key("listing", "0190f2a1-0000-7000-8000-0000000000ff", "title")]).toBe("not_found");
+    expect(r.written).toMatchObject({ cmsPagesUpdated: 1, listings: 1, categories: 1 });
+    const nl = await owner.cmsPage.findUniqueOrThrow({ where: { id: nlId } });
+    expect(nl.title).toBe("Over ML-13");
+    expect(nl.seoTitle).toBe("Over ML-13 (redactie)");
+    expect(
+      (nl.content as { sections: { intro?: string; title: string }[] }).sections[0]?.intro,
+    ).toBe("Wie wij zijn.");
+    // Not every source text is verified: the page still records the older source revision.
+    const revs = await owner.cmsPageRevision.findMany({
+      where: { pageId: groupA },
+      orderBy: { revisionNumber: "asc" },
+    });
+    expect(revs).toHaveLength(2);
+    expect(nl.translationSourceRevisionId).toBe(revs[0]?.id);
+    expect(
+      (
+        await owner.productListingText.findUniqueOrThrow({
+          where: { listingId_locale: { listingId, locale: "nl" } },
+        })
+      ).seoTitle,
+    ).toBe("ML-13 Basisolie 4 SEO");
+
+    // A translation whose structure differs gets no content text; its title still can.
+    await saveDraft(nlId, (p) => ({
+      content: { sections: [(p.content["sections"] as unknown[])[0]] },
+    }));
+    const pkg2 = await exported();
+    const r2 = await report(
+      root,
+      "dry-run",
+      fill(pkg2, {
+        [key("cms", groupA, "title")]: "Over ML-13 (nieuw)",
+        [key("cms", groupA, "content.sections.@ml13-hero-0001.intro")]: "Wie we zijn.",
+      }),
+    );
+    expect(statusOf(r2)[key("cms", groupA, "title")]).toBe("update");
+    expect(statusOf(r2)[key("cms", groupA, "content.sections.@ml13-hero-0001.intro")]).toBe(
+      "conflict:structure",
+    );
+  });
+
+  it("menus: a text the menu schema refuses (e.g. too long) is invalid; the others are processed", async () => {
+    // The Dutch menu of the earlier sections has its own structure; give it the structure of the
+    // live English menu (as "Create translation" would) so its texts can be imported.
+    const enNav = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: BV, templateKey: "bv.site-nav", locale: "en" },
+    });
+    const enRev = await owner.cmsPageRevision.findFirstOrThrow({
+      where: { pageId: enNav.id },
+      orderBy: { revisionNumber: "desc" },
+    });
+    await owner.cmsPage.updateMany({
+      where: { siteId: BV, templateKey: "bv.site-nav", locale: "nl" },
+      data: { content: enRev.content as never, version: { increment: 1 } },
+    });
+    const pkg = await exported();
+    const nav = pkg.pages.find((p) => p.templateKey === "bv.site-nav")!;
+    const labels = pkg.units.filter(
+      (u) => u.key.startsWith(`cms:${nav.groupId}:content.`) && u.key.endsWith(".label"),
+    );
+    expect(labels.length).toBeGreaterThan(1);
+    const [tooLong, ok] = labels as [(typeof labels)[0], (typeof labels)[0]];
+    const r = await report(
+      root,
+      "dry-run",
+      fill(pkg, {
+        [key("cms", nav.groupId, "title")]: "Navigatie",
+        [tooLong.key]: "x".repeat(81),
+        [ok.key]: `${ok.source} (NL)`,
+      }),
+    );
+    const st = statusOf(r);
+    expect(st[tooLong.key]).toBe("invalid:schema");
+    expect(["create", "update"]).toContain(st[ok.key]);
+    expect(r.pages.find((p) => p.groupId === nav.groupId)?.action).toMatch(/create|update/);
+  });
+
+  it("addresses: a translated slug must be valid and free; a new page needs its title", async () => {
+    const pkg = await exported();
+    const r = await report(
+      root,
+      "dry-run",
+      fill(pkg, {
+        [key("cms", groupB, "title")]: "Diensten ML-13",
+        [key("cms", groupB, "slug")]: "over-ml13", // the Dutch page of group A has it
+        [key("cms", groupC, "content.sections.@ml13-text-0004.title")]: "Werk bij ons",
+      }),
+    );
+    let st = statusOf(r);
+    expect(st[key("cms", groupB, "slug")]).toBe("conflict:slug_taken");
+    // The page is still created, at the source's address (free in Dutch).
+    expect(st[key("cms", groupB, "title")]).toBe("create");
+    expect(r.pages.find((p) => p.groupId === groupB)).toMatchObject({ action: "create" });
+    expect(st[key("cms", groupC, "content.sections.@ml13-text-0004.title")]).toBe(
+      "invalid:title_required",
+    );
+    expect(r.pages.find((p) => p.groupId === groupC)).toMatchObject({
+      action: "skipped",
+      rule: "title_required",
+    });
+
+    const bad = async (slug: string) =>
+      statusOf(
+        await report(
+          root,
+          "dry-run",
+          fill(pkg, { [key("cms", groupB, "title")]: "D", [key("cms", groupB, "slug")]: slug }),
+        ),
+      )[key("cms", groupB, "slug")];
+    expect(await bad("Over Ons")).toBe("invalid:format");
+    expect(await bad("products")).toBe("invalid:reserved");
+
+    // Two pages of the package asking for the same new address: the first in the package wins
+    // (pages are exported in address order: /ml13-careers before /ml13-services); the other page
+    // is still created, at its source's address.
+    const r2 = await report(
+      root,
+      "import",
+      fill(pkg, {
+        [key("cms", groupB, "title")]: "Diensten ML-13",
+        [key("cms", groupB, "slug")]: "ml13-nl-dubbel",
+        [key("cms", groupC, "title")]: "Werken ML-13",
+        [key("cms", groupC, "slug")]: "ml13-nl-dubbel",
+      }),
+    );
+    st = statusOf(r2);
+    expect(st[key("cms", groupC, "slug")]).toBe("create");
+    expect(st[key("cms", groupB, "slug")]).toBe("conflict:duplicate_slug");
+    expect((await nlPage(groupC))?.path).toBe("/ml13-nl-dubbel");
+    expect((await nlPage(groupB))?.path).toBe("/ml13-services");
+    expect(r2.written.cmsPagesCreated).toBe(2);
   });
 });

@@ -14,7 +14,9 @@
  *  5. Body: at most 16 KB of JSON (413, 400). Nest's own body parser is off. DP-212: the admin
  *     redirect CSV import (`POST /api/v1/admin/seo/sites/:siteId/redirects/import`) is the one
  *     JSON route with a larger limit (`SEO_REDIRECT_IMPORT_MAX_BODY_BYTES`, 320 KB: a CSV of at
- *     most 128 KB, JSON-escaped); it is still read and parsed here like every JSON body.
+ *     most 128 KB, JSON-escaped); ML-13a (DP-244): so are the translation package dry run and
+ *     import (`TRANSLATION_PACKAGE_MAX_BODY_BYTES`, 4 MB). They are still read and parsed here
+ *     like every JSON body.
  *     Two exceptions, both from the admin app and streamed by their controllers: (PM-2)
  *     `PUT /api/v1/admin/catalog/products/:id/images` takes a raw JPEG/PNG/WebP body of at most
  *     10 MB; (PM-5) `PUT /api/v1/admin/catalog/documents/:id/revisions` a raw PDF of at most
@@ -28,7 +30,12 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { SEO_REDIRECT_IMPORT_MAX_BODY_BYTES, SEO_REDIRECT_IMPORT_PATH } from "@dream/contracts";
+import {
+  SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
+  SEO_REDIRECT_IMPORT_PATH,
+  TRANSLATION_PACKAGE_BODY_PATH,
+  TRANSLATION_PACKAGE_MAX_BODY_BYTES,
+} from "@dream/contracts";
 import { ipPrefix } from "../auth/ip-prefix.js";
 import type { ApiConfig } from "./api-config.js";
 import { writeError } from "./api-error.js";
@@ -91,11 +98,15 @@ export function rawUpload(
   return null;
 }
 
-/** DP-212: the JSON body limit of a request (16 KB, the redirect import 320 KB). */
+/**
+ * DP-212: the JSON body limit of a request (16 KB, the redirect import 320 KB). ML-13a (DP-244):
+ * the translation package dry run and import 4 MB.
+ */
 export function jsonBodyLimit(app: AuthAppValue, method: string, pathname: string): number {
-  return app === "ADMIN" && method === "POST" && SEO_REDIRECT_IMPORT_PATH.test(pathname)
-    ? SEO_REDIRECT_IMPORT_MAX_BODY_BYTES
-    : MAX_BODY_BYTES;
+  if (app !== "ADMIN" || method !== "POST") return MAX_BODY_BYTES;
+  if (SEO_REDIRECT_IMPORT_PATH.test(pathname)) return SEO_REDIRECT_IMPORT_MAX_BODY_BYTES;
+  if (TRANSLATION_PACKAGE_BODY_PATH.test(pathname)) return TRANSLATION_PACKAGE_MAX_BODY_BYTES;
+  return MAX_BODY_BYTES;
 }
 
 export function isHealthPath(pathname: string): boolean {

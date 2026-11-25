@@ -66,3 +66,15 @@ describe("redirect import body limit", () => {
     expect(jsonBodyLimit("ADMIN", "POST", "/api/v1/auth/staff/login")).toBe(MAX_BODY_BYTES);
   });
 });
+
+describe("translation package routes (ML-13a, DP-244)", () => {
+  const p = "/api/v1/admin/translation-packages";
+  it("is 4 MB only for POST dry-run and import from the admin app", () => {
+    expect(jsonBodyLimit("ADMIN", "POST", `${p}/import`)).toBe(4 * 1024 * 1024);
+    expect(jsonBodyLimit("ADMIN", "POST", `${p}/dry-run`)).toBe(4 * 1024 * 1024);
+    expect(jsonBodyLimit("WEB_BV", "POST", `${p}/import`)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "PUT", `${p}/import`)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "POST", `${p}/export`)).toBe(MAX_BODY_BYTES);
+    expect(jsonBodyLimit("ADMIN", "POST", `${p}/import/x`)).toBe(MAX_BODY_BYTES);
+  });
+});
