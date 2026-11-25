@@ -9,6 +9,9 @@
 # (resource-policy.mjs, DP-116).
 
 PROJECT="${PROJECT:-dream-petroleum-platform}"
+# Container name prefix of the stack (compose files). Overridden only by the isolated local-mode
+# fixture (DP-277), together with PROJECT, DREAM_ENV_FILE, DREAM_PORTS and DREAM_LOCAL_OVERLAY.
+CONTAINER_PREFIX="${DREAM_CONTAINER_PREFIX:-dream-platform}"
 TEST_PROJECT="$PROJECT-test"   # disposable test stack (compose.test.yaml, ADR-010)
 NODE_IMAGE="${NODE_IMAGE:-node:24.22.2-bookworm-slim}"
 MiB=$((1024 * 1024))
@@ -36,7 +39,7 @@ to_bytes() { # 3072m | 3g | 1536 (MiB); bash 3.2 compatible (macOS /bin/bash)
 }
 
 # resource_check <job> <jobBytes> [compose args...]
-#   job: dev | prod | heavy:<name> | report. With compose args, the rendered config of that
+#   job: dev | prod | local | heavy:<name> | report. With compose args, the rendered config of that
 #   mode is the plan: every service, or only PLAN_SERVICES and their dependencies when that
 #   array is set (`stack.sh <mode> up <service>...`). Prints the budget table; returns non-zero
 #   if the job must not start.
@@ -75,6 +78,10 @@ heavy_lock_inherited() {
 
 acquire_heavy_lock() {
   local name="$1" holder
+  # Re-entrant for the shell that holds it (stack.sh switch runs `local up` / `dev up` inside).
+  if [[ -f "$LOCK_DIR/owner" && "$(cut -d' ' -f1 "$LOCK_DIR/owner" 2>/dev/null)" == "$$" ]]; then
+    return 0
+  fi
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     holder="$(cat "$LOCK_DIR/owner" 2>/dev/null || true)"
     if [[ -n "$holder" ]] && kill -0 "${holder%% *}" 2>/dev/null; then

@@ -5,7 +5,8 @@
 //   stdin: <compose config JSON or {}> "\n@@\n" <docker inspect JSON of this project's running
 //          containers> "\n@@\n" <docker stats JSON lines of the same containers>
 //   argv:  <job> <jobBytes> <reserveBytes>
-//          job = dev | prod     plan for `up` of that mode (replaces this project's containers)
+//          job = dev | prod | local   plan for `up` of that mode (replaces this project's
+//                         containers); local builds nothing (jobBytes 0: no build decision)
 //                heavy:<name>   a one-off job (toolbox, check build) next to what is running now
 //                report         print the table only
 //
@@ -153,23 +154,25 @@ const report = (label, peak, d) => {
 
 if (job !== "report") {
   const decisions = [];
-  if (job === "dev" || job === "prod") {
+  if (job === "dev" || job === "prod" || job === "local") {
     // `up` builds the image (jobBytes) next to the running containers, then recreates them: the
     // new plan has no usage yet, so its hard limits (planPeak) are its estimate, and what the
     // old containers use is freed. Their own state does not block `up`, which recreates them.
-    decisions.push([
-      `Job ${job} image build`,
-      jobBytes,
-      decide({
-        vmAvailable,
-        reserve,
+    // Local mode never builds on `up` (sync-main builds and budgets separately): no build step.
+    if (jobBytes > 0)
+      decisions.push([
+        `Job ${job} image build`,
         jobBytes,
-        running,
-        pressure,
-        replaced: false,
-        checkContainers: false,
-      }),
-    ]);
+        decide({
+          vmAvailable,
+          reserve,
+          jobBytes,
+          running,
+          pressure,
+          replaced: false,
+          checkContainers: false,
+        }),
+      ]);
     decisions.push([
       `Job ${job} start (plan limits ${mib(planPeak).trim()}, a hard cap)`,
       planPeak,
