@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Port preflight and HTTP smoke tests for the local Compose stack. No dependencies: runs on any Node >= 20.",
   "scripts": {
-    "test": "node --test compose-dev.test.mjs"
+    "test": "node --test compose-dev.test.mjs compose-local.test.mjs local-mode.test.mjs"
   }
 }
