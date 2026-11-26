@@ -311,6 +311,9 @@ services:
     environment:
       <<: *dev-env
       NODE_OPTIONS: --max-old-space-size=448
+      # DP-298: the legal texts come from the API with this site's proxy key.
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_WEB_CORPORATE: ${DEV_DP_PROXY_KEY_WEB_CORPORATE:?set DEV_DP_PROXY_KEY_WEB_CORPORATE in .env}
     volumes: *dev-volumes
     depends_on: *after-install
     command: ["node_modules/.bin/next", "dev", "--port", "3000", "--hostname", "0.0.0.0"]

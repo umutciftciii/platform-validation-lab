@@ -12,8 +12,9 @@ import { catalogLocale } from "@/lib/catalog-locale";
 import { countryOptions, dictionary, leadFormUi } from "@/lib/i18n";
 import { documentLang } from "@/lib/document-language";
 import { formLegalTexts } from "@/lib/form-texts";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
 import { DEFAULT_LOCALE, localizeHref } from "@/lib/locale-routing";
-import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
+import { privacyPolicyHref } from "@/lib/privacy";
 import { visibleLocales } from "@/lib/public-locales";
 import { COUNTRY_CODES } from "@dream/contracts";
 
@@ -77,13 +78,19 @@ async function RequestDetail({
   }
   const doc = docs.data.find((d) => d.id === id);
   if (!doc || !doc.requestable) notFound();
-  if (!sitePrivacy().publish) {
+  // DP-298: the gate and the texts are the API's snapshot of the published versions (fail closed).
+  const privacy = await sitePrivacyNow();
+  if (!privacy.gate.publish) {
     return (
       <CatalogNotice title={t.closedTitle}>{t.closedText}</CatalogNotice>
     );
   }
   // English pages read no language list (as before); other languages must be public (fail closed).
-  const legal = formLegalTexts(locale, locale === DEFAULT_LOCALE ? [] : await visibleLocales());
+  const legal = formLegalTexts(
+    locale,
+    locale === DEFAULT_LOCALE ? [] : await visibleLocales(),
+    privacy.snapshot.registry,
+  );
   if (!legal) {
     return (
       <CatalogNotice title={t.notInLanguageTitle}>{t.notInLanguageText}</CatalogNotice>
@@ -134,7 +141,7 @@ async function RequestDetail({
         documentLang={documentLang(locale, doc.language)}
         countries={countries}
         texts={texts}
-        privacyHref={privacyPolicyHref(locale)}
+        privacyHref={privacyPolicyHref(locale, privacy.locales)}
         locale={locale}
         ui={leadFormUi(locale)}
       />

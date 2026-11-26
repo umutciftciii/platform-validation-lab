@@ -593,7 +593,8 @@ export type CmsSiteKey = (typeof CMS_SITE_KEYS)[number];
 /**
  * How a route of the web apps is managed today.
  *  - cms_pending: becomes a DESIGN page or FRAGMENT when it is imported (stage in `stage`);
- *  - contract:    versioned legal text in @dream/contracts (privacy, consent); never the CMS;
+ *  - contract:    versioned legal text (privacy, consent); since DP-298 stored as LegalTextVersion
+ *                 and edited under Content → Legal texts, never as a CMS page;
  *  - catalog:     product data from the catalogue module; never the CMS.
  */
 export interface CmsRegistryEntry {

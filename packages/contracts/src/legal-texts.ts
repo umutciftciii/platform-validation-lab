@@ -270,3 +270,54 @@ export function legalTextVersionLocale(version: string): string {
   const m = /\.([a-z]{2,3})$/.exec(version);
   return m?.[1] ?? "en";
 }
+
+// --- DP-298 (ADR-031 D1): the registry built from the published versions ------------------------
+
+/**
+ * The placeholder labels of the policy per language (presentation, not legal wording; they name
+ * the D-T2 values still missing). A language without labels falls back to English.
+ */
+export const PRIVACY_FILL_LABELS: Readonly<Record<string, PrivacyFillLabels>> = {
+  en: PRIVACY_FILL_LABELS_EN,
+  nl: NL.privacyPolicy.labels,
+};
+
+/**
+ * The registry of the forms and the privacy page from the API's published versions
+ * (`GET /api/v1/public/legal-texts`). Since DP-298 the constants above are the SEED of the
+ * database (migration 20261222090000_dp_298_legal_texts_consents), not the runtime source: a
+ * language is offered exactly when the API lists its four published texts. `review` then means
+ * "published" (`source` for English, `approved` for a translation); the lawyer's review is the
+ * separate production gate (`privacyBlockersFor`).
+ */
+export function legalTextRegistryFrom(
+  sets: readonly {
+    locale: string;
+    privacyNotice: LegalText;
+    marketingConsent: LegalText;
+    contactNotice: LegalText;
+    privacyPolicy: { version: string; sections: readonly PrivacySection[] };
+    translates: LegalTextSet["translates"];
+  }[],
+): LegalTextRegistry {
+  const out: Record<string, LegalTextSet> = {};
+  for (const s of sets) {
+    out[s.locale] = {
+      locale: s.locale,
+      review: s.locale === "en" ? "source" : "approved",
+      translates: s.translates,
+      privacyNotice: s.privacyNotice,
+      marketingConsent: s.marketingConsent,
+      contactNotice: s.contactNotice,
+      privacyPolicy: {
+        version: s.privacyPolicy.version,
+        sections: s.privacyPolicy.sections,
+        labels: PRIVACY_FILL_LABELS[s.locale] ?? PRIVACY_FILL_LABELS_EN,
+      },
+    };
+  }
+  return out;
+}
+
+/** The seed registry exactly as the constants define it (tests and the migration generator). */
+export const SEED_LEGAL_TEXTS: LegalTextRegistry = LEGAL_TEXTS;

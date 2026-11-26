@@ -714,6 +714,8 @@ describe("DP-103: what can step around row-level security", () => {
       "AiModelPrice",
       "AiOperation",
       "AiProviderCredential",
+      // DP-298 (ADR-031 D6): provider data-processing terms.
+      "AiProviderDataTerms",
       "AiProviderSetting",
       "AiReconciliation",
       "AiSettings",
@@ -736,6 +738,8 @@ describe("DP-103: what can step around row-level security", () => {
       AiOperation: "SELECT",
       // Table-level: no SELECT (column grants below, without "ciphertext").
       AiProviderCredential: "INSERT,UPDATE",
+      // DP-298: append-only terms; a revocation is the one update (trigger).
+      AiProviderDataTerms: "INSERT,SELECT,UPDATE",
       AiProviderSetting: "SELECT,UPDATE",
       AiReconciliation: "INSERT,SELECT",
       AiSettings: "SELECT,UPDATE",

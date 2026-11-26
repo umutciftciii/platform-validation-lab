@@ -341,8 +341,29 @@ export class StaffAuthService {
       // DP-110: only tells the user about itself; nobody learns who the owner is.
       isSystemOwner: (await loadSystemOwnerId(this.prisma)) === s.user.id,
       // DP-287: what the admin shows; the API decides again on every AI route.
-      features: { aiCenter: await this.aiCenterAvailable(ctx, s, now) },
+      features: {
+        aiCenter: await this.aiCenterAvailable(ctx, s, now),
+        // DP-298: presentation only; every legal-text route decides again.
+        legalTexts: await this.legalTextsAvailable(ctx, s, now),
+      },
     };
+  }
+
+  /** DP-298 (ADR-031 D1): Content → Legal texts for holders of legal_text:edit or :publish. */
+  private async legalTextsAvailable(
+    ctx: RequestContext,
+    s: ActiveSession,
+    now: Date,
+  ): Promise<boolean> {
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    // Held, not usable right now: a stale step-up must not hide the menu (publish is sensitive).
+    const snapshot = await inStaffContext(this.prisma, token, (tx) =>
+      loadAuthorizationSnapshot(tx, s.userId, { mfaVerified: true }),
+    );
+    if (!snapshot) return false;
+    return ["legal_text:edit", "legal_text:publish"].some(
+      (p) => decide(snapshot, p, { scope: "platform" }, now).allowed,
+    );
   }
 
   /**

@@ -33,10 +33,11 @@ describe("navigation", () => {
     expect(new Set(NAV_ITEMS.map((i) => i.slug)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("marks the overview, content (CMS S1), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), staff (DP-107), the AI Center (DP-287) and the owner console (DP-110) as ready", () => {
+  it("marks the overview, content (CMS S1), legal texts (DP-298), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), staff (DP-107), the AI Center (DP-287) and the owner console (DP-110) as ready", () => {
     expect(NAV_ITEMS.filter((i) => i.ready).map((i) => i.href)).toEqual([
       "/",
       "/content",
+      "/legal-texts",
       "/products",
       "/translations",
       "/seo",
@@ -62,6 +63,24 @@ describe("navigation", () => {
     ).toEqual(["/company-review"]);
     // The placeholder section route never stands in for it.
     expect(findSection("ai")).toBeUndefined();
+  });
+
+  it("shows Legal texts only with the legalTexts feature, right after Content (DP-298)", () => {
+    const hrefs = (owner: boolean, features?: { legalTexts?: boolean }) =>
+      navGroupsFor(owner, false, features).flatMap((g) => g.items.map((i) => i.href));
+    expect(hrefs(true)).not.toContain("/legal-texts");
+    expect(hrefs(false, { legalTexts: false })).not.toContain("/legal-texts");
+    expect(hrefs(false, { legalTexts: true })).toContain("/legal-texts");
+    const list = hrefs(true, { legalTexts: true });
+    expect(list[list.indexOf("/content") + 1]).toBe("/legal-texts");
+    // A review-only user never sees it.
+    expect(
+      navGroupsFor(false, true, { legalTexts: true }).flatMap((g) => g.items.map((i) => i.href)),
+    ).toEqual(["/company-review"]);
+    expect(findSection("legal-texts")).toBeUndefined();
+    // Its own route: the Content item is not active on it.
+    const content = NAV_ITEMS.find((i) => i.slug === "content")!;
+    expect(isActive(content, "/legal-texts")).toBe(false);
   });
 
   it("shows the owner console to the system owner only (DP-110)", () => {

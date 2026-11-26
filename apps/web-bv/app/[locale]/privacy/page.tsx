@@ -8,7 +8,7 @@ import { privacyLocale } from "@/lib/catalog-locale";
 import { dictionary, interpolate } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { localizeHref } from "@/lib/locale-routing";
-import { sitePrivacy } from "@/lib/privacy";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
 import { PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, fillPrivacyText, legalTextsFor } from "@dream/contracts";
 
 /** ML-6: the title in the page's language. */
@@ -24,10 +24,12 @@ export async function generateMetadata(): Promise<Metadata> {
  * DP-095 D-T5: the privacy policy of this site. Rendered per request: the gate reads the env.
  * ML-3: English only (`/en/privacy`); the Dutch policy needs its own approval (ADR-028 D12).
  * ML-6: the page's own labels come from the site UI dictionary; the policy text itself is the
- * versioned text of @dream/contracts.
- * ML-10: the policy and the form texts of the page's language (`legalTextsFor`). A language whose
- * translation is still under DP-095 review has no page (`PRIVACY_LOCALES`, 404); the English
- * policy is never shown under another language's address.
+ * versioned text published in the admin (DP-298).
+ * ML-10: the policy and the form texts of the page's language (`legalTextsFor`). A language
+ * without its own texts has no page (404); the English policy is never shown under another
+ * language's address.
+ * DP-298 (ADR-031 D1): the texts and the gate are the API's snapshot of the versions published in
+ * the admin; while it cannot be read there is no page (fail closed).
  */
 export default async function PrivacyPage() {
   const locale = await privacyLocale();
@@ -46,10 +48,10 @@ export default async function PrivacyPage() {
 
 async function PrivacyPolicy({ locale }: { locale: RouteLocale }) {
   await connection();
-  const gate = sitePrivacy();
+  const { snapshot, gate } = await sitePrivacyNow();
   if (!gate.publish) notFound();
-  const texts = legalTextsFor(locale);
-  // PRIVACY_LOCALES already holds only languages with texts; checked again (fail closed).
+  const texts = legalTextsFor(locale, snapshot.registry);
+  // The proxy already answered 404 for a language without texts; checked again (fail closed).
   if (!texts || texts.locale !== locale) notFound();
   const policy = texts.privacyPolicy;
   const fill = (t: string) =>

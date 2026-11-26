@@ -28,7 +28,6 @@
  * the row, and logged. Live content always wins over a row (the API answers it first).
  */
 import {
-  LEGAL_TEXTS,
   legalTextsFor,
   seoLegacyPath,
   seoRedirectLocation,
@@ -58,24 +57,24 @@ const LEGACY_PAGE_FILE = /\.(?:html?|php|aspx?|pdf)$/i;
 const LANGUAGE_LIKE = /^[a-z]{2}$/;
 
 /**
- * Languages whose catalogue and privacy policy exist on the site. ML-8c (DP-239): the catalogue
- * has routes in every language; what a language shows is data (the products published in it,
- * answered by the API only while the language is public), so a Dutch product without its own
- * text is a 404, never English content under a Dutch address (D7). The Dutch policy comes with
- * its own approval (ADR-028 D12); until then `/nl/privacy` is a 404.
+ * Languages whose catalogue exists on the site. ML-8c (DP-239): the catalogue has routes in every
+ * language; what a language shows is data (the products published in it, answered by the API
+ * only while the language is public), so a Dutch product without its own text is a 404, never
+ * English content under a Dutch address (D7). The policy's languages are data too since DP-298
+ * (`privacyLocalesOf` below).
  */
 export const CATALOGUE_LOCALES: readonly RouteLocale[] = ROUTE_LOCALES;
 
 /**
  * ML-10 (DP-241, ADR-028 D12): the policy exists in a language once its legal texts may be offered
- * (`legalTextsFor`: English, or a translation approved by the DP-095 review). A Dutch draft
- * under review is never one of them, so `/nl/privacy` stays a 404 until that approval; the
- * language must also be public (checked before, like every page).
+ * (`legalTextsFor`). DP-298 (ADR-031 D1): `registry` is the API's snapshot of the published
+ * versions, so a language is offered once its four texts are published in the admin (no constant
+ * list any more); without a Dutch version `/nl/privacy` is a 404. The language must also be
+ * public (checked before, like every page).
  */
-export function privacyLocalesOf(registry: LegalTextRegistry = LEGAL_TEXTS): readonly RouteLocale[] {
+export function privacyLocalesOf(registry: LegalTextRegistry): readonly RouteLocale[] {
   return ROUTE_LOCALES.filter((l) => legalTextsFor(l, registry) !== null);
 }
-export const PRIVACY_LOCALES: readonly RouteLocale[] = privacyLocalesOf();
 
 /** At most this many redirects are followed to find the final address of a chain. */
 export const MAX_HOPS = 4;
@@ -213,8 +212,8 @@ export interface ProxyDeps {
   catalogue(locale: RouteLocale): Promise<"products" | "empty" | "unknown">;
   /** DP-095: whether the privacy policy is published in this environment. */
   privacyPublished: boolean;
-  /** ML-10: the policy's languages (tests only; the site always uses `PRIVACY_LOCALES`). */
-  privacyLocales?: readonly RouteLocale[];
+  /** ML-10, DP-298: the policy's languages (`privacyLocalesOf` of the API's snapshot). */
+  privacyLocales: readonly RouteLocale[];
   /** Called when a redirect cycle or an over-long chain was refused (logged by the caller). */
   onLoop?(trail: readonly string[]): void;
 }
@@ -303,7 +302,7 @@ export async function step(
       return { action: "next" };
     }
     case "privacy":
-      return deps.privacyPublished && (deps.privacyLocales ?? PRIVACY_LOCALES).includes(locale)
+      return deps.privacyPublished && deps.privacyLocales.includes(locale)
         ? { action: "next" }
         : { action: "not-found", locale };
     case "document-request": {

@@ -29,6 +29,7 @@ import { aiAuditMetadata } from "./audit.js";
 import { AI_CONFIG } from "./config/ai-config.provider.js";
 import type { AiConfig } from "./config/ai-config.js";
 import { estimateInputTokens, estimateOutputTokens, profileFor } from "./engine/estimate.js";
+import { minimisedInput, personalDataRefusal } from "./engine/personal-data-gate.js";
 import { personalDataIn } from "./engine/input-policy.js";
 import { AiLedgerService } from "./ledger.service.js";
 import {
@@ -163,19 +164,40 @@ export class AiOperationsService {
         conflict("task_not_available", "task"),
       );
     }
-    const input = req.input.trim();
+    // DP-298 (ADR-031 D6): a task declares whether it handles personal data. Without (every
+    // AI-1 task): free text, the regex filter is a safety net. With: only the declared fields,
+    // only with the data's permission, an approved purpose and (live) the provider's terms.
+    const policy = def.dataPolicy;
+    let input = req.input.trim();
+    let pdPermission = false;
+    if (policy.kind === "personal_data") {
+      const m = minimisedInput(policy, req.input);
+      if (!m.ok) {
+        return this.refuse(access, req.task, siteId, m.code, invalid("input", m.code));
+      }
+      input = m.text;
+      pdPermission = siteId !== null && access.allows(policy.permission, { scope: "site", siteId });
+      const early = personalDataRefusal(policy, {
+        transport: this.config.transport,
+        hasPermission: pdPermission,
+        providerTermsRecorded: true, // checked with the plan's provider below
+      });
+      if (early) return this.refuse(access, req.task, siteId, early, conflict(early, "task"));
+    }
     if (input.length === 0 || input.length > def.maxInputChars) {
       return this.refuse(access, req.task, siteId, "input_too_large", invalid("input", "length"));
     }
-    const personal = personalDataIn(input);
-    if (personal) {
-      return this.refuse(
-        access,
-        req.task,
-        siteId,
-        "input_rejected_personal_data",
-        invalid("input", `input_rejected_personal_data:${personal}`),
-      );
+    if (policy.kind === "none") {
+      const personal = personalDataIn(input);
+      if (personal) {
+        return this.refuse(
+          access,
+          req.task,
+          siteId,
+          "input_rejected_personal_data",
+          invalid("input", `input_rejected_personal_data:${personal}`),
+        );
+      }
     }
     const digest = createHash("sha256")
       .update(JSON.stringify([req.task, siteId, input]))
@@ -185,6 +207,18 @@ export class AiOperationsService {
       .staffData(async (tx) => {
         const plan = await sqlTaskPlan(tx, req.task);
         if (!plan) return null;
+        if (policy.kind === "personal_data") {
+          const terms = await tx.aiProviderDataTerms.findFirst({
+            where: { provider: plan.provider, revokedAt: null },
+            select: { id: true },
+          });
+          const refusal = personalDataRefusal(policy, {
+            transport: this.config.transport,
+            hasPermission: pdPermission,
+            providerTermsRecorded: terms !== null,
+          });
+          if (refusal) return { refusal } as const;
+        }
         const profile = profileFor(plan.billingProfile);
         const estInput = estimateInputTokens({ system: def.system, input }, profile);
         const estOutput = estimateOutputTokens(plan, profile);
@@ -214,6 +248,14 @@ export class AiOperationsService {
           await this.audit(access, tx, "ai.operation.create", r.operationId, siteId, {
             operationId: r.operationId,
             task: req.task,
+            // DP-298: purposes and field NAMES only, never values.
+            ...(policy.kind === "personal_data"
+              ? {
+                  personalData: true,
+                  purposes: policy.purposes.join(","),
+                  fields: Object.keys(policy.fields).join(","),
+                }
+              : {}),
             reservedMicros: r.reservedMicros,
             estInputTokens: estInput,
             estOutputTokens: estOutput,
@@ -234,6 +276,10 @@ export class AiOperationsService {
         "task_disabled",
         conflict("task_disabled", "task"),
       );
+    }
+    if ("refusal" in outcome && outcome.refusal) {
+      const code: string = outcome.refusal;
+      return this.refuse(access, req.task, siteId, code, conflict(code, "task"));
     }
     const { r } = outcome;
     if (r.outcome === "ai_disabled") throw new ApiError("NOT_FOUND");

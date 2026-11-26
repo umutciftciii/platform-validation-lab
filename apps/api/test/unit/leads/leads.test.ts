@@ -9,6 +9,8 @@ import {
   LeadDocumentRequestInputSchema,
   isFreeMailDomain,
   privacyBlockers,
+  privacyBlockersFor,
+  SEED_LEGAL_TEXTS,
 } from "@dream/contracts";
 import type { ApiConfig } from "../../../src/iam/http/api-config.js";
 import { LeadRequestsService } from "../../../src/leads/lead-requests.service.js";
@@ -185,10 +187,17 @@ describe("DP-095 production gate of the lead form (D-T3, D-T5)", () => {
   );
   const service = (deployEnv: "local" | "staging" | "production") =>
     new LeadRequestsService(
-      untouched as never,
+      { begin: async () => ({ siteId: "s", db: {} }) } as never,
       untouched as never,
       untouched as never,
       { deployEnv } as ApiConfig,
+      // DP-298: a current version waiting for legal review (the seeded state).
+      {
+        published: async () => ({
+          registry: SEED_LEGAL_TEXTS,
+          blockers: privacyBlockersFor([{ key: "CONTACT_NOTICE", locale: "en", version: "x" }]),
+        }),
+      } as never,
     );
 
   it("refuses the form like an unknown document in production while the texts are drafts", async () => {

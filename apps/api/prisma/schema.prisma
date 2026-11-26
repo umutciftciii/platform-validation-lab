@@ -161,6 +161,13 @@ model User {
   contentProposalsCreated     ProductContentProposal[]      @relation("ProductContentProposalCreatedBy")
   contentProposalsDecided     ProductContentProposal[]      @relation("ProductContentProposalDecidedBy")
   contentProposalEvents       ProductContentProposalEvent[]
+  /// DP-298 (ADR-031): legal text versions, consent withdrawals and AI provider terms.
+  legalTextsCreated           LegalTextVersion[]            @relation("LegalTextCreatedBy")
+  legalTextsPublished         LegalTextVersion[]            @relation("LegalTextPublishedBy")
+  legalTextsReviewed          LegalTextVersion[]            @relation("LegalTextReviewApprovedBy")
+  consentRecords              ConsentRecord[]
+  aiProviderTermsRecorded     AiProviderDataTerms[]         @relation("AiProviderTermsRecordedBy")
+  aiProviderTermsRevoked      AiProviderDataTerms[]         @relation("AiProviderTermsRevokedBy")
 
   @@index([kind, status])
 }
@@ -222,6 +229,8 @@ model Site {
   pathLock                     SitePathLock?
   // ML-1 (DP-073, ADR-028 D2): the site's languages.
   locales                      SiteLocale[]
+  // DP-298 (ADR-031 D4): consent records of the site's leads.
+  consentRecords               ConsentRecord[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1475,6 +1484,8 @@ model Lead {
   assignedTo      User?                 @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
   activities      LeadActivity[]
   notifications   LeadNotification[]
+  /// DP-298 (ADR-031 D4): consent grants and withdrawals (the latest per purpose is the state).
+  consents        ConsentRecord[]
 
   @@unique([siteId, email])
   @@index([siteId, lastRequestAt])
@@ -2414,4 +2425,156 @@ model AiReconciliation {
   createdAt            DateTime   @default(now()) @db.Timestamptz(3)
 
   @@unique([provider, projectRef, day, source])
+}
+
+// ===========================================================================================
+// DP-298 (ADR-031): data processing policies. Legal text versions managed in the admin (Legal
+// texts), consent records separate from notices, and the AI provider data-processing terms.
+// Rules Prisma cannot express (immutable published versions, append-only consent evidence,
+// row-level security) are in migration 20261222090000_dp_298_legal_texts_consents.
+// ===========================================================================================
+
+enum LegalDocumentKey {
+  PRIVACY_POLICY
+  DOCUMENT_REQUEST_NOTICE
+  CONTACT_NOTICE
+  MARKETING_CONSENT
+  AI_PROCESSING_NOTICE
+  AI_PROCESSING_CONSENT
+  INTERNATIONAL_TRANSFER_NOTICE
+  INTERNATIONAL_TRANSFER_CONSENT
+}
+
+enum LegalTextStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum LegalReviewState {
+  REQUIRED
+  APPROVED
+}
+
+/// One version of a legal or consent text in one language. A published version never changes.
+model LegalTextVersion {
+  id                 String           @id @default(uuid(7)) @db.Uuid
+  key                LegalDocumentKey
+  locale             String           @db.VarChar(8)
+  /// `<date>[.<n>].<locale>`; null while a draft (named when published).
+  version            String?          @db.VarChar(20)
+  status             LegalTextStatus  @default(DRAFT)
+  legalReview        LegalReviewState @default(REQUIRED)
+  reviewNote         String?          @db.VarChar(2000)
+  /// Plain text; for the privacy policy the editor markup (the sections are the content).
+  text               String
+  sections           Json?
+  /// SHA-256 of the evidence text (the text; the sections' JSON for the policy).
+  sha256             String           @db.Char(64)
+  translatesId       String?          @db.Uuid
+  revision           Int              @default(1)
+  createdById        String?          @db.Uuid
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime         @default(now()) @db.Timestamptz(3)
+  publishedAt        DateTime?        @db.Timestamptz(3)
+  publishedById      String?          @db.Uuid
+  reviewApprovedAt   DateTime?        @db.Timestamptz(3)
+  reviewApprovedById String?          @db.Uuid
+
+  translates       LegalTextVersion?  @relation("LegalTextTranslation", fields: [translatesId], references: [id], onDelete: Restrict)
+  translations     LegalTextVersion[] @relation("LegalTextTranslation")
+  createdBy        User?              @relation("LegalTextCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  publishedBy      User?              @relation("LegalTextPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict)
+  reviewApprovedBy User?              @relation("LegalTextReviewApprovedBy", fields: [reviewApprovedById], references: [id], onDelete: Restrict)
+
+  @@unique([key, locale, version])
+  @@unique([key, locale], map: "LegalTextVersion_one_draft", where: raw("\"status\" = 'DRAFT'::\"LegalTextStatus\""))
+  @@index([key, locale, status, publishedAt])
+}
+
+enum ConsentPurpose {
+  MARKETING_EMAIL
+  AI_PERSONAL_DATA
+  INTERNATIONAL_TRANSFER
+}
+
+enum ConsentAction {
+  GRANTED
+  WITHDRAWN
+}
+
+enum ConsentSource {
+  DOCUMENT_REQUEST
+  CONTACT_FORM
+  STAFF
+  PUBLIC_LINK
+  MIGRATION
+}
+
+enum ConsentChannel {
+  EMAIL
+  PHONE
+  WRITTEN
+  IN_PERSON
+  OTHER
+}
+
+/// One grant or withdrawal of a consent purpose for a lead (append-only evidence, RLS like leads).
+model ConsentRecord {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  leadId         String          @db.Uuid
+  siteId         String          @db.Uuid
+  purpose        ConsentPurpose
+  action         ConsentAction
+  source         ConsentSource
+  textVersion    String?         @db.VarChar(20)
+  textSha256     String?         @db.Char(64)
+  sourceRecordId String?         @db.Uuid
+  channel        ConsentChannel?
+  actorId        String?         @db.Uuid
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+
+  lead  Lead  @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  site  Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([leadId, purpose, createdAt])
+  @@index([siteId, createdAt])
+}
+
+enum AiTransferMechanism {
+  EEA_ONLY
+  ADEQUACY
+  EU_US_DPF
+  SCC
+}
+
+enum AiKvkkTransferMechanism {
+  NOT_APPLICABLE
+  ADEQUACY
+  STANDARD_CONTRACT_NOTIFIED
+  EXPLICIT_CONSENT
+}
+
+/// The owner's record of a provider's data-processing terms (needed before personal data may be
+/// sent to it). At most one unrevoked record per provider; revocation is the only change.
+model AiProviderDataTerms {
+  id                    String                  @id @default(uuid(7)) @db.Uuid
+  provider              AiProvider
+  dpaReference          String                  @db.VarChar(200)
+  dpaSignedOn           DateTime                @db.Date
+  transferMechanism     AiTransferMechanism
+  kvkkTransferMechanism AiKvkkTransferMechanism
+  dataRegion            String                  @db.VarChar(100)
+  retentionSetting      String                  @db.VarChar(200)
+  noTraining            Boolean
+  recordedById          String                  @db.Uuid
+  recordedAt            DateTime                @default(now()) @db.Timestamptz(3)
+  revokedAt             DateTime?               @db.Timestamptz(3)
+  revokedById           String?                 @db.Uuid
+
+  recordedBy User  @relation("AiProviderTermsRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  revokedBy  User? @relation("AiProviderTermsRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+
+  @@unique([provider], map: "AiProviderDataTerms_active_provider_key", where: raw("\"revokedAt\" IS NULL"))
+  @@index([provider, recordedAt])
 }

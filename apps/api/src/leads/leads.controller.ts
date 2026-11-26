@@ -4,6 +4,8 @@
  * notes, contacts) with lead:manage (DP-041, ADR-019). Export: CSV of the filtered list with
  * lead:export and its step-up (DP-227, lead-export.service.ts).
  */
+import { LeadConsentsService } from "./consents.service.js";
+import type { LeadConsentsResponse } from "@dream/contracts";
 import { once } from "node:events";
 import type { ServerResponse } from "node:http";
 import {
@@ -101,6 +103,7 @@ export class AdminLeadsController {
   constructor(
     @Inject(AdminLeadsService) private readonly leads: AdminLeadsService,
     @Inject(LeadExportService) private readonly exports: LeadExportService,
+    @Inject(LeadConsentsService) private readonly consents: LeadConsentsService,
   ) {}
 
   @Get()
@@ -170,6 +173,24 @@ export class AdminLeadsController {
     @Body() body: unknown,
   ): Promise<LeadWorkflowResponse> {
     return this.leads.workflow(ctx, id, body);
+  }
+
+  /** DP-298 (ADR-031 D4): the lead's consent states and history (lead:read). */
+  @Get(":id/consents")
+  consentList(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<LeadConsentsResponse> {
+    return this.consents.list(ctx, id);
+  }
+
+  /** DP-298: records a withdrawal that reached the company (lead:manage; channel code only). */
+  @Post(":id/consents/:purpose/withdraw")
+  @HttpCode(200)
+  consentWithdraw(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Param("purpose") purpose: string,
+    @Body() body: unknown,
+  ): Promise<LeadConsentsResponse> {
+    return this.consents.withdraw(ctx, id, purpose, body);
   }
 
   /** DP-041: a note or a contact record (lead:manage). */

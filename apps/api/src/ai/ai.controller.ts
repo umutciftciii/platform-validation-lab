@@ -3,6 +3,8 @@
  * AI is off); each handler authorises again in its service. GET/POST/DELETE only (the admin proxy
  * forwards no other method); responses are never cached and never carry an API key.
  */
+import { AiDataTermsService } from "./data-terms.service.js";
+import type { AiProviderDataTermsResponse } from "@dream/contracts";
 import {
   Body,
   Controller,
@@ -78,6 +80,7 @@ export class AiController {
     @Inject(AiBudgetsService) private readonly budgets: AiBudgetsService,
     @Inject(AiOperationsService) private readonly operations: AiOperationsService,
     @Inject(AiReportsService) private readonly reports: AiReportsService,
+    @Inject(AiDataTermsService) private readonly dataTermsService: AiDataTermsService,
   ) {}
 
   @Get("overview")
@@ -103,6 +106,39 @@ export class AiController {
     @Body() body: unknown,
   ): Promise<AiProviderSummary> {
     return this.providers.updateProvider(ctx, provider, body);
+  }
+
+  /** DP-298 (ADR-031 D6): the provider's data-processing terms (read: ai:read). */
+  @Get("providers/:provider/data-terms")
+  @Header("Cache-Control", "no-store")
+  dataTerms(
+    @Ctx() ctx: RequestContext,
+    @Param("provider") provider: string,
+  ): Promise<AiProviderDataTermsResponse> {
+    return this.dataTermsService.get(ctx, provider);
+  }
+
+  /** DP-298: record (replace) the terms — system owner only (module:manage, step-up). */
+  @Post("providers/:provider/data-terms")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  recordDataTerms(
+    @Ctx() ctx: RequestContext,
+    @Param("provider") provider: string,
+    @Body() body: unknown,
+  ): Promise<AiProviderDataTermsResponse> {
+    return this.dataTermsService.record(ctx, provider, body);
+  }
+
+  /** DP-298: revoke the current terms — system owner only. */
+  @Post("providers/:provider/data-terms/revoke")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  revokeDataTerms(
+    @Ctx() ctx: RequestContext,
+    @Param("provider") provider: string,
+  ): Promise<AiProviderDataTermsResponse> {
+    return this.dataTermsService.revoke(ctx, provider);
   }
 
   @Post("providers/:provider/credentials")
