@@ -23,6 +23,10 @@ const INFRASTRUCTURE = [
   // DP-289 (ADR-030 D5): the one reader of a provider key's ciphertext (a SECURITY DEFINER call in
   // the caller's staff transaction); no table query.
   "src/ai/credential-store.ts",
+  // DP-290 (ADR-030 D6): the budget engine — the calls of its SECURITY DEFINER functions (the only
+  // write path to operations, usage and ledger) and the sweeper, which runs outside any request.
+  "src/ai/ledger-sql.ts",
+  "src/ai/ledger.service.ts",
   "test/**",
 ];
 // F1-002: the throttle's row lock (SELECT … FOR UPDATE) and the clean-up's advisory lock have no
@@ -58,6 +62,9 @@ const RAW_SQL_ALLOWED = [
   // DP-289 (ADR-030 D5): the call of ai_credential_ciphertext(id), the only way to the stored key
   // (dp_app cannot SELECT the column); tagged template only, no table access.
   "src/ai/credential-store.ts",
+  // DP-290 (ADR-030 D6): the engine's SECURITY DEFINER calls (ai_reserve, ai_start, ai_settle,
+  // ai_release, ai_mark_unknown, ai_sweep, ai_ledger_mismatches); tagged templates only.
+  "src/ai/ledger-sql.ts",
   // DP-096 (ADR-003 §5): SET LOCAL ROLE dp_lead_retention, the run's advisory lock and the
   // field-by-field anonymisation (UPDATE … SET column = cleared value, = ANY(uuid[])); tagged
   // templates only, never *Unsafe. The database limits the role (migration dp_096).

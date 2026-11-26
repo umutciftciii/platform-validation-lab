@@ -15,6 +15,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  AiBudgetSchema,
+  AiBudgetsResponseSchema,
+  AiOperationsResponseSchema,
+  AiReconciliationResponseSchema,
+  AiTasksResponseSchema,
   AiCredentialResultSchema,
   AiModelRefreshResponseSchema,
   AiModelsResponseSchema,
@@ -3061,5 +3066,498 @@ describe("DP-289: providers, keys and models", () => {
     expect((await owner.call("POST", AI, { enabled: false, reason: "DP-289 done" })).status).toBe(
       200,
     );
+  });
+});
+
+// DP-290 (ADR-030 D6, D7): the budget and reservation engine. The money moves only through the
+// database functions (ai_reserve / ai_start / ai_settle / ai_release / ai_mark_unknown / ai_sweep);
+// these tests call them as the API does (dp_app, staff context for reservations) and drive the
+// configuration over HTTP. No provider is called: the engine is provider-agnostic.
+describe("DP-290: budgets, reservations and settlement", () => {
+  type Tx = Prisma.TransactionClient;
+  const AI = "/owner/modules/ai/platform";
+  let owner: Staff;
+  let admin: Staff; // super admin + ai_administrator (ai:invoke)
+  let viewer: Staff; // ai_viewer
+  let modelId = "";
+  let priceId = "";
+  let dailyId = "";
+  let est: typeof import("../../src/ai/engine/estimate.js");
+  const token = (s: Staff) => (s as unknown as { token: string }).token;
+  const digest = (n: number) => createHash("sha256").update(`input-${n}`).digest("hex");
+  let seq = 0;
+  const key = () => `dp290-${Date.now()}-${seq++}`;
+
+  function inCtx<T>(who: Staff | null, fn: (tx: Tx) => Promise<T>): Promise<T> {
+    return asApp.$transaction(async (tx) => {
+      if (who) await tx.$executeRaw`SELECT leads_rls_set_staff_context(${token(who)})`;
+      return fn(tx);
+    });
+  }
+  interface Reserved {
+    operation_id: string | null;
+    outcome: string;
+    reserved_micros: bigint | null;
+  }
+  function reserve(
+    who: Staff | null,
+    o: {
+      site?: string | null;
+      in?: number;
+      out?: number;
+      key?: string;
+      digest?: string;
+      capDaily?: bigint | null;
+    } = {},
+  ): Promise<Reserved> {
+    return inCtx(who, async (tx) => {
+      const r = await tx.$queryRaw<Reserved[]>`
+        SELECT operation_id, outcome, reserved_micros FROM ai_reserve('DIAGNOSTIC_PING'::"AiTaskType",
+          ${o.site ?? null}::uuid, ${o.key ?? key()}, ${o.digest ?? digest(1)}, ${o.in ?? 100}::integer,
+          ${o.out ?? 16}::integer, 'int-test', ${o.capDaily ?? null}::bigint, NULL::bigint)`;
+      return r[0]!;
+    });
+  }
+  const fn1 = async (sql: Promise<{ r: string }[]>) => (await sql)[0]!.r;
+  const start = (id: string) =>
+    fn1(asApp.$queryRaw<{ r: string }[]>`SELECT ai_start(${id}::uuid, 'int-test', 60) AS "r"`);
+  const settle = (id: string, status: string, inT: number, out: number) =>
+    fn1(
+      asApp.$queryRaw<
+        { r: string }[]
+      >`SELECT ai_settle(${id}::uuid, ${status}::"AiOperationStatus", ${inT}::integer, 0, 0, ${out}::integer, 0, NULL, NULL) AS "r"`,
+    );
+  const release = (id: string, why: string) =>
+    fn1(asApp.$queryRaw<{ r: string }[]>`SELECT ai_release(${id}::uuid, ${why}) AS "r"`);
+  const unknown = (id: string) =>
+    fn1(asApp.$queryRaw<{ r: string }[]>`SELECT ai_mark_unknown(${id}::uuid, 'timeout') AS "r"`);
+  const sweep = async () =>
+    (
+      await asApp.$queryRaw<
+        { released: number; assumed: number; cancelled: number }[]
+      >`SELECT released, assumed, cancelled FROM ai_sweep()`
+    )[0]!;
+  const mismatches = async () =>
+    Number(
+      (
+        await asApp.$queryRaw<
+          { n: bigint }[]
+        >`SELECT count(*)::bigint AS "n" FROM ai_ledger_mismatches()`
+      )[0]!.n,
+    );
+  const amountFor = async (inT: number, out: number) => {
+    // The margin from the table owner's view (AiSettings is behind row-level security for dp_app).
+    const margin = (await dbo.aiSettings.findUniqueOrThrow({ where: { id: 1 } })).safetyMarginPct;
+    return (
+      await asApp.$queryRaw<
+        { a: bigint }[]
+      >`SELECT ai_upper_cost_micros(${priceId}::uuid, ${inT}::bigint, ${out}::bigint, ${margin}::integer) AS "a"`
+    )[0]!.a;
+  };
+  async function today(budgetId: string) {
+    const u = await dbo.aiBudgetUsage.findFirst({
+      where: { budgetId },
+      orderBy: { periodStart: "desc" },
+    });
+    return {
+      reserved: u?.reservedMicros ?? 0n,
+      committed: u?.committedMicros ?? 0n,
+      assumed: u?.assumedMicros ?? 0n,
+    };
+  }
+  async function setDailyLimit(limit: bigint) {
+    const b = await dbo.aiBudget.findUniqueOrThrow({ where: { id: dailyId } });
+    const res = await admin.call("POST", `/ai/budgets/${dailyId}`, {
+      limitMicros: limit.toString(),
+      warnPct: b.warnPct,
+      active: true,
+      version: b.version,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  async function setConcurrency(n: number) {
+    const s = await admin.call("GET", "/ai/settings");
+    const res = await admin.call("POST", "/ai/settings", { ...s.body, maxConcurrency: n });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  async function clearActive() {
+    for (const o of await dbo.aiOperation.findMany({
+      where: { status: { in: ["RESERVED", "IN_FLIGHT"] } },
+    })) {
+      if (o.status === "RESERVED") await release(o.id, "release");
+      else await settle(o.id, "FAILED", 0, 0);
+    }
+  }
+
+  beforeAll(async () => {
+    est = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/ai/engine/estimate.js")).href
+    )) as typeof est;
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-290", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-290", pw, [{ role: "platform_super_admin" }], root.userId);
+    viewer = await staff("ai-viewer-290", pw, [], root.userId);
+    // Earlier blocks leave an ENABLED OpenAI model, an ACTIVE OpenAI key and the provider on.
+    const model = await dbo.aiModel.findFirstOrThrow({
+      where: { modelId: "gpt-fake-mini", status: "ENABLED" },
+    });
+    modelId = model.id;
+    expect(
+      await dbo.aiProviderCredential.count({ where: { provider: "OPENAI", status: "ACTIVE" } }),
+    ).toBe(1);
+    expect(
+      (await dbo.aiProviderSetting.findUniqueOrThrow({ where: { provider: "OPENAI" } })).enabled,
+    ).toBe(true);
+  });
+
+  it("refuses every reservation while AI is off", async () => {
+    expect(
+      (await dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } })).enabled,
+    ).toBe(false);
+    expect((await reserve(owner)).outcome).toBe("ai_disabled");
+  });
+
+  it("is configured over HTTP: dated prices, task limits, settings and budgets, by AI administrators only", async () => {
+    expect(
+      (await owner.call("POST", AI, { enabled: true, reason: "DP-290 engine test" })).status,
+    ).toBe(200);
+    expect(
+      (await owner.call("POST", `/staff/${admin.userId}/roles`, { roleKey: "ai_administrator" }))
+        .status,
+    ).toBe(201);
+    expect(
+      (await owner.call("POST", `/staff/${viewer.userId}/roles`, { roleKey: "ai_viewer" })).status,
+    ).toBe(201);
+    const price = await admin.call("POST", `/ai/models/${modelId}/prices`, {
+      inputMicrosPerMTok: "400000",
+      cachedReadMicrosPerMTok: "100000",
+      outputMicrosPerMTok: "1600000",
+      sourceNote: "DP-290 test price (fake)",
+    });
+    expect(price.status, JSON.stringify(price.body)).toBe(201);
+    priceId = price.body.id;
+    const back = await admin.call("POST", `/ai/models/${modelId}/prices`, {
+      inputMicrosPerMTok: "1",
+      cachedReadMicrosPerMTok: "1",
+      outputMicrosPerMTok: "1",
+      effectiveFrom: new Date(Date.now() - 86_400_000).toISOString(),
+      sourceNote: "backdated",
+    });
+    expectError(back, 400, "VALIDATION_FAILED");
+    expectError(
+      await viewer.call("POST", `/ai/models/${modelId}/prices`, {
+        inputMicrosPerMTok: "1",
+        cachedReadMicrosPerMTok: "1",
+        outputMicrosPerMTok: "1",
+        sourceNote: "no",
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    const tasks = AiTasksResponseSchema.parse((await viewer.call("GET", "/ai/tasks")).body).items;
+    const ping = tasks.find((t) => t.task === "DIAGNOSTIC_PING")!;
+    const t = await admin.call("POST", "/ai/tasks/diagnostic_ping", {
+      enabled: true,
+      modelId,
+      maxInputTokens: 2000,
+      maxOutputTokens: 64,
+      thinkingBudget: 0,
+      maxCostPerOpMicros: "50000",
+      temperatureMilli: null,
+      version: ping.version,
+    });
+    expect(t.status, JSON.stringify(t.body)).toBe(200);
+    await setConcurrency(20);
+    // Budgets: the platform daily budget of the DP-288 block, a new platform monthly one, BV's site
+    // monthly budget of the DP-288 block.
+    const list = AiBudgetsResponseSchema.parse((await viewer.call("GET", "/ai/budgets")).body);
+    dailyId = list.items.find(
+      (b) => b.scope === "PLATFORM" && b.period === "DAILY" && b.active,
+    )!.id;
+    const monthly = await admin.call("POST", "/ai/budgets", {
+      scope: "PLATFORM",
+      period: "MONTHLY",
+      limitMicros: "100000000",
+    });
+    expect(monthly.status, JSON.stringify(monthly.body)).toBe(201);
+    AiBudgetSchema.parse(monthly.body);
+    expectError(
+      await admin.call("POST", "/ai/budgets", {
+        scope: "PLATFORM",
+        period: "MONTHLY",
+        limitMicros: "1",
+      }),
+      409,
+      "CONFLICT_STATE",
+    );
+    expectError(
+      await viewer.call("POST", "/ai/budgets", {
+        scope: "PLATFORM",
+        period: "MONTHLY",
+        limitMicros: "1",
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    await setDailyLimit(50_000_000n);
+  });
+
+  it("reserves only for ai:invoke holders, with the amount computed in the database (parity with the API's formula)", async () => {
+    expect((await reserve(viewer)).outcome).toBe("not_allowed");
+    expect((await reserve(null)).outcome).toBe("not_allowed");
+    const before = await today(dailyId);
+    const r = await reserve(admin, { in: 1000, out: 64 });
+    expect(r.outcome).toBe("reserved");
+    const price = await dbo.aiModelPrice.findUniqueOrThrow({ where: { id: priceId } });
+    const settings = await dbo.aiSettings.findUniqueOrThrow({ where: { id: 1 } });
+    expect(r.reserved_micros).toBe(est.upperCostMicros(price, 1000, 64, settings.safetyMarginPct));
+    for (const [i, o] of [
+      [123, 45],
+      [0, 0],
+      [99_999, 1],
+      [2000, 64],
+    ] as const) {
+      expect(await amountFor(i, o)).toBe(
+        est.upperCostMicros(price, i, o, settings.safetyMarginPct),
+      );
+      const actual = await asApp.$queryRaw<
+        { a: bigint }[]
+      >`SELECT ai_actual_cost_micros(${priceId}::uuid, ${i}::bigint, 7::bigint, 0::bigint, ${o}::bigint) AS "a"`;
+      expect(actual[0]!.a).toBe(
+        est.actualCostMicros(price, {
+          inputTokens: i,
+          cachedReadTokens: 7,
+          cacheWriteTokens: 0,
+          outputTokens: o,
+        }),
+      );
+    }
+    expect((await today(dailyId)).reserved).toBe(before.reserved + r.reserved_micros!);
+    expect(
+      await dbo.aiLedgerEntry.count({ where: { operationId: r.operation_id!, kind: "RESERVE" } }),
+    ).toBe(2);
+    expect(await release(r.operation_id!, "release")).toBe("released");
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("is idempotent per key, and refuses what breaks a limit", async () => {
+    const k = key();
+    const a = await reserve(admin, { key: k });
+    const b = await reserve(admin, { key: k });
+    expect([a.outcome, b.outcome, b.operation_id]).toEqual([
+      "reserved",
+      "existing",
+      a.operation_id,
+    ]);
+    expect((await reserve(admin, { key: k, digest: digest(2) })).outcome).toBe(
+      "idempotency_conflict",
+    );
+    expect(await dbo.aiOperation.count({ where: { idempotencyKey: k } })).toBe(1);
+    expect((await reserve(admin, { in: 2001 })).outcome).toBe("input_too_large");
+    expect((await reserve(admin, { out: 65 })).outcome).toBe("output_too_large");
+    expect(await release(a.operation_id!, "release")).toBe("released");
+    expect(await release(a.operation_id!, "release")).toBe("already_released");
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("starts, settles (idempotently) and records an overrun", async () => {
+    const before = await today(dailyId);
+    const r = await reserve(admin, { in: 100, out: 16 });
+    expect(await start(r.operation_id!)).toBe("started");
+    expect(await start(r.operation_id!)).toBe("already_started");
+    expect(await release(r.operation_id!, "cancel")).toBe("in_flight");
+    expect(await settle(r.operation_id!, "SUCCEEDED", 50, 10)).toBe("settled");
+    expect(await settle(r.operation_id!, "SUCCEEDED", 50, 10)).toBe("already_settled");
+    const op = await dbo.aiOperation.findUniqueOrThrow({ where: { id: r.operation_id! } });
+    expect(op).toMatchObject({
+      status: "SUCCEEDED",
+      costBasis: "LOCAL_USAGE",
+      actInputTokens: 50,
+      actOutputTokens: 10,
+    });
+    const after = await today(dailyId);
+    expect(after.reserved).toBe(before.reserved);
+    expect(after.committed).toBe(before.committed + op.actualMicros!);
+    // A provider that reports more than the bound: the money is committed, the overrun recorded.
+    const o = await reserve(admin, { in: 10, out: 1 });
+    await start(o.operation_id!);
+    expect(await settle(o.operation_id!, "SUCCEEDED", 5_000_000, 1)).toBe("settled_overrun");
+    expect(
+      await dbo.aiOperation.findUniqueOrThrow({ where: { id: o.operation_id! } }),
+    ).toMatchObject({ errorCode: "overrun" });
+    expect(
+      await dbo.aiLedgerEntry.count({ where: { operationId: o.operation_id!, kind: "OVERRUN" } }),
+    ).toBe(2);
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("counts an unknown outcome as spent, never retries, and settles a late answer", async () => {
+    const before = await today(dailyId);
+    const r = await reserve(admin);
+    await start(r.operation_id!);
+    expect(await unknown(r.operation_id!)).toBe("assumed");
+    expect(await unknown(r.operation_id!)).toBe("already_unknown");
+    expect((await today(dailyId)).assumed).toBe(before.assumed + r.reserved_micros!);
+    expect(await start(r.operation_id!)).toBe("not_reserved");
+    expect(await settle(r.operation_id!, "SUCCEEDED", 40, 4)).toBe("settled");
+    const op = await dbo.aiOperation.findUniqueOrThrow({ where: { id: r.operation_id! } });
+    expect(op.status).toBe("DISCARDED");
+    const after = await today(dailyId);
+    expect(after.assumed).toBe(before.assumed);
+    expect(after.committed).toBe(before.committed + op.actualMicros!);
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("reconciles expired leases (a crashed worker): reservations released, calls counted as spent", async () => {
+    const a = await reserve(admin);
+    const b = await reserve(admin);
+    await start(b.operation_id!);
+    await dbo.aiOperation.updateMany({
+      where: { id: { in: [a.operation_id!, b.operation_id!] } },
+      data: { leaseUntil: new Date(Date.now() - 1000) },
+    });
+    const r = await sweep();
+    expect(r.released).toBeGreaterThanOrEqual(1);
+    expect(r.assumed).toBeGreaterThanOrEqual(1);
+    expect(
+      (await dbo.aiOperation.findUniqueOrThrow({ where: { id: a.operation_id! } })).status,
+    ).toBe("EXPIRED");
+    expect(
+      (await dbo.aiOperation.findUniqueOrThrow({ where: { id: b.operation_id! } })).status,
+    ).toBe("UNKNOWN");
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("never lets concurrent reservations exceed the budget together", async () => {
+    await clearActive();
+    const amount = await amountFor(100, 16);
+    const used = await today(dailyId);
+    const limit = used.reserved + used.committed + used.assumed + amount * 5n + amount / 2n;
+    await setDailyLimit(limit);
+    const results = await Promise.all(Array.from({ length: 30 }, () => reserve(admin)));
+    const ok = results.filter((r) => r.outcome === "reserved");
+    expect(ok).toHaveLength(5);
+    expect(new Set(results.filter((r) => r.outcome !== "reserved").map((r) => r.outcome))).toEqual(
+      new Set(["budget_exceeded"]),
+    );
+    const now = await today(dailyId);
+    expect(now.reserved + now.committed + now.assumed).toBeLessThanOrEqual(limit);
+    expect(await mismatches()).toBe(0);
+    // The concurrency limit counts running and reserved operations.
+    await setDailyLimit(50_000_000n);
+    await setConcurrency(5);
+    expect((await reserve(admin)).outcome).toBe("concurrency_limit");
+    await clearActive();
+    await setConcurrency(20);
+  });
+
+  it("applies the site's budget and the local ceiling on top of the platform budgets", async () => {
+    const site = await dbo.aiBudget.findFirstOrThrow({
+      where: { scope: "SITE", siteId: BV, active: true },
+    });
+    const amount = await amountFor(100, 16);
+    const siteBefore = await today(site.id);
+    const r = await reserve(admin, { site: BV });
+    expect(r.outcome).toBe("reserved");
+    expect((await today(site.id)).reserved).toBe(siteBefore.reserved + amount);
+    expect(
+      await dbo.aiLedgerEntry.count({ where: { operationId: r.operation_id!, kind: "RESERVE" } }),
+    ).toBe(3);
+    await release(r.operation_id!, "release");
+    // A site budget with no room refuses even with platform room left.
+    const s = await admin.call("POST", `/ai/budgets/${site.id}`, {
+      limitMicros: (
+        siteBefore.reserved +
+        siteBefore.committed +
+        siteBefore.assumed +
+        1n
+      ).toString(),
+      warnPct: 80,
+      active: true,
+      version: site.version,
+    });
+    expect(s.status, JSON.stringify(s.body)).toBe(200);
+    expect((await reserve(admin, { site: BV })).outcome).toBe("budget_exceeded");
+    expect((await reserve(admin)).outcome).toBe("reserved");
+    // The local ceiling (live in the local deployment) lowers the daily limit.
+    const used = await today(dailyId);
+    expect(
+      (
+        await reserve(admin, {
+          capDaily: used.reserved + used.committed + used.assumed + amount - 1n,
+        })
+      ).outcome,
+    ).toBe("budget_exceeded");
+    await clearActive();
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("shows operations without any text, and reports the provider difference separately", async () => {
+    const ops = AiOperationsResponseSchema.parse(
+      (await viewer.call("GET", "/ai/operations?limit=100")).body,
+    );
+    expect(ops.items.length).toBeGreaterThan(5);
+    for (const o of ops.items) {
+      expect(
+        Object.keys(o).filter((k) => /prompt|response|text|content|input$|output$/i.test(k)),
+      ).toEqual([]);
+    }
+    const day = new Date().toISOString().slice(0, 10);
+    const before = AiReconciliationResponseSchema.parse(
+      (await viewer.call("GET", `/ai/reconciliation?from=${day}&to=${day}`)).body,
+    );
+    const local = before.items.find((r) => r.provider === "OPENAI");
+    expect(local?.providerMicros).toBeNull();
+    const add = await admin.call("POST", "/ai/reconciliation", {
+      provider: "OPENAI",
+      day,
+      providerAmountMicros: "1234",
+    });
+    expect(add.status, JSON.stringify(add.body)).toBe(201);
+    expectError(
+      await admin.call("POST", "/ai/reconciliation", {
+        provider: "OPENAI",
+        day,
+        providerAmountMicros: "1",
+      }),
+      409,
+      "CONFLICT_STATE",
+    );
+    const after = AiReconciliationResponseSchema.parse(
+      (await viewer.call("GET", `/ai/reconciliation?from=${day}&to=${day}`)).body,
+    );
+    const row = after.items.find((r) => r.provider === "OPENAI")!;
+    expect(row.providerMicros).toBe("1234");
+    expect(BigInt(row.differenceMicros!)).toBe(
+      1234n - BigInt(row.localMicros) - BigInt(row.assumedMicros),
+    );
+    const audits = await dbo.auditEvent.findMany({
+      where: { action: { startsWith: "ai." } },
+      select: { metadata: true },
+    });
+    expect(JSON.stringify(audits)).not.toMatch(/prompt|response/i);
+  });
+
+  it("cancels queued reservations when the owner switches AI off; running calls end by settlement or lease; data kept", async () => {
+    const queued = await reserve(admin);
+    const running = await reserve(admin);
+    await start(running.operation_id!);
+    expect((await owner.call("POST", AI, { enabled: false, reason: "DP-290 done" })).status).toBe(
+      200,
+    );
+    // The switch listener sweeps at once; sweep again to be independent of timing.
+    await sweep();
+    expect(
+      (await dbo.aiOperation.findUniqueOrThrow({ where: { id: queued.operation_id! } })).status,
+    ).toBe("CANCELLED");
+    expect(await start(queued.operation_id!)).toBe("ai_disabled");
+    expect((await reserve(admin)).outcome).toBe("ai_disabled");
+    // The running call's answer arrives after the switch-off: cost settled, output discarded.
+    expect(await settle(running.operation_id!, "DISCARDED", 10, 2)).toBe("settled");
+    expect(await mismatches()).toBe(0);
+    for (const p of ["/ai/budgets", "/ai/operations", "/ai/tasks", "/ai/settings"]) {
+      expectError(await admin.call("GET", p), 404, "NOT_FOUND");
+    }
+    expect(await dbo.aiOperation.count()).toBeGreaterThanOrEqual(10);
   });
 });

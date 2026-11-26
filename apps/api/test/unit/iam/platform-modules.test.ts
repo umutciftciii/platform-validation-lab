@@ -38,6 +38,7 @@ describe("DP-287: the AI Center in the catalogue", () => {
       "ai_provider:manage",
       "ai_model:manage",
       "ai_budget:manage",
+      "ai:invoke",
     ]);
     expect(PERMISSIONS.find((p) => p.key === "ai:read")).toMatchObject({
       scopeType: "PLATFORM",

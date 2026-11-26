@@ -17,6 +17,15 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import type {
+  AiBudget,
+  AiBudgetsResponse,
+  AiOperationsResponse,
+  AiPrice,
+  AiPricesResponse,
+  AiReconciliationResponse,
+  AiSettingsDto,
+  AiTaskSettingDto,
+  AiTasksResponse,
   AiCredentialResult,
   AiCredentialSummary,
   AiModelRefreshResponse,
@@ -30,6 +39,7 @@ import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { AiGateGuard } from "./ai-gate.guard.js";
 import { AiService } from "./ai.service.js";
 import { AiProvidersService } from "./providers.service.js";
+import { AiBudgetsService } from "./budgets.service.js";
 
 @Controller("api/v1/admin/ai")
 @UseGuards(AiGateGuard)
@@ -37,6 +47,7 @@ export class AiController {
   constructor(
     @Inject(AiService) private readonly ai: AiService,
     @Inject(AiProvidersService) private readonly providers: AiProvidersService,
+    @Inject(AiBudgetsService) private readonly budgets: AiBudgetsService,
   ) {}
 
   @Get("overview")
@@ -156,5 +167,111 @@ export class AiController {
   @Header("Cache-Control", "no-store")
   disableModel(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<AiModelSummary> {
     return this.providers.setModelEnabled(ctx, id, false);
+  }
+
+  // --- DP-290: settings, prices, tasks, budgets, usage, reconciliation --------------------------
+
+  @Get("settings")
+  @Header("Cache-Control", "no-store")
+  getSettings(@Ctx() ctx: RequestContext): Promise<AiSettingsDto> {
+    return this.budgets.settings(ctx);
+  }
+
+  @Post("settings")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  updateSettings(@Ctx() ctx: RequestContext, @Body() body: unknown): Promise<AiSettingsDto> {
+    return this.budgets.updateSettings(ctx, body);
+  }
+
+  @Get("models/:id/prices")
+  @Header("Cache-Control", "no-store")
+  listPrices(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<AiPricesResponse> {
+    return this.budgets.prices(ctx, id);
+  }
+
+  @Post("models/:id/prices")
+  @HttpCode(201)
+  @Header("Cache-Control", "no-store")
+  addPrice(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ): Promise<AiPrice> {
+    return this.budgets.addPrice(ctx, id, body);
+  }
+
+  @Get("tasks")
+  @Header("Cache-Control", "no-store")
+  listTasks(@Ctx() ctx: RequestContext): Promise<AiTasksResponse> {
+    return this.budgets.tasks(ctx);
+  }
+
+  @Post("tasks/:task")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  updateTask(
+    @Ctx() ctx: RequestContext,
+    @Param("task") task: string,
+    @Body() body: unknown,
+  ): Promise<AiTaskSettingDto> {
+    return this.budgets.updateTask(ctx, task, body);
+  }
+
+  @Get("budgets")
+  @Header("Cache-Control", "no-store")
+  listBudgets(@Ctx() ctx: RequestContext): Promise<AiBudgetsResponse> {
+    return this.budgets.budgets(ctx);
+  }
+
+  @Post("budgets")
+  @HttpCode(201)
+  @Header("Cache-Control", "no-store")
+  createBudget(@Ctx() ctx: RequestContext, @Body() body: unknown): Promise<AiBudget> {
+    return this.budgets.createBudget(ctx, body);
+  }
+
+  @Post("budgets/:id")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  updateBudget(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ): Promise<AiBudget> {
+    return this.budgets.updateBudget(ctx, id, body);
+  }
+
+  @Get("operations")
+  @Header("Cache-Control", "no-store")
+  listOperations(
+    @Ctx() ctx: RequestContext,
+    @Query("before") before?: string,
+    @Query("limit") limit?: string,
+  ): Promise<AiOperationsResponse> {
+    return this.budgets.operations(ctx, {
+      ...(before ? { before } : {}),
+      ...(limit ? { limit } : {}),
+    });
+  }
+
+  @Get("reconciliation")
+  @Header("Cache-Control", "no-store")
+  reconciliation(
+    @Ctx() ctx: RequestContext,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ): Promise<AiReconciliationResponse> {
+    return this.budgets.reconciliation(ctx, { ...(from ? { from } : {}), ...(to ? { to } : {}) });
+  }
+
+  @Post("reconciliation")
+  @HttpCode(201)
+  @Header("Cache-Control", "no-store")
+  recordProviderFigure(
+    @Ctx() ctx: RequestContext,
+    @Body() body: unknown,
+  ): Promise<{ recorded: true }> {
+    return this.budgets.recordProviderFigure(ctx, body);
   }
 }
