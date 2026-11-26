@@ -43,6 +43,14 @@ const MIGRATION = readFileSync(
   path.resolve(DIR, "../../../prisma/migrations/20261217090000_dp_288_ai_data_model/migration.sql"),
   "utf8",
 );
+// DP-297: the twelfth AI table ("AiTransient", UNLOGGED) has its own migration.
+const MIGRATION_297 = readFileSync(
+  path.resolve(
+    DIR,
+    "../../../prisma/migrations/20261221090000_dp_297_ai_durable_queue/migration.sql",
+  ),
+  "utf8",
+);
 const platform = { scope: "platform" } as const;
 const key32 = () => randomBytes(32).toString("base64url");
 
@@ -283,7 +291,7 @@ describe("DP-288: schema rules", () => {
         return { name: name!, type: type! };
       });
 
-  it("has the eleven AI tables", () => {
+  it("has the twelve AI tables (DP-297: AiTransient)", () => {
     expect(models.map((m) => m.name).sort()).toEqual(
       [
         "AiBudget",
@@ -297,6 +305,7 @@ describe("DP-288: schema rules", () => {
         "AiReconciliation",
         "AiSettings",
         "AiTaskSetting",
+        "AiTransient",
       ].sort(),
     );
     expect(SCHEMA).toMatch(/enum AiProvider \{\s+OPENAI\s+ANTHROPIC\s+GEMINI\s+\}/);
@@ -307,6 +316,8 @@ describe("DP-288: schema rules", () => {
       for (const f of fields(m.body)) {
         // The key's encrypted form (secret-box) is the one allowed "text".
         if (m.name === "AiProviderCredential" && f.name === "ciphertext") continue;
+        // DP-297: the encrypted 15-minute input/draft (UNLOGGED, never a permanent text).
+        if (m.name === "AiTransient" && f.name === "ciphertext") continue;
         // Whole camel-case words: "contextWindow" is a token count, not a text.
         const words = f.name.split(/(?=[A-Z])/).map((w) => w.toLowerCase());
         const banned = ["prompt", "response", "content", "message", "text", "body", "completion"];
@@ -330,8 +341,13 @@ describe("DP-288: schema rules", () => {
 
   it("enables row-level security on every AI table and never grants DELETE", () => {
     for (const m of models) {
-      expect(MIGRATION, m.name).toContain(`ALTER TABLE "${m.name}" ENABLE ROW LEVEL SECURITY;`);
+      const sql = m.name === "AiTransient" ? MIGRATION_297 : MIGRATION;
+      expect(sql, m.name).toContain(`ALTER TABLE "${m.name}" ENABLE ROW LEVEL SECURITY;`);
     }
+    // DP-297: no privilege at all for dp_app (definer functions only), and UNLOGGED.
+    expect(MIGRATION_297).toContain(`REVOKE ALL ON TABLE "AiTransient" FROM dp_app;`);
+    expect(MIGRATION_297).toContain(`CREATE UNLOGGED TABLE "AiTransient"`);
+    expect(MIGRATION_297).toMatch(/"expiresAt" <= "createdAt" \+ interval '15 minutes'/);
     expect(MIGRATION).toMatch(
       /REVOKE DELETE ON TABLE "AiSettings"[\s\S]*"AiReconciliation" FROM dp_app;/,
     );

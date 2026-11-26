@@ -13,8 +13,12 @@
  *   [fake:error=<code>]   throw that ProviderCallError code
  *   [fake:refuse]         a refusal          [fake:max_tokens]  stopped at the output cap
  *   [fake:overrun]        report twice the output cap (an estimate underrun)
- * `FakeAdapter.generateCalls` counts every generation started in this process.
+ * `FakeAdapter.generateCalls` counts every generation started in this process. DP-297: with
+ * DP_AI_FAKE_CALL_LOG set (multi-process tests only), every generation also appends the SHA-256 of
+ * its input (never the text) to that file, so tests count calls across API processes.
  */
+import { createHash } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { anthropicModel } from "./anthropic.js";
 import { geminiModel } from "./gemini.js";
 import { openAiModel } from "./openai.js";
@@ -126,6 +130,12 @@ export class FakeAdapter implements AiProviderAdapter {
   ): Promise<GenerateResult> {
     this.check(apiKey, o);
     FakeAdapter.generateCalls++;
+    const callLog = process.env["DP_AI_FAKE_CALL_LOG"];
+    if (callLog) {
+      appendFileSync(callLog, `${createHash("sha256").update(r.input).digest("hex")}\n`);
+    }
+    // The fake "request" is with the provider from here (DP-297 dispatch hand-off).
+    o.onDispatch?.();
     const wait = /\[fake:delay=(\d{1,5})\]/.exec(r.input);
     if (wait) await delay(Number(wait[1]), o.signal);
     if (o.signal.aborted) throw new ProviderCallError("timeout");

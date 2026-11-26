@@ -26,6 +26,11 @@ export interface ProviderCallOptions {
   /** OpenAI-Project / anthropic-workspace-id / (unused for Gemini). */
   projectRef?: string | null;
   signal: AbortSignal;
+  /**
+   * DP-297: called synchronously right after the provider request was handed to the transport
+   * (fetch invoked), once. The worker keeps the AI switch until then (ADR-030 D10).
+   */
+  onDispatch?: () => void;
 }
 
 export interface AiProviderAdapter {

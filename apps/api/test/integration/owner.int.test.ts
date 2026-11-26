@@ -9,8 +9,11 @@
 // everyone else), the owner out of reach of the super admin over HTTP and in the database
 // (condition 7), the PROTECTED stream (classification, hidden from staff, hash chain, tamper
 // detection; conditions 2 and 3) and the owner recovery (CLI only, ownership unchanged).
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -122,7 +125,12 @@ class Staff {
     private readonly token: string,
   ) {}
 
-  async call(method: "GET" | "POST", p: string, body?: unknown): Promise<Res> {
+  call(method: "GET" | "POST", p: string, body?: unknown): Promise<Res> {
+    return this.callAt(base, method, p, body);
+  }
+
+  /** DP-297: the same call through another API instance (base URL). */
+  async callAt(at: string, method: "GET" | "POST", p: string, body?: unknown): Promise<Res> {
     const headers: Record<string, string> = {
       "x-dp-proxy-key": TEST_KEYS.admin,
       "x-dp-client-ip": "10.20.30.41",
@@ -133,7 +141,7 @@ class Staff {
       headers["content-type"] = "application/json";
     }
     return parse(
-      await fetch(`${base}/api/v1/admin${p}`, {
+      await fetch(`${at}/api/v1/admin${p}`, {
         method,
         headers,
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
@@ -2264,7 +2272,7 @@ describe("DP-288: the AI data model", () => {
     const rls = await dbo.$queryRaw<{ t: string; rls: boolean }[]>`
       SELECT relname::text AS t, relrowsecurity AS rls FROM pg_class
       WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'Ai%' AND relkind = 'r' ORDER BY 1`;
-    expect(rls).toHaveLength(11);
+    expect(rls).toHaveLength(12); // DP-297: AiTransient
     expect(rls.every((r) => r.rls)).toBe(true);
   });
 
@@ -3813,11 +3821,16 @@ describe("DP-291: the AI operation service", () => {
         stored,
         await dbo.aiLedgerEntry.findMany({ where: { operationId: created.operationId } }),
         await dbo.auditEvent.findMany({ where: { action: { startsWith: "ai." } } }),
+        // DP-297: the held texts are ciphertexts; the input was wiped when the job was claimed.
+        await dbo.aiTransient.findMany({ where: { operationId: created.operationId } }),
       ],
       (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v),
     );
     expect(everything).not.toContain(CANARY);
     expect(everything).not.toContain("pong");
+    const held = await dbo.aiTransient.findMany({ where: { operationId: created.operationId } });
+    expect(held.find((t) => t.kind === "INPUT")).toMatchObject({ ciphertext: null });
+    expect(held.find((t) => t.kind === "RESULT")?.ciphertext).toMatch(/^v1:/);
     expect(await mismatches()).toBe(0);
   });
 
@@ -3894,11 +3907,16 @@ describe("DP-291: the AI operation service", () => {
   });
 
   it("lets the actor cancel: a queued job costs nothing, a running call ends UNKNOWN; others cannot", async () => {
+    const calls = fake.generateCalls;
     const a = await started("[fake:delay=3000] a");
     const b = await started("[fake:delay=3000] b");
     const c = await started("[fake:delay=3000] c");
-    await until(() => runner.state(a) === "running" && runner.state(b) === "running");
-    expect(runner.state(c)).toBe("queued");
+    // DP-297: the database says what runs; both calls have reached the provider.
+    await until(() => fake.generateCalls === calls + 2);
+    expect(runner.state(a)).toBe("running");
+    expect(runner.state(b)).toBe("running");
+    expect((await detail(admin, c)).runner).toBe("queued");
+    expect((await detail(admin, a)).runner).toBe("running");
     expectError(await other.call("POST", `/ai/operations/${c}/cancel`), 404, "NOT_FOUND");
     expect((await admin.call("POST", `/ai/operations/${c}/cancel`)).body).toEqual({
       operationId: c,
@@ -3924,8 +3942,9 @@ describe("DP-291: the AI operation service", () => {
     await runner.whenIdle();
     expect((await detail(admin, done)).result).not.toBeNull();
     const ids = [] as string[];
+    const callsBefore = fake.generateCalls;
     for (let i = 0; i < 5; i++) ids.push(await started(`[fake:delay=4000] job ${i}`));
-    await until(() => ids.filter((id) => runner.state(id) === "running").length === 2);
+    await until(() => fake.generateCalls === callsBefore + 2);
     const callsAtSwitch = fake.generateCalls;
     expect(
       (await owner.call("POST", AI, { enabled: false, reason: "DP-291 switch-off" })).status,
@@ -4332,4 +4351,711 @@ describe("DP-293: AI budget, usage and reporting", () => {
     );
     expectError(await superAdmin.call("GET", "/ai/alerts"), 404, "NOT_FOUND");
   });
+});
+
+// DP-297 (ADR-030 D10): the AI queue and the draft answers in the database, with TWO API
+// PROCESSES (`node dist/main.js`, separate memory) on this database and the fake provider (no
+// network, no paid call). The in-process API runs with the transport off (no worker): it serves
+// the owner's switch only. Every generation of a child appends the SHA-256 of its input to a call
+// log (DP_AI_FAKE_CALL_LOG), so a call made twice anywhere is seen. Covered: no job runs twice;
+// maxConcurrency and the budget over both processes; queue capacity; a result read through the
+// other process; cancel through the other process (queued and running); a crash (SIGKILL) — the
+// running call never repeated (UNKNOWN at lease end), the queued job run by the other process; a
+// graceful shutdown (SIGTERM); the call deadline; the owner's switch-off with calls running on
+// both processes and queued; nothing restarts when AI is back on; the held texts — encrypted,
+// UNLOGGED, 15-minute bound, wiped, for their actor only, never in a log or an audit event.
+describe("DP-297: the AI queue over two API processes", () => {
+  const AI = "/owner/modules/ai/platform";
+  const MAIN = path.join(API_DIR, "dist/main.js");
+  const CALL_LOG = path.join(tmpdir(), `dp297-calls-${randomBytes(4).toString("hex")}.log`);
+  const CANARY = `canary297-${randomBytes(6).toString("hex")}`;
+  let factory: { createApiApp(o: { logger: false }): Promise<App> };
+  let owner: Staff;
+  let admin: Staff; // ai_administrator
+  let other: Staff; // another ai_administrator
+  let viewer: Staff; // ai_viewer
+  let seq = 0;
+  const key = () => `dp297-${Date.now()}-${seq++}`;
+  const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+  const calls = (input?: string) => {
+    if (!existsSync(CALL_LOG)) return 0;
+    const lines = readFileSync(CALL_LOG, "utf8").split("\n").filter(Boolean);
+    return input === undefined ? lines.length : lines.filter((l) => l === sha(input)).length;
+  };
+
+  interface Proc {
+    name: string;
+    url: string;
+    child: ChildProcess;
+    output: string[];
+    exited: Promise<number | null>;
+  }
+  const procs: Proc[] = [];
+
+  async function freePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const srv = createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const { port } = srv.address() as { port: number };
+        srv.close(() => resolve(port));
+      });
+    });
+  }
+
+  async function launch(name: string, env: Record<string, string> = {}): Promise<Proc> {
+    const port = await freePort();
+    const child = spawn(process.execPath, [MAIN], {
+      cwd: API_DIR,
+      env: {
+        ...process.env,
+        PORT: String(port),
+        DP_AI_TRANSPORT: "fake",
+        DP_AI_ENC_KEYS: AI_ENC_KEYS,
+        DP_AI_FAKE_CALL_LOG: CALL_LOG,
+        AI_WORKER_POLL_MS: "200",
+        AI_WORKER_CONCURRENCY: "1",
+        AI_SWEEP_INTERVAL_SECONDS: "1",
+        AI_CALL_TIMEOUT_SECONDS: "5",
+        NODE_OPTIONS: "--max-old-space-size=384",
+        ...env,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output: string[] = [];
+    child.stdout?.on("data", (d: Buffer) => output.push(d.toString("utf8")));
+    child.stderr?.on("data", (d: Buffer) => output.push(d.toString("utf8")));
+    const exited = new Promise<number | null>((resolve) => child.once("exit", (c) => resolve(c)));
+    const p: Proc = { name, url: `http://127.0.0.1:${port}`, child, output, exited };
+    procs.push(p);
+    const end = Date.now() + 30_000;
+    for (;;) {
+      if (child.exitCode !== null) throw new Error(`${name} exited: ${output.join("")}`);
+      try {
+        if ((await fetch(`${p.url}/health/ready`)).status === 200) return p;
+      } catch {
+        // not listening yet
+      }
+      if (Date.now() > end) throw new Error(`${name} not ready`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  async function stop(p: Proc, signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
+    if (p.child.exitCode === null && p.child.signalCode === null) p.child.kill(signal);
+    await p.exited;
+  }
+
+  const run = (who: Staff, via: Proc, input: string, k = key()) =>
+    who.callAt(via.url, "POST", "/ai/operations", {
+      task: "DIAGNOSTIC_PING",
+      input,
+      idempotencyKey: k,
+    });
+  async function started(via: Proc, input: string, who = admin): Promise<string> {
+    const res = await run(who, via, input);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    return AiOperationCreatedSchema.parse(res.body).operationId;
+  }
+  const row = (id: string) => dbo.aiOperation.findUniqueOrThrow({ where: { id } });
+  const status = async (id: string) => (await row(id)).status;
+  const detailAt = async (who: Staff, via: Proc, id: string) => {
+    const res = await who.callAt(via.url, "GET", `/ai/operations/${id}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return AiOperationDetailSchema.parse(res.body);
+  };
+  async function until(fn: () => Promise<boolean> | boolean, ms = 15_000) {
+    const end = Date.now() + ms;
+    while (!(await fn())) {
+      if (Date.now() > end) throw new Error("condition not reached");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  const TERMINAL = [
+    "SUCCEEDED",
+    "FAILED",
+    "UNKNOWN",
+    "DISCARDED",
+    "CANCELLED",
+    "RELEASED",
+    "EXPIRED",
+  ];
+  const settledAll = (ids: string[], ms?: number) =>
+    until(async () => {
+      const rows = await dbo.aiOperation.findMany({ where: { id: { in: ids } } });
+      return rows.every((r) => TERMINAL.includes(r.status));
+    }, ms);
+  const mismatches = async () =>
+    Number(
+      (
+        await asApp.$queryRaw<
+          { n: bigint }[]
+        >`SELECT count(*)::bigint AS "n" FROM ai_ledger_mismatches()`
+      )[0]!.n,
+    );
+  async function settings(patch: Record<string, unknown>) {
+    const cur = await admin.call("GET", "/ai/settings");
+    const res = await admin.call("POST", "/ai/settings", { ...cur.body, ...patch });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  async function setDaily(limitMicros: bigint) {
+    const daily = await dbo.aiBudget.findFirstOrThrow({
+      where: { active: true, scope: "PLATFORM", period: "DAILY" },
+    });
+    const res = await admin.call("POST", `/ai/budgets/${daily.id}`, {
+      limitMicros: limitMicros.toString(),
+      warnPct: daily.warnPct,
+      active: true,
+      version: daily.version,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return daily.id;
+  }
+  async function restartInProcess(env: Record<string, string | undefined>) {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await app.close();
+    app = await factory.createApiApp({ logger: false });
+    await app.listen(0, "127.0.0.1");
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as { port: number }).port}`;
+  }
+  const noActive = async () =>
+    (await dbo.aiOperation.count({ where: { status: { in: ["RESERVED", "IN_FLIGHT"] } } })) === 0;
+
+  let A: Proc;
+  let B: Proc;
+  let Q: Proc; // API-only (AI_WORKER_CONCURRENCY=0)
+
+  beforeAll(async () => {
+    factory = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href
+    )) as typeof factory;
+    rmSync(CALL_LOG, { force: true });
+    // The in-process API: transport off (no worker), the owner's switch and the settings.
+    await restartInProcess({
+      DP_AI_TRANSPORT: undefined,
+      DP_AI_ENC_KEYS: undefined,
+      AI_SWEEP_INTERVAL_SECONDS: "0",
+    });
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-297", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-297", pw, [], root.userId);
+    other = await staff("ai-other-297", pw, [], root.userId);
+    viewer = await staff("ai-viewer-297", pw, [], root.userId);
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-297 test" })).status).toBe(
+      200,
+    );
+    for (const [who, roleKey] of [
+      [admin, "ai_administrator"],
+      [other, "ai_administrator"],
+      [viewer, "ai_viewer"],
+    ] as const) {
+      expect((await owner.call("POST", `/staff/${who.userId}/roles`, { roleKey })).status).toBe(
+        201,
+      );
+    }
+    for (const b of await dbo.aiBudget.findMany({ where: { active: true, scope: "PLATFORM" } })) {
+      const res = await admin.call("POST", `/ai/budgets/${b.id}`, {
+        limitMicros: "100000000",
+        warnPct: b.warnPct,
+        active: true,
+        version: b.version,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    await settings({ maxConcurrency: 20 });
+    [A, B, Q] = await Promise.all([
+      launch("api-a"),
+      launch("api-b"),
+      launch("api-q", { AI_WORKER_CONCURRENCY: "0" }),
+    ]);
+  }, 90_000);
+
+  afterAll(async () => {
+    for (const p of procs) await stop(p);
+    // Nothing of a text in any process output (logs).
+    for (const p of procs) {
+      const out = p.output.join("");
+      expect(out, p.name).not.toContain(CANARY);
+      expect(out, p.name).not.toContain("pong");
+    }
+    rmSync(CALL_LOG, { force: true });
+    await restartInProcess({ AI_SWEEP_INTERVAL_SECONDS: undefined });
+  }, 60_000);
+
+  it("keeps the held texts in an UNLOGGED table that dp_app cannot read", async () => {
+    const rel = await dbo.$queryRaw<{ relpersistence: string }[]>`
+      SELECT relpersistence::text AS relpersistence FROM pg_class WHERE relname = 'AiTransient'`;
+    expect(rel[0]?.relpersistence).toBe("u");
+    await rejectsDb(asApp.$queryRaw`SELECT * FROM "AiTransient"`, /permission denied/);
+    await rejectsDb(
+      asApp.$executeRaw`UPDATE "AiTransient" SET "ciphertext" = NULL`,
+      /permission denied/,
+    );
+  });
+
+  it("runs each job exactly once over two processes, within maxConcurrency; any process reads the draft", async () => {
+    // Twelve jobs queued through the API-only process Q while no worker runs; then the global
+    // limit is lowered to 3 and two worker processes with 2 workers each (4 > 3) start together.
+    await stop(A);
+    await stop(B);
+    const jobs: { id: string; via: Proc; input: string }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const input = `[fake:delay=300] job ${i} ${CANARY}`;
+      jobs.push({ id: await started(Q, input), via: Q, input });
+    }
+    expect(
+      await dbo.aiOperation.count({
+        where: { id: { in: jobs.map((j) => j.id) }, status: "RESERVED" },
+      }),
+    ).toBe(12);
+    await settings({ maxConcurrency: 3 });
+    [A, B] = await Promise.all([
+      launch("api-a-wide", { AI_WORKER_CONCURRENCY: "2" }),
+      launch("api-b-wide", { AI_WORKER_CONCURRENCY: "2" }),
+    ]);
+    try {
+      jobs.forEach((j, n) => (j.via = n % 2 === 0 ? A : B));
+      await settledAll(
+        jobs.map((j) => j.id),
+        30_000,
+      );
+      const rows = await dbo.aiOperation.findMany({ where: { id: { in: jobs.map((j) => j.id) } } });
+      expect(rows.map((r) => r.status)).toEqual(rows.map(() => "SUCCEEDED"));
+      for (const j of jobs) expect(calls(j.input), j.input).toBe(1);
+      // Both processes worked; never more than 3 calls in flight together.
+      expect(new Set(rows.map((r) => r.instanceId)).size).toBe(2);
+      const events = rows.flatMap((r) => [
+        { t: r.startedAt!.getTime(), d: 1 },
+        { t: r.finishedAt!.getTime(), d: -1 },
+      ]);
+      events.sort((x, y) => x.t - y.t || x.d - y.d);
+      let flying = 0;
+      let peak = 0;
+      for (const e of events) peak = Math.max(peak, (flying += e.d));
+      expect(peak).toBeLessThanOrEqual(3);
+      // The ledger: no second start anywhere.
+      const starts = await dbo.aiLedgerEntry.groupBy({
+        by: ["operationId"],
+        where: { operationId: { in: jobs.map((j) => j.id) }, kind: "START" },
+        _count: true,
+      });
+      expect(starts).toHaveLength(jobs.length);
+      // One START per budget (daily + monthly platform budgets) — a second start would double it.
+      const budgets = await dbo.aiBudget.count({ where: { active: true, scope: "PLATFORM" } });
+      for (const g of starts) expect(g._count, g.operationId).toBe(budgets);
+      // The draft through the process that did NOT take the request, for its actor only.
+      for (const j of jobs) {
+        const otherProc = j.via === A ? B : A;
+        expect(await detailAt(admin, otherProc, j.id)).toMatchObject({
+          own: true,
+          runner: "none",
+          result: { draft: true, text: "pong" },
+        });
+        expect((await detailAt(other, otherProc, j.id)).result).toBeNull();
+      }
+      expectError(
+        await viewer.callAt(A.url, "GET", `/ai/operations/${jobs[0]!.id}`),
+        403,
+        "FORBIDDEN",
+      );
+      // The API-only process ran nothing and still serves the draft.
+      expect((await detailAt(admin, Q, jobs[0]!.id)).result).toEqual({ draft: true, text: "pong" });
+      expect(await mismatches()).toBe(0);
+    } finally {
+      await settings({ maxConcurrency: 20 });
+      await stop(A);
+      await stop(B);
+      [A, B] = await Promise.all([launch("api-a"), launch("api-b")]);
+    }
+  }, 90_000);
+
+  it("refuses beyond the capacity and the budget, counted over both processes", async () => {
+    // Capacity: maxConcurrency counts queued + running on every instance.
+    await settings({ maxConcurrency: 2 });
+    const burst = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => run(admin, i % 2 ? A : B, `[fake:delay=1500] cap ${i}`)),
+    );
+    const accepted = burst.filter((r) => r.status === 202);
+    expect(accepted).toHaveLength(2);
+    for (const r of burst.filter((x) => x.status !== 202)) {
+      expectError(r, 409, "CONFLICT_STATE");
+      expect(JSON.stringify(r.body)).toContain("concurrency_limit");
+    }
+    await settledAll(accepted.map((r) => AiOperationCreatedSchema.parse(r.body).operationId));
+    await settings({ maxConcurrency: 20 });
+
+    // Budget: room for exactly three reservations of this size, whoever reserves.
+    const probe = await started(A, "[fake:delay=2000] budget p"); // same size as the burst
+    await settledAll([probe]);
+    const amount = (await row(probe)).reservedMicros;
+    const daily = await dbo.aiBudget.findFirstOrThrow({
+      where: { active: true, scope: "PLATFORM", period: "DAILY" },
+    });
+    const usage = await dbo.aiBudgetUsage.findFirstOrThrow({
+      where: { budgetId: daily.id },
+      orderBy: { periodStart: "desc" },
+    });
+    const used = usage.reservedMicros + usage.committedMicros + usage.assumedMicros;
+    await setDaily(used + amount * 3n + amount / 2n);
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        run(admin, i % 2 ? A : B, `[fake:delay=2000] budget ${i}`),
+      ),
+    );
+    const ok = results.filter((r) => r.status === 202);
+    expect(ok).toHaveLength(3);
+    for (const r of results.filter((x) => x.status !== 202)) {
+      expect(JSON.stringify(r.body)).toContain("budget_exceeded");
+    }
+    await settledAll(ok.map((r) => AiOperationCreatedSchema.parse(r.body).operationId));
+    const after = await dbo.aiBudgetUsage.findFirstOrThrow({
+      where: { budgetId: daily.id },
+      orderBy: { periodStart: "desc" },
+    });
+    expect(after.reservedMicros).toBe(0n);
+    expect(after.committedMicros + after.assumedMicros).toBeLessThanOrEqual(
+      used + amount * 3n + amount / 2n,
+    );
+    await setDaily(100_000_000n);
+    expect(await mismatches()).toBe(0);
+  }, 60_000);
+
+  it("cancels through the other process: a queued job costs nothing, a running call stops there", async () => {
+    // Both processes busy (one worker each), then a third job waits in the queue.
+    const busyA = await started(A, "[fake:delay=4000] busy a");
+    const busyB = await started(B, "[fake:delay=4000] busy b");
+    await until(
+      () => calls("[fake:delay=4000] busy a") === 1 && calls("[fake:delay=4000] busy b") === 1,
+    );
+    const queued = await started(A, `[fake:delay=4000] queued ${CANARY}`);
+    expect((await detailAt(admin, B, queued)).runner).toBe("queued");
+    const before = await dbo.aiTransient.findUniqueOrThrow({
+      where: { operationId_kind: { operationId: queued, kind: "INPUT" } },
+    });
+    expect(before.ciphertext).toMatch(/^v1:/);
+    expect(before.ciphertext).not.toContain(CANARY);
+    expect(before.expiresAt.getTime() - before.createdAt.getTime()).toBeLessThanOrEqual(900_000);
+    // Another user cannot cancel it; the actor can, through B.
+    expectError(
+      await other.callAt(B.url, "POST", `/ai/operations/${queued}/cancel`),
+      404,
+      "NOT_FOUND",
+    );
+    expect((await admin.callAt(B.url, "POST", `/ai/operations/${queued}/cancel`)).body).toEqual({
+      operationId: queued,
+      stopped: "queued",
+    });
+    expect(await row(queued)).toMatchObject({ status: "CANCELLED", startedAt: null });
+    expect(
+      (
+        await dbo.aiTransient.findUniqueOrThrow({
+          where: { operationId_kind: { operationId: queued, kind: "INPUT" } },
+        })
+      ).ciphertext,
+    ).toBeNull();
+    // The call running on A, cancelled through B: A sees the stop at its next poll.
+    const runningOn = (await row(busyA)).instanceId;
+    expect((await admin.callAt(B.url, "POST", `/ai/operations/${busyA}/cancel`)).body).toEqual({
+      operationId: busyA,
+      stopped: "running",
+    });
+    await until(async () => (await status(busyA)) === "UNKNOWN", 3_000);
+    expect(await row(busyA)).toMatchObject({ errorCode: "cancelled", instanceId: runningOn });
+    await settledAll([busyB]);
+    expect(await status(busyB)).toBe("SUCCEEDED");
+    await new Promise((r) => setTimeout(r, 600));
+    expect(calls(`[fake:delay=4000] queued ${CANARY}`)).toBe(0);
+    expect(calls("[fake:delay=4000] busy a")).toBe(1);
+    expect(await mismatches()).toBe(0);
+  }, 60_000);
+
+  it("a crashed process (SIGKILL): its call is never repeated (UNKNOWN at lease end), its queue runs elsewhere", async () => {
+    await stop(B);
+    const running = "[fake:delay=4000] crash running";
+    const waiting = `crash waiting ${CANARY}`;
+    const r = await started(A, running);
+    await until(() => calls(running) === 1);
+    const w = await started(A, waiting); // A has one worker: it waits in the queue
+    expect(await status(w)).toBe("RESERVED");
+    await stop(A, "SIGKILL");
+    expect(await status(r)).toBe("IN_FLIGHT");
+    // A new process takes the queued job; the crashed call is counted as spent at lease end.
+    B = await launch("api-b2");
+    await until(async () => (await status(w)) === "SUCCEEDED");
+    expect((await detailAt(admin, B, w)).result).toEqual({ draft: true, text: "pong" });
+    await until(async () => (await status(r)) === "UNKNOWN", 30_000);
+    expect(await row(r)).toMatchObject({ errorCode: "lease_expired", costBasis: "ASSUMED" });
+    A = await launch("api-a2");
+    await new Promise((res) => setTimeout(res, 1_000));
+    expect(calls(running)).toBe(1);
+    expect(calls(waiting)).toBe(1);
+    expect(await mismatches()).toBe(0);
+  }, 90_000);
+
+  it("a graceful shutdown (SIGTERM) ends the running call UNKNOWN and leaves the queue to the other process", async () => {
+    await stop(B);
+    const running = "[fake:delay=4000] term running";
+    const waiting = "term waiting";
+    const r = await started(A, running);
+    await until(() => calls(running) === 1);
+    const w = await started(A, waiting);
+    await stop(A, "SIGTERM");
+    expect(await row(r)).toMatchObject({ status: "UNKNOWN", errorCode: "shutdown" });
+    expect(await status(w)).toBe("RESERVED");
+    B = await launch("api-b3");
+    await until(async () => (await status(w)) === "SUCCEEDED");
+    A = await launch("api-a3");
+    expect(calls(running)).toBe(1);
+    expect(calls(waiting)).toBe(1);
+  }, 60_000);
+
+  it("ends a call at its deadline as UNKNOWN (counted as spent), never repeated", async () => {
+    const slow = "[fake:delay=9000] past the deadline";
+    const id = await started(A, slow);
+    await until(async () => (await status(id)) === "UNKNOWN", 15_000);
+    expect(await row(id)).toMatchObject({ errorCode: "timeout", costBasis: "ASSUMED" });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(calls(slow)).toBe(1);
+  }, 30_000);
+
+  it("the held draft: 15 minutes at most, unreadable once expired, wiped, never after a cancel", async () => {
+    const id = await started(A, "ttl ping");
+    await settledAll([id]);
+    expect((await detailAt(admin, B, id)).result).toEqual({ draft: true, text: "pong" });
+    // The database refuses a lifetime above 15 minutes.
+    await rejectsDb(
+      dbo.$executeRaw`UPDATE "AiTransient" SET "expiresAt" = "createdAt" + interval '16 minutes'
+                       WHERE "operationId" = ${id}::uuid AND "kind" = 'RESULT'`,
+      /AiTransient_ttl/,
+    );
+    // Expired: no longer handed out, then wiped by the next poll.
+    await dbo.$executeRaw`UPDATE "AiTransient" SET "createdAt" = now() - interval '20 minutes',
+                            "expiresAt" = now() - interval '5 minutes'
+                           WHERE "operationId" = ${id}::uuid AND "kind" = 'RESULT'`;
+    expect((await detailAt(admin, A, id)).result).toBeNull();
+    await until(async () => {
+      const t = await dbo.aiTransient.findUniqueOrThrow({
+        where: { operationId_kind: { operationId: id, kind: "RESULT" } },
+      });
+      return t.ciphertext === null && t.wipedAt !== null;
+    }, 5_000);
+    // A cancel after success wipes the draft at once.
+    const id2 = await started(B, "cancel after success");
+    await settledAll([id2]);
+    expect((await detailAt(admin, A, id2)).result).not.toBeNull();
+    expect((await admin.callAt(A.url, "POST", `/ai/operations/${id2}/cancel`)).body).toEqual({
+      operationId: id2,
+      stopped: "none",
+    });
+    expect((await detailAt(admin, B, id2)).result).toBeNull();
+    // A draft copied to another operation does not decrypt (bound to operation and actor).
+    const id3 = await started(A, "copy target");
+    await settledAll([id3]);
+    const src = await dbo.aiTransient.findUniqueOrThrow({
+      where: { operationId_kind: { operationId: id2, kind: "RESULT" } },
+    });
+    expect(src.ciphertext).toBeNull();
+    const own = await dbo.aiTransient.findUniqueOrThrow({
+      where: { operationId_kind: { operationId: id3, kind: "RESULT" } },
+    });
+    const id4 = await started(A, "copy source");
+    await settledAll([id4]);
+    await dbo.$executeRaw`UPDATE "AiTransient" SET "ciphertext" = ${own.ciphertext}
+                           WHERE "operationId" = ${id4}::uuid AND "kind" = 'RESULT'`;
+    expect((await detailAt(admin, B, id4)).result).toBeNull();
+    // Nothing of a text in audit events.
+    const audits = JSON.stringify(
+      await dbo.auditEvent.findMany({ where: { action: { startsWith: "ai." } } }),
+      (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v),
+    );
+    expect(audits).not.toContain(CANARY);
+    expect(audits).not.toContain("pong");
+  }, 60_000);
+
+  const aiVersion = async () =>
+    (await dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } })).version;
+
+  it("the switch-off waits for a provider request being started under the switch; after its COMMIT none can start", async () => {
+    // No worker process: the test is the worker (dp_app), so the order is under its control.
+    await stop(A);
+    await stop(B);
+    const first = await started(Q, "dispatch order 1");
+    const second = await started(Q, "dispatch order 2");
+    const claimed = await asApp.$queryRaw<{ op_id: string }[]>`
+      SELECT op_id FROM ai_claim('int-probe', 60, 2)`;
+    expect(claimed.map((c) => c.op_id).sort()).toEqual([first, second].sort());
+    const vOn = await aiVersion();
+    let switchedAt = 0;
+    let committedAt = 0;
+    let switching: Promise<Res> | null = null;
+    await asApp.$transaction(
+      async (tx) => {
+        const r = await tx.$queryRaw<{ r: string }[]>`SELECT ai_dispatch(${first}::uuid) AS "r"`;
+        expect(r[0]!.r).toBe("dispatch");
+        // The provider request would be sent here. The owner switches AI off meanwhile.
+        switching = owner.call("POST", AI, { enabled: false, reason: "DP-297 dispatch order" });
+        void switching.then(() => (switchedAt = Date.now()));
+        await new Promise((res) => setTimeout(res, 1_500));
+        expect(switchedAt, "the switch-off must wait for the dispatching transaction").toBe(0);
+        committedAt = Date.now();
+      },
+      { timeout: 15_000, maxWait: 5_000 },
+    );
+    expect((await switching!).status).toBe(200);
+    expect(switchedAt).toBeGreaterThanOrEqual(committedAt);
+    const vOff = await aiVersion();
+    expect(vOff).toBe(vOn + 1);
+    // After the COMMIT of the switch-off: no permission for the other claimed call.
+    const late = await asApp.$queryRaw<{ r: string }[]>`SELECT ai_dispatch(${second}::uuid) AS "r"`;
+    expect(late[0]!.r).toBe("ai_disabled");
+    expect(await row(first)).toMatchObject({ dispatchSwitchVersion: vOn });
+    expect((await row(first)).dispatchedAt).not.toBeNull();
+    expect(await row(second)).toMatchObject({ dispatchedAt: null, dispatchSwitchVersion: null });
+    // The database refuses a dispatch record without its version (and the reverse).
+    await rejectsDb(
+      dbo.$executeRaw`UPDATE "AiOperation" SET "dispatchSwitchVersion" = NULL WHERE "id" = ${first}::uuid`,
+      /AiOperation_dispatch/,
+    );
+    // Clean up the probe's calls (no request was sent): counted as spent at lease end otherwise.
+    for (const id of [first, second]) {
+      await asApp.$queryRaw`SELECT ai_mark_unknown(${id}::uuid, 'int_probe') AS "r"`;
+    }
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-297 back on" })).status).toBe(
+      200,
+    );
+    [A, B] = await Promise.all([launch("api-a4"), launch("api-b4")]);
+    expect(await mismatches()).toBe(0);
+  }, 60_000);
+
+  it("switch-off races against two busy worker processes: zero provider requests start after the COMMIT", async () => {
+    await stop(A);
+    await stop(B);
+    [A, B] = await Promise.all([
+      launch("api-a-race", { AI_WORKER_CONCURRENCY: "4", AI_WORKER_POLL_MS: "100" }),
+      launch("api-b-race", { AI_WORKER_CONCURRENCY: "4", AI_WORKER_POLL_MS: "100" }),
+    ]);
+    const totals = { dispatched: 0, refusedAtDispatch: 0, aborted: 0, cancelledQueued: 0 };
+    try {
+      for (let round = 0; round < 5; round++) {
+        const vOn = await aiVersion();
+        const inputs: string[] = [];
+        const ids: string[] = [];
+        // A stream of short jobs: claims and dispatches are happening on both processes.
+        const feeding = (async () => {
+          for (let i = 0; i < 24; i++) {
+            const input = `[fake:delay=${80 + ((i * 37) % 120)}] race ${round} ${i} ${CANARY}`;
+            const res = await run(admin, Q, input);
+            if (res.status !== 202) break; // AI is off now
+            inputs.push(input);
+            ids.push(AiOperationCreatedSchema.parse(res.body).operationId);
+            await new Promise((r) => setTimeout(r, 15));
+          }
+        })();
+        await new Promise((r) => setTimeout(r, 150 + round * 90));
+        const off = await owner.call("POST", AI, {
+          enabled: false,
+          reason: `DP-297 race ${round}`,
+        });
+        expect(off.status).toBe(200);
+        // The switch-off has COMMITTED (the answer comes after it): from here, no new request.
+        const atCommit = new Map(inputs.map((t) => [t, calls(t)]));
+        const vOff = await aiVersion();
+        expect(vOff).toBeGreaterThan(vOn);
+        await feeding;
+        await new Promise((r) => setTimeout(r, 1_200));
+        // Inputs accepted while the switch-off ran (reserved before it, cancelled by it) count 0.
+        for (const t of inputs) {
+          expect(calls(t), `round ${round}: a provider request started after the switch-off`).toBe(
+            atCommit.get(t) ?? 0,
+          );
+        }
+        await settledAll(ids, 15_000);
+        const rows = await dbo.aiOperation.findMany({ where: { id: { in: ids } } });
+        for (const r of rows) {
+          // Every recorded dispatch was granted under the version in force BEFORE the switch-off.
+          if (r.dispatchedAt) expect(r.dispatchSwitchVersion, r.id).toBe(vOn);
+          expect(r.dispatchSwitchVersion ?? 0).toBeLessThan(vOff);
+        }
+        // Each provider request has its dispatch record, and no request was made twice.
+        for (const [n, r] of ids.map((id, n) => [n, rows.find((x) => x.id === id)!] as const)) {
+          expect(calls(inputs[n]!), r.id).toBe(r.dispatchedAt ? 1 : 0);
+        }
+        totals.dispatched += rows.filter((r) => r.dispatchedAt).length;
+        totals.refusedAtDispatch += rows.filter(
+          (r) => r.startedAt && !r.dispatchedAt && r.errorCode === "ai_disabled",
+        ).length;
+        totals.aborted += rows.filter(
+          (r) => r.dispatchedAt && r.status !== "SUCCEEDED" && r.errorCode === "ai_disabled",
+        ).length;
+        totals.cancelledQueued += rows.filter((r) => r.status === "CANCELLED").length;
+        // Nothing of this round is handed out after the switch-off.
+        expect(await dbo.aiTransient.count({ where: { ciphertext: { not: null } } })).toBe(0);
+        expect(await noActive()).toBe(true);
+        expect(
+          (await owner.call("POST", AI, { enabled: true, reason: `DP-297 race ${round} on` }))
+            .status,
+        ).toBe(200);
+      }
+      console.info(`DP-297 race totals ${JSON.stringify(totals)}`);
+      expect(totals.dispatched).toBeGreaterThan(0);
+      expect(totals.cancelledQueued + totals.refusedAtDispatch + totals.aborted).toBeGreaterThan(0);
+      expect(await mismatches()).toBe(0);
+    } finally {
+      if (
+        (await dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } }))
+          .enabled === false
+      ) {
+        await owner.call("POST", AI, { enabled: true, reason: "DP-297 race cleanup" });
+      }
+      await stop(A);
+      await stop(B);
+      [A, B] = await Promise.all([launch("api-a5"), launch("api-b5")]);
+    }
+  }, 120_000);
+
+  it("the owner's switch-off with calls running on both processes and queued: nothing starts, nothing is kept or delivered", async () => {
+    expect(await noActive()).toBe(true);
+    const done = await started(A, "before the switch-off");
+    await settledAll([done]);
+    const ra = "[fake:delay=4000] off running a";
+    const rb = "[fake:delay=4000] off running b";
+    const runningIds = [await started(A, ra), await started(B, rb)];
+    await until(() => calls(ra) + calls(rb) === 2);
+    const queuedIds = [
+      await started(A, "[fake:delay=4000] off queued 1"),
+      await started(B, "[fake:delay=4000] off queued 2"),
+    ];
+    const total = calls();
+    expect(
+      (await owner.call("POST", AI, { enabled: false, reason: "DP-297 switch-off" })).status,
+    ).toBe(200);
+    // In the owner's transaction: the queue is cancelled and every held text wiped.
+    for (const id of queuedIds) expect(await status(id)).toBe("CANCELLED");
+    expect(await dbo.aiTransient.count({ where: { ciphertext: { not: null } } })).toBe(0);
+    // The calls on both processes stop at their next poll.
+    await until(async () => {
+      const rows = await dbo.aiOperation.findMany({ where: { id: { in: runningIds } } });
+      return rows.every((r) => r.status === "UNKNOWN" && r.errorCode === "ai_disabled");
+    }, 3_000);
+    expectError(await run(admin, A, "ping while off"), 404, "NOT_FOUND");
+    expectError(await admin.callAt(B.url, "GET", `/ai/operations/${done}`), 404, "NOT_FOUND");
+    // Switched on again: nothing restarts by itself, nothing from before is handed out.
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-297 back on" })).status).toBe(
+      200,
+    );
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect(calls()).toBe(total);
+    expect((await detailAt(admin, A, done)).result).toBeNull();
+    for (const id of [...runningIds, ...queuedIds]) {
+      expect(["CANCELLED", "UNKNOWN"]).toContain(await status(id));
+    }
+    expect(await noActive()).toBe(true);
+    expect(await mismatches()).toBe(0);
+    expect((await owner.call("POST", AI, { enabled: false, reason: "DP-297 done" })).status).toBe(
+      200,
+    );
+  }, 60_000);
 });
