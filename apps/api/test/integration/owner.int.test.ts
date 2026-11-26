@@ -15,7 +15,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  AiCredentialResultSchema,
+  AiModelRefreshResponseSchema,
+  AiModelsResponseSchema,
   AiOverviewResponseSchema,
+  AiProvidersResponseSchema,
   EnrolInspectResponseSchema,
   EnrolMfaConfirmResponseSchema,
   EnrolMfaSetupResponseSchema,
@@ -2615,4 +2619,388 @@ describe("DP-288: the AI data model", () => {
     });
     return ((await res.json()) as { features?: { aiCenter: boolean } }).features?.aiCenter;
   }
+});
+
+// DP-289 (ADR-030 D4, D5): providers, their separate API keys and their models, end to end with
+// the deterministic fake provider (DP_AI_TRANSPORT=fake: no network, no paid call). Covers the
+// gate (404 while AI is off), permissions and step-up, a key that never comes back (responses,
+// database, audit), format and duplicate checks, testing, replacement, disabling, revoking, the
+// model list with compatibility, verification and enabling, provider settings, and transport off.
+describe("DP-289: providers, keys and models", () => {
+  const AI = "/owner/modules/ai/platform";
+  const hex = (n: number) => randomBytes(n).toString("hex");
+  // Hex only: the fake provider reads words like "invalid" or "down" in a key as an outcome.
+  const OPENAI_1 = `sk-proj-${hex(20)}`;
+  const OPENAI_2 = `sk-proj-${hex(20)}`;
+  const ANTHROPIC = `sk-ant-api03-${hex(20)}`;
+  const GEMINI = ["AI", "za", hex(18)].join("");
+  let factory: { createApiApp(o: { logger: false }): Promise<App> };
+  let owner: Staff;
+  let admin: Staff; // super admin + ai_administrator (from the owner)
+  let viewer: Staff; // ai_viewer
+  let staleAdmin: Staff; // the same administrator without a fresh step-up
+  const ids: Record<string, string> = {};
+
+  async function restart(env: Record<string, string | undefined>) {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await app.close();
+    app = await factory.createApiApp({ logger: false });
+    await app.listen(0, "127.0.0.1");
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as { port: number }).port}`;
+  }
+  async function noKeyAnywhere(text: string) {
+    for (const k of [OPENAI_1, OPENAI_2, ANTHROPIC, GEMINI]) expect(text).not.toContain(k);
+  }
+  const call = async (who: Staff, method: "GET" | "POST", p: string, body?: unknown) => {
+    const res = await who.call(method, p, body);
+    await noKeyAnywhere(JSON.stringify(res.body));
+    return res;
+  };
+  async function del(who: Staff, p: string): Promise<Res> {
+    const res = await fetch(`${base}/api/v1/admin${p}`, {
+      method: "DELETE",
+      headers: {
+        "x-dp-proxy-key": TEST_KEYS.admin,
+        "x-dp-client-ip": "10.20.30.41",
+        origin: ADMIN_ORIGIN,
+        cookie: `__Host-dp_admin_session=${(who as unknown as { token: string }).token}`,
+      },
+    });
+    return parse(res);
+  }
+
+  beforeAll(async () => {
+    factory = (await import(pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href)) as {
+      createApiApp(o: { logger: false }): Promise<App>;
+    };
+    await restart({
+      DP_AI_TRANSPORT: "fake",
+      DP_AI_ENC_KEYS: `1:${randomBytes(32).toString("base64url")}`,
+    });
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-289", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-289", pw, [{ role: "platform_super_admin" }], root.userId);
+    viewer = await staff("ai-viewer-289", pw, [], root.userId);
+    staleAdmin = new Staff("ai-admin-289-stale", admin.userId, await session(admin.userId, null));
+  });
+
+  afterAll(async () => {
+    await restart({ DP_AI_TRANSPORT: undefined, DP_AI_ENC_KEYS: undefined });
+  });
+
+  it("is a 404 while AI is off, for the owner too", async () => {
+    expect(
+      (await dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } })).enabled,
+    ).toBe(false);
+    expectError(await owner.call("GET", "/ai/providers"), 404, "NOT_FOUND");
+    expectError(
+      await owner.call("POST", "/ai/providers/openai/credentials", {
+        apiKey: OPENAI_1,
+        label: "x",
+      }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("lists the three providers to readers; only AI administrators manage, with a fresh step-up", async () => {
+    expect(
+      (await owner.call("POST", AI, { enabled: true, reason: "DP-289 providers test" })).status,
+    ).toBe(200);
+    expect(
+      (await owner.call("POST", `/staff/${admin.userId}/roles`, { roleKey: "ai_administrator" }))
+        .status,
+    ).toBe(201);
+    expect(
+      (await owner.call("POST", `/staff/${viewer.userId}/roles`, { roleKey: "ai_viewer" })).status,
+    ).toBe(201);
+    const list = AiProvidersResponseSchema.parse((await call(viewer, "GET", "/ai/providers")).body);
+    expect(list.transport).toBe("fake");
+    // The DP-288 block above left keys of its own; the list shows every one of them.
+    const counts = await Promise.all(
+      (["OPENAI", "ANTHROPIC", "GEMINI"] as const).map((provider) =>
+        dbo.aiProviderCredential.count({ where: { provider } }),
+      ),
+    );
+    expect(list.providers.map((p) => [p.provider, p.enabled, p.credentials.length])).toEqual([
+      ["OPENAI", false, counts[0]],
+      ["ANTHROPIC", false, counts[1]],
+      ["GEMINI", false, counts[2]],
+    ]);
+    expectError(
+      await call(viewer, "POST", "/ai/providers/openai/credentials", {
+        apiKey: OPENAI_1,
+        label: "x",
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await call(staleAdmin, "POST", "/ai/providers/openai/credentials", {
+        apiKey: OPENAI_1,
+        label: "x",
+      }),
+      403,
+      "AUTH_STEP_UP_REQUIRED",
+    );
+    expectError(
+      await call(admin, "POST", "/ai/providers/mistral/credentials", {
+        apiKey: OPENAI_1,
+        label: "x",
+      }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("stores a key encrypted, tests it, makes it ACTIVE and never shows it again", async () => {
+    const res = await call(admin, "POST", "/ai/providers/openai/credentials", {
+      apiKey: OPENAI_1,
+      label: "OpenAI platform",
+      projectRef: "proj_dp289",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const r = AiCredentialResultSchema.parse(res.body);
+    expect(r.test).toEqual({ code: "ok", models: 2 });
+    expect(r.credential).toMatchObject({
+      provider: "OPENAI",
+      status: "ACTIVE",
+      keyHint: `sk-proj-…${OPENAI_1.slice(-4)}`,
+    });
+    ids["openai1"] = r.credential.id;
+    const row = await dbo.aiProviderCredential.findUniqueOrThrow({
+      where: { id: r.credential.id },
+    });
+    expect(row.ciphertext).toMatch(/^v1:/);
+    expect(row.ciphertext).not.toContain(OPENAI_1.slice(8, 20));
+    expect(row.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    const audits = await dbo.auditEvent.findMany({
+      where: { action: { startsWith: "ai.credential." } },
+      select: { action: true, metadata: true, reason: true },
+    });
+    expect(audits.map((a) => a.action)).toEqual(
+      expect.arrayContaining(["ai.credential.add", "ai.credential.test", "ai.credential.activate"]),
+    );
+    await noKeyAnywhere(JSON.stringify(audits));
+  });
+
+  it("refuses a malformed key, another provider's key and the same key twice, without echoing them", async () => {
+    const bad = await call(admin, "POST", "/ai/providers/anthropic/credentials", {
+      apiKey: OPENAI_2,
+      label: "wrong provider",
+    });
+    expectError(bad, 400, "VALIDATION_FAILED");
+    expect(bad.body.error.details).toEqual([{ path: "apiKey", rule: "key_format" }]);
+    const twice = await call(admin, "POST", "/ai/providers/openai/credentials", {
+      apiKey: OPENAI_1,
+      label: "again",
+    });
+    expectError(twice, 409, "CONFLICT_STATE");
+    expect(twice.body.error.details).toEqual([{ path: "apiKey", rule: "duplicate_key" }]);
+  });
+
+  it("keeps a failing key PENDING_TEST with its code and the ACTIVE key untouched", async () => {
+    const res = await call(admin, "POST", "/ai/providers/openai/credentials", {
+      apiKey: `sk-proj-invalid${hex(10)}`,
+      label: "broken",
+    });
+    const r = AiCredentialResultSchema.parse(res.body);
+    expect(r.test.code).toBe("credential_invalid");
+    expect(r.credential.status).toBe("PENDING_TEST");
+    expect(
+      (await dbo.aiProviderCredential.findUniqueOrThrow({ where: { id: ids["openai1"]! } })).status,
+    ).toBe("ACTIVE");
+    const rl = AiCredentialResultSchema.parse(
+      (
+        await call(admin, "POST", "/ai/providers/openai/credentials", {
+          apiKey: `sk-proj-ratelimit${hex(10)}`,
+          label: "busy",
+        })
+      ).body,
+    );
+    expect(rl.test.code).toBe("rate_limited");
+    expect(
+      await dbo.auditEvent.count({ where: { action: "ai.credential.test", outcome: "FAILURE" } }),
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("replaces the ACTIVE key with a working new one; each provider keeps its own key", async () => {
+    const r = AiCredentialResultSchema.parse(
+      (
+        await call(admin, "POST", "/ai/providers/openai/credentials", {
+          apiKey: OPENAI_2,
+          label: "OpenAI rotated",
+        })
+      ).body,
+    );
+    expect(r.credential.status).toBe("ACTIVE");
+    ids["openai2"] = r.credential.id;
+    expect(
+      await dbo.aiProviderCredential.findUniqueOrThrow({ where: { id: ids["openai1"]! } }),
+    ).toMatchObject({
+      status: "DISABLED",
+      replacedById: r.credential.id,
+    });
+    for (const [provider, key] of [
+      ["anthropic", ANTHROPIC],
+      ["gemini", GEMINI],
+    ] as const) {
+      const c = AiCredentialResultSchema.parse(
+        (
+          await call(admin, "POST", `/ai/providers/${provider}/credentials`, {
+            apiKey: key,
+            label: provider,
+          })
+        ).body,
+      );
+      expect([c.credential.status, c.test.code]).toEqual(["ACTIVE", "ok"]);
+      ids[provider] = c.credential.id;
+    }
+    const active = await dbo.aiProviderCredential.findMany({
+      where: { status: "ACTIVE" },
+      select: { provider: true },
+    });
+    expect(active.map((a) => a.provider).sort()).toEqual(["ANTHROPIC", "GEMINI", "OPENAI"]);
+  });
+
+  it("tests, re-activates, disables and revokes keys", async () => {
+    const t = AiCredentialResultSchema.parse(
+      (await call(admin, "POST", `/ai/credentials/${ids["openai1"]}/test`)).body,
+    );
+    expect([t.test.code, t.credential.status]).toEqual(["ok", "DISABLED"]);
+    const a = AiCredentialResultSchema.parse(
+      (await call(admin, "POST", `/ai/credentials/${ids["openai1"]}/activate`)).body,
+    );
+    expect(a.credential.status).toBe("ACTIVE");
+    expect(
+      (await dbo.aiProviderCredential.findUniqueOrThrow({ where: { id: ids["openai2"]! } })).status,
+    ).toBe("DISABLED");
+    expect((await call(admin, "POST", `/ai/credentials/${ids["gemini"]}/disable`)).status).toBe(
+      200,
+    );
+    const revoked = await del(admin, `/ai/credentials/${ids["gemini"]}`);
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    expect(
+      await dbo.aiProviderCredential.findUniqueOrThrow({ where: { id: ids["gemini"]! } }),
+    ).toMatchObject({
+      status: "REVOKED",
+      ciphertext: null,
+    });
+    expectError(
+      await call(admin, "POST", `/ai/credentials/${ids["gemini"]}/test`),
+      409,
+      "CONFLICT_STATE",
+    );
+  });
+
+  it("lists models with compatibility, verifies and enables a compatible one only", async () => {
+    const refresh = AiModelRefreshResponseSchema.parse(
+      (await call(admin, "POST", "/ai/providers/openai/models/refresh")).body,
+    );
+    // The DP-288 block's test model is not in the provider's list: it becomes UNAVAILABLE.
+    expect(refresh).toEqual({ code: "ok", added: 2, updated: 0, unavailable: 1 });
+    expect(
+      await dbo.aiModel.findFirstOrThrow({ where: { modelId: "dp288-test-model" } }),
+    ).toMatchObject({
+      status: "UNAVAILABLE",
+      compatible: false,
+    });
+    const again = AiModelRefreshResponseSchema.parse(
+      (await call(admin, "POST", "/ai/providers/openai/models/refresh")).body,
+    );
+    expect(again).toEqual({ code: "ok", added: 0, updated: 0, unavailable: 0 });
+    const models = AiModelsResponseSchema.parse(
+      (await call(viewer, "GET", "/ai/models?provider=openai")).body,
+    ).items;
+    const good = models.find((m) => m.modelId === "gpt-fake-mini")!;
+    const embed = models.find((m) => m.modelId === "text-embedding-fake")!;
+    expect([good.status, good.compatible, good.capabilities.textGeneration]).toEqual([
+      "DISCOVERED",
+      true,
+      true,
+    ]);
+    expect([embed.status, embed.compatible]).toEqual(["UNAVAILABLE", false]);
+    expectError(await call(admin, "POST", `/ai/models/${good.id}/enable`), 409, "CONFLICT_STATE");
+    const verified = await call(admin, "POST", `/ai/models/${good.id}/verify`);
+    expect(verified.body).toMatchObject({ status: "VERIFIED", verifyCode: "ok" });
+    expect((await call(admin, "POST", `/ai/models/${good.id}/enable`)).body).toMatchObject({
+      status: "ENABLED",
+    });
+    const incompatible = await call(admin, "POST", `/ai/models/${embed.id}/enable`);
+    expectError(incompatible, 409, "CONFLICT_STATE");
+    expect(incompatible.body.error.details).toEqual([{ path: "(root)", rule: "incompatible" }]);
+    expectError(
+      await call(viewer, "POST", "/ai/providers/openai/models/refresh"),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await call(admin, "POST", "/ai/providers/gemini/models/refresh"),
+      409,
+      "CONFLICT_STATE",
+    );
+    // Provider settings: on only with an ACTIVE key and an ENABLED default model of the provider.
+    const setting = await dbo.aiProviderSetting.findUniqueOrThrow({
+      where: { provider: "OPENAI" },
+    });
+    const on = await call(admin, "POST", "/ai/providers/openai/settings", {
+      enabled: true,
+      defaultModelId: good.id,
+      version: setting.version,
+    });
+    expect(on.status, JSON.stringify(on.body)).toBe(200);
+    expect(on.body).toMatchObject({ provider: "OPENAI", enabled: true, defaultModelId: good.id });
+    const otherProvider = await call(admin, "POST", "/ai/providers/anthropic/settings", {
+      enabled: true,
+      defaultModelId: good.id,
+      version: 1,
+    });
+    expectError(otherProvider, 409, "CONFLICT_STATE");
+    const overview = AiOverviewResponseSchema.parse(
+      (await call(viewer, "GET", "/ai/overview")).body,
+    );
+    expect(overview.blockers).not.toContain("no_provider_key");
+  });
+
+  it("closes every provider route when the owner switches AI off, keeping the data", async () => {
+    const before = await dbo.aiProviderCredential.count();
+    expect(
+      (await owner.call("POST", AI, { enabled: false, reason: "DP-289 test done" })).status,
+    ).toBe(200);
+    for (const [m, p] of [
+      ["GET", "/ai/providers"],
+      ["GET", "/ai/models"],
+      ["POST", "/ai/providers/openai/models/refresh"],
+      ["POST", `/ai/credentials/${ids["openai1"]}/test`],
+    ] as const) {
+      expectError(await call(admin, m, p), 404, "NOT_FOUND");
+    }
+    expect(await dbo.aiProviderCredential.count()).toBe(before);
+  });
+
+  it("refuses provider calls and new keys while the transport is off", async () => {
+    await restart({ DP_AI_TRANSPORT: undefined, DP_AI_ENC_KEYS: undefined });
+    expect(
+      (await owner.call("POST", AI, { enabled: true, reason: "DP-289 transport off" })).status,
+    ).toBe(200);
+    const list = AiProvidersResponseSchema.parse((await call(admin, "GET", "/ai/providers")).body);
+    expect(list.transport).toBe("off");
+    const add = await call(admin, "POST", "/ai/providers/openai/credentials", {
+      apiKey: `sk-proj-${hex(20)}`,
+      label: "off",
+    });
+    expectError(add, 409, "CONFLICT_STATE");
+    expect(add.body.error.details).toEqual([{ path: "(root)", rule: "transport_off" }]);
+    expectError(
+      await call(admin, "POST", `/ai/credentials/${ids["openai1"]}/test`),
+      409,
+      "CONFLICT_STATE",
+    );
+    expect((await owner.call("POST", AI, { enabled: false, reason: "DP-289 done" })).status).toBe(
+      200,
+    );
+  });
 });

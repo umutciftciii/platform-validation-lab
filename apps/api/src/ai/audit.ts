@@ -58,6 +58,15 @@ export const AI_AUDIT_METADATA_KEYS = [
   "version",
   "day",
   "amountMicros",
+  // DP-289: provider calls and model refreshes.
+  "activated",
+  "replacedId",
+  "added",
+  "updated",
+  "unavailable",
+  "models",
+  "enabled",
+  "defaultModelId",
 ] as const;
 
 const ALLOWED = new Set<string>(AI_AUDIT_METADATA_KEYS);
