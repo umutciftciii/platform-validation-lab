@@ -6,14 +6,93 @@
  * ONLY in the `x-goog-api-key` header documented on the API-key page (a key in a URL ends up in
  * logs). A model is a text model when it supports
  * `generateContent`; limits from `inputTokenLimit` / `outputTokenLimit`; `thinking` as reported.
+ *
+ * DP-291: generation (generateContent reference read 2026-11-26): `POST /v1beta/models/{m}:
+ * generateContent` with `systemInstruction`, one user `contents` entry and `generationConfig`
+ * (`maxOutputTokens`, `temperature`, `thinkingConfig.thinkingBudget` only when a budget is set).
+ * The key stays in the `x-goog-api-key` header. The text is the non-`thought` text parts of the
+ * first candidate. Usage: `promptTokenCount` includes the cached content
+ * (`cachedContentTokenCount`); thoughts (`thoughtsTokenCount`) are billed as output in addition
+ * to `candidatesTokenCount`.
  */
-import { errorFields, getJson, retryAfterSec, codeForStatus, type FetchLike } from "./http.js";
+import {
+  errorFields,
+  getJson,
+  postJson,
+  retryAfterSec,
+  codeForStatus,
+  type FetchLike,
+} from "./http.js";
 import {
   ProviderCallError,
+  tokens,
   type AiProviderAdapter,
+  type GenerateRequest,
+  type GenerateResult,
   type ProviderCallOptions,
   type ProviderModel,
 } from "./types.js";
+
+export function geminiRequestBody(r: GenerateRequest): Record<string, unknown> {
+  return {
+    systemInstruction: { parts: [{ text: r.system }] },
+    contents: [{ role: "user", parts: [{ text: r.input }] }],
+    generationConfig: {
+      maxOutputTokens: r.maxOutputTokens,
+      ...(r.temperature !== null ? { temperature: r.temperature } : {}),
+      ...(r.thinkingBudget > 0 ? { thinkingConfig: { thinkingBudget: r.thinkingBudget } } : {}),
+    },
+  };
+}
+
+const BLOCKED = new Set([
+  "SAFETY",
+  "RECITATION",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+  "LANGUAGE",
+]);
+
+/** The answer of `generateContent` in the common model. */
+export function geminiGeneration(raw: unknown): GenerateResult {
+  if (!raw || typeof raw !== "object") throw new ProviderCallError("bad_response");
+  const b = raw as Record<string, unknown>;
+  const usage = (b["usageMetadata"] ?? {}) as Record<string, unknown>;
+  const cached = tokens(usage["cachedContentTokenCount"]);
+  const prompt = tokens(usage["promptTokenCount"]) + tokens(usage["toolUsePromptTokenCount"]);
+  const thoughts = tokens(usage["thoughtsTokenCount"]);
+  const candidate = (Array.isArray(b["candidates"]) ? (b["candidates"] as unknown[])[0] : null) as
+    Record<string, unknown> | null | undefined;
+  const parts = ((candidate?.["content"] ?? {}) as Record<string, unknown>)["parts"];
+  const text = (Array.isArray(parts) ? (parts as unknown[]) : [])
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+    .filter((p) => p["thought"] !== true && typeof p["text"] === "string")
+    .map((p) => p["text"] as string)
+    .join("");
+  const reason = candidate?.["finishReason"];
+  const blocked = ((b["promptFeedback"] ?? {}) as Record<string, unknown>)["blockReason"];
+  const finish: GenerateResult["finish"] =
+    blocked !== undefined || (typeof reason === "string" && BLOCKED.has(reason))
+      ? "refused"
+      : reason === "STOP"
+        ? "complete"
+        : reason === "MAX_TOKENS"
+          ? "max_tokens"
+          : "incomplete";
+  return {
+    text,
+    usage: {
+      inputTokens: Math.max(0, prompt - cached),
+      cachedReadTokens: cached,
+      cacheWriteTokens: 0,
+      outputTokens: tokens(usage["candidatesTokenCount"]) + thoughts,
+      reasoningTokens: thoughts,
+    },
+    finish,
+    providerRequestId: typeof b["responseId"] === "string" ? b["responseId"].slice(0, 200) : null,
+  };
+}
 
 export const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const PAGE = 1000;
@@ -117,5 +196,23 @@ export class GeminiAdapter implements AiProviderAdapter {
       if (error instanceof ProviderCallError && error.code === "model_not_found") return null;
       throw error;
     }
+  }
+
+  async generate(
+    apiKey: string,
+    request: GenerateRequest,
+    o: ProviderCallOptions,
+  ): Promise<GenerateResult> {
+    const body = await postJson(
+      this.fetchImpl,
+      {
+        url: `${GEMINI_BASE_URL}/models/${encodeURIComponent(request.model)}:generateContent`,
+        headers: this.headers(apiKey),
+        signal: o.signal,
+        body: geminiRequestBody(request),
+      },
+      mapError,
+    );
+    return geminiGeneration(body);
   }
 }

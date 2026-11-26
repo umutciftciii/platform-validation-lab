@@ -24,6 +24,8 @@ export const AI_AUDIT_ACTIONS = [
   "ai.budget.create",
   "ai.budget.update",
   "ai.budget.deactivate",
+  "ai.operation.create",
+  "ai.operation.cancel",
   "ai.operation.denied",
   "ai.operation.overrun",
   "ai.operation.unknown",
@@ -67,6 +69,11 @@ export const AI_AUDIT_METADATA_KEYS = [
   "models",
   "enabled",
   "defaultModelId",
+  // DP-291: the operation service.
+  "existing",
+  "stopped",
+  "estInputTokens",
+  "estOutputTokens",
 ] as const;
 
 const ALLOWED = new Set<string>(AI_AUDIT_METADATA_KEYS);

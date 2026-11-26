@@ -1,5 +1,5 @@
 /**
- * DP-287/DP-289 (ADR-030): `/api/v1/admin/ai/*`. Every route sits behind AiGateGuard (404 while
+ * DP-287…DP-291 (ADR-030): `/api/v1/admin/ai/*`. Every route sits behind AiGateGuard (404 while
  * AI is off); each handler authorises again in its service. GET/POST/DELETE only (the admin proxy
  * forwards no other method); responses are never cached and never carry an API key.
  */
@@ -20,6 +20,9 @@ import type {
   AiBudget,
   AiBudgetsResponse,
   AiOperationsResponse,
+  AiOperationCancelResponse,
+  AiOperationCreated,
+  AiOperationDetail,
   AiPrice,
   AiPricesResponse,
   AiReconciliationResponse,
@@ -40,6 +43,7 @@ import { AiGateGuard } from "./ai-gate.guard.js";
 import { AiService } from "./ai.service.js";
 import { AiProvidersService } from "./providers.service.js";
 import { AiBudgetsService } from "./budgets.service.js";
+import { AiOperationsService } from "./operations.service.js";
 
 @Controller("api/v1/admin/ai")
 @UseGuards(AiGateGuard)
@@ -48,6 +52,7 @@ export class AiController {
     @Inject(AiService) private readonly ai: AiService,
     @Inject(AiProvidersService) private readonly providers: AiProvidersService,
     @Inject(AiBudgetsService) private readonly budgets: AiBudgetsService,
+    @Inject(AiOperationsService) private readonly operations: AiOperationsService,
   ) {}
 
   @Get("overview")
@@ -253,6 +258,31 @@ export class AiController {
       ...(before ? { before } : {}),
       ...(limit ? { limit } : {}),
     });
+  }
+
+  // --- DP-291: the operation service ------------------------------------------------------------
+
+  @Post("operations")
+  @HttpCode(202)
+  @Header("Cache-Control", "no-store")
+  runOperation(@Ctx() ctx: RequestContext, @Body() body: unknown): Promise<AiOperationCreated> {
+    return this.operations.run(ctx, body);
+  }
+
+  @Get("operations/:id")
+  @Header("Cache-Control", "no-store")
+  getOperation(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<AiOperationDetail> {
+    return this.operations.get(ctx, id);
+  }
+
+  @Post("operations/:id/cancel")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  cancelOperation(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+  ): Promise<AiOperationCancelResponse> {
+    return this.operations.cancel(ctx, id);
   }
 
   @Get("reconciliation")

@@ -27,8 +27,34 @@ const INFRASTRUCTURE = [
   // write path to operations, usage and ledger) and the sweeper, which runs outside any request.
   "src/ai/ledger-sql.ts",
   "src/ai/ledger.service.ts",
+  // DP-291 (ADR-030 D6–D8): the queue and workers of the AI operation service run outside any
+  // request (engine calls, the key read, system audit events); no table query, no raw SQL.
+  "src/ai/runner/runner.service.ts",
   "test/**",
 ];
+// DP-291 (ADR-030 D8; design §2): the AI module reads no lead, member or content data and cannot
+// write or publish content — its answers are drafts a person applies through the existing paths.
+// Its only ways out of src/ai are IAM (access, audit, the platform switch) and the database
+// infrastructure.
+const AI_FORBIDDEN = {
+  group: [
+    "**/leads/**",
+    "**/iam/lead-data*",
+    "**/catalog/**",
+    "**/cms/**",
+    "**/seo/**",
+    "**/media/**",
+    "**/notifications/**",
+    "**/translation-packages/**",
+  ],
+  message:
+    "src/ai may not use lead, member or content modules: AI answers are drafts that a person applies (ADR-030 D8).",
+};
+const PRISMA_FORBIDDEN = {
+  group: ["**/prisma/prisma.service*", "**/generated/prisma/**"],
+  message:
+    "Use the site-scoped client (iam/site-scope.ts withSiteScope); the unscoped Prisma client is infrastructure-only (ADR-011).",
+};
 // F1-002: the throttle's row lock (SELECT … FOR UPDATE) and the clean-up's advisory lock have no
 // Prisma API; both use tagged templates only (parameterised, never *Unsafe).
 const RAW_SQL_ALLOWED = [
@@ -87,16 +113,22 @@ export default [
       "no-restricted-imports": [
         "error",
         {
-          patterns: [
-            {
-              group: ["**/prisma/prisma.service*", "**/generated/prisma/**"],
-              message:
-                "Use the site-scoped client (iam/site-scope.ts withSiteScope); the unscoped Prisma client is infrastructure-only (ADR-011).",
-            },
-          ],
+          patterns: [PRISMA_FORBIDDEN],
         },
       ],
     },
+  },
+  {
+    // Later blocks replace the rule for their files, so the AI blocks repeat what still applies.
+    files: ["src/ai/**/*.ts"],
+    ignores: INFRASTRUCTURE,
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [PRISMA_FORBIDDEN, AI_FORBIDDEN] }],
+    },
+  },
+  {
+    files: INFRASTRUCTURE.filter((f) => f.startsWith("src/ai/")),
+    rules: { "no-restricted-imports": ["error", { patterns: [AI_FORBIDDEN] }] },
   },
   {
     files: ["src/**/*.ts"],
