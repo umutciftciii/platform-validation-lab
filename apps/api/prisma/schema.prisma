@@ -2204,6 +2204,10 @@ model AiModel {
   maxOutputTokens Int?
   /// Token-estimate profile of the model family (ADR-030 D6), e.g. "openai.responses".
   billingProfile  String        @db.VarChar(64)
+  /// DP-289: what the provider says the model can do (AiModelCapabilities in the contracts).
+  capabilities    Json          @default("{}")
+  /// DP-289: usable for the platform's text tasks (text generation, not retired).
+  compatible      Boolean       @default(false)
   lastVerifiedAt  DateTime?     @db.Timestamptz(3)
   verifyCode      String?       @db.VarChar(40)
   version         Int           @default(1)
