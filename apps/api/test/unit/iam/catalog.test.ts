@@ -34,7 +34,7 @@ describe("catalogue consistency", () => {
         !PUBLISH_PERMISSIONS.includes(p.key) &&
         !p.ownerOnly &&
         // DP-288: AI management only through the owner-assigned ai_administrator.
-        !["ai_provider:manage", "ai_model:manage", "ai_budget:manage"].includes(p.key),
+        !["ai_provider:manage", "ai_model:manage", "ai_budget:manage", "ai:invoke"].includes(p.key),
     ).map((p) => p.key);
     expect(admin?.permissions).not.toContain("module:manage");
     expect(admin?.permissions).not.toContain("owner_audit:read");

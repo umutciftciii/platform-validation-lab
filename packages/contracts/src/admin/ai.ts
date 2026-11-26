@@ -204,3 +204,201 @@ export const AiProviderSettingRequestSchema = z.strictObject({
   version: z.number().int().positive(),
 });
 export type AiProviderSettingRequest = z.infer<typeof AiProviderSettingRequestSchema>;
+
+// =============================================================================================
+// DP-290 (ADR-030 D6, D7): settings, prices, task limits, budgets, usage, operations and
+// reconciliation. Money is micro-USD (1 USD = 1 000 000) as a decimal string; prices are micro-USD
+// per 1 000 000 tokens. Budget periods are UTC (the admin shows local time too). Amounts are the
+// local calculation (tokens × dated price), never an invoice: `providerMicros` comes from the
+// provider's own figures (reconciliation) and the difference is reported separately.
+// =============================================================================================
+
+const Micros = z.string().regex(/^\d{1,15}$/);
+const PositiveMicros = Micros.refine((v) => BigInt(v) > 0n, "positive");
+
+/** GET/POST /api/v1/admin/ai/settings (ai:read / ai_budget:manage, step-up). */
+export const AiSettingsSchema = z.strictObject({
+  maxConcurrency: z.number().int().min(1).max(20),
+  reservationTtlSec: z.number().int().min(30).max(3600),
+  safetyMarginPct: z.number().int().min(0).max(100),
+  version: z.number().int().positive(),
+});
+export type AiSettingsDto = z.infer<typeof AiSettingsSchema>;
+
+export const AiPriceSchema = z.strictObject({
+  id: Uuid,
+  modelId: Uuid,
+  inputMicrosPerMTok: Micros,
+  cachedReadMicrosPerMTok: Micros,
+  cacheWriteMicrosPerMTok: Micros.nullable(),
+  outputMicrosPerMTok: Micros,
+  longContextThreshold: z.number().int().positive().nullable(),
+  longInputMicrosPerMTok: Micros.nullable(),
+  longOutputMicrosPerMTok: Micros.nullable(),
+  perRequestFeeMicros: Micros,
+  effectiveFrom: IsoDateTime,
+  source: z.string(),
+  sourceNote: z.string(),
+  createdAt: IsoDateTime,
+});
+export type AiPrice = z.infer<typeof AiPriceSchema>;
+
+/** POST /api/v1/admin/ai/models/:id/prices (ai_model:manage, step-up). Never backdated. */
+export const AiPriceCreateRequestSchema = z.strictObject({
+  inputMicrosPerMTok: Micros,
+  cachedReadMicrosPerMTok: Micros,
+  cacheWriteMicrosPerMTok: Micros.nullable().optional(),
+  outputMicrosPerMTok: Micros,
+  longContextThreshold: z.number().int().positive().nullable().optional(),
+  longInputMicrosPerMTok: Micros.nullable().optional(),
+  longOutputMicrosPerMTok: Micros.nullable().optional(),
+  perRequestFeeMicros: Micros.optional(),
+  /** Default: now. Never in the past. */
+  effectiveFrom: IsoDateTime.optional(),
+  sourceNote: z.string().trim().min(3).max(500),
+});
+export type AiPriceCreateRequest = z.infer<typeof AiPriceCreateRequestSchema>;
+
+export const AiPricesResponseSchema = z.strictObject({ items: z.array(AiPriceSchema) });
+export type AiPricesResponse = z.infer<typeof AiPricesResponseSchema>;
+
+export const AiTaskSettingSchema = z.strictObject({
+  task: z.enum(AI_TASK_TYPES),
+  enabled: z.boolean(),
+  modelId: Uuid.nullable(),
+  maxInputTokens: z.number().int().positive().max(2_000_000),
+  maxOutputTokens: z.number().int().positive().max(200_000),
+  thinkingBudget: z.number().int().min(0).max(200_000),
+  maxCostPerOpMicros: PositiveMicros,
+  temperatureMilli: z.number().int().min(0).max(2000).nullable(),
+  version: z.number().int().positive(),
+});
+export type AiTaskSettingDto = z.infer<typeof AiTaskSettingSchema>;
+export const AiTasksResponseSchema = z.strictObject({ items: z.array(AiTaskSettingSchema) });
+export type AiTasksResponse = z.infer<typeof AiTasksResponseSchema>;
+/** POST /api/v1/admin/ai/tasks/:task (ai_model:manage, step-up). */
+export const AiTaskSettingRequestSchema = AiTaskSettingSchema.omit({ task: true });
+export type AiTaskSettingRequest = z.infer<typeof AiTaskSettingRequestSchema>;
+
+export const AI_BUDGET_SCOPES = ["PLATFORM", "SITE"] as const;
+export const AI_BUDGET_PERIODS = ["DAILY", "MONTHLY"] as const;
+
+export const AiBudgetSchema = z.strictObject({
+  id: Uuid,
+  scope: z.enum(AI_BUDGET_SCOPES),
+  siteId: Uuid.nullable(),
+  period: z.enum(AI_BUDGET_PERIODS),
+  limitMicros: Micros,
+  /** The limit in force: in a capped local deployment never above the local ceiling. */
+  effectiveLimitMicros: Micros,
+  warnPct: z.number().int().min(1).max(100),
+  active: z.boolean(),
+  version: z.number().int().positive(),
+  /** The current UTC period's counters (zero when nothing happened yet). */
+  current: z.strictObject({
+    periodStart: IsoDateTime,
+    reservedMicros: Micros,
+    committedMicros: Micros,
+    assumedMicros: Micros,
+    /** reserved + committed + assumed ≥ warnPct of the effective limit. */
+    warning: z.boolean(),
+  }),
+});
+export type AiBudget = z.infer<typeof AiBudgetSchema>;
+/** GET /api/v1/admin/ai/budgets (ai:read). */
+export const AiBudgetsResponseSchema = z.strictObject({
+  items: z.array(AiBudgetSchema),
+  /** The local ceiling of DP_AI_TRANSPORT=live in the local deployment, if any. */
+  localCap: z.strictObject({ dailyMicros: Micros, monthlyMicros: Micros }).nullable(),
+});
+export type AiBudgetsResponse = z.infer<typeof AiBudgetsResponseSchema>;
+/** POST /api/v1/admin/ai/budgets (ai_budget:manage, step-up). One active per scope/site/period. */
+export const AiBudgetCreateRequestSchema = z.strictObject({
+  scope: z.enum(AI_BUDGET_SCOPES),
+  siteId: Uuid.nullable().optional(),
+  period: z.enum(AI_BUDGET_PERIODS),
+  limitMicros: PositiveMicros,
+  warnPct: z.number().int().min(1).max(100).optional(),
+});
+export type AiBudgetCreateRequest = z.infer<typeof AiBudgetCreateRequestSchema>;
+/** POST /api/v1/admin/ai/budgets/:id (ai_budget:manage, step-up). */
+export const AiBudgetUpdateRequestSchema = z.strictObject({
+  limitMicros: PositiveMicros,
+  warnPct: z.number().int().min(1).max(100),
+  active: z.boolean(),
+  version: z.number().int().positive(),
+});
+export type AiBudgetUpdateRequest = z.infer<typeof AiBudgetUpdateRequestSchema>;
+
+export const AI_OPERATION_STATUSES = [
+  "RESERVED",
+  "IN_FLIGHT",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+  "RELEASED",
+  "EXPIRED",
+  "UNKNOWN",
+  "DISCARDED",
+] as const;
+
+/** One operation: ids, counts, amounts and codes only — never a prompt or response text. */
+export const AiOperationSchema = z.strictObject({
+  id: Uuid,
+  task: z.enum(AI_TASK_TYPES),
+  siteId: Uuid.nullable(),
+  provider: AiProviderKeySchema,
+  modelId: Uuid,
+  status: z.enum(AI_OPERATION_STATUSES),
+  estInputTokens: z.number().int(),
+  estOutputTokens: z.number().int(),
+  reservedMicros: Micros,
+  actualMicros: Micros.nullable(),
+  costBasis: z.enum(["NONE", "LOCAL_USAGE", "ASSUMED"]),
+  inputTokens: z.number().int().nullable(),
+  cachedReadTokens: z.number().int().nullable(),
+  cacheWriteTokens: z.number().int().nullable(),
+  outputTokens: z.number().int().nullable(),
+  reasoningTokens: z.number().int().nullable(),
+  errorCode: z.string().nullable(),
+  reservedAt: IsoDateTime,
+  finishedAt: IsoDateTime.nullable(),
+});
+export type AiOperation = z.infer<typeof AiOperationSchema>;
+/** GET /api/v1/admin/ai/operations?before=<iso>&limit=<1..100> (ai_usage:read). */
+export const AiOperationsResponseSchema = z.strictObject({
+  items: z.array(AiOperationSchema).max(100),
+  nextBefore: IsoDateTime.nullable(),
+});
+export type AiOperationsResponse = z.infer<typeof AiOperationsResponseSchema>;
+
+/** GET /api/v1/admin/ai/reconciliation?from=YYYY-MM-DD&to=YYYY-MM-DD (ai_usage:read). */
+export const AiReconciliationRowSchema = z.strictObject({
+  provider: AiProviderKeySchema,
+  day: z.iso.date(),
+  /** Local calculation of finished operations that UTC day (tokens × dated price). */
+  localMicros: Micros,
+  /** Outcome unknown (counted as spent at the reserved amount). */
+  assumedMicros: Micros,
+  /** The provider's own figure (latest entry), if entered. */
+  providerMicros: Micros.nullable(),
+  /** provider − (local + assumed); null without a provider figure. Signed. */
+  differenceMicros: z
+    .string()
+    .regex(/^-?\d{1,16}$/)
+    .nullable(),
+});
+export type AiReconciliationRow = z.infer<typeof AiReconciliationRowSchema>;
+export const AiReconciliationResponseSchema = z.strictObject({
+  items: z.array(AiReconciliationRowSchema),
+});
+export type AiReconciliationResponse = z.infer<typeof AiReconciliationResponseSchema>;
+/** POST /api/v1/admin/ai/reconciliation (ai_budget:manage, step-up): the provider's daily figure. */
+export const AiReconciliationCreateRequestSchema = z.strictObject({
+  provider: AiProviderKeySchema,
+  day: z.iso.date(),
+  providerAmountMicros: Micros,
+  projectRef: z.string().trim().max(200).optional(),
+  note: z.string().trim().max(500).optional(),
+});
+export type AiReconciliationCreateRequest = z.infer<typeof AiReconciliationCreateRequestSchema>;
