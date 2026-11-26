@@ -4,15 +4,88 @@
  * shutdown date, so a model's capabilities stay UNKNOWN (null) — never guessed from its name —
  * and it is not `compatible` until an AI administrator verifies it and confirms it explicitly
  * (providers.service.ts). Only the lifecycle (from `shutdown_date`) is known.
+ *
+ * DP-291: generation over the Responses API (reference read 2026-11-26): `POST /v1/responses`
+ * with `instructions` (system), `input` (string), `max_output_tokens` (reasoning included; at
+ * least 16), `store: false`, `tool_choice: "none"` and no tools. The text is the `output_text`
+ * parts of the `message` items of `output[]` (the `output_text` field is SDK-only). Usage:
+ * `input_tokens` includes cache reads (`input_tokens_details.cached_tokens`) and cache writes
+ * (`…cache_write_tokens`); `output_tokens` includes reasoning tokens.
  */
 import type { AiModelCapabilities } from "@dream/contracts";
-import { codeForStatus, errorFields, getJson, retryAfterSec, type FetchLike } from "./http.js";
+import {
+  codeForStatus,
+  errorFields,
+  getJson,
+  postJson,
+  retryAfterSec,
+  type FetchLike,
+} from "./http.js";
 import {
   ProviderCallError,
+  tokens,
   type AiProviderAdapter,
+  type GenerateRequest,
+  type GenerateResult,
   type ProviderCallOptions,
   type ProviderModel,
 } from "./types.js";
+
+/** The Responses API's smallest `max_output_tokens`. */
+export const OPENAI_MIN_OUTPUT_TOKENS = 16;
+
+export function openAiRequestBody(r: GenerateRequest): Record<string, unknown> {
+  return {
+    model: r.model,
+    instructions: r.system,
+    input: r.input,
+    max_output_tokens: Math.max(OPENAI_MIN_OUTPUT_TOKENS, r.maxOutputTokens),
+    store: false,
+    tool_choice: "none",
+    ...(r.temperature !== null ? { temperature: r.temperature } : {}),
+  };
+}
+
+/** The answer of `POST /v1/responses` in the common model. */
+export function openAiGeneration(raw: unknown): GenerateResult {
+  if (!raw || typeof raw !== "object") throw new ProviderCallError("bad_response");
+  const b = raw as Record<string, unknown>;
+  const usage = (b["usage"] ?? {}) as Record<string, unknown>;
+  const inDetails = (usage["input_tokens_details"] ?? {}) as Record<string, unknown>;
+  const outDetails = (usage["output_tokens_details"] ?? {}) as Record<string, unknown>;
+  const cached = tokens(inDetails["cached_tokens"]);
+  const cacheWrite = tokens(inDetails["cache_write_tokens"]);
+  const text = (Array.isArray(b["output"]) ? (b["output"] as unknown[]) : [])
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
+    .filter((i) => i["type"] === "message")
+    .flatMap((i) => (Array.isArray(i["content"]) ? (i["content"] as unknown[]) : []))
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+    .filter((c) => c["type"] === "output_text" && typeof c["text"] === "string")
+    .map((c) => c["text"] as string)
+    .join("");
+  const status = b["status"];
+  const reason = ((b["incomplete_details"] ?? {}) as Record<string, unknown>)["reason"];
+  const finish: GenerateResult["finish"] =
+    status === "completed"
+      ? "complete"
+      : status === "incomplete" && reason === "max_output_tokens"
+        ? "max_tokens"
+        : status === "incomplete" && reason === "content_filter"
+          ? "refused"
+          : "incomplete";
+  return {
+    text,
+    usage: {
+      inputTokens: Math.max(0, tokens(usage["input_tokens"]) - cached - cacheWrite),
+      cachedReadTokens: cached,
+      cacheWriteTokens: cacheWrite,
+      outputTokens: tokens(usage["output_tokens"]),
+      reasoningTokens: tokens(outDetails["reasoning_tokens"]),
+    },
+    finish,
+    providerRequestId: typeof b["id"] === "string" ? b["id"].slice(0, 200) : null,
+  };
+}
 
 export const OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -97,5 +170,23 @@ export class OpenAiAdapter implements AiProviderAdapter {
       if (error instanceof ProviderCallError && error.code === "model_not_found") return null;
       throw error;
     }
+  }
+
+  async generate(
+    apiKey: string,
+    request: GenerateRequest,
+    o: ProviderCallOptions,
+  ): Promise<GenerateResult> {
+    const body = await postJson(
+      this.fetchImpl,
+      {
+        url: `${OPENAI_BASE_URL}/responses`,
+        headers: this.headers(apiKey, o),
+        signal: o.signal,
+        body: openAiRequestBody(request),
+      },
+      mapError,
+    );
+    return openAiGeneration(body);
   }
 }
