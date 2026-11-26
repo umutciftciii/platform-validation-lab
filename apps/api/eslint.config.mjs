@@ -23,8 +23,38 @@ const INFRASTRUCTURE = [
   // DP-289 (ADR-030 D5): the one reader of a provider key's ciphertext (a SECURITY DEFINER call in
   // the caller's staff transaction); no table query.
   "src/ai/credential-store.ts",
+  // DP-290 (ADR-030 D6): the budget engine — the calls of its SECURITY DEFINER functions (the only
+  // write path to operations, usage and ledger) and the sweeper, which runs outside any request.
+  "src/ai/ledger-sql.ts",
+  "src/ai/ledger.service.ts",
+  // DP-291 (ADR-030 D6–D8): the queue and workers of the AI operation service run outside any
+  // request (engine calls, the key read, system audit events); no table query, no raw SQL.
+  "src/ai/runner/runner.service.ts",
   "test/**",
 ];
+// DP-291 (ADR-030 D8; design §2): the AI module reads no lead, member or content data and cannot
+// write or publish content — its answers are drafts a person applies through the existing paths.
+// Its only ways out of src/ai are IAM (access, audit, the platform switch) and the database
+// infrastructure.
+const AI_FORBIDDEN = {
+  group: [
+    "**/leads/**",
+    "**/iam/lead-data*",
+    "**/catalog/**",
+    "**/cms/**",
+    "**/seo/**",
+    "**/media/**",
+    "**/notifications/**",
+    "**/translation-packages/**",
+  ],
+  message:
+    "src/ai may not use lead, member or content modules: AI answers are drafts that a person applies (ADR-030 D8).",
+};
+const PRISMA_FORBIDDEN = {
+  group: ["**/prisma/prisma.service*", "**/generated/prisma/**"],
+  message:
+    "Use the site-scoped client (iam/site-scope.ts withSiteScope); the unscoped Prisma client is infrastructure-only (ADR-011).",
+};
 // F1-002: the throttle's row lock (SELECT … FOR UPDATE) and the clean-up's advisory lock have no
 // Prisma API; both use tagged templates only (parameterised, never *Unsafe).
 const RAW_SQL_ALLOWED = [
@@ -58,6 +88,9 @@ const RAW_SQL_ALLOWED = [
   // DP-289 (ADR-030 D5): the call of ai_credential_ciphertext(id), the only way to the stored key
   // (dp_app cannot SELECT the column); tagged template only, no table access.
   "src/ai/credential-store.ts",
+  // DP-290 (ADR-030 D6): the engine's SECURITY DEFINER calls (ai_reserve, ai_start, ai_settle,
+  // ai_release, ai_mark_unknown, ai_sweep, ai_ledger_mismatches); tagged templates only.
+  "src/ai/ledger-sql.ts",
   // DP-096 (ADR-003 §5): SET LOCAL ROLE dp_lead_retention, the run's advisory lock and the
   // field-by-field anonymisation (UPDATE … SET column = cleared value, = ANY(uuid[])); tagged
   // templates only, never *Unsafe. The database limits the role (migration dp_096).
@@ -80,16 +113,22 @@ export default [
       "no-restricted-imports": [
         "error",
         {
-          patterns: [
-            {
-              group: ["**/prisma/prisma.service*", "**/generated/prisma/**"],
-              message:
-                "Use the site-scoped client (iam/site-scope.ts withSiteScope); the unscoped Prisma client is infrastructure-only (ADR-011).",
-            },
-          ],
+          patterns: [PRISMA_FORBIDDEN],
         },
       ],
     },
+  },
+  {
+    // Later blocks replace the rule for their files, so the AI blocks repeat what still applies.
+    files: ["src/ai/**/*.ts"],
+    ignores: INFRASTRUCTURE,
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [PRISMA_FORBIDDEN, AI_FORBIDDEN] }],
+    },
+  },
+  {
+    files: INFRASTRUCTURE.filter((f) => f.startsWith("src/ai/")),
+    rules: { "no-restricted-imports": ["error", { patterns: [AI_FORBIDDEN] }] },
   },
   {
     files: ["src/**/*.ts"],

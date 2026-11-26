@@ -1,7 +1,7 @@
 /**
  * DP-289: the HTTP layer of the provider adapters — deadline, size limit, JSON, one bounded retry
- * and the mapping of failures to result codes. Only list/retrieve endpoints use it, which cost
- * nothing, so a retry is safe; generation (DP-291) will not retry a timeout.
+ * and the mapping of failures to result codes. `getJson` (list/retrieve endpoints, which cost
+ * nothing) may retry once; `postJson` (DP-291 generation, a paid call) never retries.
  */
 import { ProviderCallError } from "./types.js";
 
@@ -28,7 +28,7 @@ function retryAfterSec(res: Response): number | null {
   return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - Date.now()) / 1000));
 }
 
-async function readJson(res: Response): Promise<unknown> {
+async function readJson(res: Response, limit = MAX_RESPONSE_BYTES): Promise<unknown> {
   const reader = res.body?.getReader();
   if (!reader) throw new ProviderCallError("bad_response", res.status);
   const chunks: Uint8Array[] = [];
@@ -37,7 +37,7 @@ async function readJson(res: Response): Promise<unknown> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_RESPONSE_BYTES) {
+    if (size > limit) {
       await reader.cancel().catch(() => undefined);
       throw new ProviderCallError("bad_response", res.status);
     }
@@ -120,6 +120,44 @@ export async function getJson(
         failure.code === "provider_unavailable");
     if (!retryable || req.signal.aborted) throw failure;
     await new Promise((r) => setTimeout(r, wait !== null ? wait * 1000 : RETRY_BACKOFF_MS));
+  }
+}
+
+/** Largest generation answer read (an AI-1/AI-2 answer is a few kilobytes). */
+export const MAX_GENERATION_BYTES = 1024 * 1024;
+
+/**
+ * DP-291: one POST with a JSON body and a JSON answer — a paid generation call. NEVER retried:
+ * after the request left, a timeout, a lost connection or an unreadable answer is uncertain (the
+ * provider may have done and billed the work) and is thrown as `timeout` / `network_error` /
+ * `bad_response`; an HTTP error answer is mapped by the adapter (the provider refused it).
+ */
+export async function postJson(
+  fetchImpl: FetchLike,
+  req: ProviderRequest & { body: unknown },
+  mapError: ErrorMapper,
+): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetchImpl(req.url, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json", ...req.headers },
+      body: JSON.stringify(req.body),
+      signal: req.signal,
+      redirect: "error",
+    });
+  } catch (error) {
+    if (req.signal.aborted) throw new ProviderCallError("timeout");
+    if (error instanceof ProviderCallError) throw error;
+    throw new ProviderCallError("network_error");
+  }
+  if (!res.ok) throw await mapError(res);
+  try {
+    return await readJson(res, MAX_GENERATION_BYTES);
+  } catch (error) {
+    if (req.signal.aborted) throw new ProviderCallError("timeout");
+    if (error instanceof ProviderCallError) throw error;
+    throw new ProviderCallError("network_error");
   }
 }
 

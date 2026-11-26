@@ -486,8 +486,24 @@ describe("DP-103: what can step around row-level security", () => {
     expect(rows).toEqual([
       // DP-288 (ADR-030): the AI tables' permission check (boolean) and a usable key's ciphertext
       // (still encrypted; only while AI is on).
+      // DP-290 (ADR-030 D6): the budget engine — cost bounds, the money transitions (the only
+      // write path to operations, usage and ledger) and the ledger check. DP-291: the narrow
+      // readers of the operation service (task plan, call plan, operation view).
+      { f: "ai_actual_cost_micros", owner: "dp_owner", lead: false },
+      { f: "ai_call_plan", owner: "dp_owner", lead: false },
       { f: "ai_credential_ciphertext", owner: "dp_owner", lead: false },
+      { f: "ai_ledger_mismatches", owner: "dp_owner", lead: false },
+      { f: "ai_mark_unknown", owner: "dp_owner", lead: false },
+      { f: "ai_move", owner: "dp_owner", lead: false },
+      { f: "ai_operation_view", owner: "dp_owner", lead: false },
+      { f: "ai_release", owner: "dp_owner", lead: false },
+      { f: "ai_reserve", owner: "dp_owner", lead: false },
       { f: "ai_rls_staff_allows", owner: "dp_owner", lead: false },
+      { f: "ai_settle", owner: "dp_owner", lead: false },
+      { f: "ai_start", owner: "dp_owner", lead: false },
+      { f: "ai_sweep", owner: "dp_owner", lead: false },
+      { f: "ai_task_plan", owner: "dp_owner", lead: false },
+      { f: "ai_upper_cost_micros", owner: "dp_owner", lead: false },
       // DP-193: one boolean — may this ACTIVE staff user publish directly on this site.
       { f: "catalog_direct_publish_allowed", owner: "dp_owner", lead: false },
       // DP-173: one boolean about one preview link's session (live, ACTIVE user, review role).
@@ -732,6 +748,52 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "ai_rls_staff_allows", who: "dp_app" },
       { f: "iam_owner_managed_role_guard", who: null },
     ]);
+  });
+
+  it("DP-290: lets the API's role run the engine's transitions, never the internal money mover", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(DISTINCT r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname IN ('ai_reserve', 'ai_start', 'ai_settle', 'ai_release', 'ai_mark_unknown',
+                           'ai_sweep', 'ai_ledger_mismatches', 'ai_move', 'ai_upper_cost_micros',
+                           'ai_actual_cost_micros', 'ai_period_start')
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(Object.fromEntries(rows.map((r) => [r.f, r.who]))).toEqual({
+      ai_actual_cost_micros: "dp_app",
+      ai_ledger_mismatches: "dp_app",
+      ai_mark_unknown: "dp_app",
+      ai_move: null,
+      ai_period_start: "dp_app",
+      ai_release: "dp_app",
+      ai_reserve: "dp_app",
+      ai_settle: "dp_app",
+      ai_start: "dp_app",
+      ai_sweep: "dp_app",
+      ai_upper_cost_micros: "dp_app",
+    });
+  });
+
+  it("DP-291: lets only the API's role read a task plan, a call plan and an operation view", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(DISTINCT r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname IN ('ai_task_plan', 'ai_call_plan', 'ai_operation_view')
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(Object.fromEntries(rows.map((r) => [r.f, r.who]))).toEqual({
+      ai_call_plan: "dp_app",
+      ai_operation_view: "dp_app",
+      ai_task_plan: "dp_app",
+    });
   });
 
   it("DP-125: keeps row-level security on the five IAM tables, without FORCE", async () => {

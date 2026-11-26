@@ -59,10 +59,11 @@ describe("DP-288: AI roles and permissions", () => {
     expect(viewer.ownerManaged).toBeUndefined();
     expect([...viewer.permissions].sort()).toEqual(["ai:read", "ai_usage:read"]);
     for (const p of AI_MANAGE_PERMISSIONS) {
+      // DP-290: ai:invoke (starting operations) is not a step-up permission; the others are.
       expect(PERMISSIONS.find((x) => x.key === p)).toMatchObject({
         module: "ai",
         scopeType: "PLATFORM",
-        sensitive: true,
+        sensitive: p !== "ai:invoke",
       });
     }
     expect(catalogProblems()).toEqual([]);
@@ -146,9 +147,10 @@ describe("DP-288: AI roles and permissions", () => {
       expect(decide(off, p, platform, NOW)).toEqual({ allowed: false, reason: "module_disabled" });
       expect(decide(on, p, platform, NOW).allowed, p).toBe(true);
     }
-    for (const p of AI_MANAGE_PERMISSIONS) {
+    for (const p of AI_MANAGE_PERMISSIONS.filter((x) => x !== "ai:invoke")) {
       expect(decide(stale, p, platform, NOW)).toEqual({ allowed: false, reason: "mfa_required" });
     }
+    expect(decide(stale, "ai:invoke", platform, NOW).allowed).toBe(true);
     expect(decide(on, "module:manage", platform, NOW)).toEqual({
       allowed: false,
       reason: "no_grant",
