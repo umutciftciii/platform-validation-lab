@@ -53,6 +53,8 @@ export const AiPermissionsSchema = z.strictObject({
   modelManage: z.boolean(),
   budgetManage: z.boolean(),
   invoke: z.boolean(),
+  /** DP-293: the AI audit trail needs audit:read (platform) besides ai_usage:read. */
+  auditRead: z.boolean(),
 });
 export type AiPermissions = z.infer<typeof AiPermissionsSchema>;
 
@@ -65,6 +67,10 @@ export const AiOverviewResponseSchema = z.strictObject({
   /** DP-292: the server environment's transport (off / fake / live). */
   transport: z.enum(["off", "fake", "live"]),
   permissions: AiPermissionsSchema,
+  /** DP-293: the sites the caller knows (site budgets and per-site usage show their names). */
+  sites: z.array(
+    z.strictObject({ id: z.uuid(), key: z.enum(["BV", "CORPORATE"]), name: z.string() }),
+  ),
 });
 export type AiOverviewResponse = z.infer<typeof AiOverviewResponseSchema>;
 
@@ -463,3 +469,262 @@ export const AiReconciliationCreateRequestSchema = z.strictObject({
   note: z.string().trim().max(500).optional(),
 });
 export type AiReconciliationCreateRequest = z.infer<typeof AiReconciliationCreateRequestSchema>;
+
+// =============================================================================================
+// DP-293 (ADR-030 D6, D7): budget, usage and reporting of the AI Center. Read-only reports over
+// what DP-290/DP-291 recorded; every amount is integer micro-USD as a string (the admin rounds for
+// display only). Four amounts stay apart everywhere:
+//   - estimated  — the upper bound reserved before the call (`reservedMicros`; never a cost);
+//   - reserved   — money held by RESERVED / IN_FLIGHT operations right now (not spent);
+//   - actual     — the local calculation of finished calls (reported tokens × dated price,
+//                  cost basis LOCAL_USAGE); not an invoice;
+//   - assumed    — operations whose outcome is unknown (UNKNOWN), counted as spent at their
+//                  reserved amount until reconciled (conservative);
+//   - the provider's own figure (reconciliation) is a fifth, separate amount.
+// Periods and buckets are UTC (a day = 00:00–24:00 UTC, a month from the 1st 00:00 UTC). All
+// routes are 404 while AI is off; budget limits are enforced by the database only (DP-290).
+// =============================================================================================
+
+/** How an operation ended, for reports: one class per status. */
+export const AI_OUTCOMES = [
+  "succeeded",
+  "failed",
+  "cancelled",
+  "unknown",
+  "discarded",
+  "open",
+] as const;
+export type AiOutcome = (typeof AI_OUTCOMES)[number];
+
+/** The outcome class of an operation status. */
+export const AI_OUTCOME_OF_STATUS: Readonly<
+  Record<(typeof AI_OPERATION_STATUSES)[number], AiOutcome>
+> = {
+  SUCCEEDED: "succeeded",
+  FAILED: "failed",
+  CANCELLED: "cancelled",
+  RELEASED: "cancelled",
+  EXPIRED: "cancelled",
+  UNKNOWN: "unknown",
+  DISCARDED: "discarded",
+  RESERVED: "open",
+  IN_FLIGHT: "open",
+};
+
+const Count = z.number().int().min(0);
+
+/** The sums of a set of operations. */
+export const AiUsageTotalsSchema = z.strictObject({
+  operations: Count,
+  outcomes: z.strictObject({
+    succeeded: Count,
+    failed: Count,
+    cancelled: Count,
+    unknown: Count,
+    discarded: Count,
+    open: Count,
+  }),
+  /** Sum of the upper-bound estimates reserved for these operations (not a cost). */
+  estimatedMicros: Micros,
+  /** Held now by open operations (RESERVED / IN_FLIGHT): not spent. */
+  reservedMicros: Micros,
+  /** Local calculation of finished calls (LOCAL_USAGE). */
+  actualMicros: Micros,
+  /** Unknown outcome, counted as spent (ASSUMED). */
+  assumedMicros: Micros,
+  /** Estimate of the operations that finished with a local calculation (for the deviation). */
+  settledEstimateMicros: Micros,
+  /** Operations whose local calculation exceeded their estimate. */
+  overruns: Count,
+  inputTokens: Count,
+  cachedReadTokens: Count,
+  cacheWriteTokens: Count,
+  outputTokens: Count,
+  reasoningTokens: Count,
+});
+export type AiUsageTotals = z.infer<typeof AiUsageTotalsSchema>;
+
+export const AI_USAGE_GRANULARITIES = ["day", "month"] as const;
+export type AiUsageGranularity = (typeof AI_USAGE_GRANULARITIES)[number];
+/** At most this many UTC days per usage report. */
+export const AI_USAGE_MAX_DAYS = 366;
+
+/**
+ * GET /api/v1/admin/ai/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&granularity=day|month
+ *   [&provider=][&modelId=][&task=][&siteId=|platform][&outcome=] (ai_usage:read).
+ * Operations by their reservation time (the UTC day/month whose budget they count against).
+ */
+export const AiUsageReportSchema = z.strictObject({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  granularity: z.enum(AI_USAGE_GRANULARITIES),
+  totals: AiUsageTotalsSchema,
+  /** One bucket per UTC day ("YYYY-MM-DD") or month ("YYYY-MM") of the range, zeros included. */
+  series: z.array(z.strictObject({ bucket: z.string(), totals: AiUsageTotalsSchema })),
+  byProvider: z.array(
+    z.strictObject({ provider: AiProviderKeySchema, totals: AiUsageTotalsSchema }),
+  ),
+  byModel: z.array(
+    z.strictObject({
+      provider: AiProviderKeySchema,
+      modelId: Uuid,
+      /** The provider's model id and display name (no secret). */
+      modelKey: z.string(),
+      displayName: z.string(),
+      totals: AiUsageTotalsSchema,
+    }),
+  ),
+  byTask: z.array(z.strictObject({ task: z.enum(AI_TASK_TYPES), totals: AiUsageTotalsSchema })),
+  /** siteId null = platform operations. */
+  bySite: z.array(z.strictObject({ siteId: Uuid.nullable(), totals: AiUsageTotalsSchema })),
+});
+export type AiUsageReport = z.infer<typeof AiUsageReportSchema>;
+
+/**
+ * DP-293: optional filters of GET /api/v1/admin/ai/operations (besides `before` / `limit`):
+ * `from` / `to` (YYYY-MM-DD, UTC, by reservation), `provider`, `modelId`, `task`, `siteId`
+ * (a uuid or `platform`), `outcome` (AI_OUTCOMES).
+ */
+export const AI_OPERATION_FILTERS = [
+  "from",
+  "to",
+  "provider",
+  "modelId",
+  "task",
+  "siteId",
+  "outcome",
+] as const;
+
+/** GET /api/v1/admin/ai/prices (ai:read): every dated price with its model and state. */
+export const AI_PRICE_STATES = ["in_force", "scheduled", "superseded"] as const;
+export const AiPriceListItemSchema = z.strictObject({
+  price: AiPriceSchema,
+  provider: AiProviderKeySchema,
+  modelKey: z.string(),
+  displayName: z.string(),
+  modelStatus: z.enum(AI_MODEL_STATUSES),
+  state: z.enum(AI_PRICE_STATES),
+});
+export type AiPriceListItem = z.infer<typeof AiPriceListItemSchema>;
+export const AiPriceListResponseSchema = z.strictObject({
+  items: z.array(AiPriceListItemSchema),
+  /** Enabled models (or models of an enabled task) without a price in force. */
+  missing: z.array(
+    z.strictObject({
+      modelId: Uuid,
+      provider: AiProviderKeySchema,
+      modelKey: z.string(),
+      displayName: z.string(),
+      tasks: z.array(z.enum(AI_TASK_TYPES)),
+    }),
+  ),
+});
+export type AiPriceListResponse = z.infer<typeof AiPriceListResponseSchema>;
+
+/**
+ * GET /api/v1/admin/ai/alerts (ai_usage:read): what needs attention now, computed on request
+ * for the current UTC day and month. Ids, codes, counts and amounts only.
+ */
+export const AI_ALERT_CODES = [
+  "budget_exceeded",
+  "budget_warning",
+  "budget_missing",
+  "price_missing",
+  "unknown_operations",
+  "cost_overrun",
+  "reconciliation_difference",
+  "ledger_mismatch",
+] as const;
+export type AiAlertCode = (typeof AI_ALERT_CODES)[number];
+export const AiAlertSchema = z.strictObject({
+  code: z.enum(AI_ALERT_CODES),
+  severity: z.enum(["critical", "warning", "info"]),
+  budgetId: Uuid.nullable(),
+  siteId: Uuid.nullable(),
+  period: z.enum(AI_BUDGET_PERIODS).nullable(),
+  provider: AiProviderKeySchema.nullable(),
+  modelId: Uuid.nullable(),
+  /** UTC day of a reconciliation difference. */
+  day: z.iso.date().nullable(),
+  count: Count.nullable(),
+  /** Used (committed + assumed) for budgets; the amount concerned otherwise. Signed. */
+  amountMicros: z
+    .string()
+    .regex(/^-?\d{1,16}$/)
+    .nullable(),
+  limitMicros: Micros.nullable(),
+  /** Used share of the limit in tenths of a percent (budgets; reserved not included). */
+  permille: z.number().int().min(0).nullable(),
+});
+export type AiAlert = z.infer<typeof AiAlertSchema>;
+export const AiAlertsResponseSchema = z.strictObject({
+  generatedAt: IsoDateTime,
+  dayStart: IsoDateTime,
+  monthStart: IsoDateTime,
+  items: z.array(AiAlertSchema),
+});
+export type AiAlertsResponse = z.infer<typeof AiAlertsResponseSchema>;
+/** A reconciliation difference is reported when |diff| ≥ max(this, 5 % of local + assumed). */
+export const AI_RECONCILIATION_TOLERANCE_MICROS = 10_000;
+export const AI_RECONCILIATION_TOLERANCE_PCT = 5;
+
+/** One AI audit event: action, outcome, actor name, allowed metadata (ids, codes, amounts). */
+export const AiAuditEventSchema = z.strictObject({
+  id: Uuid,
+  occurredAt: IsoDateTime,
+  action: z.string(),
+  outcome: z.enum(["SUCCESS", "DENIED", "FAILURE"]),
+  actor: z.string().nullable(),
+  resourceType: z.string(),
+  resourceId: z.string().nullable(),
+  /** A refusal's code (e.g. budget_exceeded), never free text. */
+  reason: z.string().nullable(),
+  details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+});
+export type AiAuditEvent = z.infer<typeof AiAuditEventSchema>;
+/**
+ * GET /api/v1/admin/ai/audit?before=<iso>&limit=<1..100>[&action=ai.<…>] — ai_usage:read AND
+ * audit:read (platform); the PROTECTED stream stays the owner's (row-level security).
+ */
+export const AiAuditResponseSchema = z.strictObject({
+  items: z.array(AiAuditEventSchema).max(100),
+  nextBefore: IsoDateTime.nullable(),
+});
+export type AiAuditResponse = z.infer<typeof AiAuditResponseSchema>;
+
+export const AI_LEDGER_KINDS = [
+  "RESERVE",
+  "START",
+  "SETTLE",
+  "RELEASE",
+  "CANCEL",
+  "EXPIRE",
+  "ASSUME_SPENT",
+  "OVERRUN",
+  "ESTIMATE_UNDERRUN",
+  "ADJUST",
+] as const;
+/**
+ * GET /api/v1/admin/ai/operations/:id/history (ai_usage:read): the budget ledger of one operation
+ * (what moved, on which budget and period) and, with audit:read, its audit events (else null).
+ */
+export const AiOperationHistorySchema = z.strictObject({
+  operationId: Uuid,
+  ledger: z.array(
+    z.strictObject({
+      id: Uuid,
+      at: IsoDateTime,
+      kind: z.enum(AI_LEDGER_KINDS),
+      budgetId: Uuid,
+      scope: z.enum(AI_BUDGET_SCOPES),
+      siteId: Uuid.nullable(),
+      period: z.enum(AI_BUDGET_PERIODS),
+      periodStart: IsoDateTime,
+      deltaReservedMicros: z.string().regex(/^-?\d{1,16}$/),
+      deltaCommittedMicros: z.string().regex(/^-?\d{1,16}$/),
+      deltaAssumedMicros: z.string().regex(/^-?\d{1,16}$/),
+    }),
+  ),
+  audit: z.array(AiAuditEventSchema).nullable(),
+});
+export type AiOperationHistory = z.infer<typeof AiOperationHistorySchema>;

@@ -12,6 +12,7 @@ import { AiController } from "./ai.controller.js";
 import { AiService } from "./ai.service.js";
 import { AiOperationsService } from "./operations.service.js";
 import { AiRunnerService } from "./runner/runner.service.js";
+import { AiReportsService } from "./reports.service.js";
 
 // DP-287/DP-288 (ADR-030): the AI Center. Off by default; only the system owner switches it
 // (Owner Console). AI_CONFIG is validated at start-up: with DP_AI_TRANSPORT=off (default) no AI
@@ -38,6 +39,7 @@ import { AiRunnerService } from "./runner/runner.service.js";
     AiLedgerService,
     AiRunnerService,
     AiOperationsService,
+    AiReportsService,
     AiGateGuard,
   ],
 })
