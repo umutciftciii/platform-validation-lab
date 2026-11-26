@@ -5,6 +5,8 @@ import { AI_ADAPTERS, AI_CONFIG } from "./config/ai-config.provider.js";
 import { loadAiConfig, type AiConfig } from "./config/ai-config.js";
 import { createAdapters } from "./providers/registry.js";
 import { AiProvidersService } from "./providers.service.js";
+import { AiBudgetsService } from "./budgets.service.js";
+import { AiLedgerService } from "./ledger.service.js";
 import { AiGateGuard } from "./ai-gate.guard.js";
 import { AiController } from "./ai.controller.js";
 import { AiService } from "./ai.service.js";
@@ -16,6 +18,7 @@ import { AiService } from "./ai.service.js";
 @Module({
   imports: [IamModule],
   controllers: [AiController],
+  exports: [AiLedgerService],
   providers: [
     {
       provide: AI_CONFIG,
@@ -29,6 +32,8 @@ import { AiService } from "./ai.service.js";
     },
     AiService,
     AiProvidersService,
+    AiBudgetsService,
+    AiLedgerService,
     AiGateGuard,
   ],
 })
