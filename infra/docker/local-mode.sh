@@ -112,7 +112,9 @@ backup_dev_data() {
   dir="$BACKUP_ROOT/LOCAL-$(utc_stamp)-$label"
   mkdir -m 700 "$dir" || die "could not create $dir"
   info "backup: $dir"
-  docker exec "$PG_CONTAINER" sh -c 'pg_dump --no-password -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"$dir/db.dump" ||
+  # DP-297: UNLOGGED tables (the AI's encrypted 15-minute texts, "AiTransient") hold no data worth
+  # keeping and must not be in a backup: their structure is dumped, their rows are not.
+  docker exec "$PG_CONTAINER" sh -c 'pg_dump --no-password --no-unlogged-table-data -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"$dir/db.dump" ||
     die "pg_dump failed; see $dir"
   docker exec "$PG_CONTAINER" sh -c 'pg_dumpall --no-password -U "$POSTGRES_USER" --globals-only --no-role-passwords' >"$dir/roles.sql" ||
     die "pg_dumpall --globals-only failed; see $dir"

@@ -134,18 +134,24 @@ export const MAX_GENERATION_BYTES = 1024 * 1024;
  */
 export async function postJson(
   fetchImpl: FetchLike,
-  req: ProviderRequest & { body: unknown },
+  req: ProviderRequest & { body: unknown; onDispatch?: () => void },
   mapError: ErrorMapper,
 ): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchImpl(req.url, {
+    const body = JSON.stringify(req.body);
+    // DP-297: an aborted signal here means no request is sent at all.
+    if (req.signal.aborted) throw new ProviderCallError("timeout");
+    const pending = fetchImpl(req.url, {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/json", ...req.headers },
-      body: JSON.stringify(req.body),
+      body,
       signal: req.signal,
       redirect: "error",
     });
+    // The request is with the transport now (same synchronous turn as the fetch call).
+    req.onDispatch?.();
+    res = await pending;
   } catch (error) {
     if (req.signal.aborted) throw new ProviderCallError("timeout");
     if (error instanceof ProviderCallError) throw error;

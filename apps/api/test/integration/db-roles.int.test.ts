@@ -491,16 +491,28 @@ describe("DP-103: what can step around row-level security", () => {
       // readers of the operation service (task plan, call plan, operation view).
       { f: "ai_actual_cost_micros", owner: "dp_owner", lead: false },
       { f: "ai_call_plan", owner: "dp_owner", lead: false },
+      // DP-297 (ADR-030 D10): the database queue — claim, stop signals, cancel, the encrypted
+      // 15-minute texts (stored, read by their actor, wiped) and the switch-off trigger.
+      { f: "ai_claim", owner: "dp_owner", lead: false },
       { f: "ai_credential_ciphertext", owner: "dp_owner", lead: false },
+      { f: "ai_dispatch", owner: "dp_owner", lead: false },
+      { f: "ai_enqueue", owner: "dp_owner", lead: false },
       { f: "ai_ledger_mismatches", owner: "dp_owner", lead: false },
       { f: "ai_mark_unknown", owner: "dp_owner", lead: false },
+      { f: "ai_module_switched_off", owner: "dp_owner", lead: false },
       { f: "ai_move", owner: "dp_owner", lead: false },
       { f: "ai_operation_view", owner: "dp_owner", lead: false },
+      { f: "ai_purge_transient", owner: "dp_owner", lead: false },
+      { f: "ai_queue_depth", owner: "dp_owner", lead: false },
       { f: "ai_release", owner: "dp_owner", lead: false },
+      { f: "ai_request_cancel", owner: "dp_owner", lead: false },
       { f: "ai_reserve", owner: "dp_owner", lead: false },
+      { f: "ai_result_ciphertext", owner: "dp_owner", lead: false },
       { f: "ai_rls_staff_allows", owner: "dp_owner", lead: false },
       { f: "ai_settle", owner: "dp_owner", lead: false },
       { f: "ai_start", owner: "dp_owner", lead: false },
+      { f: "ai_stop_signals", owner: "dp_owner", lead: false },
+      { f: "ai_store_result", owner: "dp_owner", lead: false },
       { f: "ai_sweep", owner: "dp_owner", lead: false },
       { f: "ai_task_plan", owner: "dp_owner", lead: false },
       { f: "ai_upper_cost_micros", owner: "dp_owner", lead: false },
@@ -706,6 +718,8 @@ describe("DP-103: what can step around row-level security", () => {
       "AiReconciliation",
       "AiSettings",
       "AiTaskSetting",
+      // DP-297: UNLOGGED, no privilege for dp_app at all (definer functions only).
+      "AiTransient",
     ]);
     expect(rls.every((r) => r.rls && !r.force)).toBe(true);
     const grants = await su.$queryRawUnsafe<{ t: string; p: string }[]>(
@@ -748,6 +762,43 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "ai_rls_staff_allows", who: "dp_app" },
       { f: "iam_owner_managed_role_guard", who: null },
     ]);
+  });
+
+  it("DP-297: the queue's functions for the API's role only; the switch-off trigger for nobody; no table access", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(DISTINCT r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname IN ('ai_enqueue', 'ai_claim', 'ai_dispatch', 'ai_stop_signals', 'ai_request_cancel',
+                           'ai_store_result', 'ai_result_ciphertext', 'ai_queue_depth',
+                           'ai_purge_transient', 'ai_module_switched_off')
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(Object.fromEntries(rows.map((r) => [r.f, r.who]))).toEqual({
+      ai_claim: "dp_app",
+      ai_dispatch: "dp_app",
+      ai_enqueue: "dp_app",
+      ai_module_switched_off: null,
+      ai_purge_transient: "dp_app",
+      ai_queue_depth: "dp_app",
+      ai_request_cancel: "dp_app",
+      ai_result_ciphertext: "dp_app",
+      ai_stop_signals: "dp_app",
+      ai_store_result: "dp_app",
+    });
+    const grants = await su.$queryRawUnsafe<{ who: string }[]>(
+      `SELECT DISTINCT grantee::text AS who FROM information_schema.role_table_grants
+       WHERE table_name = 'AiTransient' AND grantee LIKE 'dp_%' AND grantee <> 'dp_owner'`,
+    );
+    expect(grants).toEqual([]);
+    const persistence = await su.$queryRawUnsafe<{ p: string }[]>(
+      `SELECT relpersistence::text AS p FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relname = 'AiTransient'`,
+    );
+    expect(persistence).toEqual([{ p: "u" }]);
   });
 
   it("DP-290: lets the API's role run the engine's transitions, never the internal money mover", async () => {
