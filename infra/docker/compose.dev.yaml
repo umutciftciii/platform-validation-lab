@@ -184,12 +184,17 @@ services:
     # budget is unchanged): one-shot build peak 765 MiB RSS / 716 MiB cgroup anon, watcher first
     # pass 453 MiB RSS; the build and the watcher never overlap. Heap headroom ~43 MiB: the next
     # schema growth needs a new measurement (DP-248).
-    mem_limit: 896m
-    memswap_limit: 896m
+    # DP-297 (2026-11-26): the AI models of DP-288…DP-297 ate that headroom: live heap after
+    # mark-compact 685.5 MiB on main 739806b, 687.0 MiB with DP-297, limit 704 → public CI dev-up
+    # OOM. Measured cold builds (1 CPU, clean container): 896m/704 → cgroup peak 820 MiB, 15 MiB
+    # heap left; 896m/768 → 854 MiB (95 %, too tight); 1024m/832 → 850 MiB (83 %), ~147 MiB heap
+    # left. Now 1024 MiB / heap 832 MiB (+128 MiB for the dev plan). Lasting fix: DP-304.
+    mem_limit: 1024m
+    memswap_limit: 1024m
     cpus: 1.0
     environment:
       <<: *dev-env
-      NODE_OPTIONS: --max-old-space-size=704
+      NODE_OPTIONS: --max-old-space-size=832
       DATABASE_URL: postgresql://dp_app:${DEV_DP_APP_PASSWORD}@postgres:5432/${DEV_POSTGRES_DB}?schema=public
       DB_ENV: dev
       DB_EXPECTED_NAME: ${DEV_POSTGRES_DB}
