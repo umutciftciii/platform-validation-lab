@@ -8,6 +8,11 @@
 import {
   AI_API,
   ErrorBodySchema,
+  type AiBudget,
+  type AiBudgetCreateRequest,
+  type AiBudgetUpdateRequest,
+  type AiReconciliationCreateRequest,
+  type AiSettingsDto,
   type AiCredentialAddRequest,
   type AiCredentialResult,
   type AiCredentialSummary,
@@ -44,6 +49,13 @@ export const AI_RULES = [
   "task_not_available",
   "task_disabled",
   "key_format",
+  // DP-293: budgets, settings, reconciliation, reports.
+  "budget_exists",
+  "unknown_site",
+  "platform_has_no_site",
+  "already_recorded",
+  "future",
+  "too_many_operations",
 ] as const;
 export type AiRule = (typeof AI_RULES)[number];
 const isAiRule = (rule: string): rule is AiRule => (AI_RULES as readonly string[]).includes(rule);
@@ -124,3 +136,14 @@ export const addPrice = (modelId: string, body: AiPriceCreateRequest) =>
 
 export const updateTask = (task: AiTaskTypeKey, body: AiTaskSettingRequest) =>
   call<AiTaskSettingDto>("POST", `${AI_API}/tasks/${enc(task.toLowerCase())}`, body);
+
+// --- DP-293: budgets, engine settings, provider figures (each a management change: step-up) ---
+
+export const createBudget = (body: AiBudgetCreateRequest) =>
+  call<AiBudget>("POST", `${AI_API}/budgets`, body);
+export const updateBudget = (id: string, body: AiBudgetUpdateRequest) =>
+  call<AiBudget>("POST", `${AI_API}/budgets/${enc(id)}`, body);
+export const updateSettings = (body: AiSettingsDto) =>
+  call<AiSettingsDto>("POST", `${AI_API}/settings`, body);
+export const recordProviderFigure = (body: AiReconciliationCreateRequest) =>
+  call<{ recorded: true }>("POST", `${AI_API}/reconciliation`, body);

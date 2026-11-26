@@ -43,6 +43,16 @@ const TR = leaves(tr as unknown as Tree);
 
 /** Texts that are the same in both languages on purpose (names, brands, technical terms). */
 const SAME_IN_TR = new Set([
+  // DP-293: the same word in Turkish ("Limit", "Model", "Site", "Platform"), a range and "UTC".
+  "ai.budgets.limit",
+  "ai.budgets.limitField",
+  "ai.budgets.siteScope",
+  "ai.engine.concurrencyHint",
+  "ai.filters.model",
+  "ai.filters.site",
+  "ai.time.local",
+  "ai.time.utc",
+  "ai.usage.platform",
   "language.english",
   "language.turkish",
   "shell.environments.staging",

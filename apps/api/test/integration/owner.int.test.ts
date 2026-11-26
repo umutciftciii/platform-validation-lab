@@ -15,8 +15,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  AiAlertsResponseSchema,
+  AiAuditResponseSchema,
   AiOperationCreatedSchema,
   AiOperationDetailSchema,
+  AiOperationHistorySchema,
+  AiPriceListResponseSchema,
+  AiUsageReportSchema,
   AiBudgetSchema,
   AiBudgetsResponseSchema,
   AiOperationsResponseSchema,
@@ -846,6 +851,7 @@ describe("DP-287: the global AI switch", () => {
       modelManage: true,
       budgetManage: true,
       invoke: true,
+      auditRead: true,
     };
     const readOnly = {
       usageRead: true,
@@ -853,6 +859,7 @@ describe("DP-287: the global AI switch", () => {
       modelManage: false,
       budgetManage: false,
       invoke: false,
+      auditRead: true,
     };
     for (const [who, permissions] of [
       [ownerNow, manageAll],
@@ -872,6 +879,12 @@ describe("DP-287: the global AI switch", () => {
         ],
         transport: "off",
         permissions,
+        // DP-293: the sites the caller knows (names for site budgets and per-site usage).
+        sites: expect.arrayContaining(
+          (await dbo.site.findMany({ select: { id: true, key: true, name: true } })).map((s) =>
+            expect.objectContaining({ id: s.id, key: s.key }),
+          ),
+        ),
       });
     }
     expectError(await editor.call("GET", "/ai/overview"), 403, "FORBIDDEN");
@@ -3732,6 +3745,7 @@ describe("DP-291: the AI operation service", () => {
         modelManage: true,
         budgetManage: true,
         invoke: true,
+        auditRead: true,
       },
     });
     expect((await ov(viewer)).permissions).toEqual({
@@ -3740,6 +3754,7 @@ describe("DP-291: the AI operation service", () => {
       modelManage: false,
       budgetManage: false,
       invoke: false,
+      auditRead: false,
     });
 
     const calls = fake.generateCalls;
@@ -3948,5 +3963,373 @@ describe("DP-291: the AI operation service", () => {
     expect((await owner.call("POST", AI, { enabled: false, reason: "DP-291 done" })).status).toBe(
       200,
     );
+  });
+});
+
+// DP-293 (ADR-030 D6, D7): the AI Center's reports over HTTP with the fake provider — usage by
+// provider/model/task/site/outcome and UTC day, filters, every dated price, alerts, the AI audit
+// trail and one operation's ledger. Read-only; no prompt, response or key in any answer; 404 while
+// AI is off; who reads what (ai_usage:read, audit:read); management stays behind the step-up.
+describe("DP-293: AI budget, usage and reporting", () => {
+  const AI = "/owner/modules/ai/platform";
+  let factory: { createApiApp(o: { logger: false }): Promise<App> };
+  let runner: { whenIdle(): Promise<void> };
+  let owner: Staff;
+  let admin: Staff; // ai_administrator only (no audit:read)
+  let superAdmin: Staff; // platform super admin: ai:read + ai_usage:read + audit:read
+  let viewer: Staff; // ai_viewer
+  let nobody: Staff; // no AI permission
+  let succeeded = "";
+  let lost = "";
+  let seq = 0;
+  const key = () => `dp293-${Date.now()}-${seq++}`;
+  const CANARY = `canary293-${randomBytes(6).toString("hex")}`;
+  const today = () => new Date().toISOString().slice(0, 10);
+  const usage = (who: Staff, q = "") =>
+    who.call("GET", `/ai/usage?from=${today()}&to=${today()}${q}`);
+
+  async function restart(env: Record<string, string | undefined>) {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await app.close();
+    app = await factory.createApiApp({ logger: false });
+    await app.listen(0, "127.0.0.1");
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as { port: number }).port}`;
+    const mod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/ai/runner/runner.service.js")).href
+    )) as { AiRunnerService: abstract new (...a: never[]) => unknown };
+    runner = (app as unknown as { get(t: unknown): typeof runner }).get(mod.AiRunnerService);
+  }
+  async function started(who: Staff, input: string) {
+    const res = await who.call("POST", "/ai/operations", {
+      task: "DIAGNOSTIC_PING",
+      input,
+      idempotencyKey: key(),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    return AiOperationCreatedSchema.parse(res.body).operationId;
+  }
+
+  beforeAll(async () => {
+    factory = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href
+    )) as typeof factory;
+    await restart({
+      DP_AI_TRANSPORT: "fake",
+      DP_AI_ENC_KEYS: AI_ENC_KEYS,
+      AI_SWEEP_INTERVAL_SECONDS: "0",
+    });
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-293", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-293", pw, [], root.userId);
+    superAdmin = await staff("ai-super-293", pw, [{ role: "platform_super_admin" }], root.userId);
+    viewer = await staff("ai-viewer-293", pw, [], root.userId);
+    nobody = await staff("ai-nobody-293", pw, [], root.userId);
+  });
+
+  afterAll(async () => {
+    await restart({
+      DP_AI_TRANSPORT: undefined,
+      DP_AI_ENC_KEYS: undefined,
+      AI_SWEEP_INTERVAL_SECONDS: undefined,
+    });
+  });
+
+  it("every report route is a 404 while AI is off — for the owner too", async () => {
+    for (const p of [
+      `/ai/usage?from=${today()}&to=${today()}`,
+      "/ai/prices",
+      "/ai/alerts",
+      "/ai/audit",
+      "/ai/operations?outcome=unknown",
+      "/ai/operations/0190f0a0-0000-7000-8000-000000000001/history",
+    ]) {
+      expectError(await owner.call("GET", p), 404, "NOT_FOUND");
+      expectError(await superAdmin.call("GET", p), 404, "NOT_FOUND");
+    }
+  });
+
+  it("reports usage with actual, assumed, reserved and estimated apart; sums equal the rows", async () => {
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-293 test" })).status).toBe(
+      200,
+    );
+    for (const [who, roleKey] of [
+      [admin, "ai_administrator"],
+      [viewer, "ai_viewer"],
+    ] as const) {
+      expect((await owner.call("POST", `/staff/${who.userId}/roles`, { roleKey })).status).toBe(
+        201,
+      );
+    }
+    succeeded = await started(admin, `ping ${CANARY}`);
+    lost = await started(admin, `[fake:error=timeout] ping ${CANARY}`);
+    await runner.whenIdle();
+
+    const res = await usage(viewer);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const r = AiUsageReportSchema.parse(res.body);
+    const start = new Date(`${today()}T00:00:00Z`);
+    const rows = await dbo.aiOperation.findMany({
+      where: { reservedAt: { gte: start, lt: new Date(start.getTime() + 86_400_000) } },
+    });
+    const sum = (pick: (o: (typeof rows)[number]) => bigint) =>
+      rows.reduce((a, o) => a + pick(o), 0n).toString();
+    expect(r.totals.operations).toBe(rows.length);
+    expect(r.totals.actualMicros).toBe(
+      sum((o) => (o.costBasis === "LOCAL_USAGE" ? (o.actualMicros ?? 0n) : 0n)),
+    );
+    expect(r.totals.assumedMicros).toBe(
+      sum((o) => (o.costBasis === "ASSUMED" ? (o.actualMicros ?? 0n) : 0n)),
+    );
+    expect(r.totals.estimatedMicros).toBe(sum((o) => o.reservedMicros));
+    expect(r.totals.reservedMicros).toBe(
+      sum((o) => (["RESERVED", "IN_FLIGHT"].includes(o.status) ? o.reservedMicros : 0n)),
+    );
+    expect(r.totals.outcomes.unknown).toBe(rows.filter((o) => o.status === "UNKNOWN").length);
+    expect(r.series).toHaveLength(1);
+    expect(r.series[0]!.bucket).toBe(today());
+    expect(r.series[0]!.totals).toEqual(r.totals);
+    expect(r.byProvider.reduce((a, p) => a + p.totals.operations, 0)).toBe(rows.length);
+    expect(r.byModel.every((m) => m.modelKey.length > 0)).toBe(true);
+    expect(JSON.stringify(r)).not.toContain(CANARY);
+
+    // Filters narrow the same rows; the outcome class maps to its statuses.
+    const unknown = AiUsageReportSchema.parse((await usage(viewer, "&outcome=unknown")).body);
+    expect(unknown.totals.operations).toBe(r.totals.outcomes.unknown);
+    expect(unknown.totals.actualMicros).toBe("0");
+    expect(unknown.totals.assumedMicros).toBe(r.totals.assumedMicros);
+    const platform = AiUsageReportSchema.parse((await usage(viewer, "&siteId=platform")).body);
+    expect(platform.bySite.every((s) => s.siteId === null)).toBe(true);
+    const month = AiUsageReportSchema.parse(
+      (
+        await viewer.call(
+          "GET",
+          `/ai/usage?from=${today().slice(0, 8)}01&to=${today()}&granularity=month`,
+        )
+      ).body,
+    );
+    expect(month.series.map((s) => s.bucket)).toEqual([today().slice(0, 7)]);
+
+    // Invalid queries are refused, never guessed.
+    for (const q of [
+      "/ai/usage",
+      `/ai/usage?from=${today()}&to=2020-01-01`,
+      "/ai/usage?from=2026-01-01&to=2027-06-01",
+      `/ai/usage?from=${today()}&to=${today()}&provider=mistral`,
+      `/ai/usage?from=${today()}&to=${today()}&outcome=SUCCEEDED`,
+      `/ai/usage?from=${today()}&to=${today()}&granularity=week`,
+      "/ai/operations?siteId=everything",
+      "/ai/operations?from=2026-13-01&to=2026-13-02",
+    ]) {
+      expectError(await viewer.call("GET", q), 400, "VALIDATION_FAILED");
+    }
+  });
+
+  it("filters the operations list and keeps the cursor", async () => {
+    const list = AiOperationsResponseSchema.parse(
+      (await viewer.call("GET", "/ai/operations?outcome=unknown&limit=100")).body,
+    );
+    expect(list.items.length).toBeGreaterThan(0);
+    expect(list.items.every((o) => o.status === "UNKNOWN")).toBe(true);
+    expect(list.items.map((o) => o.id)).toContain(lost);
+    const byProvider = AiOperationsResponseSchema.parse(
+      (await viewer.call("GET", `/ai/operations?provider=gemini&from=${today()}&to=${today()}`))
+        .body,
+    );
+    expect(byProvider.items.every((o) => o.provider === "GEMINI")).toBe(true);
+    const page1 = AiOperationsResponseSchema.parse(
+      (await viewer.call("GET", "/ai/operations?limit=1")).body,
+    );
+    expect(page1.items).toHaveLength(1);
+    expect(page1.nextBefore).not.toBeNull();
+  });
+
+  it("lists every dated price with its state, and reports models without a price in force", async () => {
+    const res = await viewer.call("GET", "/ai/prices");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const list = AiPriceListResponseSchema.parse(res.body);
+    expect(list.items.length).toBe(await dbo.aiModelPrice.count());
+    const now = Date.now();
+    for (const i of list.items) {
+      if (i.state === "scheduled") expect(Date.parse(i.price.effectiveFrom)).toBeGreaterThan(now);
+      else expect(Date.parse(i.price.effectiveFrom)).toBeLessThanOrEqual(now);
+    }
+    const inForce = list.items.filter((i) => i.state === "in_force");
+    expect(new Set(inForce.map((i) => i.price.modelId)).size).toBe(inForce.length);
+
+    // An enabled model without a price (written directly: the API itself never enables one
+    // without verification) is reported as missing, in the price list and in the alerts.
+    const bare = await dbo.aiModel.create({
+      data: {
+        provider: "OPENAI",
+        modelId: `dp293-bare-${seq++}`,
+        displayName: "DP-293 bare model",
+        status: "ENABLED",
+        billingProfile: "openai.responses",
+        compatible: true,
+      },
+    });
+    const again = AiPriceListResponseSchema.parse((await viewer.call("GET", "/ai/prices")).body);
+    expect(again.missing.map((m) => m.modelId)).toContain(bare.id);
+    const alerts = AiAlertsResponseSchema.parse((await viewer.call("GET", "/ai/alerts")).body);
+    expect(alerts.items).toContainEqual(
+      expect.objectContaining({ code: "price_missing", modelId: bare.id, provider: "OPENAI" }),
+    );
+    await dbo.aiModel.update({
+      where: { id: bare.id },
+      data: { status: "DISABLED", version: { increment: 1 } },
+    });
+  });
+
+  it("alerts: unknown outcomes, an exceeded budget and a reconciliation difference; no ledger mismatch", async () => {
+    const a = AiAlertsResponseSchema.parse((await viewer.call("GET", "/ai/alerts")).body);
+    expect(a.dayStart).toBe(`${today()}T00:00:00.000Z`);
+    expect(a.items).toContainEqual(expect.objectContaining({ code: "unknown_operations" }));
+    expect(a.items.some((i) => i.code === "ledger_mismatch")).toBe(false);
+
+    // The daily platform budget at 1 µ$ is exceeded by what was spent today.
+    const daily = await dbo.aiBudget.findFirstOrThrow({
+      where: { active: true, scope: "PLATFORM", period: "DAILY" },
+    });
+    const set = (limitMicros: string, version: number) =>
+      admin.call("POST", `/ai/budgets/${daily.id}`, {
+        limitMicros,
+        warnPct: daily.warnPct,
+        active: true,
+        version,
+      });
+    expect((await set("1", daily.version)).status).toBe(200);
+    const exceeded = AiAlertsResponseSchema.parse((await viewer.call("GET", "/ai/alerts")).body);
+    const alert = exceeded.items.find(
+      (i) => i.code === "budget_exceeded" && i.budgetId === daily.id,
+    );
+    expect(alert).toMatchObject({ severity: "critical", period: "DAILY", limitMicros: "1" });
+    expect(exceeded.items[0]!.severity).toBe("critical");
+    expect((await set("100000000", daily.version + 1)).status).toBe(200);
+
+    // The provider says far more than the local calculation for today.
+    const rec = await admin.call("POST", "/ai/reconciliation", {
+      provider: "GEMINI",
+      day: today(),
+      providerAmountMicros: "5000000",
+      projectRef: `dp293-${seq++}`,
+    });
+    expect(rec.status, JSON.stringify(rec.body)).toBe(201);
+    const after = AiAlertsResponseSchema.parse((await viewer.call("GET", "/ai/alerts")).body);
+    expect(after.items).toContainEqual(
+      expect.objectContaining({
+        code: "reconciliation_difference",
+        provider: "GEMINI",
+        day: today(),
+      }),
+    );
+  });
+
+  it("shows one operation's ledger; its audit events only with audit:read", async () => {
+    const h = AiOperationHistorySchema.parse(
+      (await superAdmin.call("GET", `/ai/operations/${succeeded}/history`)).body,
+    );
+    expect(h.ledger.map((l) => l.kind)).toEqual(expect.arrayContaining(["RESERVE", "SETTLE"]));
+    // Reserved money comes back to zero for every budget the operation touched.
+    const perBudget = new Map<string, bigint>();
+    for (const l of h.ledger)
+      perBudget.set(l.budgetId, (perBudget.get(l.budgetId) ?? 0n) + BigInt(l.deltaReservedMicros));
+    expect([...perBudget.values()].every((v) => v === 0n)).toBe(true);
+    expect(h.audit?.map((e) => e.action)).toContain("ai.operation.create");
+    const lostH = AiOperationHistorySchema.parse(
+      (await viewer.call("GET", `/ai/operations/${lost}/history`)).body,
+    );
+    expect(lostH.ledger.map((l) => l.kind)).toContain("ASSUME_SPENT");
+    expect(lostH.audit).toBeNull(); // ai_viewer has no audit:read
+    expectError(
+      await viewer.call("GET", "/ai/operations/0190f0a0-0000-7000-8000-000000000001/history"),
+      404,
+      "NOT_FOUND",
+    );
+    expect(JSON.stringify([h, lostH])).not.toContain(CANARY);
+  });
+
+  it("the AI audit trail: AI events only, allowlisted details, no text; audit:read required", async () => {
+    const res = await superAdmin.call("GET", "/ai/audit?limit=100");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const a = AiAuditResponseSchema.parse(res.body);
+    expect(a.items.length).toBeGreaterThan(0);
+    expect(a.items.every((e) => e.action.startsWith("ai."))).toBe(true);
+    expect(a.items.some((e) => "permission" in e.details)).toBe(false);
+    const body = JSON.stringify(a);
+    expect(body).not.toContain(CANARY);
+    expect(body).not.toMatch(/ciphertext|fingerprint|BEGIN/);
+    // Only allowlisted keys (ids, codes, counts, amounts, a key's hint) leave the API.
+    const { AI_AUDIT_METADATA_KEYS } = await import("../../src/ai/audit.js");
+    for (const e of a.items)
+      for (const k of Object.keys(e.details))
+        expect(AI_AUDIT_METADATA_KEYS as readonly string[]).toContain(k);
+    const denied = AiAuditResponseSchema.parse(
+      (await superAdmin.call("GET", "/ai/audit?action=ai.operation.create&limit=1")).body,
+    );
+    expect(denied.items).toHaveLength(1);
+    expect(denied.items[0]!.action).toBe("ai.operation.create");
+    expect(denied.nextBefore).not.toBeNull();
+    expectError(
+      await superAdmin.call("GET", "/ai/audit?action=leads.export"),
+      400,
+      "VALIDATION_FAILED",
+    );
+    // ai_administrator and ai_viewer read usage but not the audit trail.
+    expectError(await admin.call("GET", "/ai/audit"), 403, "FORBIDDEN");
+    expectError(await viewer.call("GET", "/ai/audit"), 403, "FORBIDDEN");
+  });
+
+  it("who reads what: no AI permission → 403; reports need no step-up, changes do", async () => {
+    for (const p of [`/ai/usage?from=${today()}&to=${today()}`, "/ai/prices", "/ai/alerts"]) {
+      expectError(await nobody.call("GET", p), 403, "FORBIDDEN");
+      expect((await superAdmin.call("GET", p)).status).toBe(200);
+    }
+    const stale = new Staff("ai-admin-293-stale", admin.userId, await session(admin.userId, null));
+    expect((await stale.call("GET", "/ai/alerts")).status).toBe(200);
+    expect((await stale.call("GET", `/ai/usage?from=${today()}&to=${today()}`)).status).toBe(200);
+    const daily = await dbo.aiBudget.findFirstOrThrow({
+      where: { active: true, scope: "PLATFORM", period: "DAILY" },
+    });
+    const before = daily.version;
+    expectError(
+      await stale.call("POST", `/ai/budgets/${daily.id}`, {
+        limitMicros: "1",
+        warnPct: daily.warnPct,
+        active: true,
+        version: daily.version,
+      }),
+      403,
+      "AUTH_STEP_UP_REQUIRED",
+    );
+    expectError(
+      await stale.call("POST", "/ai/reconciliation", {
+        provider: "OPENAI",
+        day: today(),
+        providerAmountMicros: "1",
+      }),
+      403,
+      "AUTH_STEP_UP_REQUIRED",
+    );
+    expect((await dbo.aiBudget.findUniqueOrThrow({ where: { id: daily.id } })).version).toBe(
+      before,
+    );
+    // A reader cannot change a budget, step-up or not.
+    expectError(
+      await viewer.call("POST", `/ai/budgets/${daily.id}`, {
+        limitMicros: "1",
+        warnPct: daily.warnPct,
+        active: true,
+        version: daily.version,
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    expect((await owner.call("POST", AI, { enabled: false, reason: "DP-293 done" })).status).toBe(
+      200,
+    );
+    expectError(await superAdmin.call("GET", "/ai/alerts"), 404, "NOT_FOUND");
   });
 });
