@@ -201,6 +201,9 @@ model Site {
   leadContactMessages        LeadContactMessage[]
   leadNotifications          LeadNotification[]
   leadNotificationSetting    LeadNotificationSetting?
+  /// DP-288 (ADR-030 D6): the site's AI budgets and the AI operations started for it.
+  aiBudgets                  AiBudget[]
+  aiOperations               AiOperation[]
   documentGrants             DocumentDownloadGrant[]
   leadDocumentDownloads      LeadDocumentDownload[]
   // DP-041 (ADR-019): sales activity on this site's leads.
@@ -2039,4 +2042,345 @@ model SiteLocale {
 
   @@id([siteId, locale])
   @@unique([siteId], map: "SiteLocale_default_siteId_key", where: raw("\"isDefault\""))
+}
+
+// =============================================================================================
+// DP-288 (ADR-030 D3–D7): the AI data model. Data only — no provider call, key management screen
+// or budget engine yet (DP-289…DP-293). Every table is platform data of the AI Center:
+//  - row-level security lets a staff session read or change a table only while AI is on
+//    (PlatformModuleState, DP-287) and only with the matching ai:* permission (RolePermission),
+//    or as the system owner (ai_rls_staff_allows, migration dp_288);
+//  - an API key is stored only as secret-box ciphertext (DP_AI_ENC_KEYS); dp_app cannot SELECT the
+//    column (ai_credential_ciphertext() hands it out while AI is on and the key is ACTIVE);
+//  - no table has a column for a prompt or response text (decision 11; schema test);
+//  - money is integer micro-USD (1 USD = 1 000 000); budget periods are UTC.
+// Actor columns (createdById, updatedById, …) hold staff user ids without a foreign key: the AI
+// module stays out of the IAM relations, and staff users are never deleted (deactivated only).
+// =============================================================================================
+
+/// The first three providers (owner decision 8); a new provider is a new value plus an adapter.
+enum AiProvider {
+  OPENAI
+  ANTHROPIC
+  GEMINI
+}
+
+enum AiCredentialStatus {
+  /// Stored, not yet tested; never used for a call.
+  PENDING_TEST
+  /// The one key of its provider that calls may use (partial unique index).
+  ACTIVE
+  DISABLED
+  /// The ciphertext is erased; the row stays as history.
+  REVOKED
+}
+
+enum AiModelStatus {
+  DISCOVERED
+  VERIFIED
+  ENABLED
+  DISABLED
+  UNAVAILABLE
+}
+
+enum AiBudgetScope {
+  PLATFORM
+  SITE
+}
+
+enum AiBudgetPeriod {
+  DAILY
+  MONTHLY
+}
+
+enum AiTaskType {
+  DIAGNOSTIC_PING
+  TRANSLATION
+  SEO_META
+  CONTENT_DRAFT
+}
+
+enum AiOperationStatus {
+  RESERVED
+  IN_FLIGHT
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  RELEASED
+  EXPIRED
+  UNKNOWN
+  DISCARDED
+}
+
+enum AiCostBasis {
+  NONE
+  LOCAL_USAGE
+  ASSUMED
+}
+
+enum AiLedgerKind {
+  RESERVE
+  START
+  SETTLE
+  RELEASE
+  CANCEL
+  EXPIRE
+  ASSUME_SPENT
+  OVERRUN
+  ESTIMATE_UNDERRUN
+  ADJUST
+}
+
+/// One row (id = 1): concurrency and reservation settings. The serialisation point of the
+/// reservation engine (DP-290). The global on/off switch is NOT here (PlatformModuleState, owner).
+model AiSettings {
+  id                Int      @id @default(1)
+  maxConcurrency    Int      @default(2)
+  reservationTtlSec Int      @default(120)
+  safetyMarginPct   Int      @default(10)
+  version           Int      @default(1)
+  updatedById       String?  @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @default(now()) @db.Timestamptz(3)
+}
+
+/// Per provider (seeded, off): whether the provider may be used and its default model.
+model AiProviderSetting {
+  provider       AiProvider @id
+  enabled        Boolean    @default(false)
+  defaultModelId String?    @db.Uuid
+  version        Int        @default(1)
+  updatedById    String?    @db.Uuid
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime   @default(now()) @db.Timestamptz(3)
+
+  defaultModel AiModel? @relation("AiProviderDefaultModel", fields: [defaultModelId], references: [id], onDelete: Restrict)
+}
+
+/// A platform API key of one provider (owner decision 7): each provider has its own keys, at most
+/// one ACTIVE. The key itself is only `ciphertext` (secret-box `v<n>:iv:ct:tag`, additional data
+/// bound to the row and provider); `keyHint` is the provider prefix and the last four characters.
+model AiProviderCredential {
+  id           String             @id @default(uuid(7)) @db.Uuid
+  provider     AiProvider
+  label        String             @db.VarChar(100)
+  status       AiCredentialStatus @default(PENDING_TEST)
+  /// Null only when REVOKED (CHECK).
+  ciphertext   String?
+  keyVersion   Int?
+  keyHint      String             @db.VarChar(32)
+  /// HMAC of the key (duplicate detection), never the key.
+  fingerprint  String             @db.VarChar(64)
+  /// Provider project / workspace reference (OpenAI-Project, Anthropic workspace, GCP project).
+  projectRef   String?            @db.VarChar(200)
+  lastTestedAt DateTime?          @db.Timestamptz(3)
+  lastTestCode String?            @db.VarChar(40)
+  createdById  String             @db.Uuid
+  activatedAt  DateTime?          @db.Timestamptz(3)
+  disabledAt   DateTime?          @db.Timestamptz(3)
+  disabledById String?            @db.Uuid
+  revokedAt    DateTime?          @db.Timestamptz(3)
+  revokedById  String?            @db.Uuid
+  replacedById String?            @db.Uuid
+  version      Int                @default(1)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime           @default(now()) @db.Timestamptz(3)
+
+  replacedBy AiProviderCredential?  @relation("AiCredentialReplacement", fields: [replacedById], references: [id], onDelete: Restrict)
+  replaces   AiProviderCredential[] @relation("AiCredentialReplacement")
+
+  @@unique([provider], map: "AiProviderCredential_active_provider_key", where: raw("\"status\" = 'ACTIVE'::\"AiCredentialStatus\""))
+  @@index([provider, status])
+}
+
+/// A model of a provider, as discovered and verified (DP-289).
+model AiModel {
+  id              String        @id @default(uuid(7)) @db.Uuid
+  provider        AiProvider
+  modelId         String        @db.VarChar(200)
+  displayName     String        @db.VarChar(200)
+  status          AiModelStatus @default(DISCOVERED)
+  contextWindow   Int?
+  maxOutputTokens Int?
+  /// Token-estimate profile of the model family (ADR-030 D6), e.g. "openai.responses".
+  billingProfile  String        @db.VarChar(64)
+  lastVerifiedAt  DateTime?     @db.Timestamptz(3)
+  verifyCode      String?       @db.VarChar(40)
+  version         Int           @default(1)
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime      @default(now()) @db.Timestamptz(3)
+
+  prices          AiModelPrice[]
+  tasks           AiTaskSetting[]
+  operations      AiOperation[]
+  providerDefault AiProviderSetting[] @relation("AiProviderDefaultModel")
+
+  @@unique([provider, modelId])
+}
+
+/// A dated unit price of a model (append-only; an operation pins the version valid at its
+/// reservation). Micro-USD per one million tokens; reasoning/thinking tokens are output tokens.
+model AiModelPrice {
+  id                       String   @id @default(uuid(7)) @db.Uuid
+  modelId                  String   @db.Uuid
+  inputMicrosPerMTok       BigInt
+  cachedReadMicrosPerMTok  BigInt
+  cacheWriteMicrosPerMTok  BigInt?
+  outputMicrosPerMTok      BigInt
+  /// Optional long-context tier: above this many input tokens the long prices apply.
+  longContextThreshold     Int?
+  longInputMicrosPerMTok   BigInt?
+  longOutputMicrosPerMTok  BigInt?
+  perRequestFeeMicros      BigInt   @default(0)
+  effectiveFrom            DateTime @db.Timestamptz(3)
+  /// Where the price comes from (MANUAL = entered by an AI administrator).
+  source                   String   @default("MANUAL") @db.VarChar(20)
+  /// E.g. the provider's price page and the date it was read.
+  sourceNote               String   @db.VarChar(500)
+  createdById              String   @db.Uuid
+  createdAt                DateTime @default(now()) @db.Timestamptz(3)
+
+  model      AiModel       @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  operations AiOperation[]
+
+  @@unique([modelId, effectiveFrom])
+}
+
+/// Per task type (seeded, all off): model and limits of one operation.
+model AiTaskSetting {
+  task               AiTaskType @id
+  enabled            Boolean    @default(false)
+  modelId            String?    @db.Uuid
+  maxInputTokens     Int
+  maxOutputTokens    Int
+  /// Explicit thinking/reasoning budget sent with the request (Gemini) and reserved (0 = none).
+  thinkingBudget     Int        @default(0)
+  maxCostPerOpMicros BigInt
+  /// 0…2000 = temperature × 1000; null = the provider default.
+  temperatureMilli   Int?
+  version            Int        @default(1)
+  updatedById        String?    @db.Uuid
+  createdAt          DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime   @default(now()) @db.Timestamptz(3)
+
+  model AiModel? @relation(fields: [modelId], references: [id], onDelete: Restrict)
+}
+
+/// A daily or monthly USD limit, platform-wide or for one site (UTC periods).
+model AiBudget {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  scope       AiBudgetScope
+  siteId      String?        @db.Uuid
+  period      AiBudgetPeriod
+  limitMicros BigInt
+  warnPct     Int            @default(80)
+  active      Boolean        @default(true)
+  version     Int            @default(1)
+  createdById String         @db.Uuid
+  updatedById String?        @db.Uuid
+  createdAt   DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime       @default(now()) @db.Timestamptz(3)
+
+  site    Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  usage   AiBudgetUsage[]
+  entries AiLedgerEntry[]
+
+  @@unique([period], map: "AiBudget_active_platform_period_key", where: raw("(\"active\" AND (\"scope\" = 'PLATFORM'::\"AiBudgetScope\"))"))
+  @@unique([siteId, period], map: "AiBudget_active_site_period_key", where: raw("(\"active\" AND (\"scope\" = 'SITE'::\"AiBudgetScope\"))"))
+  @@index([siteId])
+}
+
+/// The counters of one budget period (reserved, committed, assumed); recomputable from the ledger.
+model AiBudgetUsage {
+  budgetId        String   @db.Uuid
+  /// Start of the UTC day or month.
+  periodStart     DateTime @db.Timestamptz(3)
+  reservedMicros  BigInt   @default(0)
+  committedMicros BigInt   @default(0)
+  assumedMicros   BigInt   @default(0)
+  updatedAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  budget AiBudget @relation(fields: [budgetId], references: [id], onDelete: Restrict)
+
+  @@id([budgetId, periodStart])
+}
+
+/// One AI operation: its reservation, state and cost. Never a prompt or response text.
+model AiOperation {
+  id                  String            @id @default(uuid(7)) @db.Uuid
+  task                AiTaskType
+  siteId              String?           @db.Uuid
+  /// Null for system operations.
+  actorUserId         String?           @db.Uuid
+  provider            AiProvider
+  modelId             String            @db.Uuid
+  priceId             String            @db.Uuid
+  status              AiOperationStatus @default(RESERVED)
+  idempotencyKey      String            @db.VarChar(100)
+  /// SHA-256 of the canonical input (hex); the input itself is not stored.
+  inputDigest         String            @db.Char(64)
+  estInputTokens      Int
+  estOutputTokens     Int
+  reservedMicros      BigInt
+  actInputTokens      Int?
+  actCachedReadTokens Int?
+  actCacheWriteTokens Int?
+  actOutputTokens     Int?
+  actReasoningTokens  Int?
+  actualMicros        BigInt?
+  costBasis           AiCostBasis       @default(NONE)
+  providerRequestId   String?           @db.VarChar(200)
+  errorCode           String?           @db.VarChar(40)
+  /// The API process that reserved it (crash recovery, DP-290).
+  instanceId          String            @db.VarChar(64)
+  reservedAt          DateTime          @default(now()) @db.Timestamptz(3)
+  startedAt           DateTime?         @db.Timestamptz(3)
+  finishedAt          DateTime?         @db.Timestamptz(3)
+  leaseUntil          DateTime          @db.Timestamptz(3)
+  createdAt           DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime          @default(now()) @db.Timestamptz(3)
+
+  site    Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  model   AiModel         @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  price   AiModelPrice    @relation(fields: [priceId], references: [id], onDelete: Restrict)
+  entries AiLedgerEntry[]
+
+  @@unique([actorUserId, idempotencyKey])
+  @@index([status, leaseUntil])
+  @@index([siteId, createdAt])
+  @@index([createdAt])
+}
+
+/// Append-only money movements of the operations per budget period (the audit of the counters).
+model AiLedgerEntry {
+  id                   String       @id @default(uuid(7)) @db.Uuid
+  operationId          String       @db.Uuid
+  budgetId             String       @db.Uuid
+  periodStart          DateTime     @db.Timestamptz(3)
+  kind                 AiLedgerKind
+  deltaReservedMicros  BigInt       @default(0)
+  deltaCommittedMicros BigInt       @default(0)
+  deltaAssumedMicros   BigInt       @default(0)
+  at                   DateTime     @default(now()) @db.Timestamptz(3)
+
+  operation AiOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  budget    AiBudget    @relation(fields: [budgetId], references: [id], onDelete: Restrict)
+
+  @@index([operationId])
+  @@index([budgetId, periodStart])
+}
+
+/// A provider's own daily amount, entered for reconciliation (append-only; automatic import DP-295).
+model AiReconciliation {
+  id                   String     @id @default(uuid(7)) @db.Uuid
+  provider             AiProvider
+  projectRef           String     @default("") @db.VarChar(200)
+  day                  DateTime   @db.Date
+  providerAmountMicros BigInt
+  source               String     @default("MANUAL") @db.VarChar(20)
+  note                 String?    @db.VarChar(500)
+  createdById          String     @db.Uuid
+  createdAt            DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, projectRef, day, source])
 }

@@ -19,6 +19,7 @@ export const ai = {
     "A call needs every item below. Until then nothing is sent to an AI provider and nothing is spent.",
   blockerMissing: "Missing",
   blockers: {
+    transport_off: "AI calls switched on in the server environment (DP_AI_TRANSPORT)",
     no_provider_key: "An active, tested API key of a provider (OpenAI, Claude or Gemini)",
     no_enabled_model: "An enabled model with a dated unit price",
     no_budget: "A daily and a monthly budget",
