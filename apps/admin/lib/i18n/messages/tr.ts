@@ -29,6 +29,7 @@ import { staff } from "./staff/tr";
 import { owner } from "./owner/tr";
 import { dashboard } from "./dashboard/tr";
 import { translationPackages } from "./translations/tr";
+import { ai } from "./ai/tr";
 
 export const tr: Messages = {
   common: {
@@ -116,6 +117,11 @@ export const tr: Messages = {
       staff: {
         label: "Personel ve erişim",
         summary: "Personel davet edin, talep erişimi dahil rolleri verin veya geri alın.",
+      },
+      ai: {
+        label: "Yapay Zekâ Merkezi",
+        summary:
+          "Yapay zekâ sağlayıcıları, modeller, bütçeler ve kullanım (yapay zekâ açıkken görünür).",
       },
       audit: {
         label: "Denetim kaydı",
@@ -399,4 +405,6 @@ export const tr: Messages = {
   dashboard,
   /** ML-13b (DP-244): Translations — translation packages (./translations/). */
   translationPackages,
+  /** DP-287 (ADR-030): Yapay Zekâ Merkezi (./ai/). */
+  ai,
 };

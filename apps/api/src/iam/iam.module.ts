@@ -17,6 +17,7 @@ import { StaffRolesController } from "./staff/staff-roles.controller.js";
 import { StaffRolesService } from "./staff/staff-roles.service.js";
 import { OwnerController } from "./owner/owner.controller.js";
 import { OwnerService } from "./owner/owner.service.js";
+import { PlatformModuleService } from "./platform-modules.js";
 
 // IAM (F1-001), authentication foundation (F1-002 Group 1) and staff authentication end to end
 // (F1-002 Group 2, DP-011), direct role assignment (DP-076 revision, ADR-017 v2) and the system
@@ -41,6 +42,7 @@ import { OwnerService } from "./owner/owner.service.js";
     StaffRolesService,
     OwnerService,
     CustomerDataAccessSweepService,
+    PlatformModuleService,
   ],
   exports: [
     AuthorizationService,
@@ -51,6 +53,7 @@ import { OwnerService } from "./owner/owner.service.js";
     StaffAccessService,
     PublicSiteService,
     PublicRateLimitService,
+    PlatformModuleService,
   ],
 })
 export class IamModule {}

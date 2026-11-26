@@ -48,6 +48,10 @@ const RAW_SQL_ALLOWED = [
   // bounded transaction (SELECT set_config(..., true)); parameterised tagged templates only, no
   // table access.
   "src/iam/bounded-transaction.ts",
+  // DP-287 (ADR-030 D1): calls of the platform-module SECURITY DEFINER functions
+  // (platform_module_enabled, platform_module_hold_enabled, platform_modules_enabled) and the
+  // transaction-local lock_timeout of `whileEnabled`; tagged templates only, no table access.
+  "src/iam/platform-modules.ts",
   // DP-096 (ADR-003 §5): SET LOCAL ROLE dp_lead_retention, the run's advisory lock and the
   // field-by-field anonymisation (UPDATE … SET column = cleared value, = ANY(uuid[])); tagged
   // templates only, never *Unsafe. The database limits the role (migration dp_096).

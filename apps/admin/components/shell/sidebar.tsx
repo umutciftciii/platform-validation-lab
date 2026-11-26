@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { isActive, navGroupsFor } from "../../lib/navigation";
+import { isActive, navGroupsFor, type NavFeatures } from "../../lib/navigation";
 import { BrandLogo, BrandMark, Icon, RingMotif } from "../icons";
 import { useT } from "../i18n/locale-provider";
 import { cx } from "../ui";
@@ -17,6 +17,7 @@ export function Sidebar({
   onNavigate,
   isOwner = false,
   reviewOnly = false,
+  features = {},
 }: {
   compact?: boolean;
   environmentLabel: string;
@@ -25,6 +26,8 @@ export function Sidebar({
   isOwner?: boolean;
   /** DP-172: a company reviewer sees only the company review. */
   reviewOnly?: boolean;
+  /** DP-287: the session's feature flags (the AI Center is hidden while AI is off). */
+  features?: NavFeatures;
 }) {
   const pathname = usePathname();
   const t = useT();
@@ -61,7 +64,7 @@ export function Sidebar({
       </div>
 
       <nav aria-label={t("shell.mainNavigation")} className="mt-1 flex-1 overflow-y-auto px-3 pb-4">
-        {navGroupsFor(isOwner, reviewOnly).map((group) => (
+        {navGroupsFor(isOwner, reviewOnly, features).map((group) => (
           <div key={group.id} className="mb-5">
             {compact ? (
               <div className="mx-auto mb-2 h-px w-6 bg-rail-line" aria-hidden="true" />

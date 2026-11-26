@@ -80,8 +80,24 @@ describe("DP-275: the English dictionary changed only where approved", () => {
     const ml13b = (k: string) =>
       k.startsWith("translationPackages.") || k.startsWith("nav.items.translations.");
     expect(Object.keys(before).filter(ml13b)).toEqual([]);
+    // DP-287 (ADR-030) adds the AI Center (its module and navigation entry) and the Owner
+    // Console's platform-module switch; no existing text changes.
+    const dp287 = (k: string) =>
+      k.startsWith("ai.") ||
+      k.startsWith("nav.items.ai.") ||
+      k.startsWith("owner.modules.ai.") ||
+      [
+        "owner.console.platformPanel",
+        "owner.console.platformDescription",
+        "owner.console.platformState",
+        "owner.switch.platformOnLabel",
+        "owner.switch.platformOffLabel",
+        "owner.switch.hintPlatformOff",
+        "owner.switch.hintPlatformOn",
+      ].includes(k);
+    expect(Object.keys(before).filter(dp287)).toEqual([]);
     // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
-    expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k))).toEqual([
+    expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k))).toEqual([
       "errors.DATABASE_UNAVAILABLE",
       "content.editor.translationTabs.summary.notPublishedNoSource",
     ]);

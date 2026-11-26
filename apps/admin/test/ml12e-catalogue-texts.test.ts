@@ -44,7 +44,8 @@ function entries(name: string): { key: string; name: string; description: string
 describe("API catalogue texts in the dictionaries (ML-12e)", () => {
   it("has every module of the API with its English text (owner.modules.*)", () => {
     const modules = entries("MODULES");
-    expect(modules.length).toBe(12);
+    // DP-287 adds the AI Center ("ai").
+    expect(modules.length).toBe(13);
     const dict = owner.modules as Record<string, { name: string; description: string }>;
     for (const m of modules)
       expect(dict[m.key], m.key).toEqual({ name: m.name, description: m.description });

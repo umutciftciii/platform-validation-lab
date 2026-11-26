@@ -48,12 +48,29 @@ export const OwnerModuleSiteStateSchema = z.strictObject({
 });
 export type OwnerModuleSiteState = z.infer<typeof OwnerModuleSiteStateSchema>;
 
+/** DP-287 (ADR-030 D1): the platform-wide switch of a platform module (the AI Center). */
+export const OwnerModulePlatformStateSchema = z.strictObject({
+  enabled: z.boolean(),
+  /** Reason of the last change (the migration's text until the owner first switches it). */
+  reason: z.string(),
+  updatedAt: IsoDate,
+  version: z.number().int().positive(),
+});
+export type OwnerModulePlatformState = z.infer<typeof OwnerModulePlatformStateSchema>;
+
 export const OwnerModuleSchema = z.strictObject({
   key: z.string(),
   name: z.string(),
   description: z.string(),
   /** Core modules are always on and cannot be switched. */
   isCore: z.boolean(),
+  /**
+   * DP-287: "PLATFORM" = one platform-wide switch (`platform`, no per-site states); "SITE"
+   * (or absent) = switched per site (`sites`).
+   */
+  scope: z.enum(["SITE", "PLATFORM"]).optional(),
+  /** DP-287: the platform-wide state; null when the module's migration has not run (off). */
+  platform: OwnerModulePlatformStateSchema.nullable().optional(),
   sites: z.array(OwnerModuleSiteStateSchema),
 });
 export type OwnerModule = z.infer<typeof OwnerModuleSchema>;
@@ -81,7 +98,12 @@ export const OwnerOverviewResponseSchema = z.strictObject({
 });
 export type OwnerOverviewResponse = z.infer<typeof OwnerOverviewResponseSchema>;
 
-/** POST /api/v1/admin/owner/modules/:moduleKey/sites/:siteId (step-up; module:manage). */
+/**
+ * POST /api/v1/admin/owner/modules/:moduleKey/sites/:siteId (step-up; module:manage), and since
+ * DP-287 POST /api/v1/admin/owner/modules/:moduleKey/platform for a platform-switched module (the
+ * AI Center): the same body, only the system owner, never delegable. `enabled` is the target
+ * state, so a repeated request changes nothing (`changed: false`).
+ */
 export const OwnerModuleChangeRequestSchema = z.strictObject({
   enabled: z.boolean(),
   reason: z.string().trim().min(3).max(1000),

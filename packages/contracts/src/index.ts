@@ -15,6 +15,7 @@ export * from "./admin/catalog-proposals.js";
 export * from "./admin/catalog-preview.js";
 export * from "./admin/staff-roles.js";
 export * from "./admin/owner.js";
+export * from "./admin/ai.js";
 export * from "./admin/cms.js";
 export * from "./admin/cms-bv.js";
 export * from "./admin/cms-menu.js";

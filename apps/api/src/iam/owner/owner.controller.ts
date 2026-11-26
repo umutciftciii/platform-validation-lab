@@ -34,6 +34,17 @@ export class OwnerController {
     return this.owner.changeModule(ctx, moduleKey, siteId, body);
   }
 
+  /** DP-287 (ADR-030 D1): the platform-wide switch of a platform module (the AI Center). */
+  @Post("modules/:moduleKey/platform")
+  @HttpCode(200)
+  changePlatformModule(
+    @Ctx() ctx: RequestContext,
+    @Param("moduleKey") moduleKey: string,
+    @Body() body: unknown,
+  ): Promise<OwnerModuleChangeResponse> {
+    return this.owner.changePlatformModule(ctx, moduleKey, body);
+  }
+
   @Get("audit")
   audit(
     @Ctx() ctx: RequestContext,

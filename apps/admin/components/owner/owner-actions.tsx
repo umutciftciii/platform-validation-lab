@@ -20,6 +20,7 @@ import { ADMIN_TIME_ZONE } from "../../lib/i18n/config";
 import { dateTimeFormat } from "../../lib/i18n/format";
 import {
   changeModule,
+  changePlatformModule,
   confirmDesignation,
   ownerModuleName,
   protectedAudit,
@@ -154,13 +155,17 @@ function StepUpPrompt({
 
 // --- module switches ----------------------------------------------------------------------
 
+/**
+ * A module switch with a reason and the step-up. With `site`: that site's switch. Without it
+ * (DP-287): the platform-wide switch of a platform module (the AI Center).
+ */
 export function ModuleSwitch({
   module,
   site,
   enabled,
 }: {
   module: Pick<OwnerModule, "key" | "name" | "isCore">;
-  site: OwnerSite;
+  site?: OwnerSite;
   enabled: boolean;
 }) {
   const router = useRouter();
@@ -181,7 +186,10 @@ export function ModuleSwitch({
     setBusy(true);
     setMessage(null);
     await step.run(
-      () => changeModule(module.key, site.id, !enabled, reason.trim()),
+      () =>
+        site
+          ? changeModule(module.key, site.id, !enabled, reason.trim())
+          : changePlatformModule(module.key, !enabled, reason.trim()),
       (res) => {
         setBusy(false);
         step.clear();
@@ -198,10 +206,17 @@ export function ModuleSwitch({
   }
 
   const name = ownerModuleName(module, t);
-  const label = t(enabled ? "owner.switch.switchOffLabel" : "owner.switch.switchOnLabel", {
-    module: name,
-    site: site.name,
-  });
+  const label = site
+    ? t(enabled ? "owner.switch.switchOffLabel" : "owner.switch.switchOnLabel", {
+        module: name,
+        site: site.name,
+      })
+    : t(enabled ? "owner.switch.platformOffLabel" : "owner.switch.platformOnLabel", {
+        module: name,
+      });
+  const hint = site
+    ? t(enabled ? "owner.switch.hintOff" : "owner.switch.hintOn")
+    : t(enabled ? "owner.switch.hintPlatformOff" : "owner.switch.hintPlatformOn");
   function cancel() {
     setOpen(false);
     setMessage(null);
@@ -239,11 +254,7 @@ export function ModuleSwitch({
           ) : (
             <DialogForm onSubmit={submit} label={t("owner.switch.form", { module: name })}>
               <DialogBody>
-                <Field
-                  label={t("owner.switch.reason")}
-                  htmlFor={id}
-                  hint={enabled ? t("owner.switch.hintOff") : t("owner.switch.hintOn")}
-                >
+                <Field label={t("owner.switch.reason")} htmlFor={id} hint={hint}>
                   <input
                     id={id}
                     required

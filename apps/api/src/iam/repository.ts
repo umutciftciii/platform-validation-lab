@@ -19,6 +19,7 @@ import {
   platformAdminCount,
   qualifiedAdminCount,
 } from "./iam-context.js";
+import { enabledPlatformModules } from "./platform-modules.js";
 
 export async function loadAuthorizationSnapshot(
   db: Db,
@@ -82,6 +83,7 @@ export async function loadAuthorizationSnapshot(
     ],
     activeMembershipSiteIds: new Set(user.memberships.map((m) => m.siteId)),
     enabledOptionalModules,
+    enabledPlatformModules: await enabledPlatformModules(db),
     isSystemOwner,
   };
 }

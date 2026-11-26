@@ -498,6 +498,8 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "iam_last_platform_admin_assignment_guard", owner: "dp_owner", lead: false },
       { f: "iam_last_platform_admin_expiry_guard", owner: "dp_owner", lead: false },
       { f: "iam_last_platform_admin_user_guard", owner: "dp_owner", lead: false },
+      // DP-287: trigger only — refuses a per-site row of a platform-switched module.
+      { f: "iam_module_configuration_platform_guard", owner: "dp_owner", lead: false },
       { f: "iam_operator_admin_state", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_confirm", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_start", owner: "dp_owner", lead: false },
@@ -528,6 +530,12 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "leads_rls_staff_site_ids", owner: "dp_owner", lead: false },
       { f: "leads_rls_staff_user_id", owner: "dp_owner", lead: false },
       { f: "leads_rls_user_lead_sites", owner: "dp_owner", lead: false },
+      // DP-287 (ADR-030 D1, D2): the platform-module switch as booleans and keys; the hold and
+      // the owner's switch lock (advisory locks, no data).
+      { f: "platform_module_enabled", owner: "dp_owner", lead: false },
+      { f: "platform_module_hold_enabled", owner: "dp_owner", lead: false },
+      { f: "platform_module_switch_lock", owner: "dp_owner", lead: false },
+      { f: "platform_modules_enabled", owner: "dp_owner", lead: false },
       // ML-1 (DP-073): trigger only — a new site's default language row (no EXECUTE for anyone).
       { f: "site_locale_default_row", owner: "dp_owner", lead: false },
     ]);
@@ -611,6 +619,52 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "iam_rls_user_platform", who: null },
       { f: "iam_rls_user_sites", who: null },
     ]);
+  });
+
+  it("DP-287: grants EXECUTE on the platform-module functions to their callers only", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND (p.proname ~ '^platform_module' OR p.proname IN (
+              'iam_module_configuration_platform_guard', 'iam_owner_only_permission_keys',
+              'iam_role_permission_owner_only_guard', 'platform_module_state_guard',
+              'platform_module_state_no_truncate'))
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention',
+                           'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    const byName = Object.fromEntries(rows.map((r) => [r.f, r.who]));
+    expect(byName).toEqual({
+      iam_module_configuration_platform_guard: null,
+      // IMMUTABLE list of the owner-only permissions; PUBLIC as every plain function.
+      iam_owner_only_permission_keys:
+        "dp_app,dp_iam_bootstrap,dp_iam_system,dp_lead_retention,dp_migrator",
+      iam_role_permission_owner_only_guard:
+        "dp_app,dp_iam_bootstrap,dp_iam_system,dp_lead_retention,dp_migrator",
+      platform_module_enabled: "dp_app",
+      platform_module_hold_enabled: "dp_app",
+      platform_module_state_guard:
+        "dp_app,dp_iam_bootstrap,dp_iam_system,dp_lead_retention,dp_migrator",
+      platform_module_state_no_truncate:
+        "dp_app,dp_iam_bootstrap,dp_iam_system,dp_lead_retention,dp_migrator",
+      platform_module_switch_lock: "dp_app",
+      platform_modules_enabled: "dp_app,dp_iam_bootstrap",
+    });
+    const rls = await su.$queryRawUnsafe<{ rls: boolean; force: boolean }[]>(
+      `SELECT relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relname = 'PlatformModuleState'`,
+    );
+    expect(rls).toEqual([{ rls: true, force: false }]);
+    const privileges = await su.$queryRawUnsafe<{ p: string }[]>(
+      `SELECT privilege_type::text AS p FROM information_schema.role_table_grants
+       WHERE grantee = 'dp_app' AND table_name = 'PlatformModuleState' ORDER BY 1`,
+    );
+    // Rows come from migrations only; the owner changes them (row-level security); nobody
+    // inserts, deletes or truncates.
+    expect(privileges.map((r) => r.p)).toEqual(["SELECT", "UPDATE"]);
   });
 
   it("DP-125: keeps row-level security on the five IAM tables, without FORCE", async () => {

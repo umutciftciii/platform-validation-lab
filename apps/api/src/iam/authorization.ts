@@ -46,6 +46,11 @@ export interface AuthorizationSnapshot {
   /** Optional modules enabled per site (siteId -> module keys). Core modules are always on. */
   enabledOptionalModules: ReadonlyMap<string, ReadonlySet<string>>;
   /**
+   * DP-287 (ADR-030 D1): platform-switched modules that are on (PlatformModuleState). Missing =
+   * none (fail closed): every permission of a platform module is refused.
+   */
+  enabledPlatformModules?: ReadonlySet<string>;
+  /**
    * Users who, directly or through a chain, granted the principal's active roles
    * (`loadGrantAncestry`). Needed only for role assignment: assigning a role to one of them is a
    * reciprocal or indirect self-grant (F1-001B). Unknown (undefined) means assignment is denied.
@@ -118,13 +123,22 @@ export function decide(
   if (permission.audience !== principal.kind) return deny("audience_mismatch");
 
   const mod = MODULE_BY_KEY.get(permission.module);
+  const platformSwitched = mod?.scope === "PLATFORM";
   if (permission.scopeType === "PLATFORM") {
     if (target.scope !== "platform") return deny("platform_permission");
   } else if (target.scope === "platform") {
     // Platform-wide use of a site permission is fine for core modules only: optional modules are
     // switched per site, so they need a site.
     if (!mod?.isCore) return deny("site_required");
-  } else if (!isModuleEnabled(permission.module, target.siteId, snapshot.enabledOptionalModules)) {
+  } else if (
+    !platformSwitched &&
+    !isModuleEnabled(permission.module, target.siteId, snapshot.enabledOptionalModules)
+  ) {
+    return deny("module_disabled");
+  }
+  // DP-287: a platform-switched module (the AI Center) that is off refuses everyone, the owner
+  // included; only the Owner Console switch (module:manage, a core permission) stays usable.
+  if (platformSwitched && !snapshot.enabledPlatformModules?.has(permission.module)) {
     return deny("module_disabled");
   }
 

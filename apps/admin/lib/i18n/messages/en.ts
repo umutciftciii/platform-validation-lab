@@ -31,6 +31,7 @@ import { staff } from "./staff/en";
 import { owner } from "./owner/en";
 import { dashboard } from "./dashboard/en";
 import { translationPackages } from "./translations/en";
+import { ai } from "./ai/en";
 
 export const en = {
   common: {
@@ -108,6 +109,10 @@ export const en = {
       staff: {
         label: "Staff and access",
         summary: "Invite staff and give or remove roles, lead access included.",
+      },
+      ai: {
+        label: "AI Center",
+        summary: "AI providers, models, budgets and usage (shown while AI is on).",
       },
       audit: {
         label: "Audit log",
@@ -393,4 +398,6 @@ export const en = {
   dashboard,
   /** ML-13b (DP-244): Translations — translation packages (./translations/). */
   translationPackages,
+  /** DP-287 (ADR-030): the AI Center (./ai/). */
+  ai,
 } as const;

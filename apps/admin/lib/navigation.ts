@@ -19,7 +19,8 @@ export type IconName =
   | "shield"
   | "audit"
   | "settings"
-  | "translate";
+  | "translate"
+  | "ai";
 
 export type NavItemId = keyof typeof en.nav.items;
 export type NavGroupId = keyof typeof en.nav.groups;
@@ -35,6 +36,16 @@ export interface NavItem {
   ready: boolean;
   /** DP-110: shown only to the system owner (the API answers 404 to anyone else anyway). */
   ownerOnly?: boolean;
+  /**
+   * DP-287: shown only while the session's feature is on (`features.aiCenter`: AI switched on by
+   * the system owner and readable by the user). The API answers 404 anyway while AI is off.
+   */
+  feature?: keyof NavFeatures;
+}
+
+/** DP-287: the session's feature flags the navigation depends on (StaffSessionResponse). */
+export interface NavFeatures {
+  aiCenter?: boolean;
 }
 
 export interface NavGroup {
@@ -139,6 +150,17 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         ready: true,
       },
       {
+        // DP-287 (ADR-030): hidden unless AI is on and the user may read the AI Center.
+        id: "ai",
+        slug: "ai",
+        href: "/ai",
+        label: en.nav.items.ai.label,
+        icon: "ai",
+        summary: en.nav.items.ai.summary,
+        ready: true,
+        feature: "aiCenter",
+      },
+      {
         id: "audit",
         slug: "audit",
         href: "/audit",
@@ -181,9 +203,14 @@ export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 /**
  * The navigation a viewer sees: owner-only items (and empty groups) are left out for staff. A
- * review-only user (DP-172: the company reviewer) sees the company review only.
+ * review-only user (DP-172: the company reviewer) sees the company review only. DP-287: an item of
+ * a feature (the AI Center) only while the session's feature is on.
  */
-export function navGroupsFor(isOwner: boolean, reviewOnly = false): readonly NavGroup[] {
+export function navGroupsFor(
+  isOwner: boolean,
+  reviewOnly = false,
+  features: NavFeatures = {},
+): readonly NavGroup[] {
   if (reviewOnly) {
     return NAV_GROUPS.map((g) => ({
       ...g,
@@ -192,12 +219,15 @@ export function navGroupsFor(isOwner: boolean, reviewOnly = false): readonly Nav
   }
   return NAV_GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((i) => isOwner || !i.ownerOnly),
+    items: g.items.filter(
+      (i) => (isOwner || !i.ownerOnly) && (!i.feature || features[i.feature] === true),
+    ),
   })).filter((g) => g.items.length > 0);
 }
 
 export function findSection(slug: string): NavItem | undefined {
-  return NAV_ITEMS.find((item) => item.slug === slug && item.slug !== "");
+  // DP-287: a feature's item has its own route; the placeholder section never names it.
+  return NAV_ITEMS.find((item) => item.slug === slug && item.slug !== "" && !item.feature);
 }
 
 export function isActive(item: NavItem, pathname: string): boolean {
