@@ -48,7 +48,7 @@ const DATE_TIME: Intl.DateTimeFormatOptions = {
  * Runs a sensitive call; when the API wants a fresh MFA step-up it shows a code field, verifies
  * the code and runs the call again.
  */
-function useStepUp() {
+export function useStepUp() {
   const [pending, setPending] = useState<null | (() => Promise<void>)>(null);
   async function run<T>(
     call: () => Promise<StaffCall<T>>,
@@ -64,7 +64,7 @@ function useStepUp() {
   return { pending, clear: () => setPending(null), run };
 }
 
-function StepUpPrompt({
+export function StepUpPrompt({
   retry,
   onCancel,
   variant = "inline",
