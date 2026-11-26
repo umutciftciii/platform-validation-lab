@@ -20,6 +20,9 @@ const INFRASTRUCTURE = [
   // request; it reads only the notification rows, settings, sites and staff e-mail addresses
   // (no lead table).
   "src/leads/lead-notification-sender.service.ts",
+  // DP-289 (ADR-030 D5): the one reader of a provider key's ciphertext (a SECURITY DEFINER call in
+  // the caller's staff transaction); no table query.
+  "src/ai/credential-store.ts",
   "test/**",
 ];
 // F1-002: the throttle's row lock (SELECT … FOR UPDATE) and the clean-up's advisory lock have no
@@ -52,6 +55,9 @@ const RAW_SQL_ALLOWED = [
   // (platform_module_enabled, platform_module_hold_enabled, platform_modules_enabled) and the
   // transaction-local lock_timeout of `whileEnabled`; tagged templates only, no table access.
   "src/iam/platform-modules.ts",
+  // DP-289 (ADR-030 D5): the call of ai_credential_ciphertext(id), the only way to the stored key
+  // (dp_app cannot SELECT the column); tagged template only, no table access.
+  "src/ai/credential-store.ts",
   // DP-096 (ADR-003 §5): SET LOCAL ROLE dp_lead_retention, the run's advisory lock and the
   // field-by-field anonymisation (UPDATE … SET column = cleared value, = ANY(uuid[])); tagged
   // templates only, never *Unsafe. The database limits the role (migration dp_096).
