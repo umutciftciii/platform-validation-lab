@@ -9,7 +9,8 @@
  * status 404; the browser keeps the requested URL.
  *
  *  - `/<slug>` (CMS page), `/news/<slug>` (article), `/products/<slug>` (product).
- *  - `/privacy` where the policy is not published (production while it is a draft, DP-095).
+ *  - `/privacy` where the policy is not published (production while it is a draft, DP-095), or in
+ *    a language without published legal texts (DP-298: read from the API, fail closed).
  *  - Fail open: when the API cannot answer, the page renders as before (its own handling).
  *  - An article taken off the site keeps its "no longer available" page (noindex); a page taken
  *    off is a 404 like any unknown address.
@@ -47,8 +48,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getProductDocuments, listProducts } from "@/lib/catalog-api";
 import type { RouteLocale } from "@/lib/locale-routing";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
 import { NOT_FOUND_LOCALE_HEADER, NOT_FOUND_TARGET } from "@/lib/not-found";
-import { sitePrivacy } from "@/lib/privacy";
 import { decideRequest, type ProxyDeps } from "@/lib/proxy-routes";
 import { publicLocales } from "@/lib/public-locales";
 import { resolvePath, sitePolicy } from "@/lib/seo";
@@ -76,7 +77,12 @@ export const config = {
   ],
 };
 
-function deps(): ProxyDeps {
+/**
+ * DP-298 (ADR-031 D1): the policy's gate and languages come from the API's legal texts snapshot
+ * (cached for 30 s, a failed read briefly too, so most requests make no API call for it).
+ */
+async function deps(): Promise<ProxyDeps> {
+  const privacy = await sitePrivacyNow();
   return {
     resolve: (path, search, locale) => resolvePath(path, undefined, search, locale),
     publicLocales,
@@ -86,7 +92,8 @@ function deps(): ProxyDeps {
       if (list.ok) return list.data.length > 0 ? "products" : "empty";
       return list.reason === "not_found" ? "empty" : "unknown";
     },
-    privacyPublished: sitePrivacy().publish,
+    privacyPublished: privacy.gate.publish,
+    privacyLocales: privacy.locales,
     onLoop: (trail) =>
       console.error(`proxy: redirect cycle or chain refused (404): ${trail.join(" -> ")}`),
   };
@@ -94,7 +101,7 @@ function deps(): ProxyDeps {
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   const { pathname, search } = request.nextUrl;
-  const decision = await decideRequest(pathname, search, request.method, deps());
+  const decision = await decideRequest(pathname, search, request.method, await deps());
   switch (decision.action) {
     case "next":
       return NextResponse.next();

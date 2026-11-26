@@ -17,6 +17,7 @@ import type {
   AiCredentialSummary,
   AiModelSummary,
   AiPermissions,
+  AiProviderDataTermsResponse,
   AiPrice,
   AiProviderKey,
   AiProviderResultCode,
@@ -57,6 +58,7 @@ import { ConfirmDialog, Dialog, DialogBody, DialogFooter, DialogForm } from "../
 import { useAdminLocale, useT } from "../i18n/locale-provider";
 import { StepUpPrompt, useStepUp } from "../owner/owner-actions";
 import { buttonStyles, cx, EmptyState, Spinner, StatusPill, type PillTone } from "../ui";
+import { AiDataTerms } from "./ai-data-terms";
 
 const DATE_TIME: Intl.DateTimeFormatOptions = {
   day: "numeric",
@@ -190,11 +192,17 @@ export function ProvidersPanel({
   models,
   transport,
   can,
+  dataTerms,
 }: {
   providers: readonly AiProviderSummary[];
   models: readonly AiModelSummary[];
   transport: "off" | "fake" | "live";
   can: AiPermissions;
+  /**
+   * DP-298 (ADR-031 D6): each provider's data-processing terms (null: could not be loaded; a
+   * provider left out shows no terms section).
+   */
+  dataTerms?: Partial<Record<AiProviderKey, AiProviderDataTermsResponse | null>>;
 }) {
   const t = useT();
   return (
@@ -214,6 +222,7 @@ export function ProvidersPanel({
             provider={p}
             models={models.filter((m) => m.provider === p.provider)}
             can={can}
+            dataTerms={dataTerms?.[p.provider]}
           />
         ))}
       </div>
@@ -225,10 +234,12 @@ function ProviderCard({
   provider,
   models,
   can,
+  dataTerms,
 }: {
   provider: AiProviderSummary;
   models: readonly AiModelSummary[];
   can: AiPermissions;
+  dataTerms?: AiProviderDataTermsResponse | null;
 }) {
   const t = useT();
   const date = useDate();
@@ -293,6 +304,9 @@ function ProviderCard({
           <p className="text-xs text-ink-3">
             {t("ai.providers.lastTest", { date: date(active.lastTestedAt) })}
           </p>
+        ) : null}
+        {dataTerms !== undefined ? (
+          <AiDataTerms key="data-terms" provider={provider.provider} terms={dataTerms} />
         ) : null}
       </div>
       {can.providerManage ? (

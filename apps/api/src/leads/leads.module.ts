@@ -16,8 +16,8 @@ import {
 } from "./lead-notification-sender.service.js";
 import { LeadNotificationSettingsService } from "./lead-notification-settings.service.js";
 import { LeadRequestsService } from "./lead-requests.service.js";
-import { LEAD_LEGAL_TEXTS } from "./form-locale.js";
-import { LEGAL_TEXTS } from "@dream/contracts";
+import { LegalModule } from "../legal/legal.module.js";
+import { LeadConsentsService } from "./consents.service.js";
 import { LeadRetentionReportService } from "./retention-report.service.js";
 
 // Lead-gated document downloads (DP-042, DP-043; ADR-016): public short form with consent
@@ -25,10 +25,12 @@ import { LeadRetentionReportService } from "./retention-report.service.js";
 // route uses DocumentGrantsService; data access goes through IAM (site-scoped clients, audit).
 // DP-151: the public contact form writes a message to the sender's lead (same consent evidence).
 // DP-096: a daily dry-run retention report (counts only); anonymisation is an operator action.
+// DP-298 (ADR-031): the form texts are the published Legal texts (LegalModule); consents are
+// records of their own (LeadConsentsService).
 // DP-221 (ADR-026): contact-form leads carry their source; staff notifications go through an
 // outbox (LeadNotification) and the sender below; lead managers keep the per-site settings.
 @Module({
-  imports: [IamModule, NotificationsModule],
+  imports: [IamModule, NotificationsModule, LegalModule],
   controllers: [PublicLeadsController, AdminLeadsController, AdminLeadNotificationsController],
   providers: [
     LeadRequestsService,
@@ -39,8 +41,8 @@ import { LeadRetentionReportService } from "./retention-report.service.js";
     LeadRetentionReportService,
     LeadNotificationSender,
     LeadNotificationSettingsService,
-    // ML-10: the legal texts per language, exactly as @dream/contracts ships them.
-    { provide: LEAD_LEGAL_TEXTS, useValue: LEGAL_TEXTS },
+    // DP-298 (ADR-031 D4): consent records (grants from forms, withdrawals by staff).
+    LeadConsentsService,
     // Tests and operators reach the sender by name (runOnce).
     { provide: LEAD_NOTIFICATION_SENDER, useExisting: LeadNotificationSender },
   ],

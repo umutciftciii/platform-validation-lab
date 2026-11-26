@@ -31,6 +31,8 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import {
+  LEGAL_TEXT_BODY_PATH,
+  LEGAL_TEXT_MAX_BODY_BYTES,
   SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
   SEO_REDIRECT_IMPORT_PATH,
   TRANSLATION_PACKAGE_BODY_PATH,
@@ -106,6 +108,8 @@ export function jsonBodyLimit(app: AuthAppValue, method: string, pathname: strin
   if (app !== "ADMIN" || method !== "POST") return MAX_BODY_BYTES;
   if (SEO_REDIRECT_IMPORT_PATH.test(pathname)) return SEO_REDIRECT_IMPORT_MAX_BODY_BYTES;
   if (TRANSLATION_PACKAGE_BODY_PATH.test(pathname)) return TRANSLATION_PACKAGE_MAX_BODY_BYTES;
+  // DP-298: a legal-text draft (the privacy policy may be up to 60 000 characters).
+  if (LEGAL_TEXT_BODY_PATH.test(pathname)) return LEGAL_TEXT_MAX_BODY_BYTES;
   return MAX_BODY_BYTES;
 }
 

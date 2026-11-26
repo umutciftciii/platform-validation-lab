@@ -1,20 +1,25 @@
 import Image from "next/image";
 
 import { type FooterLink, type SiteFooterContent } from "@/content/site-footer";
-import { splitLocale } from "@/lib/locale-routing";
-import { PRIVACY_PATH, privacyHref, privacyPolicyHref } from "@/lib/privacy";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
+import { splitLocale, type RouteLocale } from "@/lib/locale-routing";
+import { PRIVACY_PATH, privacyPolicyHref } from "@/lib/privacy";
 
 /**
  * DP-095 D-T5: the policy link of the legal line renders as text where the policy is not
  * published. ML-3: the link arrives with its language prefix (`/en/privacy`) and points at the
  * policy in a language that has one (a Dutch page links the English policy, ADR-028 D12).
+ * DP-298: `policy` is the API's snapshot (null: not published here, or not readable).
  */
-function legalLink(link: FooterLink): FooterLink {
+function legalLink(
+  link: FooterLink,
+  policy: { locales: readonly RouteLocale[] } | null,
+): FooterLink {
   const split = splitLocale(link.href ?? "");
   const isPolicy = link.href === PRIVACY_PATH || split?.rest === PRIVACY_PATH;
   if (!isPolicy) return link;
-  if (!privacyHref()) return { ...link, href: null };
-  return split ? { ...link, href: privacyPolicyHref(split.locale) } : link;
+  if (!policy) return { ...link, href: null };
+  return split ? { ...link, href: privacyPolicyHref(split.locale, policy.locales) } : link;
 }
 
 /**
@@ -22,12 +27,14 @@ function legalLink(link: FooterLink): FooterLink {
  * JavaScript off, and the entrance is CSS only (see `.site-footer` in globals.css). CMS S2: the
  * content comes from the published `bv.site-footer` fragment (lib/cms-home.ts).
  */
-export default function SiteFooter({
+export default async function SiteFooter({
   content,
 }: {
   content: SiteFooterContent;
 }) {
   const { contact } = content;
+  const privacy = await sitePrivacyNow();
+  const policy = privacy.gate.publish ? { locales: privacy.locales } : null;
 
   return (
     <footer className="site-footer">
@@ -139,7 +146,7 @@ export default function SiteFooter({
             {content.legal.map((link) => (
               <li key={link.label}>
                 <FooterItem
-                  link={legalLink(link)}
+                  link={legalLink(link, policy)}
                   pendingNote={content.pendingNote}
                   newTabNote={content.newTab}
                 />

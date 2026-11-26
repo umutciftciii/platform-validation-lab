@@ -181,6 +181,10 @@ services:
     environment:
       <<: *node-env
       NODE_OPTIONS: --max-old-space-size=256
+      # DP-298 (ADR-031 D1): the privacy page reads the published legal texts from the API with
+      # this site's own proxy key (server side only, never a NEXT_PUBLIC_ variable).
+      DP_API_URL: http://api:3000
+      DP_PROXY_KEY_WEB_CORPORATE: ${DP_PROXY_KEY_WEB_CORPORATE:?set DP_PROXY_KEY_WEB_CORPORATE in .env}
     ports:
       - "127.0.0.1:3111:3000"
     healthcheck: *next-healthcheck

@@ -76,6 +76,26 @@ export function privacyBlockers(
   return out;
 }
 
+/**
+ * DP-298 (ADR-031 D1): the production gate with the texts in the database. The controller details
+ * and open points stay here (D-T2, never guessed); the `final` flags of the constants are replaced
+ * by the legal review state of the CURRENT published versions (`pendingReview`, answered by the
+ * API). `null` = the API could not say: blocked (fail closed).
+ */
+export function privacyBlockersFor(
+  pendingReview: readonly { key: string; locale: string; version: string }[] | null,
+  controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
+  values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
+): string[] {
+  const out = privacyBlockers(controller, values, true, true).filter((b) => !b.startsWith("D-T4:"));
+  if (pendingReview === null) {
+    out.push("DP-298: legal texts unavailable");
+    return out;
+  }
+  for (const p of pendingReview) out.push(`DP-298: legal review of ${p.key} ${p.version}`);
+  return out;
+}
+
 export interface PrivacyPublication {
   /** The page and the lead form may be shown in this environment. */
   publish: boolean;

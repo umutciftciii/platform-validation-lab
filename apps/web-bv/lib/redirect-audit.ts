@@ -104,6 +104,9 @@ export function simulatedDeps(site: SiteState, loops: string[][] = []): ProxyDep
     // ML-8c: the audit simulates addresses only; another language's catalogue has no product.
     catalogue: async () => "empty",
     privacyPublished: true,
+    // DP-298: the policy's languages are the API's; the audit assumes the English one only (the
+    // seed), as the site had before Dutch is published.
+    privacyLocales: [DEFAULT_LOCALE],
     onLoop: (trail) => loops.push([...trail]),
   };
 }

@@ -44,7 +44,8 @@ import { PUBLIC_RATE_LIMITS, PublicRateLimitService, ipSubject } from "../iam/pu
 import { writeAudit } from "../iam/staff/audit-writer.js";
 import type { Db } from "../iam/db.js";
 import { contactNoticeIssue, evidenceSha256 } from "./consent.js";
-import { LEAD_LEGAL_TEXTS, formLocaleIsPublic, leadLegalTexts } from "./form-locale.js";
+import { LEAD_LEGAL_TEXTS, formLocaleIsPublic } from "./form-locale.js";
+import { LegalTextsService } from "../legal/legal-texts.service.js";
 
 /** A resend of the same message within this window is not stored twice (DP-221). */
 export const DUPLICATE_WINDOW_MS = 10 * 60_000;
@@ -60,19 +61,25 @@ export class ContactMessagesService {
     @Inject(PublicRateLimitService) private readonly limits: PublicRateLimitService,
     @Inject(Clock) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(LegalTextsService) private readonly legal: LegalTextsService,
+    /** Tests only: a fixed registry instead of the published versions. */
     @Optional() @Inject(LEAD_LEGAL_TEXTS) private readonly legalTexts?: LegalTextRegistry,
   ) {}
 
   async send(ctx: RequestContext, body: unknown): Promise<LeadContactMessageResponse> {
-    if (!privacyPublication(this.config.deployEnv).publish) throw new ApiError("NOT_FOUND");
+    const site = await this.sites.begin(ctx);
+    // DP-298 (ADR-031): the published notice and its review gate, read now (fail closed).
+    const published = await this.legal.published(site.db);
+    if (!privacyPublication(this.config.deployEnv, published.blockers).publish) {
+      throw new ApiError("NOT_FOUND");
+    }
     const input = parseBody(LeadContactMessageInputSchema, body);
     // ML-10: the notice of the form's language; none may be offered: no form in that language.
     const locale = input.locale ?? LEAD_FORM_DEFAULT_LOCALE;
-    const texts = legalTextsFor(locale, leadLegalTexts(this.legalTexts));
+    const texts = legalTextsFor(locale, this.legalTexts ?? published.registry);
     if (!texts) throw new ApiError("NOT_FOUND");
     const issue = contactNoticeIssue(input, texts);
     if (issue) throw new ApiError("VALIDATION_FAILED", [issue]);
-    const site = await this.sites.begin(ctx);
     await this.limits.consume([
       {
         name: "contact_message_ip",

@@ -46,6 +46,11 @@ export interface NavItem {
 /** DP-287: the session's feature flags the navigation depends on (StaffSessionResponse). */
 export interface NavFeatures {
   aiCenter?: boolean;
+  /**
+   * DP-298 (ADR-031): the user may read the legal texts (holds legal_text:edit or
+   * legal_text:publish). Presentation only: the API answers 403 on every legal-text route anyway.
+   */
+  legalTexts?: boolean;
 }
 
 export interface NavGroup {
@@ -76,6 +81,18 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: "content",
         summary: en.nav.items.content.summary,
         ready: true,
+      },
+      {
+        // DP-298 (ADR-031): versioned legal and consent texts; shown only with legal_text:edit
+        // or legal_text:publish (`features.legalTexts`, decided by the console layout).
+        id: "legalTexts",
+        slug: "legal-texts",
+        href: "/legal-texts",
+        label: en.nav.items.legalTexts.label,
+        icon: "shield",
+        summary: en.nav.items.legalTexts.summary,
+        ready: true,
+        feature: "legalTexts",
       },
       {
         id: "products",
@@ -204,7 +221,7 @@ export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 /**
  * The navigation a viewer sees: owner-only items (and empty groups) are left out for staff. A
  * review-only user (DP-172: the company reviewer) sees the company review only. DP-287: an item of
- * a feature (the AI Center) only while the session's feature is on.
+ * a feature (the AI Center; DP-298: the legal texts) only while the session's feature is on.
  */
 export function navGroupsFor(
   isOwner: boolean,

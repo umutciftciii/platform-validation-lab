@@ -2272,7 +2272,7 @@ describe("DP-288: the AI data model", () => {
     const rls = await dbo.$queryRaw<{ t: string; rls: boolean }[]>`
       SELECT relname::text AS t, relrowsecurity AS rls FROM pg_class
       WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'Ai%' AND relkind = 'r' ORDER BY 1`;
-    expect(rls).toHaveLength(12); // DP-297: AiTransient
+    expect(rls).toHaveLength(13); // DP-297: AiTransient; DP-298: AiProviderDataTerms
     expect(rls.every((r) => r.rls)).toBe(true);
   });
 

@@ -46,6 +46,15 @@ import {
   LEAD_EXPORT_PATH,
   LeadExportSummaryResponseSchema,
   LEGAL_TEXTS,
+  LEAD_TEXT_ARCHIVE,
+  LeadConsentsResponseSchema,
+  LegalTextVersionResponseSchema,
+  LegalTextsOverviewSchema,
+  PRIVACY_POLICY_SECTIONS,
+  PRIVACY_POLICY_VERSION,
+  PublicLegalTextsResponseSchema,
+  policyEvidenceText,
+  policyFromMarkup,
   type LegalTextRegistry,
   type LegalTextSet,
 } from "@dream/contracts";
@@ -4607,12 +4616,14 @@ describe("ML-10 form language, legal texts and consent evidence", () => {
     const shipped = (app as any).get(docsMod.LeadRequestsService);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const shippedMsg = (app as any).get(msgMod.ContactMessagesService);
-    expect(shipped.legalTexts).toBe(LEGAL_TEXTS);
+    // DP-298: the running API reads the published versions (no fixed registry).
+    expect(shipped.legalTexts).toBeUndefined();
     const docs = new docsMod.LeadRequestsService(
       shipped.sites,
       shipped.limits,
       shipped.clock,
       shipped.config,
+      shipped.legal,
       APPROVED,
     );
     const msgs = new msgMod.ContactMessagesService(
@@ -4620,6 +4631,7 @@ describe("ML-10 form language, legal texts and consent evidence", () => {
       shippedMsg.limits,
       shippedMsg.clock,
       shippedMsg.config,
+      shippedMsg.legal,
       APPROVED,
     );
     const ctx = (n: number) => ({
@@ -4698,5 +4710,451 @@ describe("ML-10 form language, legal texts and consent evidence", () => {
     } finally {
       await setNlPublic(false);
     }
+  });
+});
+
+describe("DP-298 legal texts, consent records and AI provider terms (ADR-031)", () => {
+  const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
+  const today = () => new Date().toISOString().slice(0, 10);
+  let doc298: string;
+  let god: Staff;
+  let sales: Staff;
+  let salesOther: Staff;
+
+  async function adminCall(who: Staff, method: string, p: string, body?: unknown): Promise<Res> {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": TEST_KEYS.admin,
+      "x-dp-client-ip": "10.20.30.41",
+      cookie: `__Host-dp_admin_session=${who.token}`,
+    };
+    if (method !== "GET") headers["origin"] = ADMIN_ORIGIN;
+    if (body !== undefined) headers["content-type"] = "application/json";
+    return parse(
+      await fetch(`${base}/api/v1/admin${p}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+  }
+  async function snapshot(site: Site = "bv"): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/legal-texts`, {
+        headers: { "x-dp-proxy-key": KEY[site] },
+      }),
+    );
+  }
+
+  beforeAll(async () => {
+    const id = await completeProduct("p298", "LEGAL-298");
+    await publishOn(id, BV, bvPublisher);
+    doc298 = await shownDoc(id, "LEAD_REQUIRED", [{ siteId: BV, publisher: bvPublisher }]);
+    // The system owner designated by the DP-041 block (one owner per installation).
+    const designated = await owner.systemOwner.findFirstOrThrow({ select: { userId: true } });
+    god = await staff("dp298-god", [], root.userId, designated.userId);
+    sales = await staff("dp298-sales", [], root.userId, undefined, { memberships: [BV] });
+    salesOther = await staff("dp298-sales-com", [], root.userId, undefined, {
+      memberships: [COM],
+    });
+    await assignRole(sales, "sales_crm_user", BV);
+    await assignRole(salesOther, "sales_crm_user", COM);
+  });
+
+  it("seeds the former constants byte-exact: same versions and SHA-256 as stored evidence", async () => {
+    const rows = await owner.legalTextVersion.findMany({ where: { locale: "en" } });
+    const cur = (key: string, version: string) =>
+      rows.find((r) => r.key === key && r.version === version);
+    expect(cur("DOCUMENT_REQUEST_NOTICE", LEAD_PRIVACY_NOTICE.version)).toMatchObject({
+      status: "PUBLISHED",
+      text: LEAD_PRIVACY_NOTICE.text,
+      sha256: sha(LEAD_PRIVACY_NOTICE.text),
+      legalReview: "REQUIRED",
+    });
+    expect(cur("MARKETING_CONSENT", LEAD_MARKETING_CONSENT.version)).toMatchObject({
+      text: LEAD_MARKETING_CONSENT.text,
+      sha256: sha(LEAD_MARKETING_CONSENT.text),
+      legalReview: "APPROVED",
+    });
+    expect(cur("CONTACT_NOTICE", LEAD_CONTACT_NOTICE.version)).toMatchObject({
+      text: LEAD_CONTACT_NOTICE.text,
+      sha256: sha(LEAD_CONTACT_NOTICE.text),
+    });
+    for (const a of LEAD_TEXT_ARCHIVE.privacyNotice) {
+      expect(cur("DOCUMENT_REQUEST_NOTICE", a.version)?.sha256).toBe(sha(a.text));
+    }
+    const policy = cur("PRIVACY_POLICY", PRIVACY_POLICY_VERSION);
+    expect(policy?.sections).toEqual(JSON.parse(JSON.stringify(PRIVACY_POLICY_SECTIONS)));
+    expect(policy?.sha256).toBe(sha(policyEvidenceText(PRIVACY_POLICY_SECTIONS)));
+    const round = policyFromMarkup(policy?.text ?? "");
+    expect(round.ok && round.sections).toEqual(JSON.parse(JSON.stringify(PRIVACY_POLICY_SECTIONS)));
+    // Dutch stays a draft under review (ADR-028 D12): never offered.
+    const nl = await owner.legalTextVersion.findMany({ where: { locale: "nl" } });
+    expect(nl).toHaveLength(4);
+    expect(nl.every((r) => r.status === "DRAFT" && r.version === null && r.translatesId)).toBe(
+      true,
+    );
+    const nlSet = LEGAL_TEXTS["nl"] as LegalTextSet;
+    expect(nl.find((r) => r.key === "MARKETING_CONSENT")?.text).toBe(nlSet.marketingConsent.text);
+  });
+
+  it("serves the published texts to the sites only, English only, with the review gate", async () => {
+    const res = await snapshot("bv");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = PublicLegalTextsResponseSchema.parse(res.body);
+    expect(body.sets.map((s) => s.locale)).toEqual(["en"]);
+    expect(body.sets[0]?.contactNotice).toEqual({
+      version: LEAD_CONTACT_NOTICE.version,
+      text: LEAD_CONTACT_NOTICE.text,
+    });
+    expect(body.pendingReview.map((p) => p.key).sort()).toEqual([
+      "CONTACT_NOTICE",
+      "DOCUMENT_REQUEST_NOTICE",
+      "PRIVACY_POLICY",
+    ]);
+    expect((await snapshot("com")).status).toBe(200);
+    expect((await snapshot("admin")).status).toBe(404);
+  });
+
+  it("keeps a published version immutable in the database, for every role", async () => {
+    const pubRow = await owner.legalTextVersion.findFirstOrThrow({
+      where: { key: "CONTACT_NOTICE", version: LEAD_CONTACT_NOTICE.version },
+    });
+    await expect(
+      asApp.legalTextVersion.update({ where: { id: pubRow.id }, data: { text: "Changed." } }),
+    ).rejects.toThrow(/published version cannot change/);
+    await expect(
+      owner.legalTextVersion.update({ where: { id: pubRow.id }, data: { sha256: "0".repeat(64) } }),
+    ).rejects.toThrow(/published version cannot change/);
+    await expect(asApp.legalTextVersion.delete({ where: { id: pubRow.id } })).rejects.toThrow(
+      /cannot be deleted/,
+    );
+  });
+
+  it("separates editing from publishing; publishing needs legal_text:publish (owner by default)", async () => {
+    // A sales user holds neither permission.
+    expectError(await adminCall(sales, "GET", "/legal-texts"), 403, "FORBIDDEN");
+    const ov = await adminCall(root, "GET", "/legal-texts");
+    expect(ov.status, JSON.stringify(ov.body)).toBe(200);
+    const overview = LegalTextsOverviewSchema.parse(ov.body);
+    expect(overview.permissions).toEqual({ edit: true, publish: false });
+    expect(overview.blockers.some((b) => b.startsWith("DP-298: legal review of"))).toBe(true);
+    // Super admin role carries edit, not publish (F1-001B).
+    const superRole = await owner.role.findUniqueOrThrow({
+      where: { key: "platform_super_admin" },
+      include: { permissions: { include: { permission: true } } },
+    });
+    const keys = superRole.permissions.map(
+      (p) => `${p.permission.resource}:${p.permission.action}`,
+    );
+    expect(keys).toContain("legal_text:edit");
+    expect(keys).not.toContain("legal_text:publish");
+
+    const text =
+      "Dream Petroleum B.V. uses your name, company, work e-mail and country to send you this " +
+      "document and to follow up on your request (DP-298 test wording).";
+    const created = await adminCall(root, "POST", "/legal-texts/drafts", {
+      key: "DOCUMENT_REQUEST_NOTICE",
+      locale: "en",
+      text,
+      reviewNote: "Test draft",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const draft = LegalTextVersionResponseSchema.parse(created.body).version;
+    expect(draft).toMatchObject({ status: "DRAFT", version: null, sha256: sha(text) });
+    expectError(
+      await adminCall(root, "POST", "/legal-texts/drafts", {
+        key: "DOCUMENT_REQUEST_NOTICE",
+        locale: "en",
+        text,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "draft_exists" },
+    );
+    // Stale revision and markup errors.
+    expectError(
+      await adminCall(root, "POST", `/legal-texts/drafts/${draft.id}`, {
+        text,
+        reviewNote: null,
+        revision: 99,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "revision", rule: "stale" },
+    );
+    expectError(
+      await adminCall(root, "POST", "/legal-texts/drafts", {
+        key: "PRIVACY_POLICY",
+        locale: "en",
+        text: "No heading first",
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "text", rule: "text_before_section:1" },
+    );
+    expectError(
+      await adminCall(root, "POST", `/legal-texts/versions/${draft.id}/publish`, {
+        sha256: draft.sha256,
+      }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await adminCall(god, "POST", `/legal-texts/versions/${draft.id}/publish`, {
+        sha256: "a".repeat(64),
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "sha256", rule: "stale" },
+    );
+    const published = await adminCall(god, "POST", `/legal-texts/versions/${draft.id}/publish`, {
+      sha256: draft.sha256,
+    });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    const v = LegalTextVersionResponseSchema.parse(published.body).version;
+    expect(v).toMatchObject({
+      status: "PUBLISHED",
+      version: `${today()}.en`,
+      legalReview: "REQUIRED",
+    });
+    expectError(
+      await adminCall(root, "POST", `/legal-texts/drafts/${draft.id}`, {
+        text: "x",
+        reviewNote: null,
+        revision: 1,
+      }),
+      409,
+      "CONFLICT_STATE",
+    );
+    const audit = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "legal_text.published", resourceId: draft.id },
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain("follow up");
+
+    // The new version is current at once: the old one is answered `outdated` (D-T7), the new one
+    // is stored as evidence with its own hash.
+    const snap = PublicLegalTextsResponseSchema.parse((await snapshot()).body);
+    expect(snap.sets[0]?.privacyNotice.version).toBe(v.version);
+    expectError(
+      await requestLead("bv", form({ documentId: doc298, email: "dp298-old@engines.example" })),
+      400,
+      "VALIDATION_FAILED",
+      { path: "privacyNoticeVersion", rule: "outdated" },
+    );
+    const ok = await requestLead(
+      "bv",
+      form({
+        documentId: doc298,
+        email: "dp298-new@engines.example",
+        privacyNoticeVersion: v.version,
+      }),
+    );
+    expect(ok.status, JSON.stringify(ok.body)).toBe(201);
+    const stored = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { lead: { email: "dp298-new@engines.example" } },
+    });
+    expect(stored).toMatchObject({
+      privacyNoticeVersion: v.version,
+      privacyNoticeSha256: sha(text),
+    });
+
+    // The legal review is recorded once, for these exact words.
+    const reviewed = await adminCall(
+      god,
+      "POST",
+      `/legal-texts/versions/${draft.id}/legal-review`,
+      {
+        sha256: sha(text),
+      },
+    );
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    expect(LegalTextVersionResponseSchema.parse(reviewed.body).version.legalReview).toBe(
+      "APPROVED",
+    );
+    expectError(
+      await adminCall(god, "POST", `/legal-texts/versions/${draft.id}/legal-review`, {
+        sha256: sha(text),
+      }),
+      409,
+      "CONFLICT_STATE",
+    );
+    const after = PublicLegalTextsResponseSchema.parse((await snapshot()).body);
+    expect(after.pendingReview.map((p) => p.key)).not.toContain("DOCUMENT_REQUEST_NOTICE");
+  });
+
+  it("records a ticked marketing box as a consent grant, separate from the notice", async () => {
+    const notice = PublicLegalTextsResponseSchema.parse((await snapshot()).body).sets[0]!;
+    const res = await requestLead(
+      "bv",
+      form({
+        documentId: doc298,
+        email: "dp298-consent@engines.example",
+        privacyNoticeVersion: notice.privacyNotice.version,
+        marketingConsent: true,
+        marketingConsentVersion: notice.marketingConsent.version,
+      }),
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { email: "dp298-consent@engines.example" },
+    });
+    const request = await owner.leadDocumentRequest.findFirstOrThrow({
+      where: { leadId: lead.id },
+    });
+    const records = await owner.consentRecord.findMany({ where: { leadId: lead.id } });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      purpose: "MARKETING_EMAIL",
+      action: "GRANTED",
+      source: "DOCUMENT_REQUEST",
+      sourceRecordId: request.id,
+      textVersion: LEAD_MARKETING_CONSENT.version,
+      textSha256: sha(LEAD_MARKETING_CONSENT.text),
+      actorId: null,
+    });
+    // An unticked form writes nothing and does not withdraw (no tick is not a withdrawal).
+    const again = await requestLead(
+      "bv",
+      form({
+        documentId: doc298,
+        email: "dp298-consent@engines.example",
+        privacyNoticeVersion: notice.privacyNotice.version,
+      }),
+    );
+    expect(again.status).toBe(201);
+    expect(await owner.consentRecord.count({ where: { leadId: lead.id } })).toBe(1);
+
+    // Staff: read with lead:read on the site; another site's sales user sees nothing.
+    const list = await adminCall(sales, "GET", `/leads/${lead.id}/consents`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    const parsed = LeadConsentsResponseSchema.parse(list.body);
+    expect(parsed.states.find((s) => s.purpose === "MARKETING_EMAIL")?.state).toBe("GRANTED");
+    expect(parsed.canWithdraw).toBe(true);
+    expectError(await adminCall(salesOther, "GET", `/leads/${lead.id}/consents`), 404, "NOT_FOUND");
+    expectError(
+      await adminCall(salesOther, "POST", `/leads/${lead.id}/consents/MARKETING_EMAIL/withdraw`, {
+        channel: "EMAIL",
+      }),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(
+      await adminCall(sales, "POST", `/leads/${lead.id}/consents/MARKETING_EMAIL/withdraw`, {
+        channel: "EMAIL",
+        note: "free text is refused",
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    // Withdrawal: recorded with its channel and actor; only a granted purpose can be withdrawn.
+    const w = await adminCall(
+      sales,
+      "POST",
+      `/leads/${lead.id}/consents/MARKETING_EMAIL/withdraw`,
+      {
+        channel: "EMAIL",
+      },
+    );
+    expect(w.status, JSON.stringify(w.body)).toBe(200);
+    const wb = LeadConsentsResponseSchema.parse(w.body);
+    expect(wb.states.find((s) => s.purpose === "MARKETING_EMAIL")?.state).toBe("WITHDRAWN");
+    expect(wb.history[0]).toMatchObject({ action: "WITHDRAWN", channel: "EMAIL", source: "STAFF" });
+    expect(wb.history[0]?.actor?.id).toBe(sales.userId);
+    expectError(
+      await adminCall(sales, "POST", `/leads/${lead.id}/consents/MARKETING_EMAIL/withdraw`, {
+        channel: "EMAIL",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "purpose", rule: "not_granted" },
+    );
+    expectError(
+      await adminCall(sales, "POST", `/leads/${lead.id}/consents/AI_PERSONAL_DATA/withdraw`, {
+        channel: "PHONE",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "purpose", rule: "not_granted" },
+    );
+    const event = await owner.auditEvent.findFirstOrThrow({
+      where: { action: "leads.consent_withdrawn", resourceId: lead.id },
+    });
+    expect(JSON.stringify(event.metadata)).not.toContain("dp298-consent");
+    // The DP-096 column keeps its meaning (when consent was last given; retention).
+    expect(
+      (await owner.lead.findUniqueOrThrow({ where: { id: lead.id } })).marketingConsentAt,
+    ).not.toBeNull();
+
+    // The database: append-only for everyone, no write outside a context, no forged staff row.
+    const rec = records[0]!;
+    await expect(
+      owner.consentRecord.update({ where: { id: rec.id }, data: { channel: "OTHER" } }),
+    ).rejects.toThrow(/cannot change/);
+    await expect(owner.consentRecord.delete({ where: { id: rec.id } })).rejects.toThrow(
+      /cannot change/,
+    );
+    await expect(
+      asApp.consentRecord.create({
+        data: {
+          leadId: lead.id,
+          siteId: BV,
+          purpose: "MARKETING_EMAIL",
+          action: "WITHDRAWN",
+          source: "STAFF",
+          channel: "EMAIL",
+          actorId: sales.userId,
+        },
+      }),
+    ).rejects.toThrow(/row-level security|consents: /);
+    expect(await asApp.consentRecord.count()).toBe(0);
+    await expect(
+      owner.consentRecord.create({
+        data: {
+          leadId: lead.id,
+          siteId: BV,
+          purpose: "MARKETING_EMAIL",
+          action: "GRANTED",
+          source: "DOCUMENT_REQUEST",
+          textVersion: LEAD_MARKETING_CONSENT.version,
+          textSha256: "f".repeat(64),
+          sourceRecordId: request.id,
+        },
+      }),
+    ).rejects.toThrow(/names the request/);
+  });
+
+  it("keeps AI provider terms append-only, revocable once, never with training", async () => {
+    const base298 = {
+      provider: "ANTHROPIC" as const,
+      dpaReference: "DPA-TEST-298",
+      dpaSignedOn: new Date("2026-11-27T00:00:00Z"),
+      transferMechanism: "SCC" as const,
+      kvkkTransferMechanism: "NOT_APPLICABLE" as const,
+      dataRegion: "EU",
+      retentionSetting: "zero data retention",
+      recordedById: root.userId,
+    };
+    await expect(
+      owner.aiProviderDataTerms.create({ data: { ...base298, noTraining: false } }),
+    ).rejects.toThrow(/AiProviderDataTerms_no_training/);
+    const t = await owner.aiProviderDataTerms.create({ data: { ...base298, noTraining: true } });
+    await expect(
+      owner.aiProviderDataTerms.create({ data: { ...base298, noTraining: true } }),
+    ).rejects.toThrow();
+    await expect(
+      owner.aiProviderDataTerms.update({ where: { id: t.id }, data: { dataRegion: "US" } }),
+    ).rejects.toThrow(/can only be revoked once/);
+    await owner.aiProviderDataTerms.update({
+      where: { id: t.id },
+      data: { revokedAt: new Date(), revokedById: root.userId },
+    });
+    await expect(
+      owner.aiProviderDataTerms.update({
+        where: { id: t.id },
+        data: { revokedAt: new Date(), revokedById: root.userId },
+      }),
+    ).rejects.toThrow(/can only be revoked once/);
+    await expect(asApp.aiProviderDataTerms.delete({ where: { id: t.id } })).rejects.toThrow();
   });
 });

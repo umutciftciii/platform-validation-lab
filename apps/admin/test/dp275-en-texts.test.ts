@@ -99,8 +99,14 @@ describe("DP-275: the English dictionary changed only where approved", () => {
       k.startsWith("staff.roles.ai_administrator.") ||
       k.startsWith("staff.roles.ai_viewer.");
     expect(Object.keys(before).filter(dp287)).toEqual([]);
+    // DP-298 (ADR-031) adds the legal texts screen, the lead consents panel and the AI providers'
+    // data-processing terms (one module, legal.*) and the navigation entry; no existing text changes.
+    const dp298 = (k: string) => k.startsWith("legal.") || k.startsWith("nav.items.legalTexts.");
+    expect(Object.keys(before).filter(dp298)).toEqual([]);
     // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
-    expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k))).toEqual([
+    expect(
+      Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k)),
+    ).toEqual([
       "errors.DATABASE_UNAVAILABLE",
       "content.editor.translationTabs.summary.notPublishedNoSource",
     ]);

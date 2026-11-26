@@ -32,6 +32,7 @@ import { owner } from "./owner/en";
 import { dashboard } from "./dashboard/en";
 import { translationPackages } from "./translations/en";
 import { ai } from "./ai/en";
+import { legal } from "./legal/en";
 
 export const en = {
   common: {
@@ -87,6 +88,11 @@ export const en = {
     items: {
       overview: { label: "Overview", summary: "Activity and status across both sites." },
       content: { label: "Content", summary: "Write, review and publish pages for both sites." },
+      legalTexts: {
+        label: "Legal texts",
+        summary:
+          "Privacy policy, form notices and consent texts: versions, review and publication.",
+      },
       products: {
         label: "Products",
         summary: "Keep product data sheets and specifications current.",
@@ -400,4 +406,6 @@ export const en = {
   translationPackages,
   /** DP-287 (ADR-030): the AI Center (./ai/). */
   ai,
+  /** DP-298 (ADR-031): legal texts, lead consents and AI data-processing terms (./legal/). */
+  legal,
 } as const;

@@ -43,6 +43,14 @@ const MIGRATION = readFileSync(
   path.resolve(DIR, "../../../prisma/migrations/20261217090000_dp_288_ai_data_model/migration.sql"),
   "utf8",
 );
+// DP-298: the AI provider data-processing terms (personal-data gate).
+const MIGRATION_298 = readFileSync(
+  path.resolve(
+    DIR,
+    "../../../prisma/migrations/20261222090000_dp_298_legal_texts_consents/migration.sql",
+  ),
+  "utf8",
+);
 // DP-297: the twelfth AI table ("AiTransient", UNLOGGED) has its own migration.
 const MIGRATION_297 = readFileSync(
   path.resolve(
@@ -291,7 +299,7 @@ describe("DP-288: schema rules", () => {
         return { name: name!, type: type! };
       });
 
-  it("has the twelve AI tables (DP-297: AiTransient)", () => {
+  it("has the thirteen AI tables (DP-297: AiTransient; DP-298: AiProviderDataTerms)", () => {
     expect(models.map((m) => m.name).sort()).toEqual(
       [
         "AiBudget",
@@ -301,6 +309,7 @@ describe("DP-288: schema rules", () => {
         "AiModelPrice",
         "AiOperation",
         "AiProviderCredential",
+        "AiProviderDataTerms",
         "AiProviderSetting",
         "AiReconciliation",
         "AiSettings",
@@ -341,7 +350,12 @@ describe("DP-288: schema rules", () => {
 
   it("enables row-level security on every AI table and never grants DELETE", () => {
     for (const m of models) {
-      const sql = m.name === "AiTransient" ? MIGRATION_297 : MIGRATION;
+      const sql =
+        m.name === "AiTransient"
+          ? MIGRATION_297
+          : m.name === "AiProviderDataTerms"
+            ? MIGRATION_298
+            : MIGRATION;
       expect(sql, m.name).toContain(`ALTER TABLE "${m.name}" ENABLE ROW LEVEL SECURITY;`);
     }
     // DP-297: no privilege at all for dp_app (definer functions only), and UNLOGGED.
