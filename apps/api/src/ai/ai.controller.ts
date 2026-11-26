@@ -16,7 +16,13 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { AI_OPERATION_FILTERS } from "@dream/contracts";
 import type {
+  AiAlertsResponse,
+  AiAuditResponse,
+  AiOperationHistory,
+  AiPriceListResponse,
+  AiUsageReport,
   AiBudget,
   AiBudgetsResponse,
   AiOperationsResponse,
@@ -38,12 +44,30 @@ import type {
   AiProviderSummary,
   AiProvidersResponse,
 } from "@dream/contracts";
+import { ApiError } from "../iam/http/api-error.js";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
 import { AiGateGuard } from "./ai-gate.guard.js";
 import { AiService } from "./ai.service.js";
 import { AiProvidersService } from "./providers.service.js";
 import { AiBudgetsService } from "./budgets.service.js";
 import { AiOperationsService } from "./operations.service.js";
+import { AiReportsService } from "./reports.service.js";
+
+const OPERATION_QUERY = ["before", "limit", ...AI_OPERATION_FILTERS] as const;
+const USAGE_QUERY = ["granularity", ...AI_OPERATION_FILTERS] as const;
+
+/** The named query parameters as single strings (a repeated parameter is refused as invalid). */
+function pick(query: Record<string, unknown>, keys: readonly string[]) {
+  const out: Record<string, string | undefined> = {};
+  for (const k of keys) {
+    const v = query[k];
+    if (v === undefined || v === "") continue;
+    if (typeof v !== "string")
+      throw new ApiError("VALIDATION_FAILED", [{ path: k, rule: "single" }]);
+    out[k] = v;
+  }
+  return out;
+}
 
 @Controller("api/v1/admin/ai")
 @UseGuards(AiGateGuard)
@@ -53,6 +77,7 @@ export class AiController {
     @Inject(AiProvidersService) private readonly providers: AiProvidersService,
     @Inject(AiBudgetsService) private readonly budgets: AiBudgetsService,
     @Inject(AiOperationsService) private readonly operations: AiOperationsService,
+    @Inject(AiReportsService) private readonly reports: AiReportsService,
   ) {}
 
   @Get("overview")
@@ -251,13 +276,50 @@ export class AiController {
   @Header("Cache-Control", "no-store")
   listOperations(
     @Ctx() ctx: RequestContext,
-    @Query("before") before?: string,
-    @Query("limit") limit?: string,
+    @Query() query: Record<string, unknown>,
   ): Promise<AiOperationsResponse> {
-    return this.budgets.operations(ctx, {
-      ...(before ? { before } : {}),
-      ...(limit ? { limit } : {}),
-    });
+    return this.budgets.operations(ctx, pick(query, OPERATION_QUERY));
+  }
+
+  // --- DP-293: reports -------------------------------------------------------------------------
+
+  @Get("usage")
+  @Header("Cache-Control", "no-store")
+  usage(
+    @Ctx() ctx: RequestContext,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AiUsageReport> {
+    return this.reports.usage(ctx, pick(query, USAGE_QUERY));
+  }
+
+  @Get("prices")
+  @Header("Cache-Control", "no-store")
+  allPrices(@Ctx() ctx: RequestContext): Promise<AiPriceListResponse> {
+    return this.reports.prices(ctx);
+  }
+
+  @Get("alerts")
+  @Header("Cache-Control", "no-store")
+  alerts(@Ctx() ctx: RequestContext): Promise<AiAlertsResponse> {
+    return this.reports.alerts(ctx);
+  }
+
+  @Get("audit")
+  @Header("Cache-Control", "no-store")
+  audit(
+    @Ctx() ctx: RequestContext,
+    @Query() query: Record<string, unknown>,
+  ): Promise<AiAuditResponse> {
+    return this.reports.audit(ctx, pick(query, ["before", "limit", "action"]));
+  }
+
+  @Get("operations/:id/history")
+  @Header("Cache-Control", "no-store")
+  operationHistory(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+  ): Promise<AiOperationHistory> {
+    return this.reports.history(ctx, id);
   }
 
   // --- DP-291: the operation service ------------------------------------------------------------

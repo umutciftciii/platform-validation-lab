@@ -57,6 +57,7 @@ const READ = {
   modelManage: false,
   budgetManage: false,
   invoke: false,
+  auditRead: false,
 };
 const MANAGE = {
   usageRead: true,
@@ -64,6 +65,7 @@ const MANAGE = {
   modelManage: true,
   budgetManage: true,
   invoke: true,
+  auditRead: true,
 };
 const overview = (
   permissions = READ,
@@ -74,6 +76,7 @@ const overview = (
   blockers,
   transport: "fake",
   permissions,
+  sites: [],
 });
 const ID = (n: number) => `0190c0de-0000-7000-8000-${String(n).padStart(12, "0")}`;
 const KEY_HINT = "sk-…ab12";
@@ -229,7 +232,8 @@ describe("DP-292: helpers", () => {
   it("parses tabs and converts money in micro-USD both ways", () => {
     expect(view.parseAiTab("models")).toBe("models");
     expect(view.parseAiTab(["tasks"])).toBe("tasks");
-    expect(view.parseAiTab("budgets")).toBe("overview");
+    expect(view.parseAiTab("budgets")).toBe("budgets"); // DP-293
+    expect(view.parseAiTab("nope")).toBe("overview");
     expect(view.parseAiTab(undefined)).toBe("overview");
     expect(view.microsToUsd("400000")).toBe("0.40");
     expect(view.microsToUsd("1600000")).toBe("1.60");

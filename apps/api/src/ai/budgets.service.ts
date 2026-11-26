@@ -40,6 +40,12 @@ import { StaffAccessService, type StaffAccess } from "../iam/staff/access.js";
 import { aiAuditMetadata } from "./audit.js";
 import { AI_CONFIG } from "./config/ai-config.provider.js";
 import { effectiveLimitMicros, type AiConfig } from "./config/ai-config.js";
+import {
+  ReportQueryError,
+  operationWhere,
+  parseFilters,
+  parseRange,
+} from "./reports/usage-report.js";
 
 type Tx = Parameters<Parameters<StaffAccess["staffData"]>[0]>[0];
 const PLATFORM = { scope: "platform" } as const;
@@ -52,6 +58,8 @@ const str = (v: bigint | null) => (v === null ? null : v.toString());
 const big = (v: string | null | undefined) => (v === null || v === undefined ? null : BigInt(v));
 /** At most this many days per reconciliation report. */
 export const MAX_RECONCILIATION_DAYS = 92;
+/** DP-293: at most this many days in the operations list's date filter. */
+export const MAX_OPERATION_RANGE_DAYS = 3660;
 
 function periodStart(period: "DAILY" | "MONTHLY", at: Date): Date {
   return period === "DAILY"
@@ -76,7 +84,7 @@ interface PriceRow {
   createdAt: Date;
 }
 
-function priceDto(p: PriceRow): AiPrice {
+export function priceDto(p: PriceRow): AiPrice {
   return {
     id: p.id,
     modelId: p.modelId,
@@ -460,10 +468,21 @@ export class AiBudgetsService {
 
   // --- operations and reconciliation ------------------------------------------------------------
 
+  /**
+   * DP-293: optional filters (UTC day range by reservation, provider, model, task, site or
+   * `platform`, outcome class); the cursor stays `before` (reservation time).
+   */
   async operations(
     ctx: RequestContext,
-    query: { before?: string; limit?: string },
+    query: Record<string, string | undefined>,
   ): Promise<AiOperationsResponse> {
+    let filter: { range: ReturnType<typeof parseRange>; filters: ReturnType<typeof parseFilters> };
+    try {
+      filter = { range: parseRange(query, MAX_OPERATION_RANGE_DAYS), filters: parseFilters(query) };
+    } catch (e) {
+      if (e instanceof ReportQueryError) throw invalid(e.path, e.rule);
+      throw e;
+    }
     const access = await this.allow(ctx, "ai_usage:read", "ai_operation");
     const limit = query.limit === undefined ? 50 : Number(query.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw invalid("limit", "range");
@@ -471,7 +490,12 @@ export class AiBudgetsService {
     if (before && Number.isNaN(before.getTime())) throw invalid("before", "date");
     const rows = await access.staffData((tx) =>
       tx.aiOperation.findMany({
-        where: before ? { reservedAt: { lt: before } } : {},
+        where: {
+          AND: [
+            operationWhere(filter.filters, filter.range),
+            before ? { reservedAt: { lt: before } } : {},
+          ],
+        } as never,
         orderBy: [{ reservedAt: "desc" }, { id: "desc" }],
         take: limit + 1,
       }),

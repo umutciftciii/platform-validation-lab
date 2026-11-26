@@ -199,7 +199,9 @@ describe("DP-287: the AI Center route", () => {
       modelManage: false,
       budgetManage: false,
       invoke: false,
+      auditRead: false,
     },
+    sites: [],
   };
 
   it("is a 404 while the session's aiCenter feature is off or missing, without asking the API", async () => {

@@ -67,14 +67,14 @@ const DATE_TIME: Intl.DateTimeFormatOptions = {
   timeZone: ADMIN_TIME_ZONE,
 };
 
-function useDate() {
+export function useDate() {
   const locale = useAdminLocale();
   return (iso: string | null) =>
     iso ? dateTimeFormat(locale, DATE_TIME).format(new Date(iso)) : "—";
 }
 
 /** One change: runs the call (with the step-up), refreshes the page on success. */
-function useChange() {
+export function useChange() {
   const router = useRouter();
   const step = useStepUp();
   const [busy, setBusy] = useState(false);
@@ -1043,11 +1043,17 @@ function EnableModelDialog({ model: m, onClose }: { model: AiModelSummary; onClo
   );
 }
 
-function PriceDialog({ model: m, onClose }: { model: AiModelSummary; onClose: () => void }) {
+export function PriceDialog({
+  model: m,
+  onClose,
+}: {
+  model: Pick<AiModelSummary, "id" | "displayName">;
+  onClose: () => void;
+}) {
   const t = useT();
-  const ids = { input: useId(), cached: useId(), output: useId(), note: useId() };
+  const ids = { input: useId(), cached: useId(), output: useId(), note: useId(), from: useId() };
   const change = useChange();
-  const [v, setV] = useState({ input: "", cached: "", output: "", note: "" });
+  const [v, setV] = useState({ input: "", cached: "", output: "", note: "", from: "" });
   const [invalid, setInvalid] = useState(false);
   const title = t("ai.prices.title", { model: m.displayName });
   async function submit(e: FormEvent) {
@@ -1055,7 +1061,14 @@ function PriceDialog({ model: m, onClose }: { model: AiModelSummary; onClose: ()
     const input = usdToMicros(v.input);
     const cached = usdToMicros(v.cached || "0");
     const output = usdToMicros(v.output);
-    if (input === null || cached === null || output === null) {
+    // DP-293: an optional start in the future, typed as UTC ("YYYY-MM-DDTHH:MM").
+    const from = v.from ? new Date(`${v.from}:00Z`) : null;
+    if (
+      input === null ||
+      cached === null ||
+      output === null ||
+      (from !== null && Number.isNaN(from.getTime()))
+    ) {
       setInvalid(true);
       return;
     }
@@ -1066,6 +1079,7 @@ function PriceDialog({ model: m, onClose }: { model: AiModelSummary; onClose: ()
         cachedReadMicrosPerMTok: cached,
         outputMicrosPerMTok: output,
         sourceNote: v.note.trim(),
+        ...(from ? { effectiveFrom: from.toISOString() } : {}),
       }),
     );
     if (ok) onClose();
@@ -1075,7 +1089,7 @@ function PriceDialog({ model: m, onClose }: { model: AiModelSummary; onClose: ()
       <input
         id={ids[key]}
         required={required}
-        inputMode={key === "note" ? undefined : "decimal"}
+        inputMode={key === "note" || key === "from" ? undefined : "decimal"}
         className={FIELD}
         value={v[key]}
         aria-invalid={invalid && key !== "note" ? true : undefined}
@@ -1102,8 +1116,17 @@ function PriceDialog({ model: m, onClose }: { model: AiModelSummary; onClose: ()
               {field("cached", t("ai.prices.cached"), undefined, false)}
               {field("output", t("ai.prices.output"))}
             </div>
-            <div className="mt-4">
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
               {field("note", t("ai.prices.note"), t("ai.prices.noteHint"))}
+              <Field label={t("ai.prices.from")} htmlFor={ids.from} hint={t("ai.prices.fromHint")}>
+                <input
+                  id={ids.from}
+                  type="datetime-local"
+                  className={FIELD}
+                  value={v.from}
+                  onChange={(e) => setV({ ...v, from: e.target.value })}
+                />
+              </Field>
             </div>
             {invalid ? (
               <div className="mt-3">
