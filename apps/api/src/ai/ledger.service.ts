@@ -30,9 +30,11 @@ import {
   sqlMarkUnknown,
   sqlRelease,
   sqlReserve,
+  sqlCallPlan,
   sqlSettle,
   sqlStart,
   sqlSweep,
+  type CallPlan,
   type ReserveArgs,
   type ReserveResult,
   type SettleArgs,
@@ -90,6 +92,28 @@ export class AiLedgerService implements OnApplicationBootstrap, OnModuleDestroy 
         capMonthlyMicros: cap?.monthlyMicros ?? null,
       }),
     );
+  }
+
+  /**
+   * DP-291: the same reservation in a transaction the caller already holds in the staff session's
+   * context (the operation service reads the task plan and reserves in one transaction).
+   */
+  reserveIn(
+    tx: Parameters<typeof sqlReserve>[0],
+    args: Omit<ReserveArgs, "instanceId" | "capDailyMicros" | "capMonthlyMicros">,
+  ): Promise<ReserveResult> {
+    const cap = this.config.localCap;
+    return sqlReserve(tx, {
+      ...args,
+      instanceId: this.instanceId,
+      capDailyMicros: cap?.dailyMicros ?? null,
+      capMonthlyMicros: cap?.monthlyMicros ?? null,
+    });
+  }
+
+  /** DP-291: a started operation's provider model and ACTIVE key id (AI on), for the worker. */
+  callPlan(operationId: string): Promise<CallPlan | null> {
+    return sqlCallPlan(this.prisma, operationId);
   }
 
   start(operationId: string, leaseSec: number): Promise<string> {

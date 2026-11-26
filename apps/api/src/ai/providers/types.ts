@@ -1,6 +1,6 @@
 /**
- * DP-289 (ADR-030 D4): the common provider adapter interface. AI-1 lists and retrieves models
- * only (free provider endpoints, no generation, no cost); generation is added with DP-291.
+ * DP-289 (ADR-030 D4): the common provider adapter interface: list/retrieve models (free provider
+ * endpoints). DP-291: text generation (`generate`, a paid call), one request, never retried.
  *
  * Rules every adapter keeps:
  *  - the API key is passed in a request header, never in a URL (URLs are logged by proxies);
@@ -39,7 +39,81 @@ export interface AiProviderAdapter {
     modelId: string,
     options: ProviderCallOptions,
   ): Promise<ProviderModel | null>;
+  /**
+   * DP-291: one text generation. Never retried (a paid call): a timeout, a lost connection or an
+   * unreadable answer is thrown as an UNCERTAIN code (the provider may have billed it); a refusal
+   * of the provider before work (4xx, 5xx) as a definite one (see `isUncertain`).
+   */
+  generate(
+    apiKey: string,
+    request: GenerateRequest,
+    options: ProviderCallOptions,
+  ): Promise<GenerateResult>;
 }
+
+/** DP-291: one generation request. Tools, web search and storage are always off. */
+export interface GenerateRequest {
+  /** The provider's model id. */
+  model: string;
+  system: string;
+  input: string;
+  /** The output cap sent to the provider (reasoning/thinking included where the provider does). */
+  maxOutputTokens: number;
+  /** Gemini only: the explicit thinking budget (0 = off where the model allows it). */
+  thinkingBudget: number;
+  /** 0…2 or null for the provider default. */
+  temperature: number | null;
+}
+
+/**
+ * DP-291 (ADR-030 D6): the provider's usage in the common model.
+ *  - inputTokens: billed input WITHOUT cache reads and cache writes;
+ *  - cachedReadTokens / cacheWriteTokens: cache reads / writes (each at its price);
+ *  - outputTokens: billed output, reasoning/thinking INCLUDED;
+ *  - reasoningTokens: the reasoning/thinking part of outputTokens (information only).
+ */
+export interface NormalizedUsage {
+  inputTokens: number;
+  cachedReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+export type GenerateFinish =
+  /** A complete answer. */
+  | "complete"
+  /** Stopped at the output cap. */
+  | "max_tokens"
+  /** The provider refused or blocked it (safety). */
+  | "refused"
+  /** Any other incomplete end. */
+  | "incomplete";
+
+export interface GenerateResult {
+  /** The answer's text (never logged or stored by the API). */
+  text: string;
+  usage: NormalizedUsage;
+  finish: GenerateFinish;
+  /** The provider's response/request id (support cases), if any. */
+  providerRequestId: string | null;
+}
+
+/**
+ * Codes after which the provider may have done (and billed) the work: the outcome is UNKNOWN,
+ * the reservation is counted as spent and the call is never repeated automatically.
+ */
+export const UNCERTAIN_CODES: ReadonlySet<ProviderCallError["code"]> = new Set([
+  "timeout",
+  "network_error",
+  "bad_response",
+]);
+export const isUncertain = (code: ProviderCallError["code"]) => UNCERTAIN_CODES.has(code);
+
+const count = (v: unknown) =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+/** A provider's token count: a non-negative integer, anything else is 0. */
+export const tokens = count;
 
 /** A failed provider call, reduced to a code (never the provider's message). */
 export class ProviderCallError extends Error {

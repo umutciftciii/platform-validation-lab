@@ -372,6 +372,48 @@ export const AiOperationsResponseSchema = z.strictObject({
 });
 export type AiOperationsResponse = z.infer<typeof AiOperationsResponseSchema>;
 
+// --- DP-291: the shared operation service ---------------------------------------------------------
+
+/**
+ * POST /api/v1/admin/ai/operations (ai:invoke): starts one task on its configured model, within
+ * the budgets. Answers 202; the result is fetched with GET /operations/:id. `idempotencyKey` is
+ * the caller's: the same key with the same input returns the same operation.
+ */
+export const AiOperationCreateRequestSchema = z.strictObject({
+  task: z.enum(AI_TASK_TYPES),
+  siteId: Uuid.nullable().optional(),
+  input: z.string().min(1).max(20_000),
+  idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{8,100}$/),
+});
+export type AiOperationCreateRequest = z.infer<typeof AiOperationCreateRequestSchema>;
+export const AiOperationCreatedSchema = z.strictObject({
+  operationId: Uuid,
+  status: z.enum(AI_OPERATION_STATUSES),
+  /** True when the idempotency key named an operation that already existed. */
+  existing: z.boolean(),
+});
+export type AiOperationCreated = z.infer<typeof AiOperationCreatedSchema>;
+/**
+ * GET /api/v1/admin/ai/operations/:id (its actor with ai:invoke, or ai_usage:read). `result` is
+ * the answer of a SUCCEEDED operation, for its actor only, while the API holds it (minutes, in
+ * memory; never stored). It is always a DRAFT: nothing is applied or published by the AI service.
+ */
+export const AiOperationDetailSchema = z.strictObject({
+  operation: AiOperationSchema,
+  own: z.boolean(),
+  /** queued / running in this API process, or none. */
+  runner: z.enum(["queued", "running", "none"]),
+  result: z.strictObject({ draft: z.literal(true), text: z.string().max(20_000) }).nullable(),
+});
+export type AiOperationDetail = z.infer<typeof AiOperationDetailSchema>;
+/** POST /api/v1/admin/ai/operations/:id/cancel (its actor, ai:invoke). */
+export const AiOperationCancelResponseSchema = z.strictObject({
+  operationId: Uuid,
+  /** What was stopped: a queued job (released), a running call (aborted) or nothing. */
+  stopped: z.enum(["queued", "running", "none"]),
+});
+export type AiOperationCancelResponse = z.infer<typeof AiOperationCancelResponseSchema>;
+
 /** GET /api/v1/admin/ai/reconciliation?from=YYYY-MM-DD&to=YYYY-MM-DD (ai_usage:read). */
 export const AiReconciliationRowSchema = z.strictObject({
   provider: AiProviderKeySchema,

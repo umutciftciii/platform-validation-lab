@@ -5,15 +5,75 @@
  * page: it must be sent; 2026-10-21 is the latest listed version), optional
  * `anthropic-workspace-id`. Claude models are Messages models, so
  * every non-retired one is a text model; limits come from `max_input_tokens` / `max_tokens`.
+ *
+ * DP-291: generation over the Messages API (reference read 2026-11-26): `POST /v1/messages` with
+ * `system`, one user message, `max_tokens` (thinking included). Version 2026-10-21 removed
+ * `temperature`/`top_p`/`top_k` (400 on every model), so no temperature is ever sent. The text is
+ * the `text` blocks of `content[]`; `stop_reason` gives the end. Usage: `input_tokens` excludes the
+ * cache (`cache_read_input_tokens`, `cache_creation_input_tokens`); `output_tokens` is the billed
+ * total (thinking included, `output_tokens_details.thinking_tokens`).
  */
 import type { AiModelCapabilities } from "@dream/contracts";
-import { errorFields, getJson, retryAfterSec, codeForStatus, type FetchLike } from "./http.js";
+import {
+  errorFields,
+  getJson,
+  postJson,
+  retryAfterSec,
+  codeForStatus,
+  type FetchLike,
+} from "./http.js";
 import {
   ProviderCallError,
+  tokens,
   type AiProviderAdapter,
+  type GenerateRequest,
+  type GenerateResult,
   type ProviderCallOptions,
   type ProviderModel,
 } from "./types.js";
+
+export function anthropicRequestBody(r: GenerateRequest): Record<string, unknown> {
+  return {
+    model: r.model,
+    system: r.system,
+    messages: [{ role: "user", content: r.input }],
+    max_tokens: r.maxOutputTokens,
+  };
+}
+
+/** The answer of `POST /v1/messages` in the common model. */
+export function anthropicGeneration(raw: unknown): GenerateResult {
+  if (!raw || typeof raw !== "object") throw new ProviderCallError("bad_response");
+  const b = raw as Record<string, unknown>;
+  const usage = (b["usage"] ?? {}) as Record<string, unknown>;
+  const outDetails = (usage["output_tokens_details"] ?? {}) as Record<string, unknown>;
+  const text = (Array.isArray(b["content"]) ? (b["content"] as unknown[]) : [])
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+    .filter((c) => c["type"] === "text" && typeof c["text"] === "string")
+    .map((c) => c["text"] as string)
+    .join("");
+  const stop = b["stop_reason"];
+  const finish: GenerateResult["finish"] =
+    stop === "end_turn" || stop === "stop_sequence"
+      ? "complete"
+      : stop === "max_tokens"
+        ? "max_tokens"
+        : stop === "refusal"
+          ? "refused"
+          : "incomplete";
+  return {
+    text,
+    usage: {
+      inputTokens: tokens(usage["input_tokens"]),
+      cachedReadTokens: tokens(usage["cache_read_input_tokens"]),
+      cacheWriteTokens: tokens(usage["cache_creation_input_tokens"]),
+      outputTokens: tokens(usage["output_tokens"]),
+      reasoningTokens: tokens(outDetails["thinking_tokens"]),
+    },
+    finish,
+    providerRequestId: typeof b["id"] === "string" ? b["id"].slice(0, 200) : null,
+  };
+}
 
 export const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 /** The latest version of the provider's versioning page (read 2026-11-26). */
@@ -151,5 +211,23 @@ export class AnthropicAdapter implements AiProviderAdapter {
       if (error instanceof ProviderCallError && error.code === "model_not_found") return null;
       throw error;
     }
+  }
+
+  async generate(
+    apiKey: string,
+    request: GenerateRequest,
+    o: ProviderCallOptions,
+  ): Promise<GenerateResult> {
+    const body = await postJson(
+      this.fetchImpl,
+      {
+        url: `${ANTHROPIC_BASE_URL}/messages`,
+        headers: this.headers(apiKey, o),
+        signal: o.signal,
+        body: anthropicRequestBody(request),
+      },
+      mapError,
+    );
+    return anthropicGeneration(body);
   }
 }
