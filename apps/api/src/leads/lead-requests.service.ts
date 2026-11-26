@@ -16,6 +16,11 @@
  * is not public on the site is refused like an unknown document (404); the versions must be that
  * language's current ones (consent.ts). The request stores the language; its texts' language is
  * the one their version names (a database CHECK keeps the two equal).
+ *
+ * DP-298 (ADR-031): the texts are the PUBLISHED versions in the database (Legal texts in the
+ * admin), read in the request; the production gate is their legal review state. A ticked
+ * marketing box also writes a `ConsentRecord` grant (consent, separate from the notice) in the
+ * same transaction; an unticked box writes nothing and never withdraws an earlier grant.
  */
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import {
@@ -40,7 +45,9 @@ import { writeAudit } from "../iam/staff/audit-writer.js";
 import type { Db } from "../iam/db.js";
 import { leadDocumentOnSite } from "../catalog/live.js";
 import { consentIssue, evidenceSha256, newRequestReference } from "./consent.js";
-import { LEAD_LEGAL_TEXTS, formLocaleIsPublic, leadLegalTexts } from "./form-locale.js";
+import { LEAD_LEGAL_TEXTS, formLocaleIsPublic } from "./form-locale.js";
+import { LegalTextsService } from "../legal/legal-texts.service.js";
+import { grantConsent } from "./consents.service.js";
 
 function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "P2002";
@@ -53,19 +60,25 @@ export class LeadRequestsService {
     @Inject(PublicRateLimitService) private readonly limits: PublicRateLimitService,
     @Inject(Clock) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(LegalTextsService) private readonly legal: LegalTextsService,
+    /** Tests only: a fixed registry instead of the published versions. */
     @Optional() @Inject(LEAD_LEGAL_TEXTS) private readonly legalTexts?: LegalTextRegistry,
   ) {}
 
   async request(ctx: RequestContext, body: unknown): Promise<LeadDocumentRequestResponse> {
-    if (!privacyPublication(this.config.deployEnv).publish) throw new ApiError("NOT_FOUND");
+    const site = await this.sites.begin(ctx);
+    // DP-298: the published texts and their review gate, read now (fail closed on any error).
+    const published = await this.legal.published(site.db);
+    if (!privacyPublication(this.config.deployEnv, published.blockers).publish) {
+      throw new ApiError("NOT_FOUND");
+    }
     const input = parseBody(LeadDocumentRequestInputSchema, body);
     // ML-10: the texts of the form's language; none may be offered: no form in that language.
     const locale = input.locale ?? LEAD_FORM_DEFAULT_LOCALE;
-    const texts = legalTextsFor(locale, leadLegalTexts(this.legalTexts));
+    const texts = legalTextsFor(locale, this.legalTexts ?? published.registry);
     if (!texts) throw new ApiError("NOT_FOUND");
     const issue = consentIssue(input, texts);
     if (issue) throw new ApiError("VALIDATION_FAILED", [issue]);
-    const site = await this.sites.begin(ctx);
     await this.limits.consume([
       { name: "lead_request_ip", subject: ipSubject(ctx), ...PUBLIC_RATE_LIMITS.leadRequestPerIp },
       {
@@ -141,6 +154,18 @@ export class LeadRequestsService {
           },
           select: { id: true, reference: true },
         });
+        if (input.marketingConsent) {
+          await grantConsent(tx, {
+            leadId: lead.id,
+            siteId: site.siteId,
+            purpose: "MARKETING_EMAIL",
+            source: "DOCUMENT_REQUEST",
+            sourceRecordId: request.id,
+            textVersion: texts.marketingConsent.version,
+            textSha256: evidenceSha256(texts.marketingConsent.text),
+            at: now,
+          });
+        }
         const grant = await tx.documentDownloadGrant.create({
           data: {
             requestId: request.id,

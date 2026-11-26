@@ -5,7 +5,7 @@ import { PRIVACY_PATH, sitePrivacy } from "@/lib/privacy";
 
 export default async function Home() {
   await connection();
-  const showPrivacy = sitePrivacy().publish;
+  const showPrivacy = (await sitePrivacy()).gate.publish;
   return (
     <SkeletonShell service="web-corporate · :3111" title="Corporate site skeleton">
       <p>

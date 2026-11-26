@@ -15,6 +15,7 @@ import {
   PUBLIC_LEADS_API,
 } from "@dream/contracts";
 import { catalogConfig } from "./catalog-api";
+import { legalTextsSnapshot } from "./legal-texts-api";
 import { clientIpFrom, trustedHops } from "./lead-api";
 import { sitePrivacy } from "./privacy";
 
@@ -31,8 +32,10 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 
 /** POST handler body: validates the envelope, forwards the form, answers only what happened. */
 export async function handleContactMessage(request: Request): Promise<Response> {
-  // Same production gate as the page that shows the form (DP-095 D-T5).
-  if (!sitePrivacy().publish) return json(404, { code: "NOT_FOUND", fields: [] });
+  // Same production gate as the page that shows the form (DP-095 D-T5; DP-298: the API's snapshot).
+  if (!sitePrivacy((await legalTextsSnapshot()).blockers).publish) {
+    return json(404, { code: "NOT_FOUND", fields: [] });
+  }
   const type = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
   if (type !== "application/json") return json(415, { code: "UNSUPPORTED_MEDIA_TYPE", fields: [] });
   const declared = Number(request.headers.get("content-length") ?? "0");
@@ -94,6 +97,8 @@ export async function handleContactMessage(request: Request): Promise<Response> 
     (d) => d.rule === "outdated" && (LEAD_TEXT_FIELDS as readonly string[]).includes(d.path),
   );
   if (res.status === 400 && outdated.length > 0) {
+    // DP-298: a newer version was published; read past the cache so the reloaded page shows it.
+    await legalTextsSnapshot({ fresh: true });
     return json(409, { code: LEAD_TEXT_OUTDATED, fields: outdated.map((d) => d.path) });
   }
   // ML-10: a notice of another language than the form's: refused, nothing stored (fail closed).

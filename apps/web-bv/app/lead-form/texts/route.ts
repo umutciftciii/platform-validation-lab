@@ -1,6 +1,6 @@
-import { privacyDeployEnv, privacyPublication } from "@dream/contracts";
-
 import { leadFormTextsAnswer } from "@/lib/form-texts";
+import { legalTextsSnapshot } from "@/lib/legal-texts-api";
+import { sitePrivacy } from "@/lib/privacy";
 import { visibleLocales } from "@/lib/public-locales";
 
 /**
@@ -9,17 +9,26 @@ import { visibleLocales } from "@/lib/public-locales";
  * confirmation; an earlier tick is never reused. Same production gate as the form (D-T5).
  *
  * ML-10: `?locale=` names the page's language; without it the English texts (unchanged). A
- * language that is not public, or whose texts are still under DP-095 review, is a 404: its draft
- * texts never leave the code.
+ * language that is not public, or without published texts, is a 404: a draft never leaves the
+ * admin.
+ *
+ * DP-298 (ADR-031 D1): the texts are the API's snapshot of the published versions. The lead and
+ * contact handlers refresh it when the API answered LEAD_TEXT_OUTDATED, so the version served
+ * here is the one the API now expects; this public route itself only reads the cache.
  */
 export async function GET(request: Request): Promise<Response> {
   const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
-  if (!privacyPublication(privacyDeployEnv(process.env["DP_DEPLOY_ENV"])).publish) {
+  const snapshot = await legalTextsSnapshot();
+  if (!sitePrivacy(snapshot.blockers).publish) {
     return new Response(JSON.stringify({ code: "NOT_FOUND" }), { status: 404, headers });
   }
   const search = new URL(request.url).searchParams;
   // The public languages are read only when a language is asked for (fail closed: default only).
-  const answer = leadFormTextsAnswer(search, search.has("locale") ? await visibleLocales() : []);
+  const answer = leadFormTextsAnswer(
+    search,
+    search.has("locale") ? await visibleLocales() : [],
+    snapshot.registry,
+  );
   return answer.status === 200
     ? new Response(JSON.stringify(answer.body), { status: 200, headers })
     : new Response(JSON.stringify({ code: "NOT_FOUND" }), { status: 404, headers });

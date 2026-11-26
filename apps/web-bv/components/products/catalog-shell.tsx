@@ -10,13 +10,14 @@ import { BRAND_LOGO } from "@/content/brand";
 import { parseSelectorKey } from "@/lib/catalog-alternates";
 import { getSiteChrome, siteLanguages } from "@/lib/cms-home";
 import { dictionary } from "@/lib/i18n";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
 import {
   DEFAULT_LOCALE,
   localizeHref,
   type LanguageOption,
   type RouteLocale,
 } from "@/lib/locale-routing";
-import { privacyHref, privacyPolicyHref } from "@/lib/privacy";
+import { privacyPolicyHref } from "@/lib/privacy";
 
 /**
  * One read of the published navigation and footer per request (both slots use it). ML-8c: the
@@ -65,7 +66,7 @@ export function CatalogShell({
           {children}
         </div>
       </main>
-      <Suspense fallback={<MinimalFooter locale={locale} />}>
+      <Suspense fallback={<MinimalFooter locale={locale} privacyHref={null} />}>
         <CatalogFooter path={path} locale={locale} languages={languages} />
       </Suspense>
     </>
@@ -107,7 +108,14 @@ async function CatalogFooter({
 }) {
   await connection();
   const { footer } = await chrome(path, locale, languages ? await languages() : "");
-  return footer ? <SiteFooter content={footer} /> : <MinimalFooter locale={locale} />;
+  if (footer) return <SiteFooter content={footer} />;
+  const privacy = await sitePrivacyNow();
+  return (
+    <MinimalFooter
+      locale={locale}
+      privacyHref={privacy.gate.publish ? privacyPolicyHref(locale, privacy.locales) : null}
+    />
+  );
 }
 
 function Breadcrumb({ crumbs, label }: { crumbs: { label: string; href?: string }[]; label: string }) {
@@ -171,9 +179,18 @@ function MinimalHeader({
   );
 }
 
-/** DP-095 D-T5: the legal line under every catalogue page; the policy link only where published. */
-function MinimalFooter({ locale }: { locale: RouteLocale }) {
-  const href = privacyHref() ? privacyPolicyHref(locale) : null;
+/**
+ * DP-095 D-T5: the legal line under every catalogue page; the policy link only where published.
+ * DP-298: the link comes in from the API's snapshot; the streaming placeholder has none (it is
+ * rendered before any request data, fail closed).
+ */
+function MinimalFooter({
+  locale,
+  privacyHref: href,
+}: {
+  locale: RouteLocale;
+  privacyHref: string | null;
+}) {
   const ui = dictionary(locale).shell;
   return (
     <footer className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 border-t border-glass/10 px-4 py-6 text-xs text-steel sm:px-8">

@@ -5,6 +5,8 @@ import {
   LEAD_MARKETING_CONSENT,
   LEAD_PRIVACY_NOTICE,
   LEGAL_TEXTS,
+  SEED_LEGAL_TEXTS,
+  legalTextRegistryFrom,
   type LegalTextRegistry,
   type LegalTextSet,
 } from "@dream/contracts";
@@ -130,6 +132,26 @@ describe("ML-10 language of the texts", () => {
   });
 });
 
+// DP-298: the services read the published texts first (one query through the site's client);
+// these stubs stand for the seeded database: English published, Dutch a draft.
+const PUBLISHED_EN = (() => {
+  const en = SEED_LEGAL_TEXTS["en"] as LegalTextSet;
+  return legalTextRegistryFrom([
+    {
+      locale: "en",
+      privacyNotice: en.privacyNotice,
+      marketingConsent: en.marketingConsent,
+      contactNotice: en.contactNotice,
+      privacyPolicy: { version: en.privacyPolicy.version, sections: en.privacyPolicy.sections },
+      translates: null,
+    },
+  ]);
+})();
+const siteStub = { begin: async () => ({ siteId: "s", db: {} }) };
+const legalStub = (blockers: string[] = []) => ({
+  published: async () => ({ registry: PUBLISHED_EN, blockers }),
+});
+
 describe("ML-10 the services refuse a form whose texts may not be offered", () => {
   // Stubs that fail the test if the service gets past the language check.
   const untouched = new Proxy(
@@ -143,22 +165,24 @@ describe("ML-10 the services refuse a form whose texts may not be offered", () =
   const config = { deployEnv: "local" } as ApiConfig;
   const docs = (registry?: LegalTextRegistry) =>
     new LeadRequestsService(
-      untouched as never,
+      siteStub as never,
       untouched as never,
       untouched as never,
       config,
+      legalStub() as never,
       registry,
     );
   const contact = (registry?: LegalTextRegistry) =>
     new ContactMessagesService(
-      untouched as never,
+      siteStub as never,
       untouched as never,
       untouched as never,
       config,
+      legalStub() as never,
       registry,
     );
 
-  it("404 for Dutch while its translation is under review (shipped registry)", async () => {
+  it("404 for Dutch while its translation is under review (published texts: English only)", async () => {
     const nlDoc = { ...docForm, locale: "nl", privacyNoticeVersion: NL.privacyNotice.version };
     await expect(docs().request({} as never, nlDoc)).rejects.toMatchObject({ code: "NOT_FOUND" });
     const nlMsg = { ...contactForm, locale: "nl", privacyNoticeVersion: NL.contactNotice.version };

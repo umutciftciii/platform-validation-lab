@@ -728,3 +728,69 @@ export const AiOperationHistorySchema = z.strictObject({
   audit: z.array(AiAuditEventSchema).nullable(),
 });
 export type AiOperationHistory = z.infer<typeof AiOperationHistorySchema>;
+
+// --- DP-298 (ADR-031 D6): personal data and AI providers ------------------------------------------
+
+/**
+ * What the system owner records about a provider before an AI task may send it personal data:
+ * the data processing agreement (GDPR Art. 28), the transfer mechanism under the GDPR (Chapter V)
+ * and, separately, under KVKK Art. 9, where the data is processed, the provider's retention
+ * setting and that the data is not used for training. Recording terms enables nothing by itself:
+ * a task with personal data also needs an approved purpose (data-processing.ts) and a transport
+ * that is allowed (apps/api/src/ai/engine/personal-data-gate.ts). Tasks without personal data
+ * (every AI-1 task) never need terms.
+ */
+export const AI_TRANSFER_MECHANISMS = ["EEA_ONLY", "ADEQUACY", "EU_US_DPF", "SCC"] as const;
+export const AI_KVKK_TRANSFER_MECHANISMS = [
+  "NOT_APPLICABLE",
+  "ADEQUACY",
+  "STANDARD_CONTRACT_NOTIFIED",
+  "EXPLICIT_CONSENT",
+] as const;
+
+export const AiProviderDataTermsSchema = z.strictObject({
+  id: z.uuid(),
+  provider: z.enum(AI_PROVIDERS),
+  dpaReference: z.string(),
+  dpaSignedOn: z.string(),
+  transferMechanism: z.enum(AI_TRANSFER_MECHANISMS),
+  kvkkTransferMechanism: z.enum(AI_KVKK_TRANSFER_MECHANISMS),
+  dataRegion: z.string(),
+  retentionSetting: z.string(),
+  noTraining: z.literal(true),
+  recordedAt: z.iso.datetime({ offset: true }),
+  recordedBy: z.string(),
+  revokedAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export type AiProviderDataTerms = z.infer<typeof AiProviderDataTermsSchema>;
+
+export const AiProviderDataTermsResponseSchema = z.strictObject({
+  provider: z.enum(AI_PROVIDERS),
+  current: AiProviderDataTermsSchema.nullable(),
+  history: z.array(AiProviderDataTermsSchema).max(100),
+  /** Only the system owner records or revokes terms (module:manage). */
+  canManage: z.boolean(),
+});
+export type AiProviderDataTermsResponse = z.infer<typeof AiProviderDataTermsResponseSchema>;
+
+const TermText = (max: number) => z.string().trim().min(1).max(max);
+export const AiProviderDataTermsRequestSchema = z.strictObject({
+  dpaReference: TermText(200),
+  dpaSignedOn: z.iso.date(),
+  transferMechanism: z.enum(AI_TRANSFER_MECHANISMS),
+  kvkkTransferMechanism: z.enum(AI_KVKK_TRANSFER_MECHANISMS),
+  dataRegion: TermText(100),
+  retentionSetting: TermText(200),
+  noTraining: z.literal(true),
+});
+export type AiProviderDataTermsRequest = z.infer<typeof AiProviderDataTermsRequestSchema>;
+
+/** Why a task with personal data cannot run (codes of the gate; never data). */
+export const AI_PERSONAL_DATA_REFUSALS = [
+  "purpose_not_approved",
+  "provider_terms_missing",
+  "transport_not_allowed",
+  "field_not_allowed",
+  "permission_missing",
+] as const;
+export type AiPersonalDataRefusal = (typeof AI_PERSONAL_DATA_REFUSALS)[number];
