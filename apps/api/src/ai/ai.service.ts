@@ -76,7 +76,9 @@ export class AiService {
         modelManage: can("ai_model:manage"),
         budgetManage: can("ai_budget:manage"),
         invoke: can("ai:invoke"),
+        auditRead: access.allows("audit:read", PLATFORM),
       },
+      sites: access.sites.map((s) => ({ id: s.id, key: s.key, name: s.name })),
     };
   }
 }
