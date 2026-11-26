@@ -3,6 +3,7 @@
  * only write path to operations, usage counters and the ledger. Tagged templates only; no table
  * query. Reservations run in the caller's staff transaction (the database checks ai:invoke and
  * holds the AI switch); the other transitions need no staff context.
+ * DP-291: the narrow readers of migration dp_291 (task plan, call plan, operation view).
  */
 import type { Db } from "../iam/db.js";
 
@@ -122,4 +123,151 @@ export async function sqlLedgerMismatches(db: Db): Promise<number> {
     { n: bigint }[]
   >`SELECT count(*)::bigint AS "n" FROM ai_ledger_mismatches()`;
   return Number(rows[0]?.n ?? 0);
+}
+
+// --- DP-291: readers (migration dp_291) ---------------------------------------------------------
+
+export type AiTask = ReserveArgs["task"];
+export type AiProviderValue = "OPENAI" | "ANTHROPIC" | "GEMINI";
+
+export interface TaskPlan {
+  modelId: string;
+  provider: AiProviderValue;
+  providerModelId: string;
+  billingProfile: string;
+  maxInputTokens: number;
+  maxOutputTokens: number;
+  thinkingBudget: number;
+  temperatureMilli: number | null;
+}
+
+/** The task's model and limits, in the caller's staff transaction (AI on + ai:invoke). */
+export async function sqlTaskPlan(db: Db, task: AiTask): Promise<TaskPlan | null> {
+  const rows = await db.$queryRaw<
+    {
+      model_id: string;
+      provider: AiProviderValue;
+      provider_model_id: string;
+      billing_profile: string;
+      max_input_tokens: number;
+      max_output_tokens: number;
+      thinking_budget: number;
+      temperature_milli: number | null;
+    }[]
+  >`SELECT * FROM ai_task_plan(${task}::"AiTaskType")`;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    modelId: r.model_id,
+    provider: r.provider,
+    providerModelId: r.provider_model_id,
+    billingProfile: r.billing_profile,
+    maxInputTokens: r.max_input_tokens,
+    maxOutputTokens: r.max_output_tokens,
+    thinkingBudget: r.thinking_budget,
+    temperatureMilli: r.temperature_milli,
+  };
+}
+
+export interface CallPlan {
+  provider: AiProviderValue;
+  providerModelId: string;
+  credentialId: string;
+  projectRef: string | null;
+}
+
+/** One started operation's provider model and ACTIVE key id (no staff context; AI on). */
+export async function sqlCallPlan(db: Db, operationId: string): Promise<CallPlan | null> {
+  const rows = await db.$queryRaw<
+    {
+      provider: AiProviderValue;
+      provider_model_id: string;
+      credential_id: string;
+      project_ref: string | null;
+    }[]
+  >`SELECT * FROM ai_call_plan(${operationId}::uuid)`;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    provider: r.provider,
+    providerModelId: r.provider_model_id,
+    credentialId: r.credential_id,
+    projectRef: r.project_ref,
+  };
+}
+
+export interface OperationView {
+  id: string;
+  task: AiTask;
+  siteId: string | null;
+  provider: AiProviderValue;
+  modelId: string;
+  status: string;
+  estInputTokens: number;
+  estOutputTokens: number;
+  reservedMicros: bigint;
+  actualMicros: bigint | null;
+  costBasis: "NONE" | "LOCAL_USAGE" | "ASSUMED";
+  inputTokens: number | null;
+  cachedReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  errorCode: string | null;
+  reservedAt: Date;
+  finishedAt: Date | null;
+  /** The caller started it. */
+  own: boolean;
+}
+
+/** One operation for its actor (ai:invoke) or an ai_usage:read holder, in the staff context. */
+export async function sqlOperationView(db: Db, operationId: string): Promise<OperationView | null> {
+  const rows = await db.$queryRaw<
+    {
+      id: string;
+      task: AiTask;
+      site_id: string | null;
+      provider: AiProviderValue;
+      model_id: string;
+      status: string;
+      est_input_tokens: number;
+      est_output_tokens: number;
+      reserved_micros: bigint;
+      actual_micros: bigint | null;
+      cost_basis: "NONE" | "LOCAL_USAGE" | "ASSUMED";
+      input_tokens: number | null;
+      cached_read_tokens: number | null;
+      cache_write_tokens: number | null;
+      output_tokens: number | null;
+      reasoning_tokens: number | null;
+      error_code: string | null;
+      reserved_at: Date;
+      finished_at: Date | null;
+      own: boolean;
+    }[]
+  >`SELECT * FROM ai_operation_view(${operationId}::uuid)`;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: r.id,
+    task: r.task,
+    siteId: r.site_id,
+    provider: r.provider,
+    modelId: r.model_id,
+    status: r.status,
+    estInputTokens: r.est_input_tokens,
+    estOutputTokens: r.est_output_tokens,
+    reservedMicros: r.reserved_micros,
+    actualMicros: r.actual_micros,
+    costBasis: r.cost_basis,
+    inputTokens: r.input_tokens,
+    cachedReadTokens: r.cached_read_tokens,
+    cacheWriteTokens: r.cache_write_tokens,
+    outputTokens: r.output_tokens,
+    reasoningTokens: r.reasoning_tokens,
+    errorCode: r.error_code,
+    reservedAt: r.reserved_at,
+    finishedAt: r.finished_at,
+    own: r.own,
+  };
 }

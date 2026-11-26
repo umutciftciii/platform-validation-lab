@@ -15,6 +15,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  AiOperationCreatedSchema,
+  AiOperationDetailSchema,
   AiBudgetSchema,
   AiBudgetsResponseSchema,
   AiOperationsResponseSchema,
@@ -73,6 +75,8 @@ for (const variable of [
 }
 const ENV_BACKUP = { ...process.env };
 const PASSWORD = `owner-test-${randomBytes(12).toString("base64url")}`;
+/** The AI keyring of the DP-289…DP-291 blocks (keys stored by one block are read by the next). */
+const AI_ENC_KEYS = `1:${randomBytes(32).toString("base64url")}`;
 
 interface App {
   listen(port: number, host: string): Promise<unknown>;
@@ -2683,7 +2687,7 @@ describe("DP-289: providers, keys and models", () => {
     };
     await restart({
       DP_AI_TRANSPORT: "fake",
-      DP_AI_ENC_KEYS: `1:${randomBytes(32).toString("base64url")}`,
+      DP_AI_ENC_KEYS: AI_ENC_KEYS,
     });
     const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
     owner = new Staff("root-289", root.userId, await session(root.userId));
@@ -3559,5 +3563,340 @@ describe("DP-290: budgets, reservations and settlement", () => {
       expectError(await admin.call("GET", p), 404, "NOT_FOUND");
     }
     expect(await dbo.aiOperation.count()).toBeGreaterThanOrEqual(10);
+  });
+});
+
+// DP-291 (ADR-030 D6–D8): the shared operation service end to end over HTTP with the fake
+// provider (DP_AI_TRANSPORT=fake: no network, no paid call) — permission → switch → task → input
+// checks → estimate → reservation → queue → one call → settlement; drafts for their actor only;
+// cancel; the owner's switch-off with calls queued and running; nothing of a text stored.
+describe("DP-291: the AI operation service", () => {
+  const AI = "/owner/modules/ai/platform";
+  let factory: { createApiApp(o: { logger: false }): Promise<App> };
+  let owner: Staff;
+  let admin: Staff; // ai_administrator (ai:invoke)
+  let other: Staff; // another ai_administrator
+  let viewer: Staff; // ai_viewer: no ai:invoke
+  let runner: { whenIdle(): Promise<void>; state(id: string): string };
+  let fake: { generateCalls: number };
+  let seq = 0;
+  const key = () => `dp291-${Date.now()}-${seq++}`;
+  const CANARY = `canary-${randomBytes(6).toString("hex")}`;
+
+  async function restart(env: Record<string, string | undefined>) {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await app.close();
+    app = await factory.createApiApp({ logger: false });
+    await app.listen(0, "127.0.0.1");
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as { port: number }).port}`;
+    const mod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/ai/runner/runner.service.js")).href
+    )) as { AiRunnerService: abstract new (...a: never[]) => unknown };
+    runner = (app as unknown as { get(t: unknown): typeof runner }).get(mod.AiRunnerService);
+  }
+  const run = (who: Staff, input: string, k = key(), task = "DIAGNOSTIC_PING") =>
+    who.call("POST", "/ai/operations", { task, input, idempotencyKey: k });
+  const detail = async (who: Staff, id: string) => {
+    const res = await who.call("GET", `/ai/operations/${id}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return AiOperationDetailSchema.parse(res.body);
+  };
+  const row = (id: string) => dbo.aiOperation.findUniqueOrThrow({ where: { id } });
+  const mismatches = async () =>
+    Number(
+      (
+        await asApp.$queryRaw<
+          { n: bigint }[]
+        >`SELECT count(*)::bigint AS "n" FROM ai_ledger_mismatches()`
+      )[0]!.n,
+    );
+  async function started(input: string, who = admin) {
+    const res = await run(who, input);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    return AiOperationCreatedSchema.parse(res.body).operationId;
+  }
+  async function until(fn: () => Promise<boolean> | boolean, ms = 5_000) {
+    const end = Date.now() + ms;
+    while (!(await fn())) {
+      if (Date.now() > end) throw new Error("condition not reached");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  beforeAll(async () => {
+    factory = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href
+    )) as typeof factory;
+    fake = (
+      (await import(pathToFileURL(path.join(API_DIR, "dist/ai/providers/fake.js")).href)) as {
+        FakeAdapter: { generateCalls: number };
+      }
+    ).FakeAdapter;
+    await restart({
+      DP_AI_TRANSPORT: "fake",
+      DP_AI_ENC_KEYS: AI_ENC_KEYS,
+      AI_SWEEP_INTERVAL_SECONDS: "0",
+    });
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-291", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-291", pw, [{ role: "platform_super_admin" }], root.userId);
+    other = await staff("ai-other-291", pw, [{ role: "platform_super_admin" }], root.userId);
+    viewer = await staff("ai-viewer-291", pw, [], root.userId);
+  });
+
+  afterAll(async () => {
+    await restart({
+      DP_AI_TRANSPORT: undefined,
+      DP_AI_ENC_KEYS: undefined,
+      AI_SWEEP_INTERVAL_SECONDS: undefined,
+    });
+  });
+
+  it("is a 404 while AI is off, and no provider call is made", async () => {
+    const calls = fake.generateCalls;
+    expectError(await run(owner, "ping"), 404, "NOT_FOUND");
+    expect(fake.generateCalls).toBe(calls);
+  });
+
+  it("runs a ping end to end: reservation, one call, settlement, a draft for its actor only", async () => {
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-291 test" })).status).toBe(
+      200,
+    );
+    for (const [who, roleKey] of [
+      [admin, "ai_administrator"],
+      [other, "ai_administrator"],
+      [viewer, "ai_viewer"],
+    ] as const) {
+      expect((await owner.call("POST", `/staff/${who.userId}/roles`, { roleKey })).status).toBe(
+        201,
+      );
+    }
+    // Room in the budgets left by the DP-290 block; nothing active from it.
+    for (const b of await dbo.aiBudget.findMany({ where: { active: true, scope: "PLATFORM" } })) {
+      const res = await admin.call("POST", `/ai/budgets/${b.id}`, {
+        limitMicros: "100000000",
+        warnPct: b.warnPct,
+        active: true,
+        version: b.version,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    expect(
+      await dbo.aiOperation.count({ where: { status: { in: ["RESERVED", "IN_FLIGHT"] } } }),
+    ).toBe(0);
+    const settings = await admin.call("GET", "/ai/settings");
+    expect(
+      (await admin.call("POST", "/ai/settings", { ...settings.body, maxConcurrency: 20 })).status,
+    ).toBe(200);
+
+    const calls = fake.generateCalls;
+    const k = key();
+    const res = await run(admin, `ping ${CANARY}`, k);
+    expect(res.status, JSON.stringify(res.body)).toBe(202);
+    const created = AiOperationCreatedSchema.parse(res.body);
+    expect(created.existing).toBe(false);
+    await runner.whenIdle();
+    expect(fake.generateCalls).toBe(calls + 1);
+    const d = await detail(admin, created.operationId);
+    expect(d).toMatchObject({ own: true, runner: "none", result: { draft: true, text: "pong" } });
+    expect(d.operation).toMatchObject({
+      status: "SUCCEEDED",
+      costBasis: "LOCAL_USAGE",
+      errorCode: null,
+    });
+    expect(d.operation.inputTokens).toBeGreaterThan(0);
+    expect(BigInt(d.operation.actualMicros!)).toBeLessThanOrEqual(
+      BigInt(d.operation.reservedMicros),
+    );
+    // The estimate is an upper bound of what the provider reported.
+    expect(d.operation.estInputTokens).toBeGreaterThanOrEqual(d.operation.inputTokens!);
+    expect(d.operation.estOutputTokens).toBeGreaterThanOrEqual(d.operation.outputTokens!);
+
+    // Another invoker sees the operation (ai_usage:read) but never its draft.
+    const seen = await detail(other, created.operationId);
+    expect(seen).toMatchObject({ own: false, result: null });
+    expectError(
+      await viewer.call("GET", `/ai/operations/${created.operationId}`),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await viewer.call("POST", "/ai/operations", {
+        task: "DIAGNOSTIC_PING",
+        input: "ping",
+        idempotencyKey: key(),
+      }),
+      403,
+      "FORBIDDEN",
+    );
+
+    // Idempotent: the same key and input → the same operation, no second call.
+    const again = AiOperationCreatedSchema.parse((await run(admin, `ping ${CANARY}`, k)).body);
+    expect(again).toMatchObject({ operationId: created.operationId, existing: true });
+    await runner.whenIdle();
+    expect(fake.generateCalls).toBe(calls + 1);
+    expectError(await run(admin, "ping changed", k), 409, "CONFLICT_STATE");
+
+    // Nothing of the input or the answer is stored: a digest, counts, amounts and codes.
+    const stored = await row(created.operationId);
+    expect(stored.inputDigest).toMatch(/^[0-9a-f]{64}$/);
+    const everything = JSON.stringify(
+      [
+        stored,
+        await dbo.aiLedgerEntry.findMany({ where: { operationId: created.operationId } }),
+        await dbo.auditEvent.findMany({ where: { action: { startsWith: "ai." } } }),
+      ],
+      (_k, v: unknown) => (typeof v === "bigint" ? v.toString() : v),
+    );
+    expect(everything).not.toContain(CANARY);
+    expect(everything).not.toContain("pong");
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("refuses before any reservation: personal data, input length, unavailable task, budget", async () => {
+    const calls = fake.generateCalls;
+    const ops = await dbo.aiOperation.count();
+    const pd = await run(admin, `mail ${CANARY}@example.nl`);
+    expectError(pd, 400, "VALIDATION_FAILED");
+    expect(JSON.stringify(pd.body)).toContain("input_rejected_personal_data:email");
+    expect(JSON.stringify(pd.body)).not.toContain(CANARY);
+    expectError(await run(admin, "x".repeat(501)), 400, "VALIDATION_FAILED");
+    expectError(await run(admin, "translate this", key(), "TRANSLATION"), 409, "CONFLICT_STATE");
+    const daily = await dbo.aiBudget.findFirstOrThrow({
+      where: { active: true, scope: "PLATFORM", period: "DAILY" },
+    });
+    const tight = await admin.call("POST", `/ai/budgets/${daily.id}`, {
+      limitMicros: "1",
+      warnPct: daily.warnPct,
+      active: true,
+      version: daily.version,
+    });
+    expect(tight.status).toBe(200);
+    const over = await run(admin, "ping");
+    expectError(over, 409, "CONFLICT_STATE");
+    expect(JSON.stringify(over.body)).toContain("budget_exceeded");
+    const d2 = await dbo.aiBudget.findUniqueOrThrow({ where: { id: daily.id } });
+    expect(
+      (
+        await admin.call("POST", `/ai/budgets/${daily.id}`, {
+          limitMicros: "100000000",
+          warnPct: d2.warnPct,
+          active: true,
+          version: d2.version,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await dbo.aiOperation.count()).toBe(ops);
+    expect(fake.generateCalls).toBe(calls);
+    const denied = await dbo.auditEvent.findMany({
+      where: { action: "ai.operation.denied" },
+      select: { reason: true, metadata: true },
+    });
+    expect(denied.map((a) => a.reason)).toEqual(
+      expect.arrayContaining([
+        "input_rejected_personal_data",
+        "input_too_large",
+        "task_not_available",
+        "budget_exceeded",
+      ]),
+    );
+    expect(JSON.stringify(denied)).not.toContain(CANARY);
+  });
+
+  it("settles a provider refusal at cost 0 and an uncertain outcome as spent; never repeats a call", async () => {
+    const calls = fake.generateCalls;
+    const refused = await started("[fake:error=provider_unavailable] ping");
+    const lost = await started("[fake:error=timeout] ping");
+    await runner.whenIdle();
+    expect(fake.generateCalls).toBe(calls + 2);
+    expect(await row(refused)).toMatchObject({
+      status: "FAILED",
+      errorCode: "provider_unavailable",
+      actualMicros: 0n,
+    });
+    const u = await row(lost);
+    expect(u).toMatchObject({ status: "UNKNOWN", errorCode: "timeout", costBasis: "ASSUMED" });
+    expect((await detail(admin, lost)).result).toBeNull();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(fake.generateCalls).toBe(calls + 2);
+    expect(
+      await dbo.auditEvent.count({ where: { action: "ai.operation.unknown", resourceId: lost } }),
+    ).toBe(1);
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("lets the actor cancel: a queued job costs nothing, a running call ends UNKNOWN; others cannot", async () => {
+    const a = await started("[fake:delay=3000] a");
+    const b = await started("[fake:delay=3000] b");
+    const c = await started("[fake:delay=3000] c");
+    await until(() => runner.state(a) === "running" && runner.state(b) === "running");
+    expect(runner.state(c)).toBe("queued");
+    expectError(await other.call("POST", `/ai/operations/${c}/cancel`), 404, "NOT_FOUND");
+    expect((await admin.call("POST", `/ai/operations/${c}/cancel`)).body).toEqual({
+      operationId: c,
+      stopped: "queued",
+    });
+    expect((await admin.call("POST", `/ai/operations/${a}/cancel`)).body).toEqual({
+      operationId: a,
+      stopped: "running",
+    });
+    expect((await admin.call("POST", `/ai/operations/${b}/cancel`)).body).toEqual({
+      operationId: b,
+      stopped: "running",
+    });
+    await runner.whenIdle();
+    expect(await row(c)).toMatchObject({ status: "CANCELLED", startedAt: null });
+    for (const id of [a, b])
+      expect(await row(id)).toMatchObject({ status: "UNKNOWN", errorCode: "cancelled" });
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("owner switch-off with calls queued and running: queue cancelled, calls aborted, no new call, nothing delivered", async () => {
+    const done = await started("ping before the switch-off");
+    await runner.whenIdle();
+    expect((await detail(admin, done)).result).not.toBeNull();
+    const ids = [] as string[];
+    for (let i = 0; i < 5; i++) ids.push(await started(`[fake:delay=4000] job ${i}`));
+    await until(() => ids.filter((id) => runner.state(id) === "running").length === 2);
+    const callsAtSwitch = fake.generateCalls;
+    expect(
+      (await owner.call("POST", AI, { enabled: false, reason: "DP-291 switch-off" })).status,
+    ).toBe(200);
+    await runner.whenIdle();
+    expect(fake.generateCalls).toBe(callsAtSwitch);
+    const rows = await dbo.aiOperation.findMany({ where: { id: { in: ids } } });
+    expect(rows.filter((r) => r.status === "CANCELLED")).toHaveLength(3);
+    const aborted = rows.filter((r) => r.status === "UNKNOWN");
+    expect(aborted).toHaveLength(2);
+    for (const r of aborted) expect(r.errorCode).toBe("ai_disabled");
+    expectError(await run(admin, "ping"), 404, "NOT_FOUND");
+    expectError(await admin.call("GET", `/ai/operations/${done}`), 404, "NOT_FOUND");
+    expect(await mismatches()).toBe(0);
+    // Switched on again: nothing restarts by itself, and no answer from before is handed out.
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-291 back on" })).status).toBe(
+      200,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await runner.whenIdle();
+    expect(fake.generateCalls).toBe(callsAtSwitch);
+    expect((await detail(admin, done)).result).toBeNull();
+    for (const r of await dbo.aiOperation.findMany({ where: { id: { in: ids } } })) {
+      expect(["CANCELLED", "UNKNOWN"]).toContain(r.status);
+    }
+  });
+
+  it("refuses every operation with the transport off", async () => {
+    await restart({ DP_AI_TRANSPORT: undefined, DP_AI_ENC_KEYS: undefined });
+    const calls = fake.generateCalls;
+    const res = await run(admin, "ping");
+    expectError(res, 409, "CONFLICT_STATE");
+    expect(JSON.stringify(res.body)).toContain("transport_off");
+    expect(fake.generateCalls).toBe(calls);
+    expect((await owner.call("POST", AI, { enabled: false, reason: "DP-291 done" })).status).toBe(
+      200,
+    );
   });
 });

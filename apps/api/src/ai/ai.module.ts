@@ -10,15 +10,17 @@ import { AiLedgerService } from "./ledger.service.js";
 import { AiGateGuard } from "./ai-gate.guard.js";
 import { AiController } from "./ai.controller.js";
 import { AiService } from "./ai.service.js";
+import { AiOperationsService } from "./operations.service.js";
+import { AiRunnerService } from "./runner/runner.service.js";
 
 // DP-287/DP-288 (ADR-030): the AI Center. Off by default; only the system owner switches it
 // (Owner Console). AI_CONFIG is validated at start-up: with DP_AI_TRANSPORT=off (default) no AI
-// variable is needed. DP-289: providers, keys and models (list/retrieve calls only); no
-// generation or budget engine yet (DP-290, DP-291).
+// variable is needed. DP-289: providers, keys and models; DP-290: the budget engine; DP-291: the
+// shared operation service (queue, worker, generation). Other modules use AiOperationsService only.
 @Module({
   imports: [IamModule],
   controllers: [AiController],
-  exports: [AiLedgerService],
+  exports: [AiLedgerService, AiOperationsService],
   providers: [
     {
       provide: AI_CONFIG,
@@ -34,6 +36,8 @@ import { AiService } from "./ai.service.js";
     AiProvidersService,
     AiBudgetsService,
     AiLedgerService,
+    AiRunnerService,
+    AiOperationsService,
     AiGateGuard,
   ],
 })
