@@ -839,13 +839,39 @@ describe("DP-287: the global AI switch", () => {
     expect(await aiCenter(ownerNow)).toBe(true);
     expect(await aiCenter(admin2)).toBe(true);
     expect(await aiCenter(editor)).toBe(false);
-    for (const who of [ownerNow, admin2]) {
+    // DP-292: the caller's permissions — the owner manages everything; a super admin reads.
+    const manageAll = {
+      usageRead: true,
+      providerManage: true,
+      modelManage: true,
+      budgetManage: true,
+      invoke: true,
+    };
+    const readOnly = {
+      usageRead: true,
+      providerManage: false,
+      modelManage: false,
+      budgetManage: false,
+      invoke: false,
+    };
+    for (const [who, permissions] of [
+      [ownerNow, manageAll],
+      [admin2, readOnly],
+    ] as const) {
       const res = await who.call("GET", "/ai/overview");
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(AiOverviewResponseSchema.parse(res.body)).toEqual({
         enabled: true,
         callsPossible: false,
-        blockers: ["transport_off", "no_provider_key", "no_enabled_model", "no_budget"],
+        blockers: [
+          "transport_off",
+          "no_provider_key",
+          "no_enabled_model",
+          "no_budget",
+          "no_enabled_task",
+        ],
+        transport: "off",
+        permissions,
       });
     }
     expectError(await editor.call("GET", "/ai/overview"), 403, "FORBIDDEN");
@@ -3691,6 +3717,30 @@ describe("DP-291: the AI operation service", () => {
     expect(
       (await admin.call("POST", "/ai/settings", { ...settings.body, maxConcurrency: 20 })).status,
     ).toBe(200);
+
+    // DP-292: the overview tells the admin what each user may do; with the fake transport and the
+    // configuration of the earlier blocks nothing is missing for a call.
+    const ov = (who: Staff) =>
+      who.call("GET", "/ai/overview").then((r) => AiOverviewResponseSchema.parse(r.body));
+    expect(await ov(admin)).toMatchObject({
+      callsPossible: true,
+      blockers: [],
+      transport: "fake",
+      permissions: {
+        usageRead: true,
+        providerManage: true,
+        modelManage: true,
+        budgetManage: true,
+        invoke: true,
+      },
+    });
+    expect((await ov(viewer)).permissions).toEqual({
+      usageRead: true,
+      providerManage: false,
+      modelManage: false,
+      budgetManage: false,
+      invoke: false,
+    });
 
     const calls = fake.generateCalls;
     const k = key();
