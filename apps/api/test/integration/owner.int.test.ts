@@ -832,7 +832,7 @@ describe("DP-287: the global AI switch", () => {
       expect(AiOverviewResponseSchema.parse(res.body)).toEqual({
         enabled: true,
         callsPossible: false,
-        blockers: ["no_provider_key", "no_enabled_model", "no_budget"],
+        blockers: ["transport_off", "no_provider_key", "no_enabled_model", "no_budget"],
       });
     }
     expectError(await editor.call("GET", "/ai/overview"), 403, "FORBIDDEN");
@@ -2130,4 +2130,489 @@ describe("DP-125: row-level security on the IAM tables", () => {
       accessExpired: 0,
     });
   });
+});
+
+// DP-288 (ADR-030 D3–D7): the AI data model in the database — seed rows, row-level security that
+// opens the AI tables only while AI is on and only with the matching ai:* permission, the
+// owner-managed ai_administrator role, separate keys per provider, the key's ciphertext out of
+// reach of plain SELECTs, append-only and never-deleted rows, and the data kept while AI is off.
+// Runs last, with users of its own, so the DP-125 counts above stay as they are.
+describe("DP-288: the AI data model", () => {
+  type Tx = Prisma.TransactionClient;
+  const AI = "/owner/modules/ai/platform";
+  const CIPHER = () =>
+    `v1:${randomBytes(12).toString("base64url")}:${randomBytes(24).toString("base64url")}:${randomBytes(16).toString("base64url")}`;
+  const FP = () => randomBytes(32).toString("hex");
+  let owner: Staff; // the system owner, fresh step-up
+  let aiAdmin: Staff; // platform super admin; gets ai_administrator from the owner
+  let viewer: Staff; // content editor on BV; gets ai_viewer from aiAdmin
+  const tokenOf = (s: Staff) => (s as unknown as { token: string }).token;
+  /** dp_app inside one transaction with the staff context of `who`. */
+  function inCtx<T>(who: Staff, fn: (tx: Tx) => Promise<T>): Promise<T> {
+    return asApp.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT leads_rls_set_staff_context(${tokenOf(who)})`;
+      return fn(tx);
+    });
+  }
+  const allows = (who: Staff, permission: string) =>
+    inCtx(who, async (tx) => {
+      const r = await tx.$queryRaw<
+        { ok: boolean }[]
+      >`SELECT ai_rls_staff_allows(${permission}) AS "ok"`;
+      return r[0]!.ok;
+    });
+  const credential = (createdById: string, o: Record<string, unknown> = {}) => ({
+    provider: "OPENAI" as const,
+    label: "Platform OpenAI key",
+    status: "PENDING_TEST" as const,
+    ciphertext: CIPHER(),
+    keyVersion: 1,
+    keyHint: "sk-…ab12",
+    fingerprint: FP(),
+    createdById,
+    ...o,
+  });
+  const SAFE = {
+    id: true,
+    provider: true,
+    status: true,
+    keyHint: true,
+    version: true,
+  } as const;
+
+  beforeAll(async () => {
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-288", root.userId, await session(root.userId));
+    aiAdmin = await staff("ai-admin", pw, [{ role: "platform_super_admin" }], root.userId);
+    viewer = await staff("ai-viewer", pw, [{ role: "content_editor", site: BV }], root.userId);
+    expect(
+      (await dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } })).enabled,
+    ).toBe(false);
+  });
+
+  it("creates the tables with their seed rows, all off, and row-level security on each", async () => {
+    expect(await dbo.aiSettings.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({
+      maxConcurrency: 2,
+      reservationTtlSec: 120,
+      safetyMarginPct: 10,
+    });
+    const providers = await dbo.aiProviderSetting.findMany({ orderBy: { provider: "asc" } });
+    expect(providers.map((p) => [p.provider, p.enabled, p.defaultModelId])).toEqual([
+      ["OPENAI", false, null],
+      ["ANTHROPIC", false, null],
+      ["GEMINI", false, null],
+    ]);
+    const tasks = await dbo.aiTaskSetting.findMany({ orderBy: { task: "asc" } });
+    expect(tasks.map((t) => [t.task, t.enabled])).toEqual([
+      ["DIAGNOSTIC_PING", false],
+      ["TRANSLATION", false],
+      ["SEO_META", false],
+      ["CONTENT_DRAFT", false],
+    ]);
+    const rls = await dbo.$queryRaw<{ t: string; rls: boolean }[]>`
+      SELECT relname::text AS t, relrowsecurity AS rls FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'Ai%' AND relkind = 'r' ORDER BY 1`;
+    expect(rls).toHaveLength(11);
+    expect(rls.every((r) => r.rls)).toBe(true);
+  });
+
+  it("opens nothing while AI is off, not even to the owner", async () => {
+    for (const who of [owner, aiAdmin, viewer]) {
+      expect(await allows(who, "ai:read")).toBe(false);
+      expect(await inCtx(who, (tx) => tx.aiSettings.count())).toBe(0);
+      expect(await inCtx(who, (tx) => tx.aiTaskSetting.count())).toBe(0);
+    }
+    await rejectsDb(
+      inCtx(owner, (tx) =>
+        tx.aiProviderCredential.create({ data: credential(root.userId), select: SAFE }),
+      ),
+      /row-level security|row level security/,
+    );
+  });
+
+  it("gives ai_administrator only through the owner, and never the global switch", async () => {
+    expect(
+      (await owner.call("POST", AI, { enabled: true, reason: "DP-288 data model test" })).status,
+    ).toBe(200);
+    // The super admin reads but does not manage, and cannot hand out ai_administrator.
+    expect(await allows(aiAdmin, "ai:read")).toBe(true);
+    expect(await allows(aiAdmin, "ai_provider:manage")).toBe(false);
+    expectError(
+      await aiAdmin.call("POST", `/staff/${viewer.userId}/roles`, { roleKey: "ai_administrator" }),
+      403,
+      "FORBIDDEN",
+    );
+    const res = await owner.call("POST", `/staff/${aiAdmin.userId}/roles`, {
+      roleKey: "ai_administrator",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    for (const p of [
+      "ai:read",
+      "ai_usage:read",
+      "ai_provider:manage",
+      "ai_model:manage",
+      "ai_budget:manage",
+    ]) {
+      expect(await allows(aiAdmin, p), p).toBe(true);
+    }
+    expect(await allows(aiAdmin, "module:manage")).toBe(false);
+    // Holding the role does not let it pass the role on, nor take it away.
+    expectError(
+      await aiAdmin.call("POST", `/staff/${viewer.userId}/roles`, { roleKey: "ai_administrator" }),
+      403,
+      "FORBIDDEN",
+    );
+    // …and the database refuses another grantor too, even for the table owner.
+    const role = await dbo.role.findUniqueOrThrow({ where: { key: "ai_administrator" } });
+    await rejectsDb(
+      dbo.roleAssignment.create({
+        data: {
+          userId: viewer.userId,
+          roleId: role.id,
+          scopeType: "PLATFORM",
+          grantedById: aiAdmin.userId,
+          reason: "x",
+        },
+      }),
+      /assigned by the system owner only/,
+    );
+    // ai_viewer is an ordinary read role: the AI administrator (a super admin) may give it.
+    const v = await aiAdmin.call("POST", `/staff/${viewer.userId}/roles`, { roleKey: "ai_viewer" });
+    expect(v.status, JSON.stringify(v.body)).toBe(201);
+    expect(await allows(viewer, "ai_usage:read")).toBe(true);
+    expect(await allows(viewer, "ai_budget:manage")).toBe(false);
+    // Nobody but the owner switches AI, whatever AI role they hold.
+    for (const who of [aiAdmin, viewer]) {
+      expectError(
+        await who.call("POST", AI, { enabled: false, reason: "not mine" }),
+        404,
+        "NOT_FOUND",
+      );
+    }
+  });
+
+  it("keeps one ACTIVE key per provider, separate keys for OpenAI, Claude and Gemini, ciphertext out of SELECT", async () => {
+    const ids: string[] = [];
+    for (const provider of ["OPENAI", "ANTHROPIC", "GEMINI"] as const) {
+      const c = await inCtx(aiAdmin, (tx) =>
+        tx.aiProviderCredential.create({
+          data: credential(aiAdmin.userId, { provider, status: "ACTIVE", activatedAt: new Date() }),
+          select: SAFE,
+        }),
+      );
+      ids.push(c.id);
+    }
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiProviderCredential.create({
+          data: credential(aiAdmin.userId, { status: "ACTIVE", activatedAt: new Date() }),
+          select: SAFE,
+        }),
+      ),
+      /AiProviderCredential_active_provider_key|Unique constraint/,
+    );
+    // The column itself is never selectable by the API's role; the narrow function hands it out.
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) => tx.$queryRaw`SELECT "ciphertext" FROM "AiProviderCredential" LIMIT 1`),
+      /permission denied/,
+    );
+    const viaFn = await inCtx(
+      aiAdmin,
+      (tx) =>
+        tx.$queryRaw<
+          { c: string | null }[]
+        >`SELECT ai_credential_ciphertext(${ids[0]}::uuid) AS "c"`,
+    );
+    expect(viaFn[0]!.c).toMatch(/^v1:/);
+    // The viewer sees the key's metadata, never manages it.
+    expect(await inCtx(viewer, (tx) => tx.aiProviderCredential.count())).toBe(3);
+    expect(
+      await inCtx(viewer, (tx) =>
+        tx.aiProviderCredential.updateMany({
+          where: { id: ids[0] },
+          data: { label: "renamed", version: 2 },
+        }),
+      ),
+    ).toEqual({ count: 0 });
+    // A key in clear text is refused; REVOKED erases the ciphertext and is final.
+    await rejectsDb(
+      dbo.aiProviderCredential.create({
+        data: credential(aiAdmin.userId, { provider: "GEMINI", ciphertext: "AIza-plain-key" }),
+      }),
+      /AiProviderCredential_ciphertext/,
+    );
+    await dbo.aiProviderCredential.update({
+      where: { id: ids[2] },
+      data: {
+        status: "REVOKED",
+        ciphertext: null,
+        keyVersion: null,
+        revokedAt: new Date(),
+        revokedById: aiAdmin.userId,
+        version: 2,
+      },
+    });
+    await rejectsDb(
+      dbo.aiProviderCredential.update({
+        where: { id: ids[2] },
+        data: { status: "DISABLED", disabledAt: new Date(), version: 3 },
+      }),
+      /a revoked key never changes/,
+    );
+    await rejectsDb(
+      dbo.aiProviderCredential.update({
+        where: { id: ids[1] },
+        data: { provider: "OPENAI", version: 2 },
+      }),
+      /never change/,
+    );
+    expect(
+      (
+        await inCtx(
+          aiAdmin,
+          (tx) =>
+            tx.$queryRaw<
+              { c: string | null }[]
+            >`SELECT ai_credential_ciphertext(${ids[2]}::uuid) AS "c"`,
+        )
+      )[0]!.c,
+    ).toBeNull();
+  });
+
+  it("keeps prices append-only and dated, tasks and budgets versioned, nothing deleted", async () => {
+    const model = await inCtx(aiAdmin, (tx) =>
+      tx.aiModel.create({
+        data: {
+          provider: "OPENAI",
+          modelId: "dp288-test-model",
+          displayName: "Test model",
+          billingProfile: "openai.responses",
+        },
+      }),
+    );
+    const price = await inCtx(aiAdmin, (tx) =>
+      tx.aiModelPrice.create({
+        data: {
+          modelId: model.id,
+          inputMicrosPerMTok: 400_000n,
+          cachedReadMicrosPerMTok: 100_000n,
+          outputMicrosPerMTok: 1_600_000n,
+          effectiveFrom: new Date(),
+          sourceNote: "DP-288 test price",
+          createdById: aiAdmin.userId,
+        },
+      }),
+    );
+    await rejectsDb(
+      dbo.aiModelPrice.create({
+        data: {
+          modelId: model.id,
+          inputMicrosPerMTok: 1n,
+          cachedReadMicrosPerMTok: 1n,
+          outputMicrosPerMTok: 1n,
+          effectiveFrom: new Date(Date.now() - 86_400_000),
+          sourceNote: "backdated",
+          createdById: aiAdmin.userId,
+        },
+      }),
+      /never backdated/,
+    );
+    await rejectsDb(
+      dbo.aiModelPrice.update({ where: { id: price.id }, data: { outputMicrosPerMTok: 1n } }),
+      /append-only/,
+    );
+    // Task settings: versioned, enabled needs a model.
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiTaskSetting.update({
+          where: { task: "TRANSLATION" },
+          data: { enabled: true, version: 2 },
+        }),
+      ),
+      /AiTaskSetting_enabled_needs_model/,
+    );
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiTaskSetting.update({
+          where: { task: "TRANSLATION" },
+          data: { modelId: model.id, version: 5 },
+        }),
+      ),
+      /raises the version by one/,
+    );
+    await inCtx(aiAdmin, (tx) =>
+      tx.aiTaskSetting.update({
+        where: { task: "TRANSLATION" },
+        data: { modelId: model.id, version: 2 },
+      }),
+    );
+    // A provider's default model must be its own.
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiProviderSetting.update({
+          where: { provider: "GEMINI" },
+          data: { defaultModelId: model.id, version: 2 },
+        }),
+      ),
+      /default model belongs to another provider/,
+    );
+    // Budgets: one active per scope/site/period; scope and period never change.
+    const daily = await inCtx(aiAdmin, (tx) =>
+      tx.aiBudget.create({
+        data: {
+          scope: "PLATFORM",
+          period: "DAILY",
+          limitMicros: 2_000_000n,
+          createdById: aiAdmin.userId,
+        },
+      }),
+    );
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiBudget.create({
+          data: {
+            scope: "PLATFORM",
+            period: "DAILY",
+            limitMicros: 1n,
+            createdById: aiAdmin.userId,
+          },
+        }),
+      ),
+      /AiBudget_active_platform_period_key|Unique constraint/,
+    );
+    await inCtx(aiAdmin, (tx) =>
+      tx.aiBudget.create({
+        data: {
+          scope: "SITE",
+          siteId: BV,
+          period: "MONTHLY",
+          limitMicros: 5_000_000n,
+          createdById: aiAdmin.userId,
+        },
+      }),
+    );
+    await rejectsDb(
+      dbo.aiBudget.create({
+        data: { scope: "SITE", period: "DAILY", limitMicros: 1n, createdById: aiAdmin.userId },
+      }),
+      /AiBudget_scope_site/,
+    );
+    await rejectsDb(
+      inCtx(aiAdmin, (tx) =>
+        tx.aiBudget.update({ where: { id: daily.id }, data: { period: "MONTHLY", version: 2 } }),
+      ),
+      /scope, site, period and creator never change/,
+    );
+    // The viewer reads budgets and usage, changes nothing.
+    expect(await inCtx(viewer, (tx) => tx.aiBudget.count())).toBe(2);
+    await rejectsDb(
+      inCtx(viewer, (tx) =>
+        tx.aiBudget.create({
+          data: {
+            scope: "PLATFORM",
+            period: "MONTHLY",
+            limitMicros: 1n,
+            createdById: viewer.userId,
+          },
+        }),
+      ),
+      /row-level security|row level security/,
+    );
+    // Usage, operations and ledger: no write path for the API yet (DP-290).
+    await rejectsDb(
+      asApp.aiBudgetUsage.create({
+        data: { budgetId: daily.id, periodStart: new Date("2026-11-26T00:00:00Z") },
+      }),
+      /permission denied/,
+    );
+    await rejectsDb(
+      dbo.aiBudgetUsage.create({
+        data: { budgetId: daily.id, periodStart: new Date("2026-11-26T05:00:00Z") },
+      }),
+      /starts at a UTC day or month/,
+    );
+    await dbo.aiBudgetUsage.create({
+      data: { budgetId: daily.id, periodStart: new Date("2026-11-26T00:00:00Z") },
+    });
+    await rejectsDb(
+      dbo.aiOperation.create({
+        data: {
+          task: "TRANSLATION",
+          provider: "GEMINI",
+          modelId: model.id,
+          priceId: price.id,
+          idempotencyKey: "dp288-probe-1",
+          inputDigest: "a".repeat(64),
+          estInputTokens: 10,
+          estOutputTokens: 10,
+          reservedMicros: 100n,
+          instanceId: "probe",
+          leaseUntil: new Date(Date.now() + 60_000),
+        },
+      }),
+      /provider, model and price must match/,
+    );
+    for (const p of [
+      dbo.$executeRaw`DELETE FROM "AiSettings"`,
+      dbo.$executeRaw`DELETE FROM "AiBudget" WHERE "id" = ${daily.id}::uuid`,
+      dbo.$executeRaw`DELETE FROM "AiModelPrice" WHERE "id" = ${price.id}::uuid`,
+    ]) {
+      await rejectsDb(p, /are never removed/);
+    }
+  });
+
+  it("closes every AI table again when the owner switches AI off, and keeps the data", async () => {
+    const before = await Promise.all([
+      dbo.aiProviderCredential.count(),
+      dbo.aiModel.count(),
+      dbo.aiModelPrice.count(),
+      dbo.aiBudget.count(),
+      dbo.aiBudgetUsage.count(),
+    ]);
+    expect(await aiCenterOf(viewer)).toBe(true);
+    expect(
+      (await owner.call("POST", AI, { enabled: false, reason: "DP-288 test done" })).status,
+    ).toBe(200);
+    for (const who of [owner, aiAdmin, viewer]) {
+      expect(await inCtx(who, (tx) => tx.aiProviderCredential.count())).toBe(0);
+      expect(await inCtx(who, (tx) => tx.aiBudget.count())).toBe(0);
+    }
+    const ids = await dbo.aiProviderCredential.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true },
+    });
+    expect(ids.length).toBe(2);
+    expect(
+      (
+        await inCtx(
+          aiAdmin,
+          (tx) =>
+            tx.$queryRaw<
+              { c: string | null }[]
+            >`SELECT ai_credential_ciphertext(${ids[0]!.id}::uuid) AS "c"`,
+        )
+      )[0]!.c,
+    ).toBeNull();
+    expect(await aiCenterOf(viewer)).toBe(false);
+    expect(
+      await Promise.all([
+        dbo.aiProviderCredential.count(),
+        dbo.aiModel.count(),
+        dbo.aiModelPrice.count(),
+        dbo.aiBudget.count(),
+        dbo.aiBudgetUsage.count(),
+      ]),
+    ).toEqual(before);
+  });
+
+  async function aiCenterOf(who: Staff): Promise<boolean | undefined> {
+    const res = await fetch(`${base}/api/v1/auth/staff/session`, {
+      headers: {
+        "x-dp-proxy-key": TEST_KEYS.admin,
+        "x-dp-client-ip": "10.20.30.41",
+        cookie: `__Host-dp_admin_session=${tokenOf(who)}`,
+      },
+    });
+    return ((await res.json()) as { features?: { aiCenter: boolean } }).features?.aiCenter;
+  }
 });

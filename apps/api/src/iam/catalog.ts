@@ -99,6 +99,11 @@ export interface RoleDef {
    * to assign; the system owner gets it from the SystemOwner record (repository.ts).
    */
   assignable?: boolean;
+  /**
+   * DP-288 (owner decision 6): only the system owner assigns or revokes this role (escalation.ts;
+   * the database refuses another grantor, migration dp_288 `iam_owner_managed_role_keys`).
+   */
+  ownerManaged?: boolean;
 }
 
 export const SITES: readonly SiteDef[] = [
@@ -352,6 +357,22 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   }),
   // DP-287 (ADR-030): the AI Center. Refused for everyone while the owner keeps AI off.
   perm("ai", "read", "ai", "View the AI Center (state and readiness)", { scopeType: P }),
+  // DP-288 (ADR-030 D3): reading usage and cost; managing keys, models/prices/tasks and budgets.
+  // The `manage` ones are sensitive (fresh step-up) and held only by the system owner and the
+  // owner-assigned ai_administrator. None of them switches AI on or off (module:manage).
+  perm("ai_usage", "read", "ai", "View AI usage, cost and reconciliation", { scopeType: P }),
+  perm("ai_provider", "manage", "ai", "Add, test, replace and disable AI provider API keys", {
+    scopeType: P,
+    sensitive: true,
+  }),
+  perm("ai_model", "manage", "ai", "Manage AI models, dated prices and task settings", {
+    scopeType: P,
+    sensitive: true,
+  }),
+  perm("ai_budget", "manage", "ai", "Manage AI budgets, concurrency and reconciliation", {
+    scopeType: P,
+    sensitive: true,
+  }),
   // Customer (member) permissions on a public site.
   perm("technical_spec", "view", "membership", "See member-only technical specifications", {
     audience: CUSTOMER,
@@ -365,11 +386,25 @@ export const PUBLISH_PERMISSIONS: readonly string[] = ["content:publish", "produ
 /** Retired permissions that grant nothing; the system owner does not carry them (DP-109 cleanup). */
 export const RETIRED_PERMISSIONS: readonly string[] = ["customer_data_access:grant"];
 
-// Super admin: every staff permission except publishing (F1-001B) and the owner-only ones
-// (DP-108), customer data included (DP-076 revision, owner decision 2026-11-11, ADR-017 v2: lead
-// and CRM data without approval).
+/**
+ * DP-288 (owner decision 3, 6): the AI management permissions. Not in the super admin's role: a
+ * super admin manages AI only after the system owner gives it `ai_administrator`.
+ */
+export const AI_MANAGE_PERMISSIONS: readonly string[] = [
+  "ai_provider:manage",
+  "ai_model:manage",
+  "ai_budget:manage",
+];
+
+// Super admin: every staff permission except publishing (F1-001B), the owner-only ones (DP-108)
+// and AI management (DP-288), customer data included (DP-076 revision, owner decision 2026-11-11,
+// ADR-017 v2: lead and CRM data without approval).
 const superAdminPermissions = PERMISSIONS.filter(
-  (p) => p.audience === "STAFF" && !PUBLISH_PERMISSIONS.includes(p.key) && !p.ownerOnly,
+  (p) =>
+    p.audience === "STAFF" &&
+    !PUBLISH_PERMISSIONS.includes(p.key) &&
+    !p.ownerOnly &&
+    !AI_MANAGE_PERMISSIONS.includes(p.key),
 ).map((p) => p.key);
 // System owner (DP-108, K4): every staff permission, publishing included, except retired ones.
 const systemOwnerPermissions = PERMISSIONS.filter(
@@ -521,6 +556,31 @@ export const ROLES: readonly RoleDef[] = [
     scopeType: "SITE",
     permissions: ["content:read", "media:read", "product:read"],
   },
+  // DP-288 (ADR-030 D3): the AI Center. The global AI switch (module:manage) is in neither role.
+  {
+    key: "ai_administrator",
+    name: "AI administrator",
+    description:
+      "Manages AI provider keys, models, prices, task settings and budgets, and reads usage. Assigned by the system owner only; cannot switch AI on or off.",
+    audience: "STAFF",
+    scopeType: "PLATFORM",
+    permissions: [
+      "ai:read",
+      "ai_usage:read",
+      "ai_provider:manage",
+      "ai_model:manage",
+      "ai_budget:manage",
+    ],
+    ownerManaged: true,
+  },
+  {
+    key: "ai_viewer",
+    name: "AI viewer",
+    description: "Reads the AI Center, usage and cost; changes nothing.",
+    audience: "STAFF",
+    scopeType: "PLATFORM",
+    permissions: ["ai:read", "ai_usage:read"],
+  },
   {
     key: "member",
     name: "Member",
@@ -657,6 +717,24 @@ export function catalogProblems(
     for (const r of catalog.roles) {
       if (r.key !== SYSTEM_OWNER && r.permissions.includes(p.key)) {
         problems.push(`role ${r.key}: carries owner-only permission ${p.key}`);
+      }
+    }
+  }
+  // DP-288: owner-managed roles are assignable platform staff roles, and only they (besides the
+  // system owner) carry the AI management permissions.
+  for (const r of catalog.roles) {
+    if (
+      r.ownerManaged &&
+      (r.assignable === false || r.scopeType !== "PLATFORM" || r.audience !== "STAFF")
+    ) {
+      problems.push(`role ${r.key}: owner-managed roles are assignable STAFF PLATFORM roles`);
+    }
+    if (r.key === SYSTEM_OWNER || r.ownerManaged) continue;
+    for (const key of AI_MANAGE_PERMISSIONS) {
+      if (r.permissions.includes(key)) {
+        problems.push(
+          `role ${r.key}: carries AI management permission ${key} (owner-managed roles only)`,
+        );
       }
     }
   }

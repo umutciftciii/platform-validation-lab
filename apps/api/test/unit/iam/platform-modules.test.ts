@@ -31,7 +31,14 @@ describe("DP-287: the AI Center in the catalogue", () => {
     const ai = MODULE_BY_KEY.get("ai");
     expect(ai).toMatchObject({ key: "ai", isCore: false, scope: "PLATFORM" });
     expect(MODULES.filter((m) => m.scope === "PLATFORM").map((m) => m.key)).toEqual(["ai"]);
-    expect(PERMISSIONS.filter((p) => p.module === "ai").map((p) => p.key)).toEqual(["ai:read"]);
+    // DP-288 adds usage reading and the three management permissions.
+    expect(PERMISSIONS.filter((p) => p.module === "ai").map((p) => p.key)).toEqual([
+      "ai:read",
+      "ai_usage:read",
+      "ai_provider:manage",
+      "ai_model:manage",
+      "ai_budget:manage",
+    ]);
     expect(PERMISSIONS.find((p) => p.key === "ai:read")).toMatchObject({
       scopeType: "PLATFORM",
       sensitive: false,

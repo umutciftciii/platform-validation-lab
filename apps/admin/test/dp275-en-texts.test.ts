@@ -94,7 +94,10 @@ describe("DP-275: the English dictionary changed only where approved", () => {
         "owner.switch.platformOffLabel",
         "owner.switch.hintPlatformOff",
         "owner.switch.hintPlatformOn",
-      ].includes(k);
+      ].includes(k) ||
+      // DP-288 adds the two AI roles' texts (staff.roles.*) to the same screen family.
+      k.startsWith("staff.roles.ai_administrator.") ||
+      k.startsWith("staff.roles.ai_viewer.");
     expect(Object.keys(before).filter(dp287)).toEqual([]);
     // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
     expect(Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k))).toEqual([

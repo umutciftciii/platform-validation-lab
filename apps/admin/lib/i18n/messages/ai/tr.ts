@@ -22,6 +22,7 @@ export const ai: Messages["ai"] = {
     "Bir çağrı için aşağıdaki öğelerin hepsi gerekir. O zamana kadar hiçbir yapay zekâ sağlayıcısına bir şey gönderilmez ve harcama yapılmaz.",
   blockerMissing: "Eksik",
   blockers: {
+    transport_off: "Sunucu ortamında yapay zekâ çağrılarının açılması (DP_AI_TRANSPORT)",
     no_provider_key:
       "Bir sağlayıcının (OpenAI, Claude veya Gemini) etkin ve test edilmiş API anahtarı",
     no_enabled_model: "Tarihli birim fiyatı olan etkin bir model",

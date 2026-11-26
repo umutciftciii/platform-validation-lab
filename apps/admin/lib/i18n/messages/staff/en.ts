@@ -104,6 +104,15 @@ export const staff = {
       name: "Read-only",
       description: "Reads content and products of one site; no customer data.",
     },
+    ai_administrator: {
+      name: "AI administrator",
+      description:
+        "Manages AI provider keys, models, prices, task settings and budgets, and reads usage. Assigned by the system owner only; cannot switch AI on or off.",
+    },
+    ai_viewer: {
+      name: "AI viewer",
+      description: "Reads the AI Center, usage and cost; changes nothing.",
+    },
     member: {
       name: "Member",
       description: "A registered customer of one public site.",

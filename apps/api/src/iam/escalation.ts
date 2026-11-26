@@ -82,6 +82,10 @@ export function canAssignRole(
   if (!role) return { allowed: false, reason: "unknown_role" };
   if (!isAssignableRole(role)) return { allowed: false, reason: "not_assignable" };
   if (grantor.principal.userId === assignee.userId) return { allowed: false, reason: "self_grant" };
+  // DP-288 (owner decision 6): an owner-managed role (ai_administrator) is the owner's to give.
+  if (role.ownerManaged && grantor.isSystemOwner !== true) {
+    return { allowed: false, reason: "not_allowed" };
+  }
   if (assignee.isSystemOwner) return { allowed: false, reason: "owner_target" };
   if (role.audience !== assignee.kind) return { allowed: false, reason: "audience_mismatch" };
   if ((role.scopeType === "PLATFORM") !== (target.scope === "platform")) {
@@ -160,6 +164,10 @@ export function canRevokeRole(
   if (!role) return { allowed: false, reason: "unknown_role" };
   if ((role.scopeType === "PLATFORM") !== (target.scope === "platform")) {
     return { allowed: false, reason: "scope_mismatch" };
+  }
+  // DP-288 (owner decision 6): and only the owner takes it away again.
+  if (role.ownerManaged && grantor.isSystemOwner !== true) {
+    return { allowed: false, reason: "not_allowed" };
   }
   const may = decide(grantor, "role_assignment:revoke", target, now);
   if (!may.allowed) {
