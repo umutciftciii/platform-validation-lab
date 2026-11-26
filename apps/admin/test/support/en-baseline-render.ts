@@ -26,6 +26,9 @@
 // DP-285: the new API error code DATABASE_UNAVAILABLE adds one entry to the Staff client's table of
 // every error code (staff-en, "explains every refusal a call can meet"); staff-en was recorded
 // again with DP285_RECORD_EN=1 (only that file), and nothing else in it changed.
+// DP-298 (ADR-031): a lead's document request labels its notice "Notice acknowledged (information,
+// not consent)" instead of "Privacy notice"; leads-en is recorded again with DP298_RECORD_EN=1
+// (only that file). The lead page's new Consents panel is not in it (its read answers 404 there).
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -47,7 +50,8 @@ const RECORD =
   process.env["DP268_RECORD_EN"] === "1" ||
   process.env["ML14_RECORD_EN"] === "1" ||
   process.env["DP275_RECORD_EN"] === "1" ||
-  process.env["DP285_RECORD_EN"] === "1";
+  process.env["DP285_RECORD_EN"] === "1" ||
+  process.env["DP298_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

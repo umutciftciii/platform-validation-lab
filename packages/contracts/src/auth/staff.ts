@@ -54,8 +54,12 @@ export const StaffSessionResponseSchema = z.strictObject({
    * DP-287 (ADR-030 D2): what the admin shows. `aiCenter`: AI is on (Owner Console) and the user
    * may read the AI Center; false hides every AI menu, page and button. Presentation only: the API
    * answers 404 on every AI route while AI is off.
+   * DP-298 (ADR-031): `legalTexts`: the user holds legal_text:edit or legal_text:publish (shows
+   * Content → Legal texts). Optional for older API answers (read as false).
    */
-  features: z.strictObject({ aiCenter: z.boolean() }).optional(),
+  features: z
+    .strictObject({ aiCenter: z.boolean(), legalTexts: z.boolean().optional() })
+    .optional(),
 });
 export type StaffSessionResponse = z.infer<typeof StaffSessionResponseSchema>;
 

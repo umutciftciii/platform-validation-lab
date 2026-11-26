@@ -30,6 +30,7 @@ import { owner } from "./owner/tr";
 import { dashboard } from "./dashboard/tr";
 import { translationPackages } from "./translations/tr";
 import { ai } from "./ai/tr";
+import { legal } from "./legal/tr";
 
 export const tr: Messages = {
   common: {
@@ -87,6 +88,11 @@ export const tr: Messages = {
       content: {
         label: "İçerik",
         summary: "İki sitenin sayfalarını yazın, inceleyin ve yayınlayın.",
+      },
+      legalTexts: {
+        label: "Hukuki metinler",
+        summary:
+          "Gizlilik politikası, form bilgilendirmeleri ve rıza metinleri: sürümler, inceleme ve yayın.",
       },
       products: {
         label: "Ürünler",
@@ -407,4 +413,6 @@ export const tr: Messages = {
   translationPackages,
   /** DP-287 (ADR-030): Yapay Zekâ Merkezi (./ai/). */
   ai,
+  /** DP-298 (ADR-031): legal texts, lead consents and AI data-processing terms (./legal/). */
+  legal,
 };

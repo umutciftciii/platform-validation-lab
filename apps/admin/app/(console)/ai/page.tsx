@@ -15,6 +15,7 @@ import {
   AiOverviewResponseSchema,
   AiPriceListResponseSchema,
   AiPricesResponseSchema,
+  AiProviderDataTermsResponseSchema,
   AiProvidersResponseSchema,
   AiReconciliationResponseSchema,
   AiSettingsSchema,
@@ -23,6 +24,8 @@ import {
   type AiModelSummary,
   type AiOverviewResponse,
   type AiPrice,
+  type AiProviderDataTermsResponse,
+  type AiProviderKey,
 } from "@dream/contracts";
 import { ModelsPanel, ProvidersPanel, TasksPanel } from "../../../components/ai/ai-actions";
 import {
@@ -186,8 +189,24 @@ async function tabBody(
   if (tab === "usage") return UsageTab(overview, models.data.items, c, sp);
   if (tab === "operations") return OperationsTab(overview, models.data.items, c, sp);
   if (tab === "providers") {
-    const providers = await serverRead(`${AI_API}/providers`, AiProvidersResponseSchema);
+    const [providers, terms] = await Promise.all([
+      serverRead(`${AI_API}/providers`, AiProvidersResponseSchema),
+      Promise.all(
+        AI_PROVIDERS.map((p) =>
+          serverRead(`${AI_API}/providers/${p}/data-terms`, AiProviderDataTermsResponseSchema),
+        ),
+      ),
+    ]);
     if (!providers.ok) return null;
+    // DP-298 (ADR-031 D6): the data-processing terms per provider; a 404 (no terms route) shows
+    // no section, any other failure says the terms could not be loaded.
+    const dataTerms: Partial<Record<AiProviderKey, AiProviderDataTermsResponse | null>> = {};
+    AI_PROVIDERS.forEach((p, i) => {
+      const r = terms[i];
+      if (!r) return;
+      if (r.ok) dataTerms[p] = r.data;
+      else if (r.status !== 404) dataTerms[p] = null;
+    });
     return (
       <Panel
         id="ai-providers"
@@ -199,6 +218,7 @@ async function tabBody(
           models={models.data.items}
           transport={providers.data.transport}
           can={can}
+          dataTerms={dataTerms}
         />
       </Panel>
     );

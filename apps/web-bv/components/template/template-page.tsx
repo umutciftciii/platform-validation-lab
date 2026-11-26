@@ -13,8 +13,9 @@ import SiteNav from "@/components/ui/site-nav";
 import type { TemplatePageView, TemplateSection } from "@/lib/cms-home";
 import { contactFormUi, countryOptions, dictionary } from "@/lib/i18n";
 import { formLegalTexts } from "@/lib/form-texts";
+import { sitePrivacyNow } from "@/lib/legal-texts-api";
 import { DEFAULT_LOCALE, type RouteLocale } from "@/lib/locale-routing";
-import { privacyPolicyHref, sitePrivacy } from "@/lib/privacy";
+import { privacyPolicyHref } from "@/lib/privacy";
 
 /**
  * A CMS template page of the BV site (CMS S3, DP-017): the four ready-made section types in the
@@ -228,7 +229,7 @@ const CONTACT_FIELDS = [
  * DP-151: the form sends where the privacy texts may be published; elsewhere it is shown
  * disabled, under the CMS note, with no action and no submit.
  */
-function ContactSection({
+async function ContactSection({
   section,
   contact,
   locale,
@@ -246,12 +247,19 @@ function ContactSection({
   // ML-10 (ADR-028 D12): and only with the notice of the page's language where it may be offered
   // (English, or an approved translation). A public page is served only in a public language (the
   // proxy checked it); a preview proves nothing, so another language counts as not public there.
-  const legal = formLegalTexts(locale, preview || locale === DEFAULT_LOCALE ? [] : [locale]);
-  const live = sitePrivacy().publish && legal !== null;
+  // DP-298 (ADR-031 D1): the gate and the notice are the API's snapshot of the published
+  // versions; while it cannot be read the disabled form is shown (fail closed).
+  const privacy = await sitePrivacyNow();
+  const legal = formLegalTexts(
+    locale,
+    preview || locale === DEFAULT_LOCALE ? [] : [locale],
+    privacy.snapshot.registry,
+  );
+  const live = privacy.gate.publish && legal !== null;
   const ui = dictionary(locale);
   // Where the privacy texts may be published but not in this language: say so in this language
   // (the CMS note describes the production gate, not a missing translation).
-  const note = sitePrivacy().publish && !legal ? ui.contactForm.notInLanguage : section.formNote;
+  const note = privacy.gate.publish && !legal ? ui.contactForm.notInLanguage : section.formNote;
   return (
     <section id={section.id} className="tp-contact">
       <div className="tp-inner tp-contact-grid">
@@ -301,7 +309,7 @@ function ContactSection({
             title={section.formTitle}
             countries={countryOptions(locale, COUNTRY_CODES)}
             notice={{ version: legal.contactNotice.version, text: legal.contactNotice.text }}
-            privacyHref={privacyPolicyHref(locale)}
+            privacyHref={privacyPolicyHref(locale, privacy.locales)}
             locale={locale}
             ui={contactFormUi(locale)}
           />

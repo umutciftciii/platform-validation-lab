@@ -77,7 +77,8 @@ describe("Leads, Staff, Owner, Overview: no hard-coded UI text (ML-12e)", () => 
 
   it("scans every area", () => {
     expect(Object.fromEntries(scopes.map(([a, files]) => [a, files.length]))).toEqual({
-      leads: 9,
+      // DP-298: + components/leads/lead-consents.tsx.
+      leads: 10,
       staff: 3,
       owner: 5,
       dashboard: 11,

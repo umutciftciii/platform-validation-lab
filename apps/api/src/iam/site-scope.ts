@@ -69,6 +69,8 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   LeadDocumentDownload: { nullable: false },
   // DP-041 (ADR-019): the sales history of a lead belongs to the lead's site.
   LeadActivity: { nullable: false },
+  // DP-298 (ADR-031 D4): consent grants and withdrawals of a lead of the site.
+  ConsentRecord: { nullable: false },
   // DP-076/DP-077 (ADR-017): access requests for a site role carry the site; requests for the
   // platform customer-data officer have none. Read by the IAM infrastructure only.
   CustomerDataAccessRequest: { nullable: true },
@@ -143,6 +145,13 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     redirectsCreated: { model: "SiteRedirect", list: true },
     redirectsUpdated: { model: "SiteRedirect", list: true },
     leadNotificationSettings: { model: "LeadNotificationSetting", list: true },
+    // DP-298: legal text versions (no site), consent withdrawals (site-bound), AI provider terms.
+    legalTextsCreated: { model: "LegalTextVersion", list: true },
+    legalTextsPublished: { model: "LegalTextVersion", list: true },
+    legalTextsReviewed: { model: "LegalTextVersion", list: true },
+    consentRecords: { model: "ConsentRecord", list: true },
+    aiProviderTermsRecorded: { model: "AiProviderDataTerms", list: true },
+    aiProviderTermsRevoked: { model: "AiProviderDataTerms", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -187,6 +196,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     redirects: { model: "SiteRedirect", list: true },
     pathLock: { model: "SitePathLock", list: false },
     locales: { model: "SiteLocale", list: true },
+    consentRecords: { model: "ConsentRecord", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -419,6 +429,24 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     assignedTo: { model: "User", list: false },
     activities: { model: "LeadActivity", list: true },
     notifications: { model: "LeadNotification", list: true },
+    consents: { model: "ConsentRecord", list: true },
+  },
+  // DP-298 (ADR-031): consent records (site-bound); legal texts and provider terms (no site).
+  ConsentRecord: {
+    lead: { model: "Lead", list: false },
+    site: { model: "Site", list: false },
+    actor: { model: "User", list: false },
+  },
+  LegalTextVersion: {
+    translates: { model: "LegalTextVersion", list: false },
+    translations: { model: "LegalTextVersion", list: true },
+    createdBy: { model: "User", list: false },
+    publishedBy: { model: "User", list: false },
+    reviewApprovedBy: { model: "User", list: false },
+  },
+  AiProviderDataTerms: {
+    recordedBy: { model: "User", list: false },
+    revokedBy: { model: "User", list: false },
   },
   LeadActivity: {
     site: { model: "Site", list: false },

@@ -40,7 +40,11 @@ export default async function ConsoleLayout({ children }: { children: ReactNode 
       environmentLabel={isEnvironment(deployEnv) ? t(`shell.environments.${deployEnv}`) : deployEnv}
       isOwner={session.isSystemOwner === true}
       reviewOnly={reviewOnly}
-      features={{ aiCenter: session.features?.aiCenter === true }}
+      features={{
+        aiCenter: session.features?.aiCenter === true,
+        // DP-298 (ADR-031): from the session (legal_text:edit or :publish); presentation only.
+        legalTexts: session.features?.legalTexts === true,
+      }}
     >
       {children}
     </AppShell>

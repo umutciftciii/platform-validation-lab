@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import {
   LEAD_PIPELINE_HELD,
+  LeadConsentsResponseSchema,
   LeadDetailResponseSchema,
   type LeadActivity,
   type LeadContactMessage,
@@ -9,6 +10,7 @@ import {
 } from "@dream/contracts";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { Icon, type IconKey } from "../../../../components/icons";
+import { LeadConsents } from "../../../../components/leads/lead-consents";
 import { LeadActivityForm, LeadWorkflowForm } from "../../../../components/leads/lead-workflow";
 import { cx, EmptyState, Panel, StatusPill } from "../../../../components/ui";
 import { ADMIN_TIME_ZONE, type AdminLocale, INTL_LOCALE } from "../../../../lib/i18n/config";
@@ -221,6 +223,8 @@ function staffEmailText(n: Notification, t: Translate, DATE: Intl.DateTimeFormat
  * DP-151: and the messages it sent with the site's contact form.
  * DP-041 (ADR-019): sales pipeline, assignment, notes and contact history; the controls appear
  * only with lead:manage on the lead's site (`canManage`), the API decides every change.
+ * DP-298 (ADR-031 D4): the Consents panel (state per purpose, history, withdrawal), separate from
+ * the notices each request acknowledged (information, not consent).
  */
 export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const session = await requireStaffSession();
@@ -228,10 +232,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const locale = await getAdminLocale();
   const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const { id } = await params;
-  const res = await serverRead(
-    `/api/v1/admin/leads/${encodeURIComponent(id)}`,
-    LeadDetailResponseSchema,
-  );
+  // DP-298 (ADR-031 D4): the consents are read with the lead (same permission, lead:read).
+  const [res, consents] = await Promise.all([
+    serverRead(`/api/v1/admin/leads/${encodeURIComponent(id)}`, LeadDetailResponseSchema),
+    serverRead(
+      `/api/v1/admin/leads/${encodeURIComponent(id)}/consents`,
+      LeadConsentsResponseSchema,
+    ),
+  ]);
   if (!res.ok && res.status === 404) notFound();
   if (!res.ok) {
     return (
@@ -374,6 +382,23 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           </dl>
         </Panel>
       </div>
+      {consents.ok ? (
+        <Panel
+          key="consents"
+          id="consents"
+          title={t("legal.consents.title")}
+          description={t("legal.consents.description")}
+        >
+          <LeadConsents leadId={lead.id} consents={consents.data} />
+        </Panel>
+      ) : consents.status !== 404 ? (
+        // 404: an API without consent records (before DP-298) — nothing to show.
+        <Panel key="consents-failed" id="consents" title={t("legal.consents.title")}>
+          <p role="alert" className="text-sm text-danger">
+            {t("legal.consents.loadError")}
+          </p>
+        </Panel>
+      ) : null}
       <Panel
         id="contact-messages"
         title={t("leads.detail.messages.title")}
@@ -504,7 +529,8 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <dd className="text-ink-2">{formLanguageLabel(r.locale, t)}</dd>
                 </div>
                 <div>
-                  <dt className="text-ink-3">{t("leads.detail.requests.notice")}</dt>
+                  {/* DP-298: a notice is information the visitor acknowledged, never a consent. */}
+                  <dt className="text-ink-3">{t("legal.consents.noticeAcknowledged")}</dt>
                   <dd className="text-ink-2">
                     {t("leads.detail.messages.version", {
                       version: r.privacyNoticeVersion,

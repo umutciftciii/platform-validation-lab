@@ -7,8 +7,17 @@
  * Every answer is a DRAFT: the service hands it back to the person who asked; nothing here (or
  * anywhere in src/ai) can write or publish content (ESLint boundary). A person applies a draft
  * through the existing editors and import/approval paths with their own permissions.
+ *
+ * DP-298 (ADR-031 D6): every task declares its `dataPolicy`. AI-1 tasks handle no personal data
+ * (`none`); a later CRM task may declare `personal_data` with its purposes and exact fields and
+ * then runs only through the personal-data gate (engine/personal-data-gate.ts).
  */
 import type { AiTask } from "../ledger-sql.js";
+import {
+  NO_PERSONAL_DATA,
+  dataPolicyProblem,
+  type AiTaskDataPolicy,
+} from "../engine/personal-data-gate.js";
 
 export interface AiTaskDefinition {
   task: AiTask;
@@ -19,6 +28,8 @@ export interface AiTaskDefinition {
   maxInputChars: number;
   /** The checked draft text, or null when the answer is not usable. */
   checkOutput(text: string): string | null;
+  /** DP-298: whether (and which) personal data the task may send. */
+  dataPolicy: AiTaskDataPolicy;
 }
 
 const unavailable = (task: AiTask): AiTaskDefinition => ({
@@ -27,6 +38,7 @@ const unavailable = (task: AiTask): AiTaskDefinition => ({
   system: "",
   maxInputChars: 0,
   checkOutput: () => null,
+  dataPolicy: NO_PERSONAL_DATA,
 });
 
 export const AI_TASKS: Readonly<Record<AiTask, AiTaskDefinition>> = {
@@ -41,8 +53,18 @@ export const AI_TASKS: Readonly<Record<AiTask, AiTaskDefinition>> = {
       const t = text.trim();
       return t.length > 0 && t.length <= 200 ? t : null;
     },
+    dataPolicy: NO_PERSONAL_DATA,
   },
   TRANSLATION: unavailable("TRANSLATION"),
   SEO_META: unavailable("SEO_META"),
   CONTENT_DRAFT: unavailable("CONTENT_DRAFT"),
 };
+
+/** DP-298: a registry whose personal-data declarations are incoherent never starts (fail closed). */
+export function assertTaskRegistry(tasks: Readonly<Record<string, AiTaskDefinition>>): void {
+  for (const [task, def] of Object.entries(tasks)) {
+    const problem = dataPolicyProblem(def.dataPolicy);
+    if (problem) throw new Error(`AI task ${task}: invalid data policy (${problem})`);
+  }
+}
+assertTaskRegistry(AI_TASKS);

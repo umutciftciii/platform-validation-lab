@@ -37,6 +37,8 @@ import {
   SEO_REDIRECT_IMPORT_MAX_BODY_BYTES,
   SEO_REDIRECT_IMPORT_PATH,
   TRANSLATION_PACKAGE_API,
+  LEGAL_TEXT_BODY_PATH,
+  LEGAL_TEXT_MAX_BODY_BYTES,
   TRANSLATION_PACKAGE_BODY_PATH,
   TRANSLATION_PACKAGE_MAX_BODY_BYTES,
 } from "@dream/contracts";
@@ -51,6 +53,8 @@ export const MAX_BODY_BYTES = 16 * 1024;
 export function bodyLimit(pathname: string): number {
   if (SEO_REDIRECT_IMPORT_PATH.test(pathname)) return SEO_REDIRECT_IMPORT_MAX_BODY_BYTES;
   if (TRANSLATION_PACKAGE_BODY_PATH.test(pathname)) return TRANSLATION_PACKAGE_MAX_BODY_BYTES;
+  // DP-298: legal-text drafts (the privacy policy may be up to 60 000 characters).
+  if (LEGAL_TEXT_BODY_PATH.test(pathname)) return LEGAL_TEXT_MAX_BODY_BYTES;
   return MAX_BODY_BYTES;
 }
 export const UPSTREAM_TIMEOUT_MS = 10_000;

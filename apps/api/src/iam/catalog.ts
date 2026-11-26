@@ -319,6 +319,19 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   }),
   perm("media", "read", "cms", "Browse the media library"),
   perm("media", "upload", "cms", "Upload and replace media"),
+  // DP-298 (ADR-031 D1): versioned legal and consent texts (platform-wide). Publishing freezes a
+  // version as consent evidence and records the legal review; it is a publication (not a super
+  // admin default, F1-001B) and needs a fresh step-up.
+  perm("legal_text", "edit", "cms", "Create and edit drafts of legal and consent texts", {
+    scopeType: P,
+  }),
+  perm(
+    "legal_text",
+    "publish",
+    "cms",
+    "Publish legal and consent texts and record their legal review",
+    { scopeType: P, sensitive: true },
+  ),
   // Product catalogue (K-01: entry, approval and publication are separate).
   // PM-1: the product master record is platform-wide; only this PLATFORM permission changes it.
   // Site roles never get it (a platform permission cannot sit in a site role).
@@ -384,7 +397,12 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   perm("portal", "access", "customer_portal", "Use the customer portal", { audience: CUSTOMER }),
 ];
 
-export const PUBLISH_PERMISSIONS: readonly string[] = ["content:publish", "product:publish"];
+export const PUBLISH_PERMISSIONS: readonly string[] = [
+  "content:publish",
+  "product:publish",
+  // DP-298: legal texts are publications too.
+  "legal_text:publish",
+];
 
 /** Retired permissions that grant nothing; the system owner does not carry them (DP-109 cleanup). */
 export const RETIRED_PERMISSIONS: readonly string[] = ["customer_data_access:grant"];

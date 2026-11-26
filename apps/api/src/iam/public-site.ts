@@ -46,6 +46,17 @@ export class PublicSiteService {
 
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  /**
+   * DP-298 (ADR-031 D1): platform-wide public data (the published legal texts) for a site's proxy
+   * key. Needs no Site row (the texts are the same on every site); the client sees no site-bound
+   * row at all (empty scope).
+   */
+  platform(ctx: RequestContext): SiteScopedClient {
+    const siteKey = ctx.app === "ADMIN" ? null : SITE_OF_APP[ctx.app];
+    if (!siteKey) throw new ApiError("NOT_FOUND");
+    return withSiteScope(this.prisma, { siteIds: [], includePlatform: false });
+  }
+
   async begin(ctx: RequestContext): Promise<PublicSite> {
     const siteKey = ctx.app === "ADMIN" ? null : SITE_OF_APP[ctx.app];
     if (!siteKey) throw new ApiError("NOT_FOUND");

@@ -13,6 +13,7 @@ import { AiService } from "./ai.service.js";
 import { AiOperationsService } from "./operations.service.js";
 import { AiRunnerService } from "./runner/runner.service.js";
 import { AiReportsService } from "./reports.service.js";
+import { AiDataTermsService } from "./data-terms.service.js";
 
 // DP-287/DP-288 (ADR-030): the AI Center. Off by default; only the system owner switches it
 // (Owner Console). AI_CONFIG is validated at start-up: with DP_AI_TRANSPORT=off (default) no AI
@@ -40,6 +41,8 @@ import { AiReportsService } from "./reports.service.js";
     AiRunnerService,
     AiOperationsService,
     AiReportsService,
+    // DP-298 (ADR-031 D6): provider data-processing terms (personal-data gate).
+    AiDataTermsService,
     AiGateGuard,
   ],
 })

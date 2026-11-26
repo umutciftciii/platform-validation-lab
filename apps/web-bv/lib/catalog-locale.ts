@@ -1,16 +1,17 @@
 /**
- * ML-3 (DP-236): the language of a catalogue or privacy page. Those pages exist only in the
- * languages listed in lib/proxy-routes.ts (`CATALOGUE_LOCALES`, `PRIVACY_LOCALES`): the catalogue
- * in every language since ML-8c (each shows only the products published in it, read with the
- * page's language), the Dutch policy with its own approval (ADR-028 D12). The proxy already
- * answers 404 for the others; the pages check again, so English content is never rendered under
- * a Dutch address (D7).
+ * ML-3 (DP-236): the language of a catalogue or privacy page. The catalogue exists in the
+ * languages of lib/proxy-routes.ts (`CATALOGUE_LOCALES`: every language since ML-8c, each showing
+ * only the products published in it, read with the page's language). DP-298 (ADR-031 D1): the
+ * policy's languages are data (the versions published in the admin, read from the API), so
+ * `privacyLocale` only checks the route language; the policy page itself checks the snapshot
+ * inside its Suspense boundary and the proxy already answers 404 for a language without texts.
+ * English content is never rendered under a Dutch address (D7).
  */
 import { notFound } from "next/navigation";
 
-import type { RouteLocale } from "@/lib/locale-routing";
+import { ROUTE_LOCALES, type RouteLocale } from "@/lib/locale-routing";
 import { pageLocale } from "@/lib/page-locale";
-import { CATALOGUE_LOCALES, PRIVACY_LOCALES } from "@/lib/proxy-routes";
+import { CATALOGUE_LOCALES } from "@/lib/proxy-routes";
 
 /**
  * Read from the root parameter (`next/root-params`), so a page can know its language outside
@@ -27,5 +28,5 @@ export function catalogLocale(): Promise<RouteLocale> {
 }
 
 export function privacyLocale(): Promise<RouteLocale> {
-  return allowed(PRIVACY_LOCALES);
+  return allowed(ROUTE_LOCALES);
 }

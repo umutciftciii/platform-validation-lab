@@ -82,6 +82,9 @@ services:
 
   web-corporate:
     <<: *local-image
+    environment:
+      # DP-298: the legal texts come from the API (DEV key, like web-bv).
+      DP_PROXY_KEY_WEB_CORPORATE: ${DEV_DP_PROXY_KEY_WEB_CORPORATE:?set DEV_DP_PROXY_KEY_WEB_CORPORATE in .env}
 
   admin:
     <<: *local-image

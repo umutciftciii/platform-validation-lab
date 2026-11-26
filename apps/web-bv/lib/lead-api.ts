@@ -23,6 +23,7 @@ import {
   type SiteLeadRequestResult,
 } from "@dream/contracts";
 import { catalogConfig, documentHref } from "./catalog-api";
+import { legalTextsSnapshot } from "./legal-texts-api";
 
 const TIMEOUT_MS = 10_000;
 export const MAX_FORM_BYTES = 8 * 1024;
@@ -174,6 +175,9 @@ async function submitLead(request: Request, form: Record<string, unknown>): Prom
       (d) => d.rule === "outdated" && (LEAD_TEXT_FIELDS as readonly string[]).includes(d.path),
     );
     if (res.status === 400 && outdated.length > 0) {
+      // DP-298: a newer version was published; read past the cache so `/lead-form/texts` serves
+      // the version the API now expects, not the cached one the visitor was refused with.
+      await legalTextsSnapshot({ fresh: true });
       return { ok: false, status: 409, code: LEAD_TEXT_OUTDATED, fields: outdated.map((d) => d.path), retryAfter: null };
     }
     // ML-10: texts of another language than the form's: refused, nothing stored (fail closed).

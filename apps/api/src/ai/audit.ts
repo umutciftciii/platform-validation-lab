@@ -32,6 +32,9 @@ export const AI_AUDIT_ACTIONS = [
   "ai.operation.discarded",
   "ai.estimate.underrun",
   "ai.reconciliation.record",
+  // DP-298 (ADR-031 D6): the owner's record of a provider's data-processing terms.
+  "ai.provider_terms.recorded",
+  "ai.provider_terms.revoked",
 ] as const;
 export type AiAuditAction = (typeof AI_AUDIT_ACTIONS)[number];
 
@@ -74,6 +77,13 @@ export const AI_AUDIT_METADATA_KEYS = [
   "stopped",
   "estInputTokens",
   "estOutputTokens",
+  // DP-298: personal-data tasks (purposes and field NAMES, comma-separated) and provider terms.
+  "personalData",
+  "purposes",
+  "fields",
+  "transferMechanism",
+  "kvkkTransferMechanism",
+  "replaced",
 ] as const;
 
 const ALLOWED = new Set<string>(AI_AUDIT_METADATA_KEYS);

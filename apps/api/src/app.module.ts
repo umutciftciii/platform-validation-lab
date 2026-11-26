@@ -6,6 +6,7 @@ import { CmsModule } from "./cms/cms.module.js";
 import { HealthController } from "./health/health.controller.js";
 import { ApiExceptionFilter } from "./iam/http/api-error.js";
 import { IamModule } from "./iam/iam.module.js";
+import { LegalModule } from "./legal/legal.module.js";
 import { MediaModule } from "./media/media.module.js";
 import { PrismaModule } from "./prisma/prisma.module.js";
 import { SeoModule } from "./seo/seo.module.js";
@@ -24,6 +25,7 @@ import { TranslationPackagesModule } from "./translation-packages/translation-pa
     SeoModule,
     TranslationPackagesModule,
     AiModule,
+    LegalModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
