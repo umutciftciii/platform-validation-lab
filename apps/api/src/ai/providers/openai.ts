@@ -183,6 +183,7 @@ export class OpenAiAdapter implements AiProviderAdapter {
         url: `${OPENAI_BASE_URL}/responses`,
         headers: this.headers(apiKey, o),
         signal: o.signal,
+        ...(o.onDispatch ? { onDispatch: o.onDispatch } : {}),
         body: openAiRequestBody(request),
       },
       mapError,

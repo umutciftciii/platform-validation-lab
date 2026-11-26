@@ -2341,18 +2341,43 @@ model AiOperation {
   startedAt           DateTime?         @db.Timestamptz(3)
   finishedAt          DateTime?         @db.Timestamptz(3)
   leaseUntil          DateTime          @db.Timestamptz(3)
+  /// DP-297: the actor asked to stop the running call (seen by every instance).
+  stopRequestedAt     DateTime?         @db.Timestamptz(3)
+  /// DP-297: the provider request was permitted (ai_dispatch) under this AI switch version.
+  dispatchedAt          DateTime?       @db.Timestamptz(3)
+  dispatchSwitchVersion Int?
   createdAt           DateTime          @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime          @default(now()) @db.Timestamptz(3)
 
-  site    Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  model   AiModel         @relation(fields: [modelId], references: [id], onDelete: Restrict)
-  price   AiModelPrice    @relation(fields: [priceId], references: [id], onDelete: Restrict)
-  entries AiLedgerEntry[]
+  site       Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  model      AiModel         @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  price      AiModelPrice    @relation(fields: [priceId], references: [id], onDelete: Restrict)
+  entries    AiLedgerEntry[]
+  transients AiTransient[]
 
   @@unique([actorUserId, idempotencyKey])
   @@index([status, leaseUntil])
   @@index([siteId, createdAt])
   @@index([createdAt])
+}
+
+/// DP-297 (ADR-030 D10): the encrypted input and draft answer of an operation, at most 15 minutes.
+/// UNLOGGED (migration dp_297): no WAL, emptied after a crash, not in the dumps. Read and written
+/// only through SECURITY DEFINER functions; a wiped entry keeps ids and times, never a text.
+model AiTransient {
+  operationId String    @db.Uuid
+  /// INPUT | RESULT
+  kind        String    @db.VarChar(8)
+  /// AES-256-GCM in the API (key derived from DP_AI_ENC_KEYS); NULL once wiped.
+  ciphertext  String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime  @db.Timestamptz(3)
+  wipedAt     DateTime? @db.Timestamptz(3)
+
+  operation AiOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+
+  @@id([operationId, kind])
+  @@index([expiresAt], map: "AiTransient_live_expiresAt_idx", where: raw("(ciphertext IS NOT NULL)"))
 }
 
 /// Append-only money movements of the operations per budget period (the audit of the counters).
