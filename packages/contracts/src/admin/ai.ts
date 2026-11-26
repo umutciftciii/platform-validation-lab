@@ -37,15 +37,34 @@ export const AI_BLOCKERS = [
   "no_provider_key",
   "no_enabled_model",
   "no_budget",
+  // DP-292: no task is enabled (a task names its model and limits).
+  "no_enabled_task",
 ] as const;
 export type AiBlocker = (typeof AI_BLOCKERS)[number];
+
+/**
+ * DP-292: what the signed-in user may do in the AI Center (presentation only: the API decides
+ * again on every route). Super admins and AI viewers read; AI administrators and the system owner
+ * manage; switching AI on or off is not here (Owner Console only).
+ */
+export const AiPermissionsSchema = z.strictObject({
+  usageRead: z.boolean(),
+  providerManage: z.boolean(),
+  modelManage: z.boolean(),
+  budgetManage: z.boolean(),
+  invoke: z.boolean(),
+});
+export type AiPermissions = z.infer<typeof AiPermissionsSchema>;
 
 /** GET /api/v1/admin/ai/overview (ai:read). 404 while AI is off. */
 export const AiOverviewResponseSchema = z.strictObject({
   enabled: z.literal(true),
-  /** Whether a provider call could start now. Always false until DP-291 (no call path yet). */
+  /** DP-291: whether a provider call could start now (no blocker left). */
   callsPossible: z.boolean(),
   blockers: z.array(z.enum(AI_BLOCKERS)),
+  /** DP-292: the server environment's transport (off / fake / live). */
+  transport: z.enum(["off", "fake", "live"]),
+  permissions: AiPermissionsSchema,
 });
 export type AiOverviewResponse = z.infer<typeof AiOverviewResponseSchema>;
 
