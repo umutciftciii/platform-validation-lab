@@ -117,6 +117,7 @@ model User {
   customerDataAccessRequested CustomerDataAccessRequest[]  @relation("CustomerDataAccessRequestedBy")
   customerDataAccessDecided   CustomerDataAccessRequest[]  @relation("CustomerDataAccessDecidedBy")
   moduleChanges               ModuleConfiguration[]
+  platformModuleChanges       PlatformModuleState[]
   auditEvents                 AuditEvent[]
   // F1-002 (ADR-013): authentication. Only the IAM infrastructure (src/iam) reads these.
   sessions                    Session[]
@@ -248,6 +249,7 @@ model FeatureModule {
 
   permissions    Permission[]
   configurations ModuleConfiguration[]
+  platformState  PlatformModuleState?
 }
 
 /// Per-site switch for an optional module. Disabling never deletes data (K-03).
@@ -268,6 +270,28 @@ model ModuleConfiguration {
 
   @@unique([moduleId, siteId])
   @@index([siteId])
+}
+
+/// DP-287 (ADR-030 D1): the platform-wide switch of an optional platform module (the first is the
+/// AI Center, `ai`). One row per platform module, created by its migration (off); a missing row
+/// counts as off (fail closed). Only the system owner changes it (row-level security,
+/// `module:manage` in the Owner Console); it is never deleted (trigger) and a platform module has
+/// no per-site switch (ModuleConfiguration trigger). Other roles read it only through
+/// `platform_module_enabled()` / `platform_module_hold_enabled()` (SECURITY DEFINER, booleans).
+model PlatformModuleState {
+  moduleKey   String   @id @db.VarChar(64)
+  enabled     Boolean  @default(false)
+  /// Why the owner set this state (K-03: every module change has a reason).
+  reason      String   @db.VarChar(1000)
+  /// Raised by exactly one on every change (trigger).
+  version     Int      @default(1)
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  /// Set by the guard trigger on every change.
+  updatedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  module    FeatureModule @relation(fields: [moduleKey], references: [key], onDelete: Restrict)
+  updatedBy User?         @relation(fields: [updatedById], references: [id], onDelete: Restrict)
 }
 
 /// Action on a resource, e.g. content:publish. `scopeType` says where it can be granted.

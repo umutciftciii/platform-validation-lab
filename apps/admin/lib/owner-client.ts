@@ -33,6 +33,7 @@ const MODULE_KEYS = [
   "automation",
   "integrations",
   "customer_portal",
+  "ai",
 ] as const;
 type ModuleKey = (typeof MODULE_KEYS)[number];
 const isModuleKey = (key: string): key is ModuleKey =>
@@ -77,6 +78,13 @@ export async function getJson<T>(url: string): Promise<StaffCall<T>> {
 export const changeModule = (moduleKey: string, siteId: string, enabled: boolean, reason: string) =>
   postJson<OwnerModuleChangeResponse>(
     `${OWNER_API}/modules/${encodeURIComponent(moduleKey)}/sites/${encodeURIComponent(siteId)}`,
+    { enabled, reason },
+  );
+
+/** DP-287 (ADR-030 D1): the platform-wide switch of a platform module (the AI Center). */
+export const changePlatformModule = (moduleKey: string, enabled: boolean, reason: string) =>
+  postJson<OwnerModuleChangeResponse>(
+    `${OWNER_API}/modules/${encodeURIComponent(moduleKey)}/platform`,
     { enabled, reason },
   );
 

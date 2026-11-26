@@ -44,7 +44,10 @@ import { Clock } from "../http/clock.js";
 import { challengeCookie, clearCookie, sessionCookie } from "../http/cookies.js";
 import type { RequestContext } from "../http/request-context.js";
 import { SESSION_POLICIES } from "../session-policy.js";
-import { loadSystemOwnerId } from "../repository.js";
+import { loadAuthorizationSnapshot, loadSystemOwnerId } from "../repository.js";
+import { decide } from "../authorization.js";
+import { inStaffContext } from "../iam-context.js";
+import { AI_MODULE, isPlatformModuleEnabled } from "../platform-modules.js";
 import { writeAudit } from "./audit-writer.js";
 import {
   consumeToken,
@@ -337,7 +340,28 @@ export class StaffAuthService {
       absoluteExpiresAt: s.absoluteExpiresAt.toISOString(),
       // DP-110: only tells the user about itself; nobody learns who the owner is.
       isSystemOwner: (await loadSystemOwnerId(this.prisma)) === s.user.id,
+      // DP-287: what the admin shows; the API decides again on every AI route.
+      features: { aiCenter: await this.aiCenterAvailable(ctx, s, now) },
     };
+  }
+
+  /**
+   * DP-287 (ADR-030 D2): the AI Center is shown only while the owner keeps AI on and the user may
+   * read it (ai:read, which `decide` refuses while AI is off). Off = one boolean read, no snapshot.
+   */
+  private async aiCenterAvailable(
+    ctx: RequestContext,
+    s: ActiveSession,
+    now: Date,
+  ): Promise<boolean> {
+    if (!(await isPlatformModuleEnabled(this.prisma, AI_MODULE))) return false;
+    const token = ctx.cookies.get(ADMIN_SESSION_COOKIE) ?? "";
+    const snapshot = await inStaffContext(this.prisma, token, (tx) =>
+      loadAuthorizationSnapshot(tx, s.userId, {
+        mfaVerified: isStepUpFresh(s.mfaVerifiedAt, now),
+      }),
+    );
+    return snapshot !== null && decide(snapshot, "ai:read", { scope: "platform" }, now).allowed;
   }
 
   /** 403 AUTH_STEP_UP_REQUIRED unless the session's MFA verification is fresh (D8). */

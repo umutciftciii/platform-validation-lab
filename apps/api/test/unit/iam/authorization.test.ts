@@ -352,7 +352,11 @@ describe("decide: the system owner's God Mode (DP-108, ADR-018)", () => {
   });
 
   it("gives the owner every staff permission on every site, publishing included (K4)", () => {
-    const s = owner({ enabled: { [BV]: ["crm", "automation", "integrations"] } });
+    // DP-287: with the AI Center switched on, too (it is off by default; see platform-modules.test.ts).
+    const s = owner({
+      enabled: { [BV]: ["crm", "automation", "integrations"] },
+      platformModules: ["ai"],
+    });
     for (const p of PERMISSIONS.filter((x) => x.audience === "STAFF")) {
       const target = p.scopeType === "PLATFORM" ? platform : bv;
       const expected = !RETIRED_PERMISSIONS.includes(p.key);

@@ -103,6 +103,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     customerDataAccessRequested: { model: "CustomerDataAccessRequest", list: true },
     customerDataAccessDecided: { model: "CustomerDataAccessRequest", list: true },
     moduleChanges: { model: "ModuleConfiguration", list: true },
+    platformModuleChanges: { model: "PlatformModuleState", list: true },
     auditEvents: { model: "AuditEvent", list: true },
     sessions: { model: "Session", list: true },
     credentialTokens: { model: "UserCredentialToken", list: true },
@@ -186,10 +187,16 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   FeatureModule: {
     permissions: { model: "Permission", list: true },
     configurations: { model: "ModuleConfiguration", list: true },
+    platformState: { model: "PlatformModuleState", list: false },
   },
   ModuleConfiguration: {
     module: { model: "FeatureModule", list: false },
     site: { model: "Site", list: false },
+    updatedBy: { model: "User", list: false },
+  },
+  // DP-287 (ADR-030 D1): platform-wide module switches; no site.
+  PlatformModuleState: {
+    module: { model: "FeatureModule", list: false },
     updatedBy: { model: "User", list: false },
   },
   Permission: {
