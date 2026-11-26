@@ -46,6 +46,12 @@ export interface ModuleDef {
   description: string;
   /** Core modules are always on for every site and can never be disabled (K-03). */
   isCore: boolean;
+  /**
+   * DP-287 (ADR-030 D1): where the module is switched. "SITE" (default): per site
+   * (ModuleConfiguration). "PLATFORM": one platform-wide switch of the system owner
+   * (PlatformModuleState); always optional, and `decide` refuses its permissions while it is off.
+   */
+  scope?: "SITE" | "PLATFORM";
 }
 
 export interface PermissionDef {
@@ -177,6 +183,16 @@ export const MODULES: readonly ModuleDef[] = [
     name: "Customer portal",
     description: "Company-level document and request history (optional)",
     isCore: false,
+  },
+  // DP-287 (ADR-030): platform-wide, switched only by the system owner; off by default (its
+  // migration creates the switch, off).
+  {
+    key: "ai",
+    name: "AI Center",
+    description:
+      "AI providers, models, budgets and usage (optional; switched platform-wide by the system owner)",
+    isCore: false,
+    scope: "PLATFORM",
   },
 ];
 
@@ -334,6 +350,8 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   perm("integration", "manage", "integrations", "Configure integrations and webhooks", {
     sensitive: true,
   }),
+  // DP-287 (ADR-030): the AI Center. Refused for everyone while the owner keeps AI off.
+  perm("ai", "read", "ai", "View the AI Center (state and readiness)", { scopeType: P }),
   // Customer (member) permissions on a public site.
   perm("technical_spec", "view", "membership", "See member-only technical specifications", {
     audience: CUSTOMER,
@@ -545,6 +563,10 @@ export function catalogProblems(
     if (moduleKeys.has(m.key)) problems.push(`module ${m.key}: duplicate key`);
     moduleKeys.add(m.key);
     if (!/^[a-z][a-z0-9_]*$/.test(m.key)) problems.push(`module ${m.key}: invalid key`);
+    // DP-287: a platform-wide switch exists only for optional modules.
+    if (m.scope === "PLATFORM" && m.isCore) {
+      problems.push(`module ${m.key}: platform-switched modules are optional`);
+    }
   }
   for (const required of ["rbac", "audit", "mfa"]) {
     const m = catalog.modules.find((x) => x.key === required);
@@ -565,8 +587,11 @@ export function catalogProblems(
       problems.push(`permission ${p.key}: step-up MFA applies to staff permissions only`);
     }
     const mod = catalog.modules.find((m) => m.key === p.module);
-    if (p.scopeType === "PLATFORM" && mod && !mod.isCore) {
-      problems.push(`permission ${p.key}: platform permissions must belong to a core module`);
+    // A per-site switch cannot gate a platform permission; a platform-wide switch can (DP-287).
+    if (p.scopeType === "PLATFORM" && mod && !mod.isCore && mod.scope !== "PLATFORM") {
+      problems.push(
+        `permission ${p.key}: platform permissions must belong to a core or platform-switched module`,
+      );
     }
   }
   const roleKeys = new Set<string>();

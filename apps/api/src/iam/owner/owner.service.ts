@@ -10,6 +10,11 @@
  * - Module switches (K1, condition 4): only optional modules are switched, always with a reason; a
  *   core module is never disabled (here, and by the ModuleConfiguration trigger). Switching never
  *   deletes data (K-03).
+ * - DP-287 (ADR-030 D1): a platform-switched module (the AI Center) has ONE platform-wide switch,
+ *   `POST modules/:moduleKey/platform`, here and nowhere else: the same owner check, module:manage
+ *   (owner-only, step-up), reason and PROTECTED audit. Row-level security lets only the owner's
+ *   context change "PlatformModuleState". The UPDATE waits for every transaction that holds the
+ *   switch (`PlatformModuleService.whileEnabled`); listeners hear about it after the COMMIT.
  * - Designation confirmation: the staff user who received the operator's link proves the account
  *   with the current password and a fresh step-up; the SECURITY DEFINER function
  *   iam_owner_designation_confirm checks the token and writes the SystemOwner row. dp_app itself
@@ -38,6 +43,7 @@ import { ApiError, parseBody } from "../http/api-error.js";
 import { Clock } from "../http/clock.js";
 import type { RequestContext } from "../http/request-context.js";
 import { moduleChangeProblem } from "../modules.js";
+import { PlatformModuleService, lockPlatformModuleSwitch } from "../platform-modules.js";
 import { inStaffContext } from "../iam-context.js";
 import { loadAuthorizationSnapshot } from "../repository.js";
 import { writeAudit } from "../staff/audit-writer.js";
@@ -48,6 +54,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** How the protected stream names the owner as an actor. */
 export const OWNER_ACTOR_LABEL = "System owner";
 const MAX_PAGE = 100;
+/**
+ * DP-287: the switch's transaction may wait for work that holds the switch (at most
+ * WHILE_ENABLED_TIMEOUT_MS, platform-modules.ts) before its UPDATE goes through.
+ */
+const PLATFORM_SWITCH_TIMEOUT_MS = 20_000;
 
 interface OwnerContext {
   session: ActiveSession;
@@ -73,6 +84,7 @@ export class OwnerService {
     @Inject(Clock) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     @Inject(StaffSessionService) private readonly sessions: StaffSessionService,
+    @Inject(PlatformModuleService) private readonly platformModules: PlatformModuleService,
   ) {
     this.throttle = new AuthThrottleService(prisma);
   }
@@ -171,21 +183,49 @@ export class OwnerService {
         },
       }),
     );
-    return MODULES.filter((m) => !only || m.key === only).map((m) => ({
-      key: m.key,
-      name: m.name,
-      description: m.description,
-      isCore: m.isCore,
-      sites: sites.map((s) => {
-        const c = configs.find((x) => x.module.key === m.key && x.siteId === s.id);
-        return {
-          siteId: s.id,
-          enabled: m.isCore || (c?.enabled ?? false),
-          reason: c?.reason ?? null,
-          updatedAt: c?.updatedAt.toISOString() ?? null,
-        };
+    // DP-287: platform-wide states, in the owner's database context (owner-only read policy).
+    const platformStates = await inStaffContext(this.prisma, token, (tx) =>
+      tx.platformModuleState.findMany({
+        where: only ? { moduleKey: only } : {},
+        select: { moduleKey: true, enabled: true, reason: true, updatedAt: true, version: true },
       }),
-    }));
+    );
+    return MODULES.filter((m) => !only || m.key === only).map((m) => {
+      if (m.scope === "PLATFORM") {
+        const state = platformStates.find((x) => x.moduleKey === m.key);
+        return {
+          key: m.key,
+          name: m.name,
+          description: m.description,
+          isCore: m.isCore,
+          scope: "PLATFORM" as const,
+          platform: state
+            ? {
+                enabled: state.enabled,
+                reason: state.reason,
+                updatedAt: state.updatedAt.toISOString(),
+                version: state.version,
+              }
+            : null,
+          sites: [],
+        };
+      }
+      return {
+        key: m.key,
+        name: m.name,
+        description: m.description,
+        isCore: m.isCore,
+        sites: sites.map((s) => {
+          const c = configs.find((x) => x.module.key === m.key && x.siteId === s.id);
+          return {
+            siteId: s.id,
+            enabled: m.isCore || (c?.enabled ?? false),
+            reason: c?.reason ?? null,
+            updatedAt: c?.updatedAt.toISOString() ?? null,
+          };
+        }),
+      };
+    });
   }
 
   // --- module switches ----------------------------------------------------------------------
@@ -205,11 +245,10 @@ export class OwnerService {
       ? await this.prisma.site.findUnique({ where: { id: siteId }, select: { id: true } })
       : null;
     if (!mod || !site) throw new ApiError("NOT_FOUND");
-    const problem = moduleChangeProblem({
-      moduleKey: mod.key,
-      enabled: req.enabled,
-      reason: req.reason,
-    });
+    const problem = moduleChangeProblem(
+      { moduleKey: mod.key, enabled: req.enabled, reason: req.reason },
+      "SITE",
+    );
     if (problem) {
       // owner.* events come only from the owner's own database context (DP-125, K2).
       await inStaffContext(this.prisma, owner.token, (tx) =>
@@ -274,6 +313,92 @@ export class OwnerService {
         });
       });
     }
+    return { module: (await this.modules(owner.token, mod.key))[0]!, changed };
+  }
+
+  /**
+   * DP-287 (ADR-030 D1, D2): the platform-wide switch of a platform module (the AI Center). Only
+   * the system owner (404 for everyone else), module:manage with a fresh step-up, a reason, a
+   * PROTECTED audit event. `enabled` is the target state: a repeated request changes nothing.
+   */
+  async changePlatformModule(
+    ctx: RequestContext,
+    rawModuleKey: string,
+    body: unknown,
+  ): Promise<OwnerModuleChangeResponse> {
+    const owner = await this.owner(ctx, "modules");
+    await this.require(ctx, owner, "module:manage");
+    const req = parseBody(OwnerModuleChangeRequestSchema, body);
+    const mod = MODULE_BY_KEY.get(rawModuleKey);
+    if (!mod) throw new ApiError("NOT_FOUND");
+    const problem = moduleChangeProblem(
+      { moduleKey: mod.key, enabled: req.enabled, reason: req.reason },
+      "PLATFORM",
+    );
+    if (problem) {
+      await inStaffContext(this.prisma, owner.token, (tx) =>
+        writeAudit(tx, {
+          actorType: "USER",
+          actorUserId: owner.session.userId,
+          action: "owner.module_changed",
+          resourceType: "feature_module",
+          resourceId: mod.key,
+          scopeType: "PLATFORM",
+          outcome: "DENIED",
+          reason: problem,
+          metadata: { permission: "module:manage", enabled: req.enabled, scope: "PLATFORM" },
+          requestId: ctx.requestId,
+        }),
+      );
+      throw new ApiError("VALIDATION_FAILED", [{ path: "enabled", rule: problem }]);
+    }
+    const changed = await inStaffContext(
+      this.prisma,
+      owner.token,
+      async (tx) => {
+        // Waits for the work that holds the switch (whileEnabled); new work waits behind us.
+        await lockPlatformModuleSwitch(tx, mod.key);
+        const current = await tx.platformModuleState.findUnique({
+          where: { moduleKey: mod.key },
+          select: { enabled: true, version: true },
+        });
+        // The module's migration creates the row; without it the module is off and cannot be
+        // switched here.
+        if (!current) throw new ApiError("CONFLICT_STATE");
+        if (current.enabled === req.enabled) return false;
+        // K4 (DP-125) for platform modules: the database lets only the owner's context write.
+        const res = await tx.platformModuleState.updateMany({
+          where: { moduleKey: mod.key, version: current.version },
+          data: {
+            enabled: req.enabled,
+            reason: req.reason,
+            updatedById: owner.session.userId,
+            version: current.version + 1,
+          },
+        });
+        if (res.count !== 1) throw new ApiError("CONFLICT_STATE");
+        await writeAudit(tx, {
+          actorType: "USER",
+          actorUserId: owner.session.userId,
+          action: "owner.module_changed",
+          resourceType: "feature_module",
+          resourceId: mod.key,
+          scopeType: "PLATFORM",
+          outcome: "SUCCESS",
+          reason: req.reason,
+          metadata: {
+            permission: "module:manage",
+            enabled: req.enabled,
+            previous: current.enabled,
+            scope: "PLATFORM",
+          },
+          requestId: ctx.requestId,
+        });
+        return true;
+      },
+      { timeout: PLATFORM_SWITCH_TIMEOUT_MS },
+    );
+    if (changed) await this.platformModules.changed({ moduleKey: mod.key, enabled: req.enabled });
     return { module: (await this.modules(owner.token, mod.key))[0]!, changed };
   }
 

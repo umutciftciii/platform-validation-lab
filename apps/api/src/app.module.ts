@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { APP_FILTER } from "@nestjs/core";
+import { AiModule } from "./ai/ai.module.js";
 import { CatalogModule } from "./catalog/catalog.module.js";
 import { CmsModule } from "./cms/cms.module.js";
 import { HealthController } from "./health/health.controller.js";
@@ -22,6 +23,7 @@ import { TranslationPackagesModule } from "./translation-packages/translation-pa
     CmsModule,
     SeoModule,
     TranslationPackagesModule,
+    AiModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],

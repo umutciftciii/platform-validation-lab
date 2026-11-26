@@ -6,7 +6,12 @@
  */
 import { MODULE_BY_KEY } from "./catalog.js";
 
-export type ModuleChangeProblem = "unknown_module" | "core_module" | "reason_required";
+export type ModuleChangeProblem =
+  | "unknown_module"
+  | "core_module"
+  | "reason_required"
+  /** DP-287: a platform-switched module has no per-site switch, a site module no platform one. */
+  | "scope_mismatch";
 
 export interface ModuleChange {
   moduleKey: string;
@@ -14,9 +19,13 @@ export interface ModuleChange {
   reason: string;
 }
 
-export function moduleChangeProblem(change: ModuleChange): ModuleChangeProblem | null {
+export function moduleChangeProblem(
+  change: ModuleChange,
+  scope: "SITE" | "PLATFORM" = "SITE",
+): ModuleChangeProblem | null {
   const mod = MODULE_BY_KEY.get(change.moduleKey);
   if (!mod) return "unknown_module";
+  if ((mod.scope ?? "SITE") !== scope) return "scope_mismatch";
   if (mod.isCore && !change.enabled) return "core_module";
   if (!change.reason.trim()) return "reason_required";
   return null;

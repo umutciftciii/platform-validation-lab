@@ -33,7 +33,7 @@ describe("navigation", () => {
     expect(new Set(NAV_ITEMS.map((i) => i.slug)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("marks the overview, content (CMS S1), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), staff (DP-107) and the owner console (DP-110) as ready", () => {
+  it("marks the overview, content (CMS S1), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), staff (DP-107), the AI Center (DP-287) and the owner console (DP-110) as ready", () => {
     expect(NAV_ITEMS.filter((i) => i.ready).map((i) => i.href)).toEqual([
       "/",
       "/content",
@@ -43,8 +43,25 @@ describe("navigation", () => {
       "/company-review",
       "/leads",
       "/staff",
+      "/ai",
       "/owner",
     ]);
+  });
+
+  it("hides the AI Center unless the session's aiCenter feature is on (DP-287)", () => {
+    const hrefs = (owner: boolean, features?: { aiCenter?: boolean }) =>
+      navGroupsFor(owner, false, features).flatMap((g) => g.items.map((i) => i.href));
+    expect(hrefs(true)).not.toContain("/ai");
+    expect(hrefs(false)).not.toContain("/ai");
+    expect(hrefs(true, { aiCenter: false })).not.toContain("/ai");
+    expect(hrefs(true, { aiCenter: true })).toContain("/ai");
+    expect(hrefs(false, { aiCenter: true })).toContain("/ai");
+    // A review-only user never sees it.
+    expect(
+      navGroupsFor(false, true, { aiCenter: true }).flatMap((g) => g.items.map((i) => i.href)),
+    ).toEqual(["/company-review"]);
+    // The placeholder section route never stands in for it.
+    expect(findSection("ai")).toBeUndefined();
   });
 
   it("shows the owner console to the system owner only (DP-110)", () => {

@@ -22,6 +22,10 @@ export const owner = {
     moduleColumn: "Module",
     lastReason: "Last reason: {reason}",
     core: "Always on (core): {modules}.",
+    platformPanel: "Platform modules",
+    platformDescription:
+      'Switched once for the whole platform, by you alone; nobody else can change them or be given the right. A module that is off is hidden from every menu and its API answers "not found"; its keys, settings and history are kept.',
+    platformState: "Platform-wide",
     chainPanel: "Protected audit chain",
     chainDescription:
       "Your actions and every action aimed at your account are chained with SHA-256 and never shown on staff screens.",
@@ -58,6 +62,11 @@ export const owner = {
       name: "Customer portal",
       description: "Company-level document and request history (optional)",
     },
+    ai: {
+      name: "AI Center",
+      description:
+        "AI providers, models, budgets and usage (optional; switched platform-wide by the system owner)",
+    },
   },
   // Step-up prompt (components/owner/owner-actions.tsx).
   stepUp: {
@@ -80,6 +89,12 @@ export const owner = {
     reason: "Reason",
     hintOff: "Switching off keeps all data; the module's functions stop for everyone.",
     hintOn: "Recorded in the protected audit trail.",
+    platformOnLabel: "Switch on {module} for the whole platform",
+    platformOffLabel: "Switch off {module} for the whole platform",
+    hintPlatformOff:
+      "Hides the module everywhere and stops new work at once; nothing is retried. Keys, settings and history are kept.",
+    hintPlatformOn:
+      "Makes the module visible to staff who may use it. Recorded in the protected audit trail.",
     cancel: "Cancel",
   },
   // Chain verification.

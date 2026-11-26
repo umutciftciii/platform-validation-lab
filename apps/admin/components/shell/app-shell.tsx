@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { NAV_ITEMS, isActive } from "../../lib/navigation";
+import { NAV_ITEMS, isActive, type NavFeatures } from "../../lib/navigation";
 import { trapTab } from "../dialog";
 import { BrandMark, Icon } from "../icons";
 import { buttonStyles, cx } from "../ui";
@@ -21,6 +21,7 @@ export function AppShell({
   environmentLabel,
   isOwner = false,
   reviewOnly = false,
+  features = {},
   children,
 }: {
   user: ShellUser;
@@ -28,6 +29,8 @@ export function AppShell({
   isOwner?: boolean;
   /** DP-172: a company reviewer sees only the company review. */
   reviewOnly?: boolean;
+  /** DP-287: the session's feature flags (the AI Center is hidden while AI is off). */
+  features?: NavFeatures;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -70,12 +73,18 @@ export function AppShell({
         <Sidebar
           isOwner={isOwner}
           reviewOnly={reviewOnly}
+          features={features}
           compact
           environmentLabel={environmentLabel}
         />
       </aside>
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] lg:block">
-        <Sidebar isOwner={isOwner} reviewOnly={reviewOnly} environmentLabel={environmentLabel} />
+        <Sidebar
+          isOwner={isOwner}
+          reviewOnly={reviewOnly}
+          features={features}
+          environmentLabel={environmentLabel}
+        />
       </aside>
 
       {/* Phone drawer */}
@@ -108,6 +117,7 @@ export function AppShell({
           <Sidebar
             isOwner={isOwner}
             reviewOnly={reviewOnly}
+            features={features}
             environmentLabel={environmentLabel}
             onNavigate={() => setDrawerOpen(false)}
           />

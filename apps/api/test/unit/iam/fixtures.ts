@@ -25,6 +25,8 @@ export function snapshot(
     ancestry?: string[];
     /** DP-108: the principal is the system owner. */
     owner?: boolean;
+    /** DP-287: platform-switched modules that are on (the AI Center: "ai"). */
+    platformModules?: string[];
   } = {},
 ): AuthorizationSnapshot {
   return {
@@ -43,6 +45,7 @@ export function snapshot(
       Object.entries(opts.enabled ?? {}).map(([site, mods]) => [site, new Set(mods)]),
     ),
     grantAncestry: new Set(opts.ancestry ?? []),
+    ...(opts.platformModules ? { enabledPlatformModules: new Set(opts.platformModules) } : {}),
     ...(opts.owner ? { isSystemOwner: true } : {}),
   };
 }

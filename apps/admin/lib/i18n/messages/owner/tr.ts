@@ -24,6 +24,10 @@ export const owner: Messages["owner"] = {
     moduleColumn: "Modül",
     lastReason: "Son gerekçe: {reason}",
     core: "Her zaman açık (çekirdek): {modules}.",
+    platformPanel: "Platform modülleri",
+    platformDescription:
+      'Tüm platform için tek seferde ve yalnız sizin tarafınızdan açılıp kapatılır; başka kimse değiştiremez, bu yetki kimseye verilemez. Kapalı bir modül tüm menülerden gizlenir ve API\'si "bulunamadı" yanıtı verir; anahtarları, ayarları ve geçmişi korunur.',
+    platformState: "Tüm platform",
     chainPanel: "Korumalı denetim zinciri",
     chainDescription:
       "Sizin işlemleriniz ve hesabınızı hedef alan her işlem SHA-256 ile zincirlenir ve personel ekranlarında hiçbir zaman gösterilmez.",
@@ -63,6 +67,11 @@ export const owner: Messages["owner"] = {
       name: "Müşteri portalı",
       description: "Şirket düzeyinde belge ve talep geçmişi (isteğe bağlı)",
     },
+    ai: {
+      name: "Yapay Zekâ Merkezi",
+      description:
+        "Yapay zekâ sağlayıcıları, modeller, bütçeler ve kullanım (isteğe bağlı; sistem sahibi tarafından tüm platform için açılıp kapatılır)",
+    },
   },
   // Ek doğrulama istemi.
   stepUp: {
@@ -85,6 +94,12 @@ export const owner: Messages["owner"] = {
     reason: "Gerekçe",
     hintOff: "Kapatmak verileri silmez; modülün işlevleri herkes için durur.",
     hintOn: "Korumalı denetim kaydına yazılır.",
+    platformOnLabel: "{module} modülünü tüm platformda aç",
+    platformOffLabel: "{module} modülünü tüm platformda kapat",
+    hintPlatformOff:
+      "Modülü her yerde gizler ve yeni işleri hemen durdurur; hiçbir iş yeniden denenmez. Anahtarlar, ayarlar ve geçmiş korunur.",
+    hintPlatformOn:
+      "Modülü kullanma yetkisi olan personele görünür kılar. Korumalı denetim kaydına yazılır.",
     cancel: "İptal",
   },
   // Zincir doğrulama.

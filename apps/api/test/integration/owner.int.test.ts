@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
+  AiOverviewResponseSchema,
   EnrolInspectResponseSchema,
   EnrolMfaConfirmResponseSchema,
   EnrolMfaSetupResponseSchema,
@@ -601,6 +602,329 @@ describe("God Mode through decide (condition 5)", () => {
   });
 });
 
+// DP-287 (ADR-030 D1, D2): the global AI switch. Only the system owner switches it, in the Owner
+// Console, platform-wide; it starts OFF; while it is off every AI route is a 404; it survives an
+// API restart; the database keeps it with the owner (row-level security, triggers, owner-only
+// permissions); and once the switch-off COMMITs no new work can start (whileEnabled).
+describe("DP-287: the global AI switch", () => {
+  const AI = "/owner/modules/ai/platform";
+  let factory: { createApiApp(o: { logger: false }): Promise<App> };
+  interface Gate {
+    whileEnabled<T>(key: string, fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T>;
+  }
+  let gate: Gate;
+  let ownerNow: Staff; // the owner with a fresh step-up
+
+  async function sessionOf(who: Staff): Promise<Res> {
+    const token = (who as unknown as { token: string }).token;
+    return parse(
+      await fetch(`${base}/api/v1/auth/staff/session`, {
+        headers: {
+          "x-dp-proxy-key": TEST_KEYS.admin,
+          "x-dp-client-ip": "10.20.30.41",
+          cookie: `__Host-dp_admin_session=${token}`,
+        },
+      }),
+    );
+  }
+  const aiCenter = async (who: Staff) =>
+    ((await sessionOf(who)).body as { features?: { aiCenter: boolean } }).features?.aiCenter;
+  const state = () => dbo.platformModuleState.findUniqueOrThrow({ where: { moduleKey: "ai" } });
+  async function restart() {
+    await app.close();
+    app = await factory.createApiApp({ logger: false });
+    await app.listen(0, "127.0.0.1");
+    base = `http://127.0.0.1:${(app.getHttpServer().address() as { port: number }).port}`;
+  }
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  beforeAll(async () => {
+    factory = (await import(pathToFileURL(path.join(API_DIR, "dist/app.factory.js")).href)) as {
+      createApiApp(o: { logger: false }): Promise<App>;
+    };
+    const mod = (await import(
+      pathToFileURL(path.join(API_DIR, "dist/iam/platform-modules.js")).href
+    )) as { PlatformModuleService: new (prisma: PrismaClient) => Gate };
+    gate = new mod.PlatformModuleService(asApp);
+    ownerNow = new Staff("root-ai", root.userId, await session(root.userId));
+  });
+
+  it("starts OFF: the migration's row, an optional module, no per-site switch", async () => {
+    expect(await state()).toMatchObject({ enabled: false, version: 1, updatedById: null });
+    expect(await dbo.featureModule.findUniqueOrThrow({ where: { key: "ai" } })).toMatchObject({
+      isCore: false,
+      name: "AI Center",
+    });
+    const overview = OwnerOverviewResponseSchema.parse(
+      (await ownerNow.call("GET", "/owner/overview")).body,
+    );
+    expect(overview.modules.find((m) => m.key === "ai")).toMatchObject({
+      scope: "PLATFORM",
+      sites: [],
+      platform: { enabled: false, version: 1 },
+    });
+  });
+
+  it("is a 404 on every AI route for everyone while off, the owner included, audited", async () => {
+    for (const who of [ownerNow, admin2, editor]) {
+      expectError(await who.call("GET", "/ai/overview"), 404, "NOT_FOUND");
+      expect(await aiCenter(who)).toBe(false);
+    }
+    expect(await lastAudit("ai.access_denied")).toMatchObject({
+      actorUserId: editor.userId,
+      outcome: "DENIED",
+      reason: "ai_disabled",
+    });
+    // Unknown AI routes look the same; a signed-out caller still gets 401 first.
+    expectError(await admin2.call("GET", "/ai/nothing-here"), 404, "NOT_FOUND");
+    const anon = await parse(
+      await fetch(`${base}/api/v1/admin/ai/overview`, {
+        headers: { "x-dp-proxy-key": TEST_KEYS.admin, "x-dp-client-ip": "10.20.30.41" },
+      }),
+    );
+    expect(anon.status).toBe(401);
+  });
+
+  it("cannot be switched by anyone but the owner, over HTTP or in the database", async () => {
+    for (const who of [admin2, editor]) {
+      expectError(
+        await who.call("POST", AI, { enabled: true, reason: "try to switch it on" }),
+        404,
+        "NOT_FOUND",
+      );
+    }
+    expect(await lastAudit("owner.access_denied")).toMatchObject({
+      actorUserId: editor.userId,
+      stream: "PROTECTED",
+    });
+    // dp_app in the super admin's own context: no row to read or change (row-level security),
+    // no insert or delete at all.
+    const adminToken = (admin2 as unknown as { token: string }).token;
+    const flipped = await asApp.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT leads_rls_set_staff_context(${adminToken})`;
+      const seen = await tx.platformModuleState.count();
+      const res = await tx.platformModuleState.updateMany({
+        where: { moduleKey: "ai" },
+        data: { enabled: true, reason: "forged by the super admin", version: 2 },
+      });
+      return { seen, count: res.count };
+    });
+    expect(flipped).toEqual({ seen: 0, count: 0 });
+    await rejectsDb(
+      asApp.$executeRaw`INSERT INTO "PlatformModuleState" ("moduleKey", "reason") VALUES ('crm', 'forged state')`,
+      /permission denied/,
+    );
+    await rejectsDb(
+      asApp.$executeRaw`DELETE FROM "PlatformModuleState" WHERE "moduleKey" = 'ai'`,
+      /permission denied/,
+    );
+    // Booleans for everyone through the narrow functions.
+    const probe = await asApp.$queryRaw<
+      { on: boolean }[]
+    >`SELECT platform_module_enabled('ai') AS "on"`;
+    expect(probe).toEqual([{ on: false }]);
+    expect((await state()).enabled).toBe(false);
+  });
+
+  it("keeps the owner-only permissions and the platform switch out of every other place, even for the table owner", async () => {
+    await rejectsDb(
+      dbo.$executeRaw`DELETE FROM "PlatformModuleState" WHERE "moduleKey" = 'ai'`,
+      /a module state is never removed/,
+    );
+    await rejectsDb(
+      dbo.$executeRaw`TRUNCATE "PlatformModuleState"`,
+      /module states are never removed|permission denied/,
+    );
+    await rejectsDb(
+      dbo.platformModuleState.update({
+        where: { moduleKey: "ai" },
+        data: { enabled: true, reason: "skips a version", version: 5 },
+      }),
+      /raises the version by one/,
+    );
+    const ai = await dbo.featureModule.findUniqueOrThrow({ where: { key: "ai" } });
+    await rejectsDb(
+      dbo.moduleConfiguration.create({
+        data: { moduleId: ai.id, siteId: BV, enabled: true, reason: "per-site AI switch" },
+      }),
+      /switched platform-wide, not per site/,
+    );
+    const manage = await dbo.permission.findUniqueOrThrow({ where: { key: "module:manage" } });
+    for (const roleKey of ["platform_super_admin", "site_admin", "read_only"]) {
+      const role = await dbo.role.findUniqueOrThrow({ where: { key: roleKey } });
+      await rejectsDb(
+        dbo.rolePermission.create({ data: { roleId: role.id, permissionId: manage.id } }),
+        /owner-only permissions belong to the system owner only/,
+      );
+    }
+    const holders = await dbo.rolePermission.findMany({
+      where: { permission: { key: { in: ["module:manage", "owner_audit:read"] } } },
+      select: { role: { select: { key: true } } },
+    });
+    expect(new Set(holders.map((h) => h.role.key))).toEqual(new Set(["system_owner"]));
+    // The site route refuses the platform module, the platform route a site module.
+    expectError(
+      await ownerNow.call("POST", `/owner/modules/ai/sites/${BV}`, {
+        enabled: true,
+        reason: "per-site AI",
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expect(await lastAudit("owner.module_changed")).toMatchObject({
+      reason: "scope_mismatch",
+      stream: "PROTECTED",
+    });
+    expectError(
+      await ownerNow.call("POST", "/owner/modules/crm/platform", {
+        enabled: true,
+        reason: "platform CRM",
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expect((await state()).enabled).toBe(false);
+  });
+
+  it("is switched on by the owner alone, with a reason and the step-up, PROTECTED", async () => {
+    const stale = new Staff("root-ai-stale", root.userId, await session(root.userId, null));
+    expectError(
+      await stale.call("POST", AI, { enabled: true, reason: "AI pilot" }),
+      403,
+      "AUTH_STEP_UP_REQUIRED",
+    );
+    expectError(
+      await ownerNow.call("POST", AI, { enabled: true, reason: "" }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const on = await ownerNow.call("POST", AI, { enabled: true, reason: "AI pilot approved" });
+    expect(on.status, JSON.stringify(on.body)).toBe(200);
+    const body = OwnerModuleChangeResponseSchema.parse(on.body);
+    expect(body).toMatchObject({
+      changed: true,
+      module: { key: "ai", platform: { enabled: true, version: 2, reason: "AI pilot approved" } },
+    });
+    expect(await state()).toMatchObject({ enabled: true, version: 2, updatedById: root.userId });
+    expect(await lastAudit("owner.module_changed")).toMatchObject({
+      actorUserId: root.userId,
+      outcome: "SUCCESS",
+      scopeType: "PLATFORM",
+      siteId: null,
+      resourceId: "ai",
+      stream: "PROTECTED",
+      reason: "AI pilot approved",
+    });
+    const again = OwnerModuleChangeResponseSchema.parse(
+      (await ownerNow.call("POST", AI, { enabled: true, reason: "AI pilot again" })).body,
+    );
+    expect(again.changed).toBe(false);
+    expect((await state()).version).toBe(2);
+  });
+
+  it("shows the AI Center while on to those who may read it; nothing else changes", async () => {
+    expect(await aiCenter(ownerNow)).toBe(true);
+    expect(await aiCenter(admin2)).toBe(true);
+    expect(await aiCenter(editor)).toBe(false);
+    for (const who of [ownerNow, admin2]) {
+      const res = await who.call("GET", "/ai/overview");
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(AiOverviewResponseSchema.parse(res.body)).toEqual({
+        enabled: true,
+        callsPossible: false,
+        blockers: ["no_provider_key", "no_enabled_model", "no_budget"],
+      });
+    }
+    expectError(await editor.call("GET", "/ai/overview"), 403, "FORBIDDEN");
+    // The other modules answer as before.
+    expect((await editor.call("GET", "/cms/context")).status).toBe(200);
+    expect((await admin2.call("GET", "/staff")).status).toBe(200);
+  });
+
+  it("keeps its state across an API restart", async () => {
+    await restart();
+    expect((await state()).enabled).toBe(true);
+    expect(await aiCenter(admin2)).toBe(true);
+    expect((await admin2.call("GET", "/ai/overview")).status).toBe(200);
+  });
+
+  it("waits for running work to end and lets no new work start after the switch-off COMMIT", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = gate.whileEnabled("ai", async () => {
+      await held;
+      return "started";
+    });
+    await sleep(150);
+    let switched = false;
+    const off = ownerNow
+      .call("POST", AI, { enabled: false, reason: "Stop AI now" })
+      .then((res) => ((switched = true), res));
+    await sleep(500);
+    expect(switched, "the switch waits for the running holder").toBe(false);
+    // A start that arrives while the switch waits queues behind it and is then refused.
+    const queued = gate
+      .whileEnabled("ai", async () => "late")
+      .then(
+        (v) => v,
+        (e: unknown) => String(e),
+      );
+    await sleep(150);
+    release();
+    expect(await holder).toBe("started");
+    const res = await off;
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(OwnerModuleChangeResponseSchema.parse(res.body).changed).toBe(true);
+    expect(await queued).toMatch(/platform module ai is off/);
+    await expect(gate.whileEnabled("ai", async () => "after")).rejects.toThrow(
+      /platform module ai is off/,
+    );
+    expect(await state()).toMatchObject({ enabled: false, version: 3 });
+  });
+
+  it("is never starved: under a stream of work the switch-off commits, and no work starts after it", async () => {
+    expect(
+      (await ownerNow.call("POST", AI, { enabled: true, reason: "Second pilot round" })).status,
+    ).toBe(200);
+    const started: number[] = [];
+    let refused = 0;
+    let stop = false;
+    const workers = Array.from({ length: 8 }, async () => {
+      while (!stop) {
+        try {
+          await gate.whileEnabled("ai", async () => {
+            started.push(Date.now());
+            await sleep(40);
+          });
+        } catch (e) {
+          if (!/platform module ai is off/.test(String(e))) throw e;
+          refused += 1;
+          await sleep(5);
+        }
+      }
+    });
+    await sleep(300);
+    const t0 = Date.now();
+    const res = await ownerNow.call("POST", AI, { enabled: false, reason: "Stop under load" });
+    const committedBy = Date.now();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(committedBy - t0, "the switch-off is not starved").toBeLessThan(5_000);
+    await sleep(300);
+    stop = true;
+    await Promise.all(workers);
+    expect(started.length).toBeGreaterThan(5);
+    expect(refused).toBeGreaterThan(0);
+    // Every start ran before the switch-off answered; none after.
+    expect(started.filter((t) => t > committedBy)).toEqual([]);
+    expect((await state()).enabled).toBe(false);
+    // Off again: every route is a 404 again, the state survives a restart, data is kept.
+    expectError(await admin2.call("GET", "/ai/overview"), 404, "NOT_FOUND");
+    await restart();
+    expect(await aiCenter(ownerNow)).toBe(false);
+    expect(await state()).toMatchObject({ enabled: false, version: 5 });
+  });
+});
+
 describe("the owner account is out of the super admin's reach (condition 7)", () => {
   it("hides the owner from the staff screen", async () => {
     for (const viewer of [admin2, root]) {
@@ -611,6 +935,8 @@ describe("the owner account is out of the super admin's reach (condition 7)", ()
   });
 
   it("answers 404 to every administration action on the owner, audited in the protected stream", async () => {
+    // DP-287: only this test's refusals (database clock), not the super admin's earlier ones.
+    const since = (await dbo.$queryRaw<{ since: Date }[]>`SELECT now() AS "since"`)[0]!.since;
     const rootAssignment = await dbo.roleAssignment.findFirstOrThrow({
       where: { userId: root.userId, revokedAt: null },
     });
@@ -639,7 +965,7 @@ describe("the owner account is out of the super admin's reach (condition 7)", ()
       where: {
         actorUserId: admin2.userId,
         outcome: "DENIED",
-        occurredAt: { gte: new Date(Date.now() - 60_000) },
+        occurredAt: { gte: since },
       },
     });
     expect(denials.length).toBeGreaterThan(0);

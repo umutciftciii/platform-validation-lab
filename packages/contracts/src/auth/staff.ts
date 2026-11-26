@@ -50,6 +50,12 @@ export const StaffSessionResponseSchema = z.strictObject({
   absoluteExpiresAt: IsoDate,
   /** DP-110 (ADR-018): the signed-in user is the system owner; shows the owner console. */
   isSystemOwner: z.boolean().optional(),
+  /**
+   * DP-287 (ADR-030 D2): what the admin shows. `aiCenter`: AI is on (Owner Console) and the user
+   * may read the AI Center; false hides every AI menu, page and button. Presentation only: the API
+   * answers 404 on every AI route while AI is off.
+   */
+  features: z.strictObject({ aiCenter: z.boolean() }).optional(),
 });
 export type StaffSessionResponse = z.infer<typeof StaffSessionResponseSchema>;
 
