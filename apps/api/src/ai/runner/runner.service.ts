@@ -1,21 +1,29 @@
 /**
- * DP-291 (ADR-030 D6–D8; design §4.3, §7.2–7.3): the queue and workers of the AI operation
+ * DP-291 + DP-297 (ADR-030 D6–D8, D10; design §4.3, §7.2–7.3): the workers of the AI operation
  * service. Infrastructure: it runs outside any request (no staff context) and reads the provider
  * key through credential-store.
  *
- * One job = one reserved operation (DP-290). A worker:
- *   1. `ai_start` (holds the AI switch: once the owner's switch-off COMMITTED, no call starts);
- *   2. the call plan (model, ACTIVE key) and the key, decrypted for this one call;
- *   3. ONE provider call with a deadline (AI_CALL_TIMEOUT_SECONDS, default 45) — never repeated;
- *   4. settlement: SUCCEEDED (answer checked by the task) inside `whileEnabled('ai')`, FAILED
- *      (provider refusal before work: cost 0; unusable answer: its usage), UNKNOWN (timeout,
- *      lost connection, unreadable answer, cancel or switch-off while waiting: counted as spent),
- *      DISCARDED (an answer after a cancel or the switch-off: cost settled, text dropped).
+ * The queue is the database (DP-297): a reserved operation with its encrypted input
+ * ("AiTransient", migration dp_297) is a job. Every API instance runs this worker; each poll
+ * (AI_WORKER_POLL_MS, default 1000; at once after a local submit):
+ *   1. asks which of its running calls must stop (`ai_stop_signals`: the owner's switch-off, the
+ *      actor's cancel received by ANY instance, a lease the sweeper ended) and aborts them;
+ *   2. claims up to its free slots (`ai_claim`: holds the AI switch, never more calls in flight on
+ *      all instances than AiSettings.maxConcurrency, row lock + SKIP LOCKED, RESERVED → IN_FLIGHT
+ *      in the same transaction, the input handed out once and wiped). No job runs twice.
+ * A claimed job: the call plan (model, ACTIVE key; none once AI is off or a stop was requested) →
+ * the key, decrypted for this one call → ONE provider call with a deadline
+ * (AI_CALL_TIMEOUT_SECONDS, default 45) — never repeated → settlement: SUCCEEDED (answer checked
+ * by the task; its encrypted draft stored in the same whileEnabled('ai') transaction, 15 min, for
+ * its actor only, readable through any instance), FAILED (refusal before work: cost 0; unusable
+ * answer: its usage), UNKNOWN (timeout, lost connection, unreadable answer, cancel, switch-off or
+ * shutdown while waiting: counted as spent), DISCARDED (an answer after a cancel or the
+ * switch-off: cost settled, text dropped).
  *
- * The answer text lives only in this process's memory, for its actor, for RESULT_TTL_MS — never
- * in the database, a log or an audit event — and is a DRAFT (tasks/registry.ts). Switching AI off
- * cancels every queued job, aborts every running call and drops every held answer. A crash loses
- * the queue: the sweeper (DP-290) releases RESERVED and counts IN_FLIGHT as spent at lease end.
+ * Restart and crash: queued jobs stay in the database and any instance claims them while their
+ * reservation lasts (AiSettings.reservationTtlSec), then they EXPIRE (cost 0; the user starts a new
+ * operation). A call that was running when its instance stopped is never repeated: the sweeper
+ * counts it as spent at lease end (UNKNOWN). Texts never reach a log or an audit event.
  */
 import {
   Inject,
@@ -38,27 +46,35 @@ import type { AdapterRegistry } from "../providers/registry.js";
 import { ProviderCallError, isUncertain, type GenerateResult } from "../providers/types.js";
 import { readCredentialKey } from "../credential-store.js";
 import { AiLedgerService } from "../ledger.service.js";
-import { sqlCallPlan, sqlSettle, type AiTask, type SettleArgs } from "../ledger-sql.js";
+import {
+  sqlClaim,
+  sqlDispatch,
+  sqlQueueDepth,
+  sqlSettle,
+  sqlStopSignals,
+  sqlStoreResult,
+  type AiTask,
+  type ClaimedJob,
+  type DispatchOutcome,
+  type SettleArgs,
+  type StopSignal,
+} from "../ledger-sql.js";
 import { aiAuditMetadata, type AiAuditAction } from "../audit.js";
 import { AI_TASKS } from "../tasks/registry.js";
+import { openInput, sealResult, type JobPayload } from "../transient-box.js";
 
-export interface AiJob {
+/** One claimed job with its decrypted payload. */
+export interface AiJob extends JobPayload {
   operationId: string;
   actorUserId: string;
   siteId: string | null;
   task: AiTask;
-  input: string;
-  /** The output cap and thinking budget the reservation was made for. */
-  maxOutputTokens: number;
-  thinkingBudget: number;
-  temperature: number | null;
 }
 
 /** Why a running call was stopped by the platform, not by the provider. */
-export type StopReason = "cancelled" | "ai_disabled" | "shutdown";
+export type StopReason = "cancelled" | "ai_disabled" | "shutdown" | "lease_expired";
 
 export const RESULT_TTL_MS = 15 * 60 * 1000;
-const MAX_RESULTS = 500;
 const LEASE_GRACE_SEC = 15;
 
 const intEnv = (raw: string | undefined, fallback: number, min: number, max: number) => {
@@ -66,12 +82,18 @@ const intEnv = (raw: string | undefined, fallback: number, min: number, max: num
   const n = Number(raw);
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 };
-/** Workers per process (AI_WORKER_CONCURRENCY, 1–16, default 2). */
+/**
+ * Workers per instance (AI_WORKER_CONCURRENCY, 0–16, default 2; 0 = an API-only instance that
+ * accepts and serves operations but runs no call). The total in flight stays maxConcurrency.
+ */
 export const workerConcurrency = (env: NodeJS.ProcessEnv = process.env) =>
-  intEnv(env["AI_WORKER_CONCURRENCY"], 2, 1, 16);
+  intEnv(env["AI_WORKER_CONCURRENCY"], 2, 0, 16);
 /** A provider call's deadline (AI_CALL_TIMEOUT_SECONDS, 5–300, default 45). */
 export const callTimeoutSeconds = (env: NodeJS.ProcessEnv = process.env) =>
   intEnv(env["AI_CALL_TIMEOUT_SECONDS"], 45, 5, 300);
+/** How often an instance looks for jobs and stop signals (AI_WORKER_POLL_MS, 100–10000, default 1000). */
+export const workerPollMs = (env: NodeJS.ProcessEnv = process.env) =>
+  intEnv(env["AI_WORKER_POLL_MS"], 1000, 100, 10_000);
 
 const ZERO = {
   inputTokens: 0,
@@ -81,28 +103,53 @@ const ZERO = {
   reasoningTokens: 0,
 };
 
-interface Running {
-  job: AiJob;
-  controller: AbortController;
-  reason: StopReason | null;
+const STOP_REASON: Record<StopSignal, StopReason> = {
+  ai_disabled: "ai_disabled",
+  cancelled: "cancelled",
+  not_in_flight: "lease_expired",
+  lease_expired: "lease_expired",
+};
+
+/** How long the switch is held at most for a request to reach the transport (ms). */
+export const DISPATCH_HANDOFF_MS = 2_000;
+
+class DispatchRefused extends Error {
+  override name = "DispatchRefused";
+  constructor(readonly outcome: StopReason | "dispatch_timeout") {
+    super(outcome);
+  }
 }
 
-export type JobState = "queued" | "running" | "none";
+/** The settlement code of a refused dispatch (no request was sent). */
+const DISPATCH_CODE: Partial<Record<string, string>> = {
+  not_in_flight: "lease_expired",
+  unknown: "lease_expired",
+};
+
+interface Running {
+  operationId: string;
+  controller: AbortController;
+  reason: StopReason | null;
+  done: Promise<void>;
+}
+
+/** Whether a call of this instance runs the operation (diagnostics; the database knows the rest). */
+export type JobState = "running" | "none";
 
 @Injectable()
 export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger("AiRunner");
-  private readonly queue: AiJob[] = [];
   private readonly running = new Map<string, Running>();
-  private readonly results = new Map<string, { actorUserId: string; text: string; at: number }>();
-  /** Bumped when AI is switched off: an answer settled before it is not handed out after it. */
+  /** Bumped when AI is switched off here: an answer settled before it is not stored after it. */
   private generation = 0;
   private stopped = false;
   private unsubscribe: (() => void) | undefined;
+  private timer: NodeJS.Timeout | undefined;
+  private ticking: Promise<void> | null = null;
+  private again = false;
   private readonly concurrency = workerConcurrency();
   private readonly timeoutMs = callTimeoutSeconds() * 1000;
-  /** Settled jobs (tests wait on it). */
-  private readonly idle = new Set<() => void>();
+  private readonly leaseSec = Math.min(600, callTimeoutSeconds() + LEASE_GRACE_SEC);
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -113,147 +160,202 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
   ) {}
 
   onApplicationBootstrap(): void {
-    this.unsubscribe = this.modules.onChange(async (change) => {
-      if (change.moduleKey === AI_MODULE && !change.enabled) await this.stopAll("ai_disabled");
+    // Fast path in this instance; the other instances learn it from ai_stop_signals.
+    this.unsubscribe = this.modules.onChange((change) => {
+      if (change.moduleKey === AI_MODULE && !change.enabled) this.abortAll("ai_disabled");
     });
+    if (this.config.transport === "off" || !this.config.keyring || this.concurrency === 0) return;
+    this.timer = setInterval(() => void this.tick(), workerPollMs());
+    this.timer.unref();
   }
 
+  /** Shutdown: running calls are aborted (UNKNOWN, never repeated); queued jobs stay queued. */
   async onModuleDestroy(): Promise<void> {
-    this.unsubscribe?.();
-    await this.stopAll("shutdown");
     this.stopped = true;
+    if (this.timer) clearInterval(this.timer);
+    this.unsubscribe?.();
+    this.abortAll("shutdown");
+    await this.ticking?.catch(() => undefined);
+    await Promise.allSettled([...this.running.values()].map((r) => r.done));
   }
 
-  /** Queues a reserved operation (the caller's reservation transaction has committed). */
-  submit(job: AiJob): void {
-    if (this.stopped) return;
-    this.queue.push(job);
-    this.pump();
+  /** A job was queued in this instance: look at once instead of at the next poll. */
+  wake(): void {
+    if (!this.stopped && this.timer) void this.tick();
   }
 
   state(operationId: string): JobState {
-    if (this.running.has(operationId)) return "running";
-    return this.queue.some((j) => j.operationId === operationId) ? "queued" : "none";
+    return this.running.has(operationId) ? "running" : "none";
   }
 
-  /**
-   * The actor's cancel: a queued job is released (cost 0); a running call is aborted — it ends
-   * UNKNOWN (no answer) or DISCARDED (the answer came anyway). Its answer is never handed out.
-   */
-  async cancel(operationId: string): Promise<JobState> {
-    this.results.delete(operationId);
-    const i = this.queue.findIndex((j) => j.operationId === operationId);
-    if (i >= 0) {
-      this.queue.splice(i, 1);
-      await this.ledger.release(operationId, "cancel");
-      return "queued";
-    }
+  /** The actor's cancel reached this instance: abort the call at once if it runs here. */
+  abortLocal(operationId: string): boolean {
     const r = this.running.get(operationId);
-    if (r) {
-      r.reason ??= "cancelled";
-      r.controller.abort();
-      return "running";
+    if (!r) return false;
+    r.reason ??= "cancelled";
+    r.controller.abort();
+    return true;
+  }
+
+  /** Resolves once this instance runs nothing and nothing is queued on any instance (tests). */
+  async whenIdle(timeoutMs = 30_000): Promise<void> {
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      if (Date.now() > end) throw new Error("AI runner not idle");
+      await this.tick();
+      await Promise.allSettled([...this.running.values()].map((r) => r.done));
+      // A poll started by a finished job may hold a claim not yet in `running`: wait for it.
+      if (this.ticking || this.running.size > 0) continue;
+      const depth = await sqlQueueDepth(this.prisma as unknown as Db);
+      if (depth === 0 && !this.ticking && this.running.size === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    return "none";
   }
 
-  /** The draft answer of a SUCCEEDED operation, for its actor only, while held. */
-  result(operationId: string, actorUserId: string): string | null {
-    const r = this.results.get(operationId);
-    if (!r || r.actorUserId !== actorUserId) return null;
-    if (Date.now() - r.at > RESULT_TTL_MS) {
-      this.results.delete(operationId);
-      return null;
+  /** One poll: stop signals, then claims. Never two at once; a request in between runs again. */
+  tick(): Promise<void> {
+    if (this.ticking) {
+      this.again = true;
+      return this.ticking;
     }
-    return r.text;
+    this.ticking = (async () => {
+      try {
+        do {
+          this.again = false;
+          await this.signals();
+          await this.claim();
+        } while (this.again && !this.stopped);
+      } catch (error) {
+        // A database failure: the next poll tries again; the lease protects the money.
+        this.logger.error(`poll failed: ${(error as Error).name}`);
+      } finally {
+        this.ticking = null;
+      }
+    })();
+    return this.ticking;
   }
 
-  /** Resolves once no job is queued or running (tests). */
-  whenIdle(): Promise<void> {
-    if (this.queue.length === 0 && this.running.size === 0) return Promise.resolve();
-    return new Promise((resolve) => this.idle.add(resolve));
-  }
-
-  private async stopAll(reason: StopReason): Promise<void> {
-    this.generation++;
-    this.results.clear();
-    const queued = this.queue.splice(0);
+  private abortAll(reason: StopReason): void {
+    if (reason === "ai_disabled") this.generation++;
     for (const r of this.running.values()) {
       r.reason ??= reason;
       r.controller.abort();
     }
-    for (const job of queued) {
-      await this.ledger.release(job.operationId, "cancel").catch(() => undefined);
-    }
-    if (queued.length) this.logger.log(`${reason}: ${queued.length} queued operation(s) cancelled`);
   }
 
-  private pump(): void {
-    while (this.running.size < this.concurrency && this.queue.length > 0) {
-      const job = this.queue.shift() as AiJob;
-      const entry: Running = { job, controller: new AbortController(), reason: null };
-      this.running.set(job.operationId, entry);
-      void this.work(entry).finally(() => {
-        this.running.delete(job.operationId);
-        this.pump();
-        if (this.queue.length === 0 && this.running.size === 0) {
-          for (const resolve of this.idle) resolve();
-          this.idle.clear();
-        }
+  private async signals(): Promise<void> {
+    if (this.running.size === 0) return;
+    const stops = await sqlStopSignals(this.prisma as unknown as Db, [...this.running.keys()]);
+    for (const s of stops) {
+      const r = this.running.get(s.operationId);
+      if (!r) continue;
+      if (s.reason === "ai_disabled") this.generation++;
+      r.reason ??= STOP_REASON[s.reason];
+      r.controller.abort();
+    }
+  }
+
+  private async claim(): Promise<void> {
+    const keyring = this.config.keyring;
+    if (this.stopped || !keyring || this.config.transport === "off") return;
+    const free = this.concurrency - this.running.size;
+    if (free <= 0) return;
+    const jobs = await this.prisma.$transaction((tx) =>
+      sqlClaim(tx as unknown as Db, this.ledger.instanceId, this.leaseSec, free),
+    );
+    for (const claimed of jobs) {
+      // The sweeper counts the call as spent at lease end: an answer settled after that is
+      // DISCARDED by the database and never stored.
+      const leaseEnds = Date.now() + this.leaseSec * 1000 - 2000;
+      const entry: Running = {
+        operationId: claimed.operationId,
+        controller: new AbortController(),
+        reason: null,
+        done: Promise.resolve(),
+      };
+      this.running.set(claimed.operationId, entry);
+      entry.done = this.work(entry, claimed, leaseEnds).finally(() => {
+        this.running.delete(claimed.operationId);
+        if (!this.stopped) this.again = true;
+        if (!this.stopped && !this.ticking) void this.tick();
       });
     }
   }
 
-  private async work(entry: Running): Promise<void> {
-    const { job } = entry;
-    const id = job.operationId;
-    let started = false;
+  private async work(entry: Running, claimed: ClaimedJob, leaseEnds: number): Promise<void> {
+    const id = claimed.operationId;
+    const keyring = this.config.keyring;
+    const payload =
+      keyring && claimed.actorUserId
+        ? openInput(keyring, id, claimed.actorUserId, claimed.payload)
+        : null;
+    const job: AiJob = {
+      operationId: id,
+      actorUserId: claimed.actorUserId ?? "",
+      siteId: claimed.siteId,
+      task: claimed.task,
+      input: payload?.input ?? "",
+      maxOutputTokens: payload?.maxOutputTokens ?? 0,
+      thinkingBudget: payload?.thinkingBudget ?? 0,
+      temperature: payload?.temperature ?? null,
+    };
     try {
-      const leaseSec = Math.min(600, this.timeoutMs / 1000 + LEASE_GRACE_SEC);
-      const start = await this.ledger.start(id, leaseSec);
-      if (start !== "started") {
-        if (start === "expired") await this.ledger.release(id, "expire");
-        else if (start === "ai_disabled") await this.ledger.release(id, "cancel");
-        return;
-      }
-      started = true;
-      // The sweeper counts the operation as spent at lease end: an answer settled after that is
-      // DISCARDED by the database (late answer) and must not be handed out.
-      const leaseEnds = Date.now() + leaseSec * 1000 - 2000;
       const failed = (code: string) => this.settle(job, "FAILED", ZERO, null, code);
+      // No call was made: an input that does not decrypt (other keyring, tampering) costs nothing.
+      if (!payload || !keyring) return void (await failed("input_unreadable"));
       if (entry.reason) return void (await failed(entry.reason));
       const def = AI_TASKS[job.task];
       const plan = await this.ledger.callPlan(id);
-      if (!plan) return void (await failed("no_active_credential"));
+      if (!plan) {
+        // No plan: AI off, a stop requested, the lease over — or no ACTIVE key any more.
+        const stop = (await sqlStopSignals(this.prisma as unknown as Db, [id]))[0];
+        return void (await failed(
+          entry.reason ?? (stop ? STOP_REASON[stop.reason] : "no_active_credential"),
+        ));
+      }
       const adapter = this.adapters.get(plan.provider);
-      if (!adapter || !this.config.keyring) return void (await failed("transport_off"));
+      if (!adapter) return void (await failed("transport_off"));
       const key = await readCredentialKey(
         this.prisma as unknown as Db,
-        this.config.keyring,
+        keyring,
         plan.credentialId,
         plan.provider,
       );
       if (key === null) return void (await failed("no_active_credential"));
-      // Last check before the paid call: a cancel or switch-off until here costs nothing.
+      // A cancel or switch-off until here costs nothing.
       if (entry.reason) return void (await failed(entry.reason));
+
+      // DP-297: the paid request starts ONLY inside a transaction that holds the AI switch
+      // (ai_dispatch). The owner's switch-off waits for that transaction, so every request is
+      // ordered before the switch-off COMMIT; after it, ai_dispatch answers ai_disabled.
+      const signal = AbortSignal.any([
+        entry.controller.signal,
+        AbortSignal.timeout(this.timeoutMs),
+      ]);
+      const request = {
+        model: plan.providerModelId,
+        system: def.system,
+        input: job.input,
+        maxOutputTokens: job.maxOutputTokens,
+        thinkingBudget: job.thinkingBudget,
+        temperature: job.temperature,
+      };
+      const dispatch = await this.dispatch(entry, (onDispatch) =>
+        adapter.generate(key, request, { projectRef: plan.projectRef, signal, onDispatch }),
+      );
+      if (dispatch.kind === "refused") {
+        if (dispatch.outcome === "already_dispatched") {
+          // Never expected (claims are unique): the other request is not touched.
+          this.logger.error(`operation ${id}: dispatched twice refused`);
+          return;
+        }
+        // No request was sent: cost 0 (from UNKNOWN the database releases the assumed amount).
+        return void (await failed(DISPATCH_CODE[dispatch.outcome] ?? dispatch.outcome));
+      }
 
       let result: GenerateResult;
       try {
-        result = await adapter.generate(
-          key,
-          {
-            model: plan.providerModelId,
-            system: def.system,
-            input: job.input,
-            maxOutputTokens: job.maxOutputTokens,
-            thinkingBudget: job.thinkingBudget,
-            temperature: job.temperature,
-          },
-          {
-            projectRef: plan.projectRef,
-            signal: AbortSignal.any([entry.controller.signal, AbortSignal.timeout(this.timeoutMs)]),
-          },
-        );
+        result = await dispatch.call;
       } catch (error) {
         const code = error instanceof ProviderCallError ? error.code : "network_error";
         if (entry.reason || isUncertain(code)) {
@@ -280,29 +382,41 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
         return;
       }
       const generation = this.generation;
+      const sealed = sealResult(keyring, id, job.actorUserId, text);
       try {
-        const { outcome, inFlight } = await this.modules.whileEnabled(AI_MODULE, async (tx) => {
+        const { outcome, cancelled } = await this.modules.whileEnabled(AI_MODULE, async (tx) => {
           const db = tx as unknown as Db;
-          // Still IN_FLIGHT (not counted as spent by the sweeper in the meantime)?
-          const live = (await sqlCallPlan(db, id)) !== null;
+          // A cancel received by another instance and not yet seen here: the answer is dropped.
+          const stop = (await sqlStopSignals(db, [id])).find((s) => s.reason === "cancelled");
+          if (stop) {
+            const r = await sqlSettle(db, id, {
+              status: "DISCARDED",
+              ...result.usage,
+              providerRequestId: result.providerRequestId,
+              errorCode: "cancelled",
+            });
+            return { outcome: r, cancelled: true };
+          }
           const r = await sqlSettle(db, id, {
             status: "SUCCEEDED",
             ...result.usage,
             providerRequestId: result.providerRequestId,
             errorCode: null,
           });
-          return { outcome: r, inFlight: live };
+          // Stored only if SUCCEEDED now (not counted as spent by the sweeper meanwhile), before
+          // the lease ended, with AI on (held to COMMIT) and no switch-off seen here.
+          if (
+            r.startsWith("settled") &&
+            Date.now() < leaseEnds &&
+            generation === this.generation &&
+            !entry.reason
+          ) {
+            await sqlStoreResult(db, id, sealed);
+          }
+          return { outcome: r, cancelled: false };
         });
+        if (cancelled) await this.audit(job, "ai.operation.discarded", "cancelled");
         if (outcome === "settled_overrun") await this.audit(job, "ai.operation.overrun", "overrun");
-        const deliver =
-          inFlight &&
-          outcome.startsWith("settled") &&
-          Date.now() < leaseEnds &&
-          generation === this.generation &&
-          !entry.reason;
-        if (deliver) {
-          this.keep(id, job.actorUserId, text);
-        }
       } catch (error) {
         if (!(error instanceof PlatformModuleDisabledError)) throw error;
         // The answer arrived after the switch-off: settled, never handed out.
@@ -310,10 +424,75 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
         await this.audit(job, "ai.operation.discarded", "ai_disabled");
       }
     } catch (error) {
-      // A database failure: the lease decides (RESERVED → released, IN_FLIGHT → counted as spent).
-      this.logger.error(
-        `operation ${id} ${started ? "after start" : "before start"}: ${(error as Error).name}`,
-      );
+      // A database failure: the lease decides (IN_FLIGHT → counted as spent at lease end).
+      this.logger.error(`operation ${id}: ${(error as Error).name}`);
+    }
+  }
+
+  /**
+   * DP-297: runs `start` (the provider request) inside one whileEnabled('ai') transaction after
+   * ai_dispatch granted it, and commits only once the request was handed to the transport
+   * (`onDispatch`) or failed — bounded by DISPATCH_HANDOFF_MS, after which the request is aborted
+   * before it is sent. The switch is never held for the provider's answer.
+   */
+  private async dispatch(
+    entry: Running,
+    start: (onDispatch: () => void) => Promise<GenerateResult>,
+  ): Promise<
+    | { kind: "sent"; call: Promise<GenerateResult> }
+    | {
+        kind: "refused";
+        outcome: Exclude<DispatchOutcome, "dispatch"> | StopReason | "dispatch_timeout";
+      }
+  > {
+    let call: Promise<GenerateResult> | null = null;
+    try {
+      const outcome = await this.modules.whileEnabled(AI_MODULE, async (tx) => {
+        const r = await sqlDispatch(tx as unknown as Db, entry.operationId);
+        if (r !== "dispatch") return r;
+        // Stopped here since the claim (this instance's listener): roll the permission back.
+        if (entry.reason) throw new DispatchRefused(entry.reason);
+        let handedOff: () => void = () => undefined;
+        const handed = new Promise<"handed">((resolve) => (handedOff = () => resolve("handed")));
+        const pending = start(() => handedOff());
+        call = pending;
+        pending.catch(() => undefined);
+        let timer: NodeJS.Timeout | undefined;
+        const first = await Promise.race([
+          handed,
+          pending.then(
+            () => "settled" as const,
+            () => "settled" as const,
+          ),
+          new Promise<"late">(
+            (resolve) => (timer = setTimeout(() => resolve("late"), DISPATCH_HANDOFF_MS)),
+          ),
+        ]);
+        clearTimeout(timer);
+        if (first === "late") {
+          // Not with the transport in time: abort before anything is sent, roll back.
+          entry.reason ??= "cancelled";
+          entry.controller.abort();
+          throw new DispatchRefused("dispatch_timeout");
+        }
+        return "dispatch" as const;
+      });
+      if (outcome !== "dispatch") return { kind: "refused", outcome };
+      return { kind: "sent", call: call as unknown as Promise<GenerateResult> };
+    } catch (error) {
+      if (error instanceof PlatformModuleDisabledError) {
+        return { kind: "refused", outcome: "ai_disabled" };
+      }
+      if (error instanceof DispatchRefused) {
+        await (call as Promise<GenerateResult> | null)?.catch(() => undefined);
+        return { kind: "refused", outcome: error.outcome };
+      }
+      if (call) {
+        // The request started under the switch but the transaction did not commit: it was still
+        // ordered before any switch-off; its outcome is uncertain (handled as a running call).
+        return { kind: "sent", call };
+      }
+      throw error;
     }
   }
 
@@ -331,18 +510,6 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
       errorCode,
     });
     if (r === "settled_overrun") await this.audit(job, "ai.operation.overrun", "overrun");
-  }
-
-  private keep(id: string, actorUserId: string, text: string): void {
-    const now = Date.now();
-    for (const [k, v] of this.results) {
-      if (now - v.at > RESULT_TTL_MS) this.results.delete(k);
-    }
-    while (this.results.size >= MAX_RESULTS) {
-      const oldest = this.results.keys().next().value as string;
-      this.results.delete(oldest);
-    }
-    this.results.set(id, { actorUserId, text, at: now });
   }
 
   /** A system audit event: ids and codes only (aiAuditMetadata), never a text. */

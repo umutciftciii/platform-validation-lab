@@ -224,6 +224,7 @@ export class AnthropicAdapter implements AiProviderAdapter {
         url: `${ANTHROPIC_BASE_URL}/messages`,
         headers: this.headers(apiKey, o),
         signal: o.signal,
+        ...(o.onDispatch ? { onDispatch: o.onDispatch } : {}),
         body: anthropicRequestBody(request),
       },
       mapError,

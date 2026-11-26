@@ -243,6 +243,10 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     model: { model: "AiModel", list: false },
     price: { model: "AiModelPrice", list: false },
     entries: { model: "AiLedgerEntry", list: true },
+    transients: { model: "AiTransient", list: true },
+  },
+  AiTransient: {
+    operation: { model: "AiOperation", list: false },
   },
   AiLedgerEntry: {
     operation: { model: "AiOperation", list: false },

@@ -271,3 +271,110 @@ export async function sqlOperationView(db: Db, operationId: string): Promise<Ope
     own: r.own,
   };
 }
+
+// --- DP-297: the durable queue and the held texts (migration dp_297) ----------------------------
+
+/** The encrypted input of a just-reserved operation, in the reservation's staff transaction. */
+export async function sqlEnqueue(db: Db, operationId: string, ciphertext: string): Promise<string> {
+  const rows = await db.$queryRaw<{ r: string }[]>`
+    SELECT ai_enqueue(${operationId}::uuid, ${ciphertext}) AS "r"`;
+  return rows[0]?.r ?? "unknown";
+}
+
+export interface ClaimedJob {
+  operationId: string;
+  actorUserId: string | null;
+  task: AiTask;
+  siteId: string | null;
+  /** The encrypted job payload, handed out once (wiped in the same transaction). */
+  payload: string;
+}
+
+/** Claims up to `limit` queued jobs for this instance (atomic; no staff context). */
+export async function sqlClaim(
+  db: Db,
+  instanceId: string,
+  leaseSec: number,
+  limit: number,
+): Promise<ClaimedJob[]> {
+  const rows = await db.$queryRaw<
+    {
+      op_id: string;
+      op_actor: string | null;
+      op_task: AiTask;
+      op_site: string | null;
+      op_payload: string;
+    }[]
+  >`SELECT op_id, op_actor, op_task, op_site, op_payload
+      FROM ai_claim(${instanceId}, ${leaseSec}::integer, ${limit}::integer)`;
+  return rows.map((r) => ({
+    operationId: r.op_id,
+    actorUserId: r.op_actor,
+    task: r.op_task,
+    siteId: r.op_site,
+    payload: r.op_payload,
+  }));
+}
+
+export type DispatchOutcome =
+  | "dispatch"
+  | "ai_disabled"
+  | "cancelled"
+  | "not_in_flight"
+  | "lease_expired"
+  | "already_dispatched"
+  | "unknown";
+
+/**
+ * The permission to send the paid provider request (ai_dispatch). Only inside the transaction
+ * that holds the AI switch (whileEnabled) and that the request is started in.
+ */
+export async function sqlDispatch(db: Db, operationId: string): Promise<DispatchOutcome> {
+  const rows = await db.$queryRaw<{ r: DispatchOutcome }[]>`
+    SELECT ai_dispatch(${operationId}::uuid) AS "r"`;
+  return rows[0]?.r ?? "unknown";
+}
+
+export type StopSignal = "ai_disabled" | "cancelled" | "not_in_flight" | "lease_expired";
+
+/** Which of these running calls must stop, and why (no staff context). */
+export async function sqlStopSignals(
+  db: Db,
+  operationIds: string[],
+): Promise<{ operationId: string; reason: StopSignal }[]> {
+  if (operationIds.length === 0) return [];
+  const rows = await db.$queryRaw<{ op_id: string; reason: StopSignal }[]>`
+    SELECT op_id, reason FROM ai_stop_signals(${operationIds}::uuid[])`;
+  return rows.map((r) => ({ operationId: r.op_id, reason: r.reason }));
+}
+
+/** The actor's cancel in the staff context: queued | running | none | not_found. */
+export async function sqlRequestCancel(db: Db, operationId: string): Promise<string> {
+  const rows = await db.$queryRaw<{ r: string }[]>`
+    SELECT ai_request_cancel(${operationId}::uuid) AS "r"`;
+  return rows[0]?.r ?? "not_found";
+}
+
+/** The encrypted draft of a SUCCEEDED operation, in its settlement's whileEnabled transaction. */
+export async function sqlStoreResult(
+  db: Db,
+  operationId: string,
+  ciphertext: string,
+): Promise<string> {
+  const rows = await db.$queryRaw<{ r: string }[]>`
+    SELECT ai_store_result(${operationId}::uuid, ${ciphertext}) AS "r"`;
+  return rows[0]?.r ?? "refused";
+}
+
+/** The encrypted draft for its own actor (staff context), or null. */
+export async function sqlResultCiphertext(db: Db, operationId: string): Promise<string | null> {
+  const rows = await db.$queryRaw<{ c: string | null }[]>`
+    SELECT ai_result_ciphertext(${operationId}::uuid) AS "c"`;
+  return rows[0]?.c ?? null;
+}
+
+/** Claimable jobs on all instances (a count). */
+export async function sqlQueueDepth(db: Db): Promise<number> {
+  const rows = await db.$queryRaw<{ n: number }[]>`SELECT ai_queue_depth() AS "n"`;
+  return Number(rows[0]?.n ?? 0);
+}
