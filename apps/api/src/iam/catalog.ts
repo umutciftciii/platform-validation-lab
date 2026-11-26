@@ -373,6 +373,9 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     scopeType: P,
     sensitive: true,
   }),
+  // DP-290 (ADR-030 D6): starting an AI operation (a budget reservation). Platform-wide for now
+  // (owner and ai_administrator); AI-2 decides who else may start translation tasks.
+  perm("ai", "invoke", "ai", "Start AI operations within the budgets", { scopeType: P }),
   // Customer (member) permissions on a public site.
   perm("technical_spec", "view", "membership", "See member-only technical specifications", {
     audience: CUSTOMER,
@@ -394,6 +397,8 @@ export const AI_MANAGE_PERMISSIONS: readonly string[] = [
   "ai_provider:manage",
   "ai_model:manage",
   "ai_budget:manage",
+  // DP-290: starting operations spends money; not a default of the super admin either.
+  "ai:invoke",
 ];
 
 // Super admin: every staff permission except publishing (F1-001B), the owner-only ones (DP-108)
@@ -570,6 +575,7 @@ export const ROLES: readonly RoleDef[] = [
       "ai_provider:manage",
       "ai_model:manage",
       "ai_budget:manage",
+      "ai:invoke",
     ],
     ownerManaged: true,
   },

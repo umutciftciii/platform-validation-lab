@@ -2372,6 +2372,8 @@ model AiLedgerEntry {
 
   @@index([operationId])
   @@index([budgetId, periodStart])
+  /// DP-290: the engine reads an operation's RESERVE rows to move its money.
+  @@index([operationId, kind])
 }
 
 /// A provider's own daily amount, entered for reconciliation (append-only; automatic import DP-295).
