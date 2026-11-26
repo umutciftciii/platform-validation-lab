@@ -484,6 +484,10 @@ describe("DP-103: what can step around row-level security", () => {
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef ORDER BY 1`,
     );
     expect(rows).toEqual([
+      // DP-288 (ADR-030): the AI tables' permission check (boolean) and a usable key's ciphertext
+      // (still encrypted; only while AI is on).
+      { f: "ai_credential_ciphertext", owner: "dp_owner", lead: false },
+      { f: "ai_rls_staff_allows", owner: "dp_owner", lead: false },
       // DP-193: one boolean — may this ACTIVE staff user publish directly on this site.
       { f: "catalog_direct_publish_allowed", owner: "dp_owner", lead: false },
       // DP-173: one boolean about one preview link's session (live, ACTIVE user, review role).
@@ -503,6 +507,8 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "iam_operator_admin_state", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_confirm", owner: "dp_owner", lead: false },
       { f: "iam_owner_designation_start", owner: "dp_owner", lead: false },
+      // DP-288: trigger only — an owner-managed role (ai_administrator) needs the owner as grantor.
+      { f: "iam_owner_managed_role_guard", owner: "dp_owner", lead: false },
       { f: "iam_owner_recover", owner: "dp_owner", lead: false },
       { f: "iam_reciprocal_grant_guard", owner: "dp_owner", lead: false },
       { f: "iam_rls_admin_target", owner: "dp_owner", lead: false },
@@ -665,6 +671,67 @@ describe("DP-103: what can step around row-level security", () => {
     // Rows come from migrations only; the owner changes them (row-level security); nobody
     // inserts, deletes or truncates.
     expect(privileges.map((r) => r.p)).toEqual(["SELECT", "UPDATE"]);
+  });
+
+  it("DP-288: keeps the AI tables behind row-level security, without DELETE, the key column unselectable", async () => {
+    const rls = await su.$queryRawUnsafe<{ t: string; rls: boolean; force: boolean }[]>(
+      `SELECT relname::text AS t, relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' AND relname LIKE 'Ai%' ORDER BY 1`,
+    );
+    expect(rls.map((r) => r.t)).toEqual([
+      "AiBudget",
+      "AiBudgetUsage",
+      "AiLedgerEntry",
+      "AiModel",
+      "AiModelPrice",
+      "AiOperation",
+      "AiProviderCredential",
+      "AiProviderSetting",
+      "AiReconciliation",
+      "AiSettings",
+      "AiTaskSetting",
+    ]);
+    expect(rls.every((r) => r.rls && !r.force)).toBe(true);
+    const grants = await su.$queryRawUnsafe<{ t: string; p: string }[]>(
+      `SELECT table_name::text AS t, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
+       FROM information_schema.role_table_grants
+       WHERE grantee = 'dp_app' AND table_name LIKE 'Ai%' GROUP BY table_name ORDER BY 1`,
+    );
+    expect(Object.fromEntries(grants.map((g) => [g.t, g.p]))).toEqual({
+      AiBudget: "INSERT,SELECT,UPDATE",
+      AiBudgetUsage: "SELECT",
+      AiLedgerEntry: "SELECT",
+      AiModel: "INSERT,SELECT,UPDATE",
+      AiModelPrice: "INSERT,SELECT",
+      AiOperation: "SELECT",
+      // Table-level: no SELECT (column grants below, without "ciphertext").
+      AiProviderCredential: "INSERT,UPDATE",
+      AiProviderSetting: "SELECT,UPDATE",
+      AiReconciliation: "INSERT,SELECT",
+      AiSettings: "SELECT,UPDATE",
+      AiTaskSetting: "SELECT,UPDATE",
+    });
+    const cols = await su.$queryRawUnsafe<{ c: string }[]>(
+      `SELECT column_name::text AS c FROM information_schema.column_privileges
+       WHERE grantee = 'dp_app' AND table_name = 'AiProviderCredential' AND privilege_type = 'SELECT'`,
+    );
+    expect(cols.length).toBeGreaterThan(10);
+    expect(cols.map((r) => r.c)).not.toContain("ciphertext");
+    const exec = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname IN ('ai_rls_staff_allows', 'ai_credential_ciphertext', 'iam_owner_managed_role_guard')
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(exec).toEqual([
+      { f: "ai_credential_ciphertext", who: "dp_app" },
+      { f: "ai_rls_staff_allows", who: "dp_app" },
+      { f: "iam_owner_managed_role_guard", who: null },
+    ]);
   });
 
   it("DP-125: keeps row-level security on the five IAM tables, without FORCE", async () => {

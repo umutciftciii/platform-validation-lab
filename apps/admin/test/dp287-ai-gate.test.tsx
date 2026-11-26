@@ -191,7 +191,7 @@ describe("DP-287: the AI Center route", () => {
   const OVERVIEW = {
     enabled: true,
     callsPossible: false,
-    blockers: ["no_provider_key", "no_enabled_model", "no_budget"],
+    blockers: ["transport_off", "no_provider_key", "no_enabled_model", "no_budget"],
   };
 
   it("is a 404 while the session's aiCenter feature is off or missing, without asking the API", async () => {

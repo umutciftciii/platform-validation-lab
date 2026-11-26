@@ -101,6 +101,15 @@ export const staff: Messages["staff"] = {
       name: "Salt okunur",
       description: "Tek bir sitenin içeriğini ve ürünlerini okur; müşteri verisi yok.",
     },
+    ai_administrator: {
+      name: "Yapay zekâ yöneticisi",
+      description:
+        "Yapay zekâ sağlayıcı API anahtarlarını, modelleri, fiyatları, görev ayarlarını ve bütçeleri yönetir, kullanımı okur. Yalnız sistem sahibi atar; yapay zekâyı açıp kapatamaz.",
+    },
+    ai_viewer: {
+      name: "Yapay zekâ izleyicisi",
+      description: "Yapay Zekâ Merkezi'ni, kullanımı ve maliyeti okur; hiçbir şeyi değiştirmez.",
+    },
     member: {
       name: "Üye",
       description: "Herkese açık bir sitenin kayıtlı müşterisi.",

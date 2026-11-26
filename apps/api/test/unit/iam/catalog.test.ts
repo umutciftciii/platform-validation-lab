@@ -29,7 +29,12 @@ describe("catalogue consistency", () => {
   it("gives the platform super admin every staff permission except publishing and God Mode (DP-076 revision, DP-108)", () => {
     const admin = ROLES.find((r) => r.key === "platform_super_admin");
     const expected = PERMISSIONS.filter(
-      (p) => p.audience === "STAFF" && !PUBLISH_PERMISSIONS.includes(p.key) && !p.ownerOnly,
+      (p) =>
+        p.audience === "STAFF" &&
+        !PUBLISH_PERMISSIONS.includes(p.key) &&
+        !p.ownerOnly &&
+        // DP-288: AI management only through the owner-assigned ai_administrator.
+        !["ai_provider:manage", "ai_model:manage", "ai_budget:manage"].includes(p.key),
     ).map((p) => p.key);
     expect(admin?.permissions).not.toContain("module:manage");
     expect(admin?.permissions).not.toContain("owner_audit:read");

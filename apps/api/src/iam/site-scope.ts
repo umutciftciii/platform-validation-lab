@@ -85,6 +85,11 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   SitePathLock: { nullable: false },
   // ML-1 (DP-073, ADR-028 D2): a site's languages (read only for the API).
   SiteLocale: { nullable: false },
+  // DP-288 (ADR-030 D6): platform budgets have no site, site budgets one; operations started for
+  // a site carry it (platform operations none). Reached only by the AI module, under row-level
+  // security (AI on + ai:* permission).
+  AiBudget: { nullable: true },
+  AiOperation: { nullable: true },
 };
 
 export interface RelationDef {
@@ -167,6 +172,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     leadContactMessages: { model: "LeadContactMessage", list: true },
     leadNotifications: { model: "LeadNotification", list: true },
     leadNotificationSetting: { model: "LeadNotificationSetting", list: false },
+    // DP-288 (ADR-030 D6): a site's AI budgets and operations.
+    aiBudgets: { model: "AiBudget", list: true },
+    aiOperations: { model: "AiOperation", list: true },
     documentGrants: { model: "DocumentDownloadGrant", list: true },
     leadDocumentDownloads: { model: "LeadDocumentDownload", list: true },
     leadActivities: { model: "LeadActivity", list: true },
@@ -198,6 +206,47 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   PlatformModuleState: {
     module: { model: "FeatureModule", list: false },
     updatedBy: { model: "User", list: false },
+  },
+  // DP-288 (ADR-030 D3–D7): the AI data model. Only budgets and operations carry a site.
+  AiSettings: {},
+  AiReconciliation: {},
+  AiProviderSetting: {
+    defaultModel: { model: "AiModel", list: false },
+  },
+  AiProviderCredential: {
+    replacedBy: { model: "AiProviderCredential", list: false },
+    replaces: { model: "AiProviderCredential", list: true },
+  },
+  AiModel: {
+    prices: { model: "AiModelPrice", list: true },
+    tasks: { model: "AiTaskSetting", list: true },
+    operations: { model: "AiOperation", list: true },
+    providerDefault: { model: "AiProviderSetting", list: true },
+  },
+  AiModelPrice: {
+    model: { model: "AiModel", list: false },
+    operations: { model: "AiOperation", list: true },
+  },
+  AiTaskSetting: {
+    model: { model: "AiModel", list: false },
+  },
+  AiBudget: {
+    site: { model: "Site", list: false },
+    usage: { model: "AiBudgetUsage", list: true },
+    entries: { model: "AiLedgerEntry", list: true },
+  },
+  AiBudgetUsage: {
+    budget: { model: "AiBudget", list: false },
+  },
+  AiOperation: {
+    site: { model: "Site", list: false },
+    model: { model: "AiModel", list: false },
+    price: { model: "AiModelPrice", list: false },
+    entries: { model: "AiLedgerEntry", list: true },
+  },
+  AiLedgerEntry: {
+    operation: { model: "AiOperation", list: false },
+    budget: { model: "AiBudget", list: false },
   },
   Permission: {
     module: { model: "FeatureModule", list: false },
