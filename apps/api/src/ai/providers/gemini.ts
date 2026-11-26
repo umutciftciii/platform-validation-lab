@@ -209,6 +209,7 @@ export class GeminiAdapter implements AiProviderAdapter {
         url: `${GEMINI_BASE_URL}/models/${encodeURIComponent(request.model)}:generateContent`,
         headers: this.headers(apiKey),
         signal: o.signal,
+        ...(o.onDispatch ? { onDispatch: o.onDispatch } : {}),
         body: geminiRequestBody(request),
       },
       mapError,
