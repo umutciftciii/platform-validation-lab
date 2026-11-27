@@ -45,6 +45,25 @@ export interface ContactFormLabels {
   notInLanguage: string;
 }
 
+/** COM-6: the cookie choice (components/cookie-consent.tsx). Interface texts, not a legal text. */
+export interface CookieLabels {
+  title: string;
+  text: string;
+  privacy: string;
+  accept: string;
+  reject: string;
+  preferences: string;
+  preferencesTitle: string;
+  necessaryTitle: string;
+  necessaryText: string;
+  alwaysOn: string;
+  analyticsTitle: string;
+  analyticsText: string;
+  save: string;
+  saved: string;
+  settings: string;
+}
+
 export interface SiteDictionary {
   skipToContent: string;
   menu: string;
@@ -81,6 +100,7 @@ export interface SiteDictionary {
   privacy: { title: string; draft: string; draftText: string; version: string };
   contactForm: ContactFormLabels;
   unavailable: string;
+  cookies: CookieLabels;
 }
 
 const EN: SiteDictionary = {
@@ -164,6 +184,23 @@ const EN: SiteDictionary = {
       "The contact form is not available in this language yet. Please call or e-mail us, or use the English version of this page.",
   },
   unavailable: "This page is temporarily unavailable. Please try again in a moment.",
+  cookies: {
+    title: "Cookies on this site",
+    text: "We use necessary cookies to run this site. With your permission we also use Google Analytics cookies to see how the site is used. You can change your choice at any time under “Cookie settings”.",
+    privacy: "Privacy Policy",
+    accept: "Accept analytics",
+    reject: "Reject analytics",
+    preferences: "Preferences",
+    preferencesTitle: "Cookie preferences",
+    necessaryTitle: "Necessary",
+    necessaryText: "Needed for the site to work and to remember your choice.",
+    alwaysOn: "Always on",
+    analyticsTitle: "Analytics (Google Analytics)",
+    analyticsText: "Measures visits and the pages viewed; loaded only with your permission.",
+    save: "Save preferences",
+    saved: "Your cookie preferences were saved.",
+    settings: "Cookie settings",
+  },
 };
 
 const TR: SiteDictionary = {
@@ -250,6 +287,23 @@ const TR: SiteDictionary = {
       "İletişim formu bu dilde henüz kullanılamıyor. Lütfen bizi arayın veya e-posta gönderin ya da sayfanın İngilizce sürümünü kullanın.",
   },
   unavailable: "Bu sayfa geçici olarak kullanılamıyor. Lütfen biraz sonra tekrar deneyin.",
+  cookies: {
+    title: "Bu sitede çerezler",
+    text: "Sitenin çalışması için zorunlu çerezler kullanıyoruz. İzin verirseniz sitenin nasıl kullanıldığını görmek için Google Analytics çerezlerini de kullanırız. Seçiminizi istediğiniz zaman “Çerez ayarları” bölümünden değiştirebilirsiniz.",
+    privacy: "Gizlilik Politikası",
+    accept: "Analitiği kabul et",
+    reject: "Analitiği reddet",
+    preferences: "Tercihler",
+    preferencesTitle: "Çerez tercihleri",
+    necessaryTitle: "Zorunlu",
+    necessaryText: "Sitenin çalışması ve seçiminizin hatırlanması için gereklidir.",
+    alwaysOn: "Her zaman açık",
+    analyticsTitle: "Analitik (Google Analytics)",
+    analyticsText: "Ziyaretleri ve görüntülenen sayfaları ölçer; yalnız izninizle yüklenir.",
+    save: "Tercihleri kaydet",
+    saved: "Çerez tercihleriniz kaydedildi.",
+    settings: "Çerez ayarları",
+  },
 };
 
 const DICTIONARIES: Record<RouteLocale, SiteDictionary> = { en: EN, tr: TR };

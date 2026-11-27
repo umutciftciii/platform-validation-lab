@@ -12,6 +12,7 @@ import {
   cmsContentTexts,
   cmsCorporateTrPlace,
   cmsDesignTemplate,
+  cmsPathForSlug,
   cmsSlugOfPath,
   cmsTemplateContentSchema,
   type CmsArticleContent,
@@ -175,11 +176,26 @@ describe("Turkish proposals (COM-5)", () => {
     expect(differ).toHaveLength(5);
   });
 
-  it("starts the Turkish contact page at its Turkish address", () => {
+  it("starts the Turkish contact page at the English address /tr/contact (COM-6)", () => {
     expect(CORPORATE_TR_PROPOSALS["standard|/contact"]).toMatchObject({
       title: "Bize Ulaşın",
-      slug: "iletisim",
+      slug: "contact",
     });
+    expect(CORPORATE_TR_PROPOSAL_INDEX["standard|/contact"]).toEqual({
+      title: "Bize Ulaşın",
+      slug: "contact",
+    });
+    // The links of the home page and the portfolio name `/contact` in every language.
+    expect(cmsPathForSlug(CORPORATE_TR_PROPOSAL_INDEX["standard|/contact"]!.slug!)).toBe(
+      "/contact",
+    );
+    // No Turkish proposal starts at an address the old slug used.
+    for (const p of [
+      ...Object.values(CORPORATE_TR_PROPOSALS),
+      ...Object.values(CORPORATE_TR_PROPOSAL_INDEX),
+    ]) {
+      expect(p.slug).not.toBe("iletisim");
+    }
     expect(cmsSlugOfPath("/news/x")).toBe("x");
     expect(CMS_SEEDS).toBeDefined();
   });
