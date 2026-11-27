@@ -152,9 +152,33 @@ export const CORPORATE_SITE_SEO_SEED: Omit<BvSiteSeoContent, "defaultOgImage"> &
  * counter (50+ countries, 100K+, 25K+, 16+, 100%), the customer testimonials, the FAQ (commercial
  * commitments: MOQ, LC, SGS, Incoterms), the "Flexible Trade Terms" strength (FOB/CIF terms), the
  * quality-standards sentence of the product block and the Storage & Distribution introduction
- * ("world-class terminal services": ownership to be confirmed). The pages behind About Us and the
- * service cards do not exist on the new site yet (COM-5): those cards carry no link until then.
+ * ("world-class terminal services": ownership to be confirmed). COM-7: the service cards link
+ * their pages (COM-5; publish the pages before the home page) and carry the visual pack.
  */
+/**
+ * COM-7: the corporate visual pack v1 (registered CORPORATE assets). Generated, representative
+ * industrial scenes: their alt texts say so, and no text presents them as the company's own
+ * terminal, fleet or plant.
+ */
+export const CORPORATE_VISUALS = {
+  energy: {
+    image: "/media/visual-pack-v1/hero-energy-trading.webp",
+    imageAlt: "Representative scene: a tanker moored beside an industrial harbour at dusk",
+  },
+  logistics: {
+    image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+    imageAlt: "Representative scene: a road tanker and a tanker ship on a harbour quay",
+  },
+  storage: {
+    image: "/media/visual-pack-v1/hero-storage-terminal.webp",
+    imageAlt: "Representative scene: storage tanks and pipelines at dusk",
+  },
+  petrochemicals: {
+    image: "/media/visual-pack-v1/hero-petrochemicals.webp",
+    imageAlt: "Representative scene: process columns and pipework of a petrochemical plant",
+  },
+} as const;
+
 export const CORPORATE_HOME_SEED: CorporateHomeContent = {
   hero: {
     eyebrow: "Dream Petroleum",
@@ -163,6 +187,40 @@ export const CORPORATE_HOME_SEED: CorporateHomeContent = {
       "Dream Petroleum is a global energy and petroleum investment company operating across midstream and downstream markets, delivering transparent and reliable execution across international trade networks.",
     primary: { label: "Contact Us", href: "/contact" },
     secondary: { label: "View Full Portfolio", href: "/products" },
+    // COM-7: the four activity areas, with the live site's own texts (service cards and pages).
+    slides: [
+      {
+        label: "Energy Trading",
+        title: "Energy Trading & Supply",
+        intro:
+          "Connecting global energy resources with strategic market demand through disciplined trading and reliable supply chain execution.",
+        ...CORPORATE_VISUALS.energy,
+        cta: { label: "Energy Trading & Supply", href: "/energy-trading" },
+      },
+      {
+        label: "Logistics & Supply",
+        title: "We Make Transport Fast And Safe",
+        intro: "We transport your products safely with our experienced staff and technology.",
+        ...CORPORATE_VISUALS.logistics,
+        cta: { label: "Logistics", href: "/logistics" },
+      },
+      {
+        label: "Storage & Distribution",
+        // The storage page's last-mile card: no statement about own terminals (DP-003).
+        title: "Storage & Distribution",
+        intro:
+          "Fully integrated transport solutions moving product from storage facilities directly to end-user locations.",
+        ...CORPORATE_VISUALS.storage,
+        cta: { label: "Storage & Distribution", href: "/storage-distribution" },
+      },
+      {
+        label: "Petrochemicals",
+        title: "Petrochemical Product Supply",
+        intro: "Aromatic, aliphatic, and solvent-based products supplied through trusted partners.",
+        ...CORPORATE_VISUALS.petrochemicals,
+        cta: { label: "View Full Portfolio", href: "/products#petrochemicals" },
+      },
+    ],
   },
   overview: {
     eyebrow: "Company Overview",
@@ -188,19 +246,28 @@ export const CORPORATE_HOME_SEED: CorporateHomeContent = {
         title: "Energy Trading & Supply",
         description:
           "Connecting global energy resources with strategic market demand through disciplined trading and reliable supply chain execution.",
-        href: null,
+        href: "/energy-trading",
+        ...CORPORATE_VISUALS.energy,
       },
       {
         title: "Logistics",
         description: "We transport your products safely with our experienced staff and technology.",
-        href: null,
+        href: "/logistics",
+        ...CORPORATE_VISUALS.logistics,
       },
-      { title: "Storage & Distribution", description: null, href: null },
+      {
+        title: "Storage & Distribution",
+        description: null,
+        href: "/storage-distribution",
+        ...CORPORATE_VISUALS.storage,
+      },
       {
         title: "Sustainability",
         description:
           "Driving progress through responsible energy distribution and environmental stewardship.",
-        href: null,
+        href: "/sustainability",
+        image: null,
+        imageAlt: null,
       },
     ],
   },
@@ -267,6 +334,12 @@ export const CORPORATE_HOME_SEED: CorporateHomeContent = {
       },
     ],
   },
+  // COM-7: the latest articles under the live blog's heading.
+  news: {
+    eyebrow: "Blogs",
+    title: CORPORATE_NEWS_INDEX_LIVE.title,
+    link: { label: "Blogs", href: "/news" },
+  },
   cta: {
     title: "Transparent, Structured, and Long-Term Commercial Value",
     text: "Our approach combines disciplined risk management, flexible structures, and consistent execution across international midstream and downstream markets.",
@@ -277,6 +350,7 @@ export const CORPORATE_HOME_SEED: CorporateHomeContent = {
       { text: "Long-term partnerships built on operational transparency." },
     ],
     button: { label: "Contact Us", href: "/contact" },
+    ...CORPORATE_VISUALS.logistics,
   },
 };
 
@@ -296,6 +370,7 @@ export const CORPORATE_PRODUCTS_SEED: CorporateProductsContent = {
     title: "Product Portfolio",
     intro:
       "Supplying high-quality base oils, solvents, and petrochemical products across global energy markets.",
+    ...CORPORATE_VISUALS.petrochemicals,
   },
   groups: [
     {

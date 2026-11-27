@@ -5,8 +5,12 @@
  *
  * Images (DP-320): a split section shows its image only when it is a registered file of the
  * corporate site (lib/section-view.ts `corporateImage`); otherwise — no image chosen, or another
- * site's file — the section is laid out without one. The corporate site has no registered images
- * until their rights are confirmed, so today every section renders without a picture.
+ * site's file — the section is laid out without one. COM-7: a hero may carry one of the visual
+ * pack's pictures (representative scenes) and then opens the page full width under a transparent
+ * header; without one it is a navy heading. The same section types take different compositions
+ * by their content and place (a titled text is a two-column pair, an untitled one a lead; card
+ * sections alternate their ground; a hero further down is a navy interlude), so pages built from
+ * the same types do not look alike.
  *
  * Contact: the published contact details (footer) and a map link; COM-4 (DP-030) the contact
  * form (components/contact-form.tsx) where it may be offered (lib/contact-form.ts: the privacy
@@ -14,11 +18,12 @@
  * disabled under the section's CMS note — never a form that looks like it works.
  */
 import { ContactForm } from "@/components/contact-form";
+import { Picture } from "@/components/picture";
 import type { SiteFooter, TemplateSection } from "@/lib/cms";
 import type { ContactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
-import { corporateImage, mapHref, paragraphsOf } from "@/lib/section-view";
+import { corporateImage, mapHref, paragraphsOf, textBlocks } from "@/lib/section-view";
 
 function Paragraphs({ text, className }: { text: string | null; className?: string }) {
   const list = paragraphsOf(text);
@@ -31,6 +36,29 @@ function Paragraphs({ text, className }: { text: string | null; className?: stri
     </div>
   );
 }
+
+/** COM-7: a card's text with the live site's "• " lines as a real list. */
+function CardText({ text }: { text: string | null }) {
+  const blocks = textBlocks(text);
+  if (!blocks.length) return null;
+  return (
+    <div className="feature-text">
+      {blocks.map((b, i) =>
+        b.kind === "p" ? (
+          <p key={i}>{b.text}</p>
+        ) : (
+          <ul key={i} className="dash-list">
+            {b.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        ),
+      )}
+    </div>
+  );
+}
+
+const num = (i: number) => String(i + 1).padStart(2, "0");
 
 function columnsFor(count: number): 2 | 3 | 4 {
   if (count % 4 === 0 && count >= 4) return 4;
@@ -97,12 +125,15 @@ function DisabledForm({
 function Section({
   section,
   first,
+  place,
   contact,
   form,
   locale,
 }: {
   section: TemplateSection;
   first: boolean;
+  /** COM-7: the how-manieth section of its type on the page (0-based), for alternating grounds. */
+  place: number;
   contact: SiteFooter["contact"] | null;
   /** COM-4: the contact form of a contact section (null: the CMS note alone). */
   form: ContactSectionForm | null;
@@ -110,13 +141,47 @@ function Section({
 }) {
   const H = first ? "h1" : "h2";
   switch (section.type) {
-    case "hero":
+    case "hero": {
+      const picture = corporateImage(section.image);
+      if (!first) {
+        // A hero further down the page (e.g. Our Team's second part): a navy interlude.
+        return (
+          <section className="interlude on-dark">
+            <div className="container-site interlude-inner">
+              {section.eyebrow ? <p className="eyebrow">{section.eyebrow}</p> : null}
+              <H className="interlude-title">{section.title}</H>
+              <Paragraphs text={section.intro} className="interlude-intro" />
+              {section.cta ? (
+                <p className="m-0">
+                  <a className="btn btn-accent btn-arrow" href={section.cta.href}>
+                    {section.cta.label}
+                  </a>
+                </p>
+              ) : null}
+            </div>
+          </section>
+        );
+      }
       return (
-        <header className="hero on-dark">
-          <div className="container-site">
+        <header
+          className={`page-hero on-dark ${picture ? "page-hero-picture" : "page-hero-plain"}`}
+        >
+          {picture ? (
+            <div className="page-hero-media">
+              <Picture
+                src={section.image}
+                alt={section.imageAlt}
+                className="page-hero-image"
+                sizes="100vw"
+                eager
+              />
+              <span aria-hidden className="page-hero-shade" />
+            </div>
+          ) : null}
+          <div className="container-site page-hero-inner">
             {section.eyebrow ? <p className="eyebrow">{section.eyebrow}</p> : null}
-            <H>{section.title}</H>
-            <Paragraphs text={section.intro} className="hero-intro" />
+            <H className="page-hero-title">{section.title}</H>
+            <Paragraphs text={section.intro} className="page-hero-intro" />
             {section.cta ? (
               <div className="hero-actions">
                 <a className="btn btn-accent btn-arrow" href={section.cta.href}>
@@ -127,31 +192,44 @@ function Section({
           </div>
         </header>
       );
+    }
     case "text":
-      return (
-        <section className="section section-plain">
-          <div className="container-site text-block" data-titled={Boolean(section.title)}>
-            {section.title ? <H className="section-title">{section.title}</H> : null}
-            <Paragraphs text={section.body} />
+      return section.title ? (
+        <section className="band text-pair-block">
+          <div className="container-site text-pair">
+            <H className="text-pair-title">{section.title}</H>
+            <Paragraphs text={section.body} className="text-pair-body" />
+          </div>
+        </section>
+      ) : (
+        <section className="band lead-block">
+          <div className="container-site">
+            <Paragraphs text={section.body} className="lead-text" />
           </div>
         </section>
       );
-    case "cards":
+    case "cards": {
+      const columns = columnsFor(section.items.length);
+      // Card sections alternate: mist, white with rules, mist...; a single card is a statement.
+      const ground = place % 2 === 0 ? "band-mist" : "band-ruled";
       return (
-        <section className="section section-tint">
+        <section className={`band ${ground}`}>
           <div className="container-site">
             {section.title || section.intro ? (
-              <div className="cards-head" data-intro={Boolean(section.intro)}>
-                {section.title ? <H className="section-title">{section.title}</H> : null}
-                <Paragraphs text={section.intro} className="section-lead" />
+              <div className="block-head" data-intro={Boolean(section.intro)}>
+                {section.title ? <H className="block-title">{section.title}</H> : <span />}
+                <Paragraphs text={section.intro} className="block-lead" />
               </div>
             ) : null}
-            <ul className="card-grid" data-columns={columnsFor(section.items.length)}>
-              {section.items.map((item) => (
+            <ol className="feature-grid" data-columns={columns} data-count={section.items.length}>
+              {section.items.map((item, i) => (
                 <li key={item.title}>
-                  <article className="card">
-                    <h3>{item.title}</h3>
-                    {item.description ? <p>{item.description}</p> : null}
+                  <article className="feature-card">
+                    <span className="feature-num" aria-hidden>
+                      {num(i)}
+                    </span>
+                    <h3 className="feature-title">{item.title}</h3>
+                    <CardText text={item.description} />
                     {item.link ? (
                       <a className="text-link" href={item.link.href}>
                         {item.link.label}
@@ -160,24 +238,23 @@ function Section({
                   </article>
                 </li>
               ))}
-            </ul>
+            </ol>
           </div>
         </section>
       );
+    }
     case "cta":
       return (
-        <section className="section section-plain">
+        <section className="band band-tight">
           <div className="container-site">
-            <div className="cta-panel on-dark">
+            <div className="cta-band on-dark">
               <div>
-                <H>{section.title}</H>
-                {section.text ? <p>{section.text}</p> : null}
+                <H className="cta-band-title">{section.title}</H>
+                {section.text ? <p className="cta-band-text">{section.text}</p> : null}
               </div>
-              <div>
-                <a className="btn btn-accent btn-arrow" href={section.button.href}>
-                  {section.button.label}
-                </a>
-              </div>
+              <a className="btn btn-accent btn-arrow" href={section.button.href}>
+                {section.button.label}
+              </a>
             </div>
           </div>
         </section>
@@ -185,11 +262,11 @@ function Section({
     case "split": {
       const image = corporateImage(section.image);
       return (
-        <section className="section section-plain">
+        <section className="band">
           <div className="container-site split" data-image={Boolean(image)}>
             <div className="split-head">
               {section.eyebrow ? <p className="eyebrow">{section.eyebrow}</p> : null}
-              <H className="section-title">{section.title}</H>
+              <H className="block-title">{section.title}</H>
               {image ? <Paragraphs text={section.body} className="split-text" /> : null}
             </div>
             {image ? (
@@ -215,10 +292,10 @@ function Section({
     }
     case "specList":
       return (
-        <section className="section section-plain">
+        <section className="band">
           <div className="container-site text-block" data-titled="true">
             <div className="split-head">
-              <H className="section-title">{section.title}</H>
+              <H className="block-title">{section.title}</H>
               <Paragraphs text={section.intro} />
               {section.link ? (
                 <p className="m-0">
@@ -241,7 +318,7 @@ function Section({
       );
     case "quote":
       return (
-        <section className="section section-plain">
+        <section className="band">
           <div className="container-site">
             <figure className="quote">
               <blockquote>
@@ -256,11 +333,11 @@ function Section({
       const t = dictionary(locale).contact;
       const map = contact ? mapHref(contact.company, contact.addressLines) : null;
       return (
-        <section className="section section-plain">
+        <section className="band band-mist contact-block">
           <div className="container-site contact-grid">
             <div>
-              <H className="section-title">{section.title}</H>
-              <Paragraphs text={section.intro} className="section-lead mt-6" />
+              <H className="block-title">{section.title}</H>
+              <Paragraphs text={section.intro} className="block-lead mt-6" />
               {contact ? (
                 <dl className="contact-details">
                   {contact.addressLines.length ? (
@@ -358,7 +435,7 @@ export function TemplateSections({
       {leading ? null : (
         <header className="page-title">
           <div className="container-site">
-            <h1>{title}</h1>
+            <h1 className="page-title-heading">{title}</h1>
           </div>
         </header>
       )}
@@ -367,6 +444,7 @@ export function TemplateSections({
           key={s.id}
           section={s}
           first={leading && i === 0}
+          place={sections.slice(0, i).filter((x) => x.type === s.type).length}
           contact={contact}
           form={form}
           locale={locale}
@@ -390,7 +468,15 @@ export function BodySections({
   return (
     <>
       {sections.map((s) => (
-        <Section key={s.id} section={s} first={false} contact={null} form={null} locale={locale} />
+        <Section
+          key={s.id}
+          section={s}
+          first={false}
+          place={0}
+          contact={null}
+          form={null}
+          locale={locale}
+        />
       ))}
     </>
   );

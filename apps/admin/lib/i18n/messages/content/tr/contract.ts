@@ -167,6 +167,16 @@ export const contract: Messages["content"]["contract"] = {
     corporateProductsTypicalValuesRowsValueALabel: "Birinci değer",
     corporateProductsTypicalValuesRowsValueBLabel: "İkinci değer",
     corporateProductsCoaLabel: "Analiz Sertifikası (COA)",
+    corporateHeroImageLabel: "Arka plan görseli",
+    corporateImageHint:
+      "Temsili bir sahne; hiçbir zaman şirketin kendi tesisi veya filosu olarak sunulmaz.",
+    corporateHomeHeroSlidesLabel: "Faaliyet alanları",
+    corporateHomeHeroSlidesItemLabel: "Faaliyet alanı",
+    corporateHomeHeroSlidesHint:
+      "Görselin üzerinde sekme olarak gösterilir. Hiç yoksa yalnız yukarıdaki başlık.",
+    corporateHomeHeroSlidesTabLabel: "Sekme etiketi",
+    corporateHomeNewsLabel: "Son haberler",
+    corporateHomeNewsHint: "Bu başlığın altında yayımlanmış en yeni üç yazı listelenir.",
     corporateProductsCoaHint: "COA talepleri iletişim sayfasına yönlendirilir.",
   },
   /** CMS'de (henüz) olmayan rotaların notları (CMS_SITE_REGISTRY). */

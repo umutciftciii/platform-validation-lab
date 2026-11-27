@@ -9,8 +9,10 @@ import {
   corporateImage,
   gradeLayout,
   mapHref,
+  opensWithPicture,
   paragraphsOf,
   showsTypicalValues,
+  textBlocks,
 } from "./section-view.ts";
 
 describe("paragraphsOf", () => {
@@ -74,5 +76,31 @@ describe("product portfolio (COM-2b)", () => {
     assert.equal(gradeLayout([{ type: null, description: null }]), "chips");
     assert.equal(gradeLayout([{ type: "Aliphatic", description: null }]), "cards");
     assert.equal(gradeLayout([{ type: null, description: "Light grade." }]), "cards");
+  });
+});
+
+describe("textBlocks (COM-7)", () => {
+  it("turns the live site's bullet lines into a list, other paragraphs stay text", () => {
+    assert.deepEqual(textBlocks("Intro text.\n\n• One\n• Two"), [
+      { kind: "p", text: "Intro text." },
+      { kind: "list", items: ["One", "Two"] },
+    ]);
+    assert.deepEqual(textBlocks("Mixed\n• line"), [{ kind: "p", text: "Mixed\n• line" }]);
+    assert.deepEqual(textBlocks(null), []);
+  });
+});
+
+describe("opensWithPicture (COM-7)", () => {
+  const corporate = CMS_STATIC_ASSETS.find((a) => a.site === "CORPORATE")!;
+  const bv = CMS_STATIC_ASSETS.find((a) => a.site === "BV" && a.kind === "image")!;
+  it("only a first hero with a registered corporate picture", () => {
+    assert.equal(opensWithPicture([{ type: "hero", image: corporate.src }]), true);
+    assert.equal(opensWithPicture([{ type: "hero", image: bv.src }]), false);
+    assert.equal(opensWithPicture([{ type: "hero", image: null }, { type: "hero" }]), false);
+    assert.equal(
+      opensWithPicture([{ type: "text" }, { type: "hero", image: corporate.src }]),
+      false,
+    );
+    assert.equal(opensWithPicture([]), false);
   });
 });

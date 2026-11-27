@@ -37,7 +37,8 @@ const DATE_FIELD = /<div><label for="article-originalDate".*?<\/p><\/div>/s;
 
 describe("COM-5: EN renders changed only where approved", () => {
   const before = load("com5-en", "content-en");
-  const after = load("catalog-en", "content-en");
+  // COM-7 recorded content-en again; the COM-5 recording is kept in fixtures/com7-en.
+  const after = load("com7-en", "content-en");
 
   it("changes exactly the corporate route list and the article editors", () => {
     expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
