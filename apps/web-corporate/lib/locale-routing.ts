@@ -25,7 +25,7 @@ const OG_LOCALES: Record<RouteLocale, string> = { en: "en_GB", tr: "tr_TR" };
 const LANGUAGE_NAMES: Record<RouteLocale, string> = { en: "English", tr: "Türkçe" };
 
 /** First segments that are never a page address (framework, API, internal 404 target, media). */
-export const TECHNICAL_SEGMENTS: readonly string[] = ["_next", "__dp", "api", "media"];
+export const TECHNICAL_SEGMENTS: readonly string[] = ["_next", "__dp", "api", "media", "preview"];
 
 /** Files the site answers at its root; never prefixed. */
 const SITE_FILES: readonly string[] = ["favicon.ico", "robots.txt", "sitemap.xml"];

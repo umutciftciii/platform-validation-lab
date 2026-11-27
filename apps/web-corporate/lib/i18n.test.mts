@@ -24,3 +24,20 @@ describe("dictionary", () => {
     assert.notEqual(dictionary("tr").notFound.title, dictionary("en").notFound.title);
   });
 });
+
+describe("interpolate (COM-2a)", () => {
+  it("fills named placeholders and keeps unknown ones", async () => {
+    const { interpolate } = await import("./i18n.ts");
+    assert.equal(
+      interpolate("Show the {label} submenu", { label: "Services" }),
+      "Show the Services submenu",
+    );
+    assert.equal(interpolate("{x} {y}", { x: "a" }), "a {y}");
+  });
+
+  it("every submenu label names its item", () => {
+    for (const locale of ROUTE_LOCALES) {
+      assert.match(dictionary(locale).openSubmenu, /\{label\}/, locale);
+    }
+  });
+});

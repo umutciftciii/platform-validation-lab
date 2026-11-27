@@ -11,6 +11,8 @@
  *    `corporate.site-nav` and `corporate.site-footer` of its language and its counterparts.
  *  - `getSiteFrame(path, locale)`: the navigation and footer alone, for pages outside the CMS (the
  *    placeholder home, the privacy policy, the 404).
+ *  - `getPreview(token)` (COM-2a, DP-321): the draft a signed preview link names, in its draft's
+ *    language — a TEMPLATE page, or a fragment (navigation, footer, SEO defaults) around the home.
  */
 import {
   BvFooterPublicSchema,
@@ -19,9 +21,9 @@ import {
   CmsPublicAlternateSchema,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
-  CmsTemplateContentSchema,
   PUBLIC_CMS_API,
   cmsIsArticle,
+  cmsTemplateContentSchema,
   type CmsLink,
   type CmsPublicAlternate,
   type CmsPublicPage,
@@ -45,7 +47,10 @@ import { visibleLocales } from "@/lib/public-locales";
 
 const KEYS = CMS_SITE_MENU_KEYS.CORPORATE;
 
-/** A section of a TEMPLATE page, as validated by CmsTemplateContentSchema. */
+/**
+ * A section of a TEMPLATE page, as validated by `cmsTemplateContentSchema("CORPORATE")` (COM-2a:
+ * a split section's image is a corporate file or none, DP-320).
+ */
 export type TemplateSection =
   | {
       id: string;
@@ -70,8 +75,8 @@ export type TemplateSection =
       eyebrow: string | null;
       title: string;
       body: string;
-      image: string;
-      imageAlt: string;
+      image: string | null;
+      imageAlt: string | null;
       imageNote: string | null;
     }
   | {
@@ -177,29 +182,90 @@ export async function getPublishedPage(
   if (page.kind !== "TEMPLATE" || cmsIsArticle(page) || !page.path) {
     return { ok: false, reason: "not_found" };
   }
-  const content = CmsTemplateContentSchema.safeParse(page.content);
-  if (!content.success) {
-    console.error("public cms: the page content does not match the contract; not rendered");
-    return { ok: false, reason: "unavailable" };
-  }
   const alternates = CmsPublicAlternateSchema.array()
     .max(20)
     .safeParse(bundle.data.alternates ?? []);
   const counterparts = alternates.success ? alternates.data : [];
+  const view = await templateView({ ...page, path: page.path }, fragments, locale, counterparts);
+  return view ? { ok: true, data: view } : { ok: false, reason: "unavailable" };
+}
+
+/** A TEMPLATE page with its frame, or null when its content does not match the contract. */
+async function templateView(
+  page: CmsPublicPage & { path: string },
+  fragments: Record<string, CmsPublicPage | null>,
+  locale: RouteLocale,
+  counterparts: readonly CmsPublicAlternate[],
+): Promise<TemplatePageView | null> {
+  const content = cmsTemplateContentSchema("CORPORATE").safeParse(page.content);
+  if (!content.success) {
+    console.error("public cms: the page content does not match the contract; not rendered");
+    return null;
+  }
   const frame = frameOf(fragments, storedAddress(locale, page.path), locale);
+  return {
+    path: page.path,
+    title: page.title,
+    seo: page.seo,
+    sections: localizeLinks(content.data.sections as TemplateSection[], locale),
+    alternates: counterparts,
+    locale,
+    footer: frame.footer,
+    nav: frame.nav
+      ? { ...frame.nav, languages: await languagesFor(locale, page.path, counterparts) }
+      : null,
+  };
+}
+
+/** COM-2a (DP-321): what a preview link shows. */
+export type PreviewView =
+  | { kind: "template"; locale: RouteLocale; page: TemplatePageView }
+  /** A fragment's draft (or the SEO defaults) around the site's home page. */
+  | { kind: "home"; locale: RouteLocale; frame: SiteFrame & { languages: LanguageOption[] } };
+
+const PREVIEW_TOKEN = /^v1\.[0-9a-f-]{36}\.CORPORATE\.\d{10,13}\.[0-9a-f]{64}$/;
+
+/**
+ * The draft a signed preview link names (the API checks the signature, the expiry and that the
+ * link is this site's). A link of another site never matches the token form and is not even
+ * asked. The address carries no language: the draft's language comes with the response.
+ */
+export async function getPreview(token: string): Promise<Read<PreviewView>> {
+  if (!PREVIEW_TOKEN.test(token)) return { ok: false, reason: "not_found" };
+  const res = await apiGet(`${PUBLIC_CMS_API}/preview/${token}`);
+  if (!res) return { ok: false, reason: "unavailable" };
+  if (res.status === 404) return { ok: false, reason: "not_found" };
+  if (!res.ok) return { ok: false, reason: "unavailable" };
+  const bundle = CmsPublicBundleSchema.safeParse(await res.json().catch(() => null));
+  if (!bundle.success || !bundle.data.preview) {
+    console.error("public cms: the preview response does not match the contract; not rendered");
+    return { ok: false, reason: "unavailable" };
+  }
+  const { page, fragments } = bundle.data;
+  const locale: RouteLocale = isRouteLocale(bundle.data.locale)
+    ? bundle.data.locale
+    : DEFAULT_LOCALE;
+  if (page.kind === "TEMPLATE") {
+    // News articles are COM-3; until then their preview is not shown here.
+    if (cmsIsArticle(page) || !page.path) return { ok: false, reason: "not_found" };
+    const view = await templateView({ ...page, path: page.path }, fragments, locale, []);
+    return view
+      ? { ok: true, data: { kind: "template", locale, page: view } }
+      : { ok: false, reason: "unavailable" };
+  }
+  // A fragment around the home page (the corporate home is not in the CMS before COM-2b).
+  const frame = frameOf(fragments, "/", locale);
+  const languages = await languagesFor(locale, "/");
   return {
     ok: true,
     data: {
-      path: page.path,
-      title: page.title,
-      seo: page.seo,
-      sections: localizeLinks(content.data.sections as TemplateSection[], locale),
-      alternates: counterparts,
+      kind: "home",
       locale,
-      footer: frame.footer,
-      nav: frame.nav
-        ? { ...frame.nav, languages: await languagesFor(locale, page.path, counterparts) }
-        : null,
+      frame: {
+        footer: frame.footer,
+        nav: frame.nav ? { ...frame.nav, languages } : null,
+        languages,
+      },
     },
   };
 }
