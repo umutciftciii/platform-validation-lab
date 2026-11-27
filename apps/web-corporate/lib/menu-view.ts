@@ -22,6 +22,8 @@ export interface NavLink {
 export interface SiteNav {
   items: (NavLink & { children: NavLink[] })[];
   contact: NavLink | null;
+  /** COM-2a: the links shown instead of the menus while JavaScript is off. */
+  noScriptLinks: NavLink[];
   pendingNote: string;
   languages: LanguageOption[];
 }
@@ -64,6 +66,8 @@ export function toNav(c: BvNavPublic, currentPath: string): Omit<SiteNav, "langu
       return { ...own, current: own.current || children.some((ch) => ch.current), children };
     }),
     contact: c.contact ? { ...link(c.contact, currentPath), current: false } : null,
+    // Only links with a live target: without JavaScript nothing explains a pending item.
+    noScriptLinks: c.noScriptLinks.filter((l) => l.href !== null).map((l) => link(l, currentPath)),
     pendingNote: c.pendingNote,
   };
 }

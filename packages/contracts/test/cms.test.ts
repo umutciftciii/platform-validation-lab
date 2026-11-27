@@ -10,7 +10,12 @@ import {
   CmsPageDraftRequestSchema,
   CmsSlugSchema,
   CmsTemplateContentSchema,
+  cmsArticleContentSchema,
+  cmsAssetRequired,
   cmsFieldsSchema,
+  cmsSiteAsset,
+  cmsSiteAssets,
+  cmsTemplateContentSchema,
 } from "../src/index.js";
 
 const draft = (content: unknown) => ({
@@ -348,5 +353,104 @@ describe("CMS content page sections (DP-135)", () => {
       "/strategic-partnership",
       "/sustainability",
     ]);
+  });
+});
+
+describe("site-scoped media (COM-2a, DP-320)", () => {
+  const bvImage = "/media/services-showcase/logistics-desktop.webp";
+  const section = (over: Record<string, unknown>) => ({
+    sections: [
+      {
+        id: "sec-0001",
+        type: "split",
+        eyebrow: null,
+        title: "Logistics",
+        body: "Sea and road.",
+        image: bvImage,
+        imageAlt: "A tanker at a quay.",
+        imageNote: null,
+        ...over,
+      },
+    ],
+  });
+
+  it("registers every asset for exactly one site and lists a site's own files only", () => {
+    for (const a of CMS_STATIC_ASSETS) expect(["BV", "CORPORATE"]).toContain(a.site);
+    expect(cmsSiteAssets("BV").every((a) => a.site === "BV")).toBe(true);
+    expect(cmsSiteAssets("CORPORATE").every((a) => a.site === "CORPORATE")).toBe(true);
+    expect(cmsSiteAsset(bvImage, "BV")?.src).toBe(bvImage);
+    expect(cmsSiteAsset(bvImage, "CORPORATE")).toBeUndefined();
+  });
+
+  it("a page of one site never points at the other site's files", () => {
+    expect(cmsTemplateContentSchema("BV").safeParse(section({})).success).toBe(true);
+    expect(cmsTemplateContentSchema("CORPORATE").safeParse(section({})).success).toBe(false);
+  });
+
+  it("a corporate split section may have no image (the design works without one)", () => {
+    const none = section({ image: null, imageAlt: null });
+    expect(cmsTemplateContentSchema("CORPORATE").safeParse(none).success).toBe(true);
+    expect(
+      cmsTemplateContentSchema("CORPORATE").safeParse(section({ image: "", imageAlt: "" })),
+    ).toMatchObject({
+      success: true,
+      data: { sections: [{ image: null, imageAlt: null }] },
+    });
+  });
+
+  it("BV keeps the image required, with its alt text", () => {
+    expect(cmsTemplateContentSchema("BV").safeParse(section({ image: null })).success).toBe(false);
+    expect(cmsTemplateContentSchema("BV").safeParse(section({ imageAlt: "" })).success).toBe(false);
+    expect(cmsTemplateContentSchema("BV").safeParse(section({ imageAlt: null })).success).toBe(
+      false,
+    );
+  });
+
+  it("the request shape accepts what either site accepts; the API applies the site", () => {
+    expect(
+      CmsTemplateContentSchema.safeParse(section({ image: null, imageAlt: null })).success,
+    ).toBe(true);
+    // An alt text stays required as soon as an image is chosen.
+    expect(CmsTemplateContentSchema.safeParse(section({ imageAlt: null })).success).toBe(false);
+  });
+
+  it("asset fields say on which sites they are required", () => {
+    const image = CMS_SECTION_TYPES.find((s) => s.type === "split")?.fields.find(
+      (f) => f.key === "image",
+    );
+    expect(image?.type).toBe("asset");
+    if (image?.type !== "asset") return;
+    expect(cmsAssetRequired(image, "BV")).toBe(true);
+    expect(cmsAssetRequired(image, "CORPORATE")).toBe(false);
+    expect(cmsAssetRequired(image)).toBe(false);
+    const cover = {
+      type: "asset",
+      key: "c",
+      label: "C",
+      kinds: ["image"],
+      required: false,
+    } as const;
+    expect(cmsAssetRequired(cover, "BV")).toBe(false);
+    const plain = { type: "asset", key: "c", label: "C", kinds: ["image"] } as const;
+    expect(cmsAssetRequired(plain)).toBe(true);
+    expect(cmsAssetRequired(plain, "CORPORATE")).toBe(true);
+  });
+
+  it("an article's cover image is the site's own file too", () => {
+    const article = {
+      excerpt: "Summary",
+      coverImage: "/media/news/why-are-oil-prices-falling.jpg",
+      coverAlt: "Cover",
+      sections: [],
+    };
+    expect(cmsArticleContentSchema("BV").safeParse(article).success).toBe(true);
+    expect(cmsArticleContentSchema("CORPORATE").safeParse(article).success).toBe(false);
+    expect(
+      cmsArticleContentSchema("CORPORATE").safeParse({
+        ...article,
+        coverImage: null,
+        coverAlt: null,
+      }).success,
+    ).toBe(true);
   });
 });

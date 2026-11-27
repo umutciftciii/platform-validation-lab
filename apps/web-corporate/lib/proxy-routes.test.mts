@@ -60,6 +60,8 @@ describe("classifyPath", () => {
       "/_next/static/x.js",
       "/api/health",
       "/media/a.png",
+      // COM-2a (DP-321): signed previews are never decided by the proxy.
+      "/preview/v1.token",
       "/favicon.ico",
       "/robots.txt",
     ]) {

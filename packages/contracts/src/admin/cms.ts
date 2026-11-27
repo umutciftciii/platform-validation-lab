@@ -136,6 +136,12 @@ export type CmsField =
       kinds: readonly CmsAssetKind[];
       /** Default true. Optional assets (e.g. an article's cover) store null when none is chosen. */
       required?: boolean;
+      /**
+       * COM-2a (DP-320): sites on which a required asset may be left empty (null). The corporate
+       * site has no registered images until their rights are confirmed; its design works without
+       * them, so a split section there may have none. Other sites keep the field required.
+       */
+      optionalOn?: readonly CmsSiteKey[];
       hint?: string;
     };
 
@@ -205,6 +211,34 @@ export function cmsAsset(src: string): CmsStaticAsset | undefined {
 }
 
 /**
+ * COM-2a (DP-320): a registered asset of this site (undefined for another site's file). Content of
+ * a site may only point at that site's files: each web app serves its own `public/media`.
+ */
+export function cmsSiteAsset(src: string, site: CmsSiteKey): CmsStaticAsset | undefined {
+  const asset = cmsAsset(src);
+  return asset?.site === site ? asset : undefined;
+}
+
+/** The registered assets of a site (the admin's choices for an asset field). */
+export function cmsSiteAssets(site: CmsSiteKey): readonly CmsStaticAsset[] {
+  return CMS_STATIC_ASSETS.filter((a) => a.site === site);
+}
+
+/**
+ * Whether an asset field must hold an asset on this site (see `optionalOn`). Without a site (the
+ * shape of a request, before the API knows the page's site) a field optional on any site is
+ * optional; the API then validates the content with its site.
+ */
+export function cmsAssetRequired(
+  field: Extract<CmsField, { type: "asset" }>,
+  site?: CmsSiteKey,
+): boolean {
+  if (field.required === false) return false;
+  if (!field.optionalOn?.length) return true;
+  return site !== undefined && !field.optionalOn.includes(site);
+}
+
+/**
  * Link targets: a site path, an in-page anchor, https, mailto or tel. Everything else (javascript:,
  * data:, protocol-relative //host, http) is refused.
  */
@@ -246,14 +280,18 @@ function textSchema(field: Extract<CmsField, { type: "text" }>): z.ZodType {
   }
 }
 
-function fieldSchema(field: CmsField): z.ZodType {
+/**
+ * The schema of one field. With `site` (COM-2a, DP-320) an asset must be one of that site's files
+ * and `optionalOn` applies; without it any registered asset is accepted (the shape alone).
+ */
+function fieldSchema(field: CmsField, site?: CmsSiteKey): z.ZodType {
   switch (field.type) {
     case "text":
       return textSchema(field);
     case "link":
       return field.required ? CmsLinkSchema : CmsLinkSchema.nullish().transform((v) => v ?? null);
     case "list": {
-      const list = z.array(cmsFieldsSchema(field.fields)).min(field.min).max(field.max);
+      const list = z.array(cmsFieldsSchema(field.fields, site)).min(field.min).max(field.max);
       const key = field.unique;
       if (!key) return list;
       return list.refine((items) => new Set(items.map((i) => i[key])).size === items.length, {
@@ -262,16 +300,16 @@ function fieldSchema(field: CmsField): z.ZodType {
       });
     }
     case "group":
-      return cmsFieldsSchema(field.fields);
+      return cmsFieldsSchema(field.fields, site);
     case "asset": {
       const asset = z.string().refine(
         (src) => {
-          const a = cmsAsset(src);
+          const a = site ? cmsSiteAsset(src, site) : cmsAsset(src);
           return Boolean(a && field.kinds.includes(a.kind));
         },
         { message: "asset" },
       );
-      if (field.required !== false) return asset;
+      if (cmsAssetRequired(field, site)) return asset;
       return asset
         .nullish()
         .or(z.literal("").transform(() => null))
@@ -280,9 +318,27 @@ function fieldSchema(field: CmsField): z.ZodType {
   }
 }
 
-/** The strict object schema of a set of fields. */
-export function cmsFieldsSchema(fields: readonly CmsField[]): z.ZodType<Record<string, unknown>> {
-  return z.strictObject(Object.fromEntries(fields.map((f) => [f.key, fieldSchema(f)]))) as never;
+/** The strict object schema of a set of fields (`site`: see `fieldSchema`). */
+export function cmsFieldsSchema(
+  fields: readonly CmsField[],
+  site?: CmsSiteKey,
+): z.ZodType<Record<string, unknown>> {
+  const object = z.strictObject(
+    Object.fromEntries(fields.map((f) => [f.key, fieldSchema(f, site)])),
+  );
+  // A text required together with a sibling (an image's alt text) while the sibling has a value.
+  const together = fields.filter(
+    (f): f is Extract<CmsField, { type: "text" }> => f.type === "text" && Boolean(f.requiredWith),
+  );
+  if (!together.length) return object as never;
+  return object.superRefine((value, ctx) => {
+    const v = value as Record<string, unknown>;
+    for (const f of together) {
+      if (v[f.requiredWith as string] && !v[f.key]) {
+        ctx.addIssue({ code: "custom", path: [f.key], message: "required_with_image" });
+      }
+    }
+  }) as never;
 }
 
 // --- section types of TEMPLATE pages -----------------------------------------------------------
@@ -374,13 +430,14 @@ export const CMS_SECTION_TYPES: readonly CmsSectionType[] = [
         multiline: true,
         hint: "Plain text. A blank line starts a new paragraph.",
       },
-      { type: "asset", key: "image", label: "Image", kinds: ["image"] },
+      { type: "asset", key: "image", label: "Image", kinds: ["image"], optionalOn: ["CORPORATE"] },
       {
         type: "text",
         key: "imageAlt",
         label: "Alt text",
         max: 300,
-        required: true,
+        // COM-2a: required with the image (always on BV, where the image is required).
+        requiredWith: "image",
         multiline: true,
       },
       {
@@ -451,7 +508,7 @@ export const CMS_SECTIONS_MAX = 30;
 /** Client-generated section id (stable React key and later preview anchor). */
 const SectionIdSchema = z.string().regex(/^[a-z0-9-]{8,40}$/);
 
-const sectionSchema = (allowed: readonly string[]) =>
+const sectionSchema = (allowed: readonly string[], site?: CmsSiteKey) =>
   z.looseObject({ id: SectionIdSchema, type: z.string() }).transform((value, ctx) => {
     const def = allowed.includes(value.type)
       ? CMS_SECTION_TYPES.find((s) => s.type === value.type)
@@ -461,7 +518,7 @@ const sectionSchema = (allowed: readonly string[]) =>
       return z.NEVER;
     }
     const { id, type, ...fields } = value;
-    const parsed = cmsFieldsSchema(def.fields).safeParse(fields);
+    const parsed = cmsFieldsSchema(def.fields, site).safeParse(fields);
     if (!parsed.success) {
       // The original code is kept as the message; the error envelope reports `custom`.
       for (const issue of parsed.error.issues) {
@@ -474,17 +531,37 @@ const sectionSchema = (allowed: readonly string[]) =>
 
 export type CmsSection = { id: string; type: string } & Record<string, unknown>;
 
-const sectionList = (allowed: readonly string[]) =>
+const sectionList = (allowed: readonly string[], site?: CmsSiteKey) =>
   z
-    .array(sectionSchema(allowed))
+    .array(sectionSchema(allowed, site))
     .max(CMS_SECTIONS_MAX)
     .refine((list) => new Set(list.map((s) => s.id)).size === list.length, {
       message: "duplicate_section_id",
     });
 
+/**
+ * The shape of a TEMPLATE page's content, whatever its site: any registered asset, and an image a
+ * site may leave empty may be empty (see `cmsTemplateContentSchema` for a site's own rules).
+ */
 export const CmsTemplateContentSchema = z.strictObject({
   sections: sectionList(CMS_SECTION_TYPE_KEYS),
 });
+
+const templateContentBySite = new Map<CmsSiteKey, z.ZodType>();
+
+/**
+ * COM-2a (DP-320): a TEMPLATE page's content on its site: its images are that site's files, and a
+ * split section's image may be empty where the site allows it (`optionalOn`). The API validates
+ * drafts, publications and public reads with this; the sites parse their own content with it.
+ */
+export function cmsTemplateContentSchema(site: CmsSiteKey): typeof CmsTemplateContentSchema {
+  let schema = templateContentBySite.get(site);
+  if (!schema) {
+    schema = z.strictObject({ sections: sectionList(CMS_SECTION_TYPE_KEYS, site) });
+    templateContentBySite.set(site, schema);
+  }
+  return schema as typeof CmsTemplateContentSchema;
+}
 export type CmsTemplateContent = { sections: CmsSection[] };
 
 // --- articles (DP-020: Blog / News) -------------------------------------------------------------
@@ -539,20 +616,34 @@ export const CMS_ARTICLE_SECTION_TYPES: readonly string[] = [
   "cta",
 ];
 
-export const CmsArticleContentSchema = z
-  .strictObject({
-    ...(Object.fromEntries(CMS_ARTICLE_FIELDS.map((f) => [f.key, fieldSchema(f)])) as Record<
-      string,
-      z.ZodType
-    >),
-    sections: sectionList(CMS_ARTICLE_SECTION_TYPES),
-  })
-  .superRefine((value, ctx) => {
-    const v = value as Record<string, unknown>;
-    if (v["coverImage"] && !v["coverAlt"]) {
-      ctx.addIssue({ code: "custom", path: ["coverAlt"], message: "required_with_image" });
-    }
-  });
+const articleContentSchema = (site?: CmsSiteKey) =>
+  z
+    .strictObject({
+      ...(Object.fromEntries(
+        CMS_ARTICLE_FIELDS.map((f) => [f.key, fieldSchema(f, site)]),
+      ) as Record<string, z.ZodType>),
+      sections: sectionList(CMS_ARTICLE_SECTION_TYPES, site),
+    })
+    .superRefine((value, ctx) => {
+      const v = value as Record<string, unknown>;
+      if (v["coverImage"] && !v["coverAlt"]) {
+        ctx.addIssue({ code: "custom", path: ["coverAlt"], message: "required_with_image" });
+      }
+    });
+
+export const CmsArticleContentSchema = articleContentSchema();
+
+const articleContentBySite = new Map<CmsSiteKey, z.ZodType>();
+
+/** COM-2a (DP-320): an article's content on its site (as `cmsTemplateContentSchema`). */
+export function cmsArticleContentSchema(site: CmsSiteKey): typeof CmsArticleContentSchema {
+  let schema = articleContentBySite.get(site);
+  if (!schema) {
+    schema = articleContentSchema(site);
+    articleContentBySite.set(site, schema);
+  }
+  return schema as typeof CmsArticleContentSchema;
+}
 
 export interface CmsArticleContent {
   excerpt: string;

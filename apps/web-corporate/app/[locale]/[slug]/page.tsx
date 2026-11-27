@@ -60,9 +60,9 @@ export default async function CmsPage({ params }: { params: Params }) {
   if (!res.ok) {
     return (
       <SiteFrame locale={locale} nav={null} footer={null} languages={[]} privacyHref={privacyHref}>
-        <article className="page">
-          <p>{dictionary(locale).unavailable}</p>
-        </article>
+        <div className="container-site section">
+          <p className="notice prose-width">{dictionary(locale).unavailable}</p>
+        </div>
       </SiteFrame>
     );
   }
@@ -75,7 +75,12 @@ export default async function CmsPage({ params }: { params: Params }) {
       languages={view.nav?.languages ?? []}
       privacyHref={privacyHref}
     >
-      <TemplateSections title={view.title} sections={view.sections} />
+      <TemplateSections
+        title={view.title}
+        sections={view.sections}
+        contact={view.footer?.contact ?? null}
+        locale={locale}
+      />
     </SiteFrame>
   );
 }

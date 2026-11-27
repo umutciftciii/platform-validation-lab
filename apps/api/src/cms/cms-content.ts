@@ -6,10 +6,13 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   CmsArticleContentSchema,
   CmsTemplateContentSchema,
+  cmsArticleContentSchema,
   cmsDesignTemplate,
   cmsIsArticle,
   cmsSlugOfPath,
   cmsFieldsSchema,
+  cmsSiteAsset,
+  cmsTemplateContentSchema,
   type CmsPage,
   type CmsPageSummary,
   type CmsSeo,
@@ -18,6 +21,7 @@ import {
   type CmsPublicPage,
   type CmsMenuLinkWarning,
   type CmsStructureWarning,
+  type CmsSiteKey,
 } from "@dream/contracts";
 import { ApiError } from "../iam/http/api-error.js";
 import type { SiteScopedClient } from "../iam/site-scope.js";
@@ -355,13 +359,17 @@ export function toPage(row: PageRow, addresses: PageAddresses): CmsPage {
  * The schema of a page's content: news articles (DP-020) their article fields and sections, other
  * TEMPLATE pages their section list, designed pages and fragments their template.
  */
-function schemaFor(kind: CmsPage["kind"], templateKey: string) {
-  if (cmsIsArticle({ kind, templateKey })) return CmsArticleContentSchema;
-  if (kind === "TEMPLATE") return CmsTemplateContentSchema;
+function schemaFor(kind: CmsPage["kind"], templateKey: string, site?: CmsSiteKey) {
+  // COM-2a (DP-320): with the page's site, its images must be that site's files (and an image the
+  // site may leave empty may be empty); without it the shape alone.
+  if (cmsIsArticle({ kind, templateKey })) {
+    return site ? cmsArticleContentSchema(site) : CmsArticleContentSchema;
+  }
+  if (kind === "TEMPLATE") return site ? cmsTemplateContentSchema(site) : CmsTemplateContentSchema;
   const template = cmsDesignTemplate(templateKey);
   if (!template) return null;
   // DP-219: the menus have a schema of their own (version 1 content is read as version 2).
-  return template.schema ?? cmsFieldsSchema(template.fields);
+  return template.schema ?? cmsFieldsSchema(template.fields, site);
 }
 
 /**
@@ -372,8 +380,9 @@ export function validateContent(
   kind: CmsPage["kind"],
   templateKey: string,
   content: unknown,
+  site?: CmsSiteKey,
 ): Record<string, unknown> {
-  const schema = schemaFor(kind, templateKey);
+  const schema = schemaFor(kind, templateKey, site);
   if (!schema) throw new ApiError("CONFLICT_STATE", [{ path: "kind", rule: "not_editable_yet" }]);
   const parsed = schema.safeParse(content);
   if (!parsed.success) {
@@ -389,6 +398,16 @@ export function validateContent(
 }
 
 /**
+ * COM-2a (DP-320): a page's link-preview image (`seo.ogImage`) must be a file of its own site;
+ * 400 VALIDATION_FAILED `seo.ogImage` otherwise (as the request schema reports it).
+ */
+export function assertSiteImage(src: string | null, site: CmsSiteKey): void {
+  if (src !== null && cmsSiteAsset(src, site)?.kind !== "image") {
+    throw new ApiError("VALIDATION_FAILED", [{ path: "seo.ogImage", rule: "asset" }]);
+  }
+}
+
+/**
  * ML-13a (DP-244): the dot paths of the content's schema issues (empty: valid), or null when the
  * page has no editable template. A translation draft may hold empty texts; the translation
  * package import uses this to refuse only the texts it would make invalid itself.
@@ -397,8 +416,9 @@ export function contentIssuePaths(
   kind: CmsPage["kind"],
   templateKey: string,
   content: unknown,
+  site?: CmsSiteKey,
 ): string[] | null {
-  const schema = schemaFor(kind, templateKey);
+  const schema = schemaFor(kind, templateKey, site);
   if (!schema) return null;
   const parsed = schema.safeParse(content);
   return parsed.success ? [] : parsed.error.issues.map((i) => i.path.map(String).join("."));
@@ -409,8 +429,9 @@ export function contentIsValid(
   kind: CmsPage["kind"],
   templateKey: string,
   content: unknown,
+  site?: CmsSiteKey,
 ): boolean {
-  const schema = schemaFor(kind, templateKey);
+  const schema = schemaFor(kind, templateKey, site);
   return Boolean(schema?.safeParse(content).success);
 }
 

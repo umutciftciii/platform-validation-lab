@@ -70,6 +70,7 @@ import {
   userRef,
   pickSeo,
   seoColumns,
+  assertSiteImage,
   validateContent,
   type PageBase,
   type SeoColumns,
@@ -409,6 +410,8 @@ export class CmsService {
     const { row: before, db } = await CmsService.pageIn(a, EDIT, rawId);
     // ML-1 (ADR-028 D2): only in a language that is enabled on the page's site (public or not).
     await assertLocaleEnabled(db, before.siteId, before.locale);
+    // COM-2a (DP-320): the content and the link-preview image are files of the page's own site.
+    const siteKey = (await CmsService.site(a, before.siteId)).key;
     let version: number;
     let data: SeoColumns & {
       title: string;
@@ -422,7 +425,7 @@ export class CmsService {
         title: input.title,
         path: cmsArticlePath(input.slug),
         ...seoColumns(input.seo),
-        content: input.content as Record<string, unknown>,
+        content: validateContent(before.kind, before.templateKey, input.content, siteKey),
       };
     } else if (before.kind === "TEMPLATE") {
       const input = parseBody(CmsPageDraftRequestSchema, body);
@@ -431,7 +434,7 @@ export class CmsService {
         title: input.title,
         path: cmsPathForSlug(input.slug),
         ...seoColumns(input.seo),
-        content: input.content as Record<string, unknown>,
+        content: validateContent(before.kind, before.templateKey, input.content, siteKey),
       };
     } else {
       if (!cmsDesignTemplate(before.templateKey)) {
@@ -444,9 +447,10 @@ export class CmsService {
         title: input.title,
         path: before.path,
         ...seoColumns(input.seo),
-        content: validateContent(before.kind, before.templateKey, input.content),
+        content: validateContent(before.kind, before.templateKey, input.content, siteKey),
       };
     }
+    assertSiteImage(data.ogImage, siteKey);
     try {
       await db.$transaction(async (tx) => {
         if (data.path !== before.path && data.path && keepsOldAddress(a.sites, before.siteId)) {
@@ -504,7 +508,7 @@ export class CmsService {
     const input = parseBody(CmsImportRequestSchema, body);
     const site = await CmsService.site(a, siteId);
     const plan = CmsService.importPlan(input.key, site.key);
-    const content = validateContent(plan.kind, plan.templateKey, plan.content);
+    const content = validateContent(plan.kind, plan.templateKey, plan.content, site.key);
     const summary = Object.entries(content).map(([field, value]) => ({
       field,
       items: Array.isArray(value) ? value.length : null,
@@ -652,8 +656,11 @@ export class CmsService {
       }
     }
     let content: Record<string, unknown>;
+    // COM-2a (DP-320): with the site's own rules (its files; an image it may leave empty).
+    const siteKey = (await CmsService.site(a, row.siteId)).key;
     try {
-      content = validateContent(row.kind, row.templateKey, row.content);
+      content = validateContent(row.kind, row.templateKey, row.content, siteKey);
+      assertSiteImage(row.ogImage, siteKey);
     } catch {
       throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "invalid" }]);
     }
@@ -849,8 +856,9 @@ export class CmsService {
     });
     if (!revision) throw new ApiError("NOT_FOUND", [{ path: "revisionNumber", rule: "unknown" }]);
     let content: Record<string, unknown>;
+    const siteKey = (await CmsService.site(a, row.siteId)).key;
     try {
-      content = validateContent(row.kind, row.templateKey, revision.content);
+      content = validateContent(row.kind, row.templateKey, revision.content, siteKey);
     } catch {
       throw new ApiError("CONFLICT_STATE", [{ path: "content", rule: "invalid" }]);
     }

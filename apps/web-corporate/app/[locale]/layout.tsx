@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { fontVariables } from "@/lib/fonts";
 import { ROUTE_LOCALES, isRouteLocale } from "@/lib/locale-routing";
 import "../globals.css";
 
@@ -26,7 +27,7 @@ export default async function LocaleLayout({ children, params }: LayoutProps<"/[
   const { locale } = await params;
   if (!isRouteLocale(locale)) notFound();
   return (
-    <html lang={locale}>
+    <html lang={locale} className={fontVariables}>
       <body>{children}</body>
     </html>
   );
