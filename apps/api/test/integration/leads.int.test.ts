@@ -5145,9 +5145,19 @@ describe("DP-298 legal texts, consent records and AI provider terms (ADR-031)", 
     await expect(
       owner.aiProviderDataTerms.update({ where: { id: t.id }, data: { dataRegion: "US" } }),
     ).rejects.toThrow(/can only be revoked once/);
-    await owner.aiProviderDataTerms.update({
-      where: { id: t.id },
-      data: { revokedAt: new Date(), revokedById: root.userId },
+    // DP-307: a revocation only under the provider's exclusive terms gate.
+    await expect(
+      owner.aiProviderDataTerms.update({
+        where: { id: t.id },
+        data: { revokedAt: new Date(), revokedById: root.userId },
+      }),
+    ).rejects.toThrow(/requires ai_provider_terms_lock/);
+    await owner.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT ai_provider_terms_lock('ANTHROPIC'::"AiProvider") AS "locked"`;
+      await tx.aiProviderDataTerms.update({
+        where: { id: t.id },
+        data: { revokedAt: new Date(), revokedById: root.userId },
+      });
     });
     await expect(
       owner.aiProviderDataTerms.update({

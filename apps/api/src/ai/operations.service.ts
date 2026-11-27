@@ -57,6 +57,8 @@ const invalid = (path: string, rule: string) => new ApiError("VALIDATION_FAILED"
 
 /** The reservation's refusals that are the caller's request, not the configuration's state. */
 const REQUEST_REFUSALS = new Set(["input_too_large", "output_too_large", "invalid"]);
+/** DP-307: the database's terms refusals, reported with the personal-data gate's path. */
+const TERMS_REFUSALS = new Set(["provider_terms_missing", "provider_terms_revoked"]);
 
 function operationDto(o: OperationView): AiOperation {
   return {
@@ -207,6 +209,9 @@ export class AiOperationsService {
       .staffData(async (tx) => {
         const plan = await sqlTaskPlan(tx, req.task);
         if (!plan) return null;
+        // DP-307: the exact terms record the data is sent under. ai_reserve checks it again under
+        // the terms gate and stores it; ai_dispatch checks it once more before the request.
+        let dataTermsId: string | null = null;
         if (policy.kind === "personal_data") {
           const terms = await tx.aiProviderDataTerms.findFirst({
             where: { provider: plan.provider, revokedAt: null },
@@ -218,6 +223,7 @@ export class AiOperationsService {
             providerTermsRecorded: terms !== null,
           });
           if (refusal) return { refusal } as const;
+          dataTermsId = terms?.id ?? null;
         }
         const profile = profileFor(plan.billingProfile);
         const estInput = estimateInputTokens({ system: def.system, input }, profile);
@@ -229,6 +235,8 @@ export class AiOperationsService {
           inputDigest: digest,
           estInputTokens: estInput,
           estOutputTokens: estOutput,
+          personalData: policy.kind === "personal_data",
+          dataTermsId,
         });
         if (r.outcome === "reserved") {
           // The job: its encrypted input in the reservation's own transaction (both or neither).
@@ -254,6 +262,7 @@ export class AiOperationsService {
                   personalData: true,
                   purposes: policy.purposes.join(","),
                   fields: Object.keys(policy.fields).join(","),
+                  dataTermsId,
                 }
               : {}),
             reservedMicros: r.reservedMicros,
@@ -287,7 +296,9 @@ export class AiOperationsService {
     if (r.outcome !== "reserved" && r.outcome !== "existing") {
       const error = REQUEST_REFUSALS.has(r.outcome)
         ? invalid("input", r.outcome)
-        : conflict(r.outcome);
+        : TERMS_REFUSALS.has(r.outcome)
+          ? conflict(r.outcome, "task")
+          : conflict(r.outcome);
       return this.refuse(access, req.task, siteId, r.outcome, error);
     }
     const operationId = r.operationId as string;

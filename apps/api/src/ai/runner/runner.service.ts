@@ -20,6 +20,12 @@
  * shutdown while waiting: counted as spent), DISCARDED (an answer after a cancel or the
  * switch-off: cost settled, text dropped).
  *
+ * DP-307: a personal-data operation names its provider-terms record. ai_dispatch checks it again
+ * under the provider's terms gate in the dispatch transaction: revoked or renewed → no request,
+ * FAILED with cost 0 (`provider_terms_revoked`, audited `ai.operation.refused` with the record's
+ * id). A running call whose terms are revoked is stopped at the next poll, and its answer is
+ * settled DISCARDED in a settlement transaction that holds the terms gate (never stored).
+ *
  * Restart and crash: queued jobs stay in the database and any instance claims them while their
  * reservation lasts (AiSettings.reservationTtlSec), then they EXPIRE (cost 0; the user starts a new
  * operation). A call that was running when its instance stopped is never repeated: the sweeper
@@ -39,6 +45,7 @@ import {
   AI_MODULE,
   PlatformModuleDisabledError,
   PlatformModuleService,
+  WHILE_ENABLED_TIMEOUT_MS,
 } from "../../iam/platform-modules.js";
 import { AI_ADAPTERS, AI_CONFIG } from "../config/ai-config.provider.js";
 import type { AiConfig } from "../config/ai-config.js";
@@ -53,6 +60,7 @@ import {
   sqlSettle,
   sqlStopSignals,
   sqlStoreResult,
+  sqlTermsHold,
   type AiTask,
   type ClaimedJob,
   type DispatchOutcome,
@@ -69,10 +77,13 @@ export interface AiJob extends JobPayload {
   actorUserId: string;
   siteId: string | null;
   task: AiTask;
+  /** DP-307: the provider-terms record of a personal-data operation (null: none). */
+  dataTermsId: string | null;
 }
 
 /** Why a running call was stopped by the platform, not by the provider. */
-export type StopReason = "cancelled" | "ai_disabled" | "shutdown" | "lease_expired";
+export type StopReason =
+  "cancelled" | "ai_disabled" | "shutdown" | "lease_expired" | "provider_terms_revoked";
 
 export const RESULT_TTL_MS = 15 * 60 * 1000;
 const LEASE_GRACE_SEC = 15;
@@ -106,12 +117,22 @@ const ZERO = {
 const STOP_REASON: Record<StopSignal, StopReason> = {
   ai_disabled: "ai_disabled",
   cancelled: "cancelled",
+  provider_terms_revoked: "provider_terms_revoked",
   not_in_flight: "lease_expired",
   lease_expired: "lease_expired",
 };
 
 /** How long the switch is held at most for a request to reach the transport (ms). */
 export const DISPATCH_HANDOFF_MS = 2_000;
+/**
+ * DP-307: the latest moment (ms after the dispatch transaction began) a request may still be
+ * started in it. The transaction is ended by Prisma at WHILE_ENABLED_TIMEOUT_MS; the lock waits of
+ * ai_dispatch (switch, operation row, terms gate; each ≤ WHILE_ENABLED_LOCK_TIMEOUT_MS) could use
+ * most of it. A request started later could be handed to the transport after the rollback — i.e.
+ * after the locks were released, unordered against a switch-off or a terms revocation. Past this
+ * point nothing is started (no request, cost 0, `dispatch_timeout`).
+ */
+export const DISPATCH_START_DEADLINE_MS = WHILE_ENABLED_TIMEOUT_MS - DISPATCH_HANDOFF_MS - 2_000;
 
 class DispatchRefused extends Error {
   override name = "DispatchRefused";
@@ -294,13 +315,18 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
       actorUserId: claimed.actorUserId ?? "",
       siteId: claimed.siteId,
       task: claimed.task,
+      dataTermsId: claimed.dataTermsId ?? null,
       input: payload?.input ?? "",
       maxOutputTokens: payload?.maxOutputTokens ?? 0,
       thinkingBudget: payload?.thinkingBudget ?? 0,
       temperature: payload?.temperature ?? null,
     };
     try {
-      const failed = (code: string) => this.settle(job, "FAILED", ZERO, null, code);
+      const failed = async (code: string) => {
+        await this.settle(job, "FAILED", ZERO, null, code);
+        // DP-307: a refusal by the terms (no request, cost 0) is audited with the record's id.
+        if (code === "provider_terms_revoked") await this.audit(job, "ai.operation.refused", code);
+      };
       // No call was made: an input that does not decrypt (other keyring, tampering) costs nothing.
       if (!payload || !keyring) return void (await failed("input_unreadable"));
       if (entry.reason) return void (await failed(entry.reason));
@@ -386,16 +412,19 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
       try {
         const { outcome, cancelled } = await this.modules.whileEnabled(AI_MODULE, async (tx) => {
           const db = tx as unknown as Db;
+          // DP-307: the terms gate held to COMMIT; revoked or renewed meanwhile → dropped.
+          const terms = job.dataTermsId === null ? "ok" : await sqlTermsHold(db, id);
           // A cancel received by another instance and not yet seen here: the answer is dropped.
           const stop = (await sqlStopSignals(db, [id])).find((s) => s.reason === "cancelled");
-          if (stop) {
+          if (stop || terms !== "ok") {
+            const why = stop ? "cancelled" : "provider_terms_revoked";
             const r = await sqlSettle(db, id, {
               status: "DISCARDED",
               ...result.usage,
               providerRequestId: result.providerRequestId,
-              errorCode: "cancelled",
+              errorCode: why,
             });
-            return { outcome: r, cancelled: true };
+            return { outcome: r, cancelled: why };
           }
           const r = await sqlSettle(db, id, {
             status: "SUCCEEDED",
@@ -413,9 +442,9 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
           ) {
             await sqlStoreResult(db, id, sealed);
           }
-          return { outcome: r, cancelled: false };
+          return { outcome: r, cancelled: null };
         });
-        if (cancelled) await this.audit(job, "ai.operation.discarded", "cancelled");
+        if (cancelled) await this.audit(job, "ai.operation.discarded", cancelled);
         if (outcome === "settled_overrun") await this.audit(job, "ai.operation.overrun", "overrun");
       } catch (error) {
         if (!(error instanceof PlatformModuleDisabledError)) throw error;
@@ -446,15 +475,25 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
       }
   > {
     let call: Promise<GenerateResult> | null = null;
+    let handedOff = false;
     try {
       const outcome = await this.modules.whileEnabled(AI_MODULE, async (tx) => {
+        const began = Date.now();
         const r = await sqlDispatch(tx as unknown as Db, entry.operationId);
         if (r !== "dispatch") return r;
         // Stopped here since the claim (this instance's listener): roll the permission back.
         if (entry.reason) throw new DispatchRefused(entry.reason);
-        let handedOff: () => void = () => undefined;
-        const handed = new Promise<"handed">((resolve) => (handedOff = () => resolve("handed")));
-        const pending = start(() => handedOff());
+        // DP-307: too late in the transaction to start a request that must reach the transport
+        // while the locks are still held (see DISPATCH_START_DEADLINE_MS): roll back, send nothing.
+        if (Date.now() - began > DISPATCH_START_DEADLINE_MS) {
+          throw new DispatchRefused("dispatch_timeout");
+        }
+        let markHanded: () => void = () => undefined;
+        const handed = new Promise<"handed">((resolve) => (markHanded = () => resolve("handed")));
+        const pending = start(() => {
+          handedOff = true;
+          markHanded();
+        });
         call = pending;
         pending.catch(() => undefined);
         let timer: NodeJS.Timeout | undefined;
@@ -487,10 +526,18 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
         await (call as Promise<GenerateResult> | null)?.catch(() => undefined);
         return { kind: "refused", outcome: error.outcome };
       }
-      if (call) {
-        // The request started under the switch but the transaction did not commit: it was still
-        // ordered before any switch-off; its outcome is uncertain (handled as a running call).
+      if (call && handedOff) {
+        // The request was handed to the transport while the switch and the terms gate were held,
+        // but the transaction did not commit: it was still ordered before any switch-off or
+        // revocation; its outcome is uncertain (handled as a running call).
         return { kind: "sent", call };
+      }
+      if (call) {
+        // DP-307: started but not with the transport, and the locks are gone: abort before it is
+        // sent (postJson checks the signal right before fetch), then let the caller see the error.
+        entry.reason ??= "cancelled";
+        entry.controller.abort();
+        await (call as Promise<GenerateResult>).catch(() => undefined);
       }
       throw error;
     }
@@ -523,7 +570,12 @@ export class AiRunnerService implements OnApplicationBootstrap, OnModuleDestroy 
       siteId: job.siteId,
       outcome: "FAILURE",
       reason: code,
-      metadata: aiAuditMetadata({ operationId: job.operationId, task: job.task, code }),
+      metadata: aiAuditMetadata({
+        operationId: job.operationId,
+        task: job.task,
+        code,
+        ...(job.dataTermsId ? { personalData: true, dataTermsId: job.dataTermsId } : {}),
+      }),
       requestId: null,
     }).catch((error: unknown) => this.logger.error(`audit failed: ${(error as Error).name}`));
   }
