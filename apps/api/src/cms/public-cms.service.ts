@@ -20,6 +20,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   BV_FRAGMENT_KEYS,
+  CMS_NEWS_INDEX_KEYS,
   CORPORATE_FRAGMENT_KEYS,
   cmsIsArticle,
   cmsSlugOfPath,
@@ -50,8 +51,6 @@ import { publicLocaleSet, publicSiteLocales } from "./site-locales.js";
 
 /** "/", "/<slug>" or a news article "/news/<slug>" (DP-020). */
 const PATH = /^\/(news\/[a-z0-9]+(-[a-z0-9]+)*|([a-z0-9]+(-[a-z0-9]+)*)?)$/;
-/** DP-153: the designed page that holds the heading of the news list. */
-const NEWS_INDEX_KEY = "bv.news-index";
 const FRAGMENTS: Readonly<Record<"BV" | "CORPORATE", readonly string[]>> = {
   BV: BV_FRAGMENT_KEYS,
   // COM-1: the corporate navigation and footer.
@@ -231,7 +230,9 @@ export class PublicCmsService {
   /**
    * DP-020: the site's published news articles, newest first by their first publication (title
    * as the tie-break), with the site-wide fragments. Only valid revisions are listed. DP-153: with
-   * the published heading page of the list (`bv.news-index`), or null while it is not published.
+   * the published heading page of the list (`bv.news-index`; COM-3: `corporate.news-index` on the
+   * corporate site), or null while it is not published. Articles and heading are the site's own
+   * (the site comes from the proxy key), so the two sites never see each other's news.
    */
   async news(ctx: RequestContext, rawLocale?: unknown): Promise<CmsPublicNews> {
     const site = await this.sites.begin(ctx);
@@ -260,7 +261,7 @@ export class PublicCmsService {
         y.firstPublishedAt.localeCompare(x.firstPublishedAt) || x.title.localeCompare(y.title),
     );
     const index = live.find(
-      (r) => r.page.kind === "DESIGN" && r.page.templateKey === NEWS_INDEX_KEY,
+      (r) => r.page.kind === "DESIGN" && r.page.templateKey === CMS_NEWS_INDEX_KEYS[site.siteKey],
     );
     return {
       page: index ? this.served(site, index) : null,

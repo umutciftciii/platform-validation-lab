@@ -75,6 +75,20 @@ describe("BV import seeds", () => {
     expect(CORPORATE_SITE_SEO_SEED.defaultOgImage).toBeNull();
   });
 
+  it("COM-3: the corporate news heading is a valid corporate design seed without claims", () => {
+    const key = "corporate.news-index";
+    expect(CMS_DESIGN_TEMPLATES.find((x) => x.key === key)).toMatchObject({
+      site: "CORPORATE",
+      kind: "DESIGN",
+      path: "/news",
+    });
+    expect(validateContent("DESIGN", key, ALL_SEEDS[key]!.content, "CORPORATE")).toEqual(
+      ALL_SEEDS[key]!.content,
+    );
+    expect(ALL_SEEDS[key]!.content).toMatchObject({ eyebrow: "Blogs", title: "News & Insights" });
+    expect(JSON.stringify(ALL_SEEDS[key])).not.toMatch(/\d|Feitian|official|leading|guarantee/i);
+  });
+
   it("COM-2b: the corporate home and portfolio carry no unconfirmed claim", () => {
     for (const key of ["corporate.home", "corporate.products"]) {
       const t = CMS_DESIGN_TEMPLATES.find((x) => x.key === key)!;
@@ -212,6 +226,22 @@ describe("BV content page seeds (DP-135)", () => {
         expect(s["imageNote"], key).toMatch(/^Illustrative (CGI )?image\./);
       }
     }
+  });
+});
+
+describe("corporate contact page (COM-4)", () => {
+  it("imports the contact page with a contact section, valid on the corporate site, no claim", () => {
+    const seed = CMS_PAGE_SEEDS["corporate.contact"]!;
+    expect(seed.slug).toBe("contact");
+    expect(seed.content.sections.map((s) => s.type)).toEqual(["contact"]);
+    expect(contentIsValid("TEMPLATE", "standard", seed.content, "CORPORATE")).toBe(true);
+    expect(CMS_SITE_REGISTRY.find((e) => e.key === "corporate.contact")).toMatchObject({
+      site: "CORPORATE",
+      kind: "TEMPLATE",
+      path: "/contact",
+      importable: true,
+    });
+    expect(JSON.stringify(seed)).not.toMatch(/\d+\s*(\+|%)|Feitian|official|guarantee|B\.V\./i);
   });
 });
 

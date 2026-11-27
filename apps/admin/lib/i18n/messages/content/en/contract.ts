@@ -194,12 +194,16 @@ export const contract = {
       "Hero, company overview, services, product groups, strengths and a call to action (COM-2b). No counters, distributorship claims or testimonials.",
     corporateProducts:
       "The product portfolio: anchored groups and the COA request (COM-2b). Typical values stay hidden until their source is approved.",
+    corporateNewsIndex:
+      "Heading, introduction and empty state of the corporate news list (COM-3). The articles are under News.",
     corporateSiteNav:
       "Menu items and submenus of every corporate page (menu editor, COM-1). Links to pages that do not exist yet stay as text.",
     corporateSiteFooter:
       "Company text, contact details, link columns, social and legal links of every corporate page (COM-1).",
     corporateSiteSeo:
       "Site name, default title and description of the corporate site (COM-1). Managed under SEO.",
+    corporateContact:
+      "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
   },
   /** Menu target problems (MENU_TARGET_PROBLEMS). */
   problem: {

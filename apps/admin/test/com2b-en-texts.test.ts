@@ -34,7 +34,8 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "
 
 describe("COM-2b: EN renders changed only where approved", () => {
   const before = load("com2b-en", "content-en");
-  const after = load("catalog-en", "content-en");
+  // COM-3 recorded content-en again; the COM-2b recording is kept in fixtures/com3-en.
+  const after = load("com3-en", "content-en");
 
   it("changes exactly the corporate route list and the corporate home page's editor", () => {
     expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());

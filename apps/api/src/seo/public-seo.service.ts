@@ -44,6 +44,7 @@ import {
   SEO_RESOLVABLE_PATH,
   cmsFieldsSchema,
   cmsIsArticle,
+  cmsIsNewsIndex,
   cmsSiteSeoFields,
   cmsLocaleAddress,
   normalizeRedirectQuery,
@@ -88,7 +89,8 @@ const PRODUCT_LIST_GROUP = "catalogue:products";
 /** The kind of a live CMS address; the two list pages are designed pages at fixed paths. */
 export function kindOf(path: string, page: { kind: string; templateKey: string }): SeoPathKind {
   if (path === "/") return "home";
-  if (page.templateKey === "bv.news-index") return "news";
+  // COM-3: the news list heading of either site.
+  if (cmsIsNewsIndex(page.templateKey)) return "news";
   if (page.templateKey === "bv.products-index") return "products";
   return cmsIsArticle(page) ? "article" : "page";
 }

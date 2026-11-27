@@ -58,9 +58,15 @@ async function fetchLegalTexts(): Promise<LegalTextsSnapshot | null> {
   }
 }
 
-/** The published legal texts and the production blockers (cached; fail closed). */
-export async function legalTextsSnapshot(now = Date.now()): Promise<LegalTextsSnapshot> {
-  if (cached && now - cached.at < TTL_MS) return cached.snapshot;
+/**
+ * The published legal texts and the production blockers (cached; fail closed). `fresh` (COM-4):
+ * read past the cache, after the API said the contact notice changed since the page was loaded.
+ */
+export async function legalTextsSnapshot(
+  now = Date.now(),
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<LegalTextsSnapshot> {
+  if (!fresh && cached && now - cached.at < TTL_MS) return cached.snapshot;
   const snapshot = await fetchLegalTexts();
   if (snapshot) {
     cached = { at: now, snapshot };

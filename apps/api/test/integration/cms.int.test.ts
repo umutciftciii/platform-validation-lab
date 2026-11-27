@@ -7147,3 +7147,437 @@ describe("24. the Corporate site on the shared CMS (COM-1)", () => {
     expectError(await pub("/page?path=/&locale=tr", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// COM-3: the corporate news on the shared article model (DP-020) — its own list heading
+// (`corporate.news-index`), its own articles in English and Turkish, served, resolved and listed
+// in the sitemap for the corporate key only; the two sites never see each other's news.
+// ---------------------------------------------------------------------------------------------
+
+describe("25. corporate news (COM-3)", () => {
+  let comPublisher: Staff;
+  let headingId: string;
+
+  async function seo(p: string, key: string = TEST_KEYS.webCorporate): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.48" },
+      }),
+    );
+  }
+  async function publish(id: string): Promise<Res> {
+    const p = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    return comPublisher.post(`/pages/${id}/publish`, { version: p.version });
+  }
+  async function published(id: string): Promise<void> {
+    const res = await publish(id);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+  const articleDraft = (version: number, slug: string, over: Record<string, unknown> = {}) => ({
+    version,
+    title: `Corporate ${slug}`,
+    slug,
+    seo: { title: null, description: null, noindex: false },
+    content: {
+      excerpt: `Summary of ${slug}.`,
+      coverImage: null,
+      coverAlt: null,
+      sections: [{ id: "sec-text-0001", type: "text", title: null, body: "One.\n\nTwo." }],
+      ...over,
+    },
+  });
+  async function article(slug: string): Promise<string> {
+    const res = await comEditor.post(`/sites/${COM}/pages`, {
+      title: `Corporate ${slug}`,
+      slug,
+      template: "article",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const a = CmsPageResponseSchema.parse(res.body).page;
+    const saved = await comEditor.post(`/pages/${a.id}/draft`, articleDraft(a.version, slug));
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    return a.id;
+  }
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com3-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  afterAll(async () => {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: false },
+    });
+  });
+
+  it("imports the corporate list heading into the Corporate site only", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "corporate.news-index", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "bv.news-index", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    const res = await comEditor.post(`/sites/${COM}/import`, {
+      key: "corporate.news-index",
+      dryRun: false,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    headingId = CmsImportResponseSchema.parse(res.body).pageId!;
+    const imported = CmsPageResponseSchema.parse(
+      (await comEditor.get(`/pages/${headingId}`)).body,
+    ).page;
+    expect(imported).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "corporate.news-index",
+      path: "/news",
+      locale: "en",
+      publication: null,
+      content: { eyebrow: "Blogs", title: "News & Insights" },
+    });
+    // A draft heading never reaches the site: the list has no heading yet.
+    const news = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(news.page).toBeNull();
+    expectError(await seo("/resolve?path=/news"), 404, "NOT_FOUND");
+  });
+
+  it("creates, publishes and lists corporate articles for the corporate key only", async () => {
+    // A BV file is no cover of a corporate article (each site serves its own media).
+    const a = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Cover check",
+      slug: "com3-cover-check",
+      template: "article",
+    });
+    const draft = CmsPageResponseSchema.parse(a.body).page;
+    expectError(
+      await comEditor.post(
+        `/pages/${draft.id}/draft`,
+        articleDraft(draft.version, "com3-cover-check", {
+          coverImage: "/media/news/why-are-oil-prices-falling.jpg",
+          coverAlt: "BV image",
+        }),
+      ),
+      400,
+      "VALIDATION_FAILED",
+    );
+
+    const older = await article("com3-older");
+    await published(older);
+    await new Promise((r) => setTimeout(r, 20));
+    const newer = await article("com3-newer");
+    await published(newer);
+    await published(headingId);
+
+    const news = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(news.page).toMatchObject({ kind: "DESIGN", templateKey: "corporate.news-index" });
+    expect(news.articles.map((x) => x.slug)).toEqual(["com3-newer", "com3-older"]);
+    expect(news.articles[0]).toMatchObject({
+      path: "/news/com3-newer",
+      excerpt: "Summary of com3-newer.",
+      coverImage: null,
+    });
+    expect(Object.keys(news.fragments).every((k) => k.startsWith("corporate."))).toBe(true);
+
+    // Isolation: the BV list never lists a corporate article nor its heading, and back.
+    const bv = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(bv.articles.some((x) => x.slug.startsWith("com3-"))).toBe(false);
+    expect(bv.page?.templateKey ?? null).not.toBe("corporate.news-index");
+    expect(news.articles.some((x) => ["older-article", "newer-article"].includes(x.slug))).toBe(
+      false,
+    );
+    expectError(await pub("/page?path=/news/com3-newer"), 404, "NOT_FOUND");
+    expectError(
+      await pub("/page?path=/news/older-article", TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+    );
+    const live = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/news/com3-newer", TEST_KEYS.webCorporate)).body,
+    );
+    expect(live.page).toMatchObject({ templateKey: "article", path: "/news/com3-newer" });
+
+    // SEO: the list and the articles resolve and are in the corporate sitemap only.
+    expect((await seo("/resolve?path=/news")).body).toEqual({ path: "/news", kind: "news" });
+    expect((await seo("/resolve?path=/news/com3-newer")).body).toEqual({
+      path: "/news/com3-newer",
+      kind: "article",
+    });
+    expectError(await seo("/resolve?path=/news/com3-newer", TEST_KEYS.webBv), 404, "NOT_FOUND");
+    const entries = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries;
+    expect(entries.find((e) => e.path === "/news")).toMatchObject({ kind: "news", locale: "en" });
+    expect(entries.filter((e) => e.kind === "article").map((e) => e.path)).toEqual(
+      expect.arrayContaining(["/news/com3-newer", "/news/com3-older"]),
+    );
+    const bvEntries = PublicSitemapResponseSchema.parse(
+      (await seo("/sitemap", TEST_KEYS.webBv)).body,
+    ).entries;
+    expect(bvEntries.some((e) => e.path.startsWith("/news/com3-"))).toBe(false);
+  });
+
+  it("previews a corporate article and the heading draft on the corporate site only", async () => {
+    const id = await article("com3-preview");
+    const res = await comEditor.post(`/pages/${id}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(res.body).url.split("/preview/")[1]!;
+    expect(token).toContain(".CORPORATE.");
+    const view = CmsPublicBundleSchema.parse(
+      (await pub(`/preview/${token}`, TEST_KEYS.webCorporate)).body,
+    );
+    expect(view.page).toMatchObject({
+      templateKey: "article",
+      path: "/news/com3-preview",
+      revisionNumber: null,
+    });
+    expect(view.locale).toBe("en");
+    expectError(await pub(`/preview/${token}`), 404, "NOT_FOUND");
+    // The draft itself stays off the site.
+    expectError(
+      await pub("/page?path=/news/com3-preview", TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+    );
+    const h = await comEditor.post(`/pages/${headingId}/preview`, {});
+    const ht = CmsPreviewResponseSchema.parse(h.body).url.split("/preview/")[1]!;
+    expect(
+      CmsPublicBundleSchema.parse((await pub(`/preview/${ht}`, TEST_KEYS.webCorporate)).body).page,
+    ).toMatchObject({ templateKey: "corporate.news-index", path: "/news" });
+  });
+
+  it("takes an article off the site and restores an earlier revision into the draft", async () => {
+    const id = await article("com3-withdrawn");
+    await published(id);
+    const live = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    expect(
+      (
+        await comPublisher.post(`/pages/${id}/unpublish`, {
+          publicationVersion: live.publication!.version,
+        })
+      ).status,
+    ).toBe(200);
+    expectError(
+      await pub("/page?path=/news/com3-withdrawn", TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+      { path: "path", rule: "unpublished" },
+    );
+    expect((await seo("/resolve?path=/news/com3-withdrawn")).status).toBe(404);
+    const list = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(list.articles.some((x) => x.slug === "com3-withdrawn")).toBe(false);
+    const restored = await comEditor.post(`/pages/${id}/restore`, {
+      version: live.version,
+      revisionNumber: 1,
+    });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+  });
+
+  it("keeps Turkish articles apart from English ones, with counterparts (TR/EN)", async () => {
+    const en = await article("com3-bilingual");
+    await published(en);
+    const tr = await comEditor.post(`/pages/${en}/translations`, {
+      locale: "tr",
+      title: "Türkçe haber",
+      slug: "com3-turkce-haber",
+    });
+    expect(tr.status, JSON.stringify(tr.body)).toBe(201);
+    const trPage = CmsPageResponseSchema.parse(tr.body).page;
+    expect(trPage).toMatchObject({
+      templateKey: "article",
+      locale: "tr",
+      path: "/news/com3-turkce-haber",
+      translationGroupId: en,
+    });
+    const saved = await comEditor.post(`/pages/${trPage.id}/draft`, {
+      ...articleDraft(trPage.version, "com3-turkce-haber"),
+      title: "Türkçe haber",
+      content: { ...articleDraft(0, "x").content, excerpt: "Türkçe özet." },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    await published(trPage.id);
+    const hTr = await comEditor.post(`/pages/${headingId}/translations`, {
+      locale: "tr",
+      title: "Haberler",
+    });
+    expect(hTr.status, JSON.stringify(hTr.body)).toBe(201);
+    const headingTr = CmsPageResponseSchema.parse(hTr.body).page;
+    expect(headingTr).toMatchObject({ templateKey: "corporate.news-index", path: "/news" });
+    const trHeading = await comEditor.post(`/pages/${headingTr.id}/draft`, {
+      version: headingTr.version,
+      title: "Haberler",
+      seo: { title: null, description: null, noindex: false },
+      content: {
+        eyebrow: "Blog",
+        title: "Haberler ve Görüşler",
+        intro: "Dream Petroleum'dan haberler.",
+        empty: { title: "Henüz yazı yok", text: "Yazılar yayımlandığında burada görünür." },
+      },
+    });
+    expect(trHeading.status, JSON.stringify(trHeading.body)).toBe(200);
+    await published(headingTr.id);
+
+    // Hidden while Turkish is not public on the corporate site.
+    expectError(await pub("/news?locale=tr", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: true },
+    });
+    const trNews = CmsPublicNewsSchema.parse(
+      (await pub("/news?locale=tr", TEST_KEYS.webCorporate)).body,
+    );
+    expect(trNews.articles.map((x) => x.slug)).toEqual(["com3-turkce-haber"]);
+    expect(trNews.page).toMatchObject({ templateKey: "corporate.news-index" });
+    expect(trNews.alternates).toEqual([{ locale: "en", path: "/news", indexable: true }]);
+    const enNews = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(enNews.articles.some((x) => x.slug === "com3-turkce-haber")).toBe(false);
+    expect(enNews.alternates).toEqual([{ locale: "tr", path: "/news", indexable: true }]);
+    const trArticle = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/news/com3-turkce-haber&locale=tr", TEST_KEYS.webCorporate)).body,
+    );
+    expect(trArticle.alternates).toEqual([
+      { locale: "en", path: "/news/com3-bilingual", indexable: true },
+    ]);
+    // The English address is not a Turkish page and the other way round.
+    expectError(
+      await pub("/page?path=/news/com3-turkce-haber", TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+    );
+    const entries = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries;
+    expect(
+      entries.find((e) => e.locale === "tr" && e.path === "/news/com3-turkce-haber"),
+    ).toMatchObject({
+      kind: "article",
+      alternates: [{ locale: "en", path: "/news/com3-bilingual" }],
+    });
+    expect(entries.find((e) => e.locale === "tr" && e.path === "/news")).toMatchObject({
+      kind: "news",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// COM-4: the corporate contact page — imported into the Corporate site only, published at
+// /contact for the corporate key, so the COM-2b links to /contact (Contact Us, COA request,
+// Enquire for Availability) reach a live page.
+// ---------------------------------------------------------------------------------------------
+
+describe("26. corporate contact page (COM-4)", () => {
+  let comPublisher: Staff;
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com4-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  it("imports corporate.contact into the Corporate site only and serves it there", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "corporate.contact", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    const res = await comEditor.post(`/sites/${COM}/import`, {
+      key: "corporate.contact",
+      dryRun: false,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const id = CmsImportResponseSchema.parse(res.body).pageId!;
+    const page = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${id}`)).body).page;
+    expect(page).toMatchObject({ kind: "TEMPLATE", path: "/contact", locale: "en" });
+    expect((page.content as { sections: { type: string }[] }).sections.map((s) => s.type)).toEqual([
+      "contact",
+    ]);
+    expectError(await pub("/page?path=/contact", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    const live = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    const published = await comPublisher.post(`/pages/${id}/publish`, { version: live.version });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    const bundle = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/contact", TEST_KEYS.webCorporate)).body,
+    );
+    expect(bundle.page).toMatchObject({ kind: "TEMPLATE", path: "/contact" });
+    expect(Object.keys(bundle.fragments).every((k) => k.startsWith("corporate."))).toBe(true);
+    // The BV site's /contact is its own page (or none), never the corporate one.
+    const bv = await pub("/page?path=/contact");
+    expect(JSON.stringify(bv.body)).not.toContain("corporate.");
+  });
+
+  it("links the menu's Contact Us and Blogs once their pages are live (COM-2b/COM-3 links)", async () => {
+    const navRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, templateKey: "corporate.site-nav", locale: "en" },
+    });
+    const contactRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, path: "/contact", locale: "en" },
+    });
+    const newsRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, templateKey: "corporate.news-index", locale: "en" },
+    });
+    // A page created for this check, not published yet: its menu link stays text.
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Our Team",
+      slug: "com4-our-team",
+    });
+    const teamId = CmsPageResponseSchema.parse(created.body).page.id;
+    const nav = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${navRow.id}`)).body).page;
+    const content = nav.content as {
+      items: { label: string; target: unknown; children?: unknown[] }[];
+      contact: { label: string; target: unknown };
+    };
+    const items = content.items.map((item) =>
+      item.label === "Blogs"
+        ? { ...item, target: { type: "page", pageId: newsRow.id } }
+        : item.label === "Company"
+          ? {
+              ...item,
+              children: [{ label: "Our Team", target: { type: "page", pageId: teamId } }],
+            }
+          : item,
+    );
+    const saved = await comEditor.post(`/pages/${navRow.id}/draft`, {
+      version: nav.version,
+      title: nav.title,
+      seo: nav.seo,
+      content: {
+        ...content,
+        items,
+        contact: { label: "Contact Us", target: { type: "page", pageId: contactRow.id } },
+      },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const fresh = CmsPageResponseSchema.parse(
+      (await comPublisher.get(`/pages/${navRow.id}`)).body,
+    ).page;
+    const out = await comPublisher.post(`/pages/${navRow.id}/publish`, { version: fresh.version });
+    expect(out.status, JSON.stringify(out.body)).toBe(200);
+    const read = async () =>
+      BvNavPublicSchema.parse(
+        CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body).fragments[
+          "corporate.site-nav"
+        ]!.content,
+      );
+    let live = await read();
+    expect(live.contact).toMatchObject({ label: "Contact Us", href: "/contact" });
+    expect(live.items.find((i) => i.label === "Blogs")).toMatchObject({ href: "/news" });
+    const team = () =>
+      live.items.find((i) => i.label === "Company")!.children.find((c) => c.label === "Our Team");
+    expect(team()?.href).toBeNull();
+    // Published: the same menu links it, without editing the menu again.
+    const teamPage = CmsPageResponseSchema.parse(
+      (await comPublisher.get(`/pages/${teamId}`)).body,
+    ).page;
+    expect(
+      (await comPublisher.post(`/pages/${teamId}/publish`, { version: teamPage.version })).status,
+    ).toBe(200);
+    live = await read();
+    expect(team()?.href).toBe("/com4-our-team");
+  });
+});

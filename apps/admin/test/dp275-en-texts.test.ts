@@ -76,10 +76,16 @@ const COM2B_CHANGED: Readonly<Record<string, string>> = {
   "content.contract.registry.corporateHome":
     "Hero, company overview, services, product groups, strengths and a call to action (COM-2b). No counters, distributorship claims or testimonials.",
 };
-/** COM-2b: the field texts of the corporate home page and portfolio, and the portfolio's note. */
+/**
+ * COM-2b: the field texts of the corporate home page and portfolio, and the portfolio's note.
+ * COM-3: the note of the corporate news list heading (its fields are the BV heading's texts).
+ * COM-4: the note of the corporate contact page.
+ */
 const com2b = (k: string) =>
   k.startsWith("content.contract.design.corporate") ||
-  k === "content.contract.registry.corporateProducts";
+  k === "content.contract.registry.corporateProducts" ||
+  k === "content.contract.registry.corporateNewsIndex" ||
+  k === "content.contract.registry.corporateContact";
 
 describe("COM-2b: the corporate designed pages' contract texts", () => {
   it("changes only the home page's registry note and adds only the new field texts", () => {
@@ -92,7 +98,14 @@ describe("COM-2b: the corporate designed pages' contract texts", () => {
       );
     }
     const added = Object.keys(now).filter((k) => !(k in before) && com2b(k));
-    expect(added).toHaveLength(31);
+    // COM-3: +1, the corporate news list heading's registry note. COM-4: +1, the contact page's.
+    expect(added).toHaveLength(33);
+    expect(now["content.contract.registry.corporateContact"]).toBe(
+      "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
+    );
+    expect(now["content.contract.registry.corporateNewsIndex"]).toBe(
+      "Heading, introduction and empty state of the corporate news list (COM-3). The articles are under News.",
+    );
   });
 });
 

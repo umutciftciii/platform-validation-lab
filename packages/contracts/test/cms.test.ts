@@ -9,6 +9,11 @@ import {
   CORPORATE_HOME_KEY,
   CORPORATE_PRODUCTS_FIELDS,
   CORPORATE_PRODUCTS_KEY,
+  BV_NEWS_INDEX_FIELDS,
+  CMS_NEWS_INDEX_KEYS,
+  CORPORATE_NEWS_INDEX_FIELDS,
+  CORPORATE_NEWS_INDEX_KEY,
+  cmsIsNewsIndex,
   CmsHrefSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
@@ -351,6 +356,8 @@ describe("CMS content page sections (DP-135)", () => {
     expect(importable.map((e) => e.path).sort()).toEqual([
       "/about-us",
       "/contact",
+      // COM-4: the corporate contact page (corporate.contact).
+      "/contact",
       "/energy-trading",
       "/logistics",
       "/news/why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets",
@@ -520,5 +527,31 @@ describe("corporate designed pages (COM-2b, DP-028, DP-094)", () => {
       schema.safeParse({ ...content, groups: [{ ...group, anchor: "Group 1" }] }).success,
     ).toBe(false);
     expect(schema.safeParse({ ...content, groups: [] }).success).toBe(false);
+  });
+});
+
+describe("corporate news list heading (COM-3)", () => {
+  it("registers corporate.news-index at /news as an importable corporate designed page", () => {
+    expect(cmsDesignTemplate(CORPORATE_NEWS_INDEX_KEY)).toMatchObject({
+      site: "CORPORATE",
+      kind: "DESIGN",
+      path: "/news",
+    });
+    expect(cmsDesignTemplate(CORPORATE_NEWS_INDEX_KEY)?.fields).toBe(CORPORATE_NEWS_INDEX_FIELDS);
+    expect(CORPORATE_NEWS_INDEX_FIELDS).toBe(BV_NEWS_INDEX_FIELDS);
+    expect(CMS_SITE_REGISTRY.find((e) => e.key === CORPORATE_NEWS_INDEX_KEY)).toMatchObject({
+      site: "CORPORATE",
+      kind: "DESIGN",
+      path: "/news",
+      importable: true,
+    });
+  });
+
+  it("names one news list heading per site", () => {
+    expect(CMS_NEWS_INDEX_KEYS).toEqual({ BV: "bv.news-index", CORPORATE: "corporate.news-index" });
+    expect(cmsIsNewsIndex("bv.news-index")).toBe(true);
+    expect(cmsIsNewsIndex("corporate.news-index")).toBe(true);
+    expect(cmsIsNewsIndex("corporate.home")).toBe(false);
+    expect(cmsIsNewsIndex("article")).toBe(false);
   });
 });

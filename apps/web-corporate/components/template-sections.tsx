@@ -8,10 +8,14 @@
  * site's file — the section is laid out without one. The corporate site has no registered images
  * until their rights are confirmed, so today every section renders without a picture.
  *
- * Contact: the published contact details (footer) and a map link; the form is COM-4 (DP-030), so
- * the panel shows the section's form heading and its note.
+ * Contact: the published contact details (footer) and a map link; COM-4 (DP-030) the contact
+ * form (components/contact-form.tsx) where it may be offered (lib/contact-form.ts: the privacy
+ * gate of this environment and an offered notice in the page's language), otherwise the form
+ * disabled under the section's CMS note — never a form that looks like it works.
  */
+import { ContactForm } from "@/components/contact-form";
 import type { SiteFooter, TemplateSection } from "@/lib/cms";
+import type { ContactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
 import { corporateImage, mapHref, paragraphsOf } from "@/lib/section-view";
@@ -34,15 +38,74 @@ function columnsFor(count: number): 2 | 3 | 4 {
   return 2;
 }
 
+/** COM-4: the disabled form under the CMS note (or "not in this language"), nothing to send. */
+function DisabledForm({
+  id,
+  title,
+  note,
+  labels,
+}: {
+  id: string;
+  title: string;
+  note: string;
+  labels: ContactSectionForm["labels"] | null;
+}) {
+  const noteId = `${id}-form-note`;
+  return (
+    <div className="form-panel">
+      <h3>{title}</h3>
+      <p id={noteId} role="note">
+        {note}
+      </p>
+      {labels ? (
+        // No action and no submit: nothing can be sent from this form.
+        <form className="contact-form" aria-describedby={noteId} noValidate>
+          <fieldset disabled>
+            <legend className="sr-only">{title}</legend>
+            {(
+              [
+                [labels.name, true],
+                [labels.email, true],
+                [labels.company, true],
+                [labels.country, true],
+                [labels.phone, false],
+                [labels.subject, true],
+              ] as const
+            ).map(([label, required]) => (
+              <label key={label} className="field">
+                <span className="field-label">
+                  {label}
+                  {required ? <span aria-hidden="true"> *</span> : null}
+                </span>
+                <input disabled />
+              </label>
+            ))}
+            <label className="field field-wide">
+              <span className="field-label">
+                {labels.message}
+                <span aria-hidden="true"> *</span>
+              </span>
+              <textarea disabled rows={4} />
+            </label>
+          </fieldset>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
 function Section({
   section,
   first,
   contact,
+  form,
   locale,
 }: {
   section: TemplateSection;
   first: boolean;
   contact: SiteFooter["contact"] | null;
+  /** COM-4: the contact form of a contact section (null: the CMS note alone). */
+  form: ContactSectionForm | null;
   locale: RouteLocale;
 }) {
   const H = first ? "h1" : "h2";
@@ -241,10 +304,30 @@ function Section({
                 </dl>
               ) : null}
             </div>
-            <div className="form-panel">
-              <h3>{section.formTitle}</h3>
-              <p>{section.formNote}</p>
-            </div>
+            {form?.state.kind === "live" ? (
+              <ContactForm
+                idPrefix={section.id}
+                title={section.formTitle}
+                countries={form.countries}
+                notice={form.state.notice}
+                privacyHref={form.privacyHref}
+                locale={locale}
+                ui={form.labels}
+              />
+            ) : (
+              <DisabledForm
+                id={section.id}
+                title={section.formTitle}
+                // Where the texts may be published but not in this language: say so in it (the
+                // CMS note describes the production gate, not a missing translation).
+                note={
+                  form?.state.kind === "disabled" && form.state.reason === "notInLanguage"
+                    ? form.labels.notInLanguage
+                    : section.formNote
+                }
+                labels={form?.labels ?? null}
+              />
+            )}
           </div>
         </section>
       );
@@ -256,12 +339,15 @@ export function TemplateSections({
   title,
   sections,
   contact,
+  form = null,
   locale,
 }: {
   title: string;
   sections: TemplateSection[];
   /** The published contact details (footer) for a contact section; null when not published. */
   contact: SiteFooter["contact"] | null;
+  /** COM-4: the contact form of the page's contact section (lib/contact-section.ts). */
+  form?: ContactSectionForm | null;
   locale: RouteLocale;
 }) {
   // One main heading per page: the first section's heading when it is a hero or a split section
@@ -282,9 +368,30 @@ export function TemplateSections({
           section={s}
           first={leading && i === 0}
           contact={contact}
+          form={form}
           locale={locale}
         />
       ))}
     </article>
+  );
+}
+
+/**
+ * COM-3: the body sections of a news article under its own heading (the article title is the
+ * page's only main heading, so every section heading is a second-level one).
+ */
+export function BodySections({
+  sections,
+  locale,
+}: {
+  sections: TemplateSection[];
+  locale: RouteLocale;
+}) {
+  return (
+    <>
+      {sections.map((s) => (
+        <Section key={s.id} section={s} first={false} contact={null} form={null} locale={locale} />
+      ))}
+    </>
   );
 }
