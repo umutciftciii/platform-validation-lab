@@ -1,8 +1,9 @@
 /**
- * COM-1: the corporate site's own interface texts (frame, language selector, 404, placeholder
- * home), per language. Content texts (menus, footer, pages) come from the CMS, never from here.
+ * COM-1: the corporate site's own interface texts (frame, language selector, 404), per language. Content texts (menus, footer, pages) come from the CMS, never from here.
  * The Turkish texts are interface labels only. COM-2a adds the labels of the designed frame
- * (menu buttons, submenus, footer, contact details, preview); the home page comes with COM-2b.
+ * (menu buttons, submenus, footer, contact details, preview); COM-2b the labels of the product
+ * portfolio around its CMS content (section list, table headings). The COM-2a placeholder home
+ * is gone: the home page is the CMS page `corporate.home`.
  *
  * Pure (no Next.js, no `@/` imports) so `node --test` runs it as is.
  */
@@ -25,7 +26,8 @@ export interface SiteDictionary {
   contact: { phone: string; email: string; address: string; map: string };
   preview: { badge: string; text: string; unavailable: string };
   notFound: { title: string; text: string; home: string };
-  home: { title: string; text: string };
+  /** COM-2b: the product portfolio's own labels (its texts come from the CMS). */
+  portfolio: { onThisPage: string; property: string; unit: string };
   privacy: { title: string; draft: string; draftText: string; version: string };
   unavailable: string;
 }
@@ -58,10 +60,7 @@ const EN: SiteDictionary = {
     text: "The page you are looking for does not exist or has moved.",
     home: "Go to the home page",
   },
-  home: {
-    title: "Dream Petroleum",
-    text: "The new dreampetroleum.com is being prepared. Its pages are published here as they are completed.",
-  },
+  portfolio: { onThisPage: "On this page", property: "Property", unit: "Unit" },
   privacy: {
     title: "Privacy Policy",
     draft: "Draft — not for publication",
@@ -100,10 +99,7 @@ const TR: SiteDictionary = {
     text: "Aradığınız sayfa mevcut değil veya taşındı.",
     home: "Ana sayfaya git",
   },
-  home: {
-    title: "Dream Petroleum",
-    text: "Yeni dreampetroleum.com hazırlanıyor. Sayfalar tamamlandıkça burada yayımlanacak.",
-  },
+  portfolio: { onThisPage: "Bu sayfada", property: "Özellik", unit: "Birim" },
   privacy: {
     title: "Gizlilik Politikası",
     draft: "Taslak — yayın için değil",

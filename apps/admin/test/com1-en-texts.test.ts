@@ -1,7 +1,8 @@
 // COM-1: the English renders changed only where approved.
 //
 // seo-en and content-en were recorded again with COM1_RECORD_EN=1; the DP-275 recording they
-// replace is kept in fixtures/com1-en. Against it:
+// replace is kept in fixtures/com1-en. Against it (content-en: the COM-1 recording, kept in
+// fixtures/com2b-en since COM-2b recorded it again; see com2b-en-texts.test.ts):
 //  - seo-en: Admin > SEO shows the chosen site, so the descriptions of the overview and of the
 //    redirects name "the chosen site" instead of dreampetroleumbv.com. Nothing else changed (the
 //    fixtures hold one site, so no site switcher is shown).
@@ -53,7 +54,7 @@ describe("COM-1: EN renders changed only where approved", () => {
 
   it("content-en: only the corporate fragments joined the corporate route list", () => {
     const before = load("com1-en", "content-en");
-    const after = load("catalog-en", "content-en");
+    const after = load("com2b-en", "content-en");
     expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
     const notes = CMS_SITE_REGISTRY.filter((e) =>
       ["corporate.site-nav", "corporate.site-footer", "corporate.site-seo"].includes(e.key),

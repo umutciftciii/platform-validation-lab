@@ -33,6 +33,10 @@
 // Content lists the corporate fragments to import; seo-en and content-en are recorded again with
 // COM1_RECORD_EN=1. The recording they replace is kept in fixtures/com1-en, and
 // test/com1-en-texts.test.ts allows only the approved changes against it.
+// COM-2b: Content lists the corporate home page and the product portfolio to import, and the
+// corporate home page has its field form; content-en is recorded again with COM2B_RECORD_EN=1.
+// The recording it replaces is kept in fixtures/com2b-en, and test/com2b-en-texts.test.ts allows
+// only the approved changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -56,7 +60,8 @@ const RECORD =
   process.env["DP275_RECORD_EN"] === "1" ||
   process.env["DP285_RECORD_EN"] === "1" ||
   process.env["DP298_RECORD_EN"] === "1" ||
-  process.env["COM1_RECORD_EN"] === "1";
+  process.env["COM1_RECORD_EN"] === "1" ||
+  process.env["COM2B_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

@@ -131,6 +131,41 @@ export const contract = {
     bvSiteSeoDefaultOgImageLabel: "Default Open Graph image",
     bvSiteSeoDefaultOgImageHint:
       "Shown in link previews of pages without an image of their own. About 1200×630 works best.",
+    corporateHomeHeroHint:
+      "The page heading. No distributorship claim or figure without the owner's confirmation.",
+    corporateHomeHeroSecondaryLabel: "Second button",
+    corporateHomeOverviewLabel: "Company overview",
+    corporateHomeOverviewHighlightsLabel: "Highlights",
+    corporateHomeOverviewHighlightsItemLabel: "Highlight",
+    corporateHomeCardHrefHint:
+      "A path of this site, e.g. /products#base-oils-group1. Empty: the card is not a link.",
+    corporateHomeStrengthsLabel: "Strengths",
+    corporateHomeStrengthsHint:
+      "Qualitative statements only: no counters or percentages without a confirmed source.",
+    corporateHomeStrengthsItemLabel: "Strength",
+    corporateHomeCtaPointsLabel: "Points",
+    corporateHomeCtaPointsItemLabel: "Point",
+    corporateProductsIntroLabel: "Page heading",
+    corporateProductsGroupsHint:
+      "One section per group, in this order. The anchor is the address of the section (/products#anchor).",
+    corporateProductsGroupsSubtitleLabel: "Subheading",
+    corporateProductsGroupsItemsLabel: "Products",
+    corporateProductsGroupsItemsItemLabel: "Product",
+    corporateProductsGroupsItemsTypeLabel: "Type",
+    corporateProductsGroupsApplicationsTitleLabel: "Applications heading",
+    corporateProductsGroupsApplicationsLabel: "Applications",
+    corporateProductsGroupsApplicationsItemLabel: "Application",
+    corporateProductsTypicalValuesLabel: "Typical values",
+    corporateProductsTypicalValuesHint:
+      "Hidden until the source of the values is approved (DP-002): keep the rows empty until then. The table is shown only with at least one row.",
+    corporateProductsTypicalValuesColumnALabel: "First value column",
+    corporateProductsTypicalValuesColumnBLabel: "Second value column",
+    corporateProductsTypicalValuesRowsPropertyLabel: "Property",
+    corporateProductsTypicalValuesRowsUnitLabel: "Unit",
+    corporateProductsTypicalValuesRowsValueALabel: "First value",
+    corporateProductsTypicalValuesRowsValueBLabel: "Second value",
+    corporateProductsCoaLabel: "Certificate of Analysis",
+    corporateProductsCoaHint: "Requests for a COA go to the contact page.",
   },
   /** Notes of the routes not (yet) in the CMS (CMS_SITE_REGISTRY). */
   registry: {
@@ -155,7 +190,10 @@ export const contract = {
     bvNewsOilPricesUsIran: "The live site's only blog post (DP-206); imported as a news article.",
     bvProductDetail: "Published product snapshots. Edit them under Products.",
     bvPrivacy: "Versioned legal text tied to consent records. Changed only through a new version.",
-    corporateHome: "Skeleton today. Built from the dreampetroleum.com inventory in S4.",
+    corporateHome:
+      "Hero, company overview, services, product groups, strengths and a call to action (COM-2b). No counters, distributorship claims or testimonials.",
+    corporateProducts:
+      "The product portfolio: anchored groups and the COA request (COM-2b). Typical values stay hidden until their source is approved.",
     corporateSiteNav:
       "Menu items and submenus of every corporate page (menu editor, COM-1). Links to pages that do not exist yet stay as text.",
     corporateSiteFooter:

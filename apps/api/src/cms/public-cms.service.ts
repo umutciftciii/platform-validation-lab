@@ -328,13 +328,9 @@ export class PublicCmsService {
       // (published, or its draft before the first publication).
       fragments[target.templateKey] = target;
       const home = await this.homeForFragmentPreview(site, live, draftLocale);
-      if (!home) {
-        // COM-2a (DP-321): a site without a home page in the CMS yet (corporate until COM-2b)
-        // gets the fragment itself as the page; the site shows its own home around it.
-        if (site.siteKey !== "CORPORATE") throw new ApiError("NOT_FOUND");
-        await resolvePublicMenus(site, live, fragments, locale);
-        return { page: target, fragments, preview: true, locale: draftLocale };
-      }
+      // COM-2b: every site has its home page in the CMS (corporate.home); without one (not
+      // imported yet in this language) there is nothing to show the fragment on.
+      if (!home) throw new ApiError("NOT_FOUND");
       await resolvePublicMenus(site, live, fragments, locale);
       return { page: home, fragments, preview: true, locale: draftLocale };
     }
