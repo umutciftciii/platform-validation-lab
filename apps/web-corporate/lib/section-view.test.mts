@@ -5,7 +5,13 @@ import { describe, it } from "node:test";
 
 import { CMS_STATIC_ASSETS } from "@dream/contracts";
 
-import { corporateImage, mapHref, paragraphsOf } from "./section-view.ts";
+import {
+  corporateImage,
+  gradeLayout,
+  mapHref,
+  paragraphsOf,
+  showsTypicalValues,
+} from "./section-view.ts";
 
 describe("paragraphsOf", () => {
   it("splits plain text at blank lines and drops empty paragraphs", () => {
@@ -54,5 +60,19 @@ describe("mapHref", () => {
   it("has no link without an address", () => {
     assert.equal(mapHref("Dream Petroleum", []), null);
     assert.equal(mapHref("Dream Petroleum", [{ text: "  " }]), null);
+  });
+});
+
+describe("product portfolio (COM-2b)", () => {
+  it("hides the typical values table while it has no row (DP-002)", () => {
+    assert.equal(showsTypicalValues({ rows: [] }), false);
+    assert.equal(showsTypicalValues({ rows: [{ property: "Viscosity Index" }] }), true);
+  });
+
+  it("shows bare grade names as a list and described grades as cards", () => {
+    assert.equal(gradeLayout([]), "none");
+    assert.equal(gradeLayout([{ type: null, description: null }]), "chips");
+    assert.equal(gradeLayout([{ type: "Aliphatic", description: null }]), "cards");
+    assert.equal(gradeLayout([{ type: null, description: "Light grade." }]), "cards");
   });
 });

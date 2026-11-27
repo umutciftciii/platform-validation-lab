@@ -22,6 +22,13 @@ import {
   CORPORATE_FOOTER_KEY,
   CORPORATE_NAV_KEY,
 } from "./cms-menu.js";
+import {
+  CORPORATE_HOME_FIELDS,
+  CORPORATE_HOME_KEY,
+  CORPORATE_PRODUCTS_FIELDS,
+  CORPORATE_PRODUCTS_KEY,
+  CORPORATE_PRODUCTS_PATH,
+} from "./cms-corporate.js";
 
 const text = (key: string, label: string, max: number, extra: Partial<CmsField> = {}): CmsField =>
   ({ type: "text", key, label, max, required: true, ...extra }) as CmsField;
@@ -481,7 +488,24 @@ export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
     path: null,
     fields: BV_SITE_SEO_FIELDS,
   },
-  // COM-1: the fragments of dreampetroleum.com (its designed pages come with COM-2).
+  // COM-2b: the designed pages of dreampetroleum.com (cms-corporate.ts).
+  {
+    key: CORPORATE_HOME_KEY,
+    site: "CORPORATE",
+    kind: "DESIGN",
+    title: "Home",
+    path: "/",
+    fields: CORPORATE_HOME_FIELDS,
+  },
+  {
+    key: CORPORATE_PRODUCTS_KEY,
+    site: "CORPORATE",
+    kind: "DESIGN",
+    title: "Products",
+    path: CORPORATE_PRODUCTS_PATH,
+    fields: CORPORATE_PRODUCTS_FIELDS,
+  },
+  // COM-1: the fragments of dreampetroleum.com.
   {
     key: CORPORATE_NAV_KEY,
     site: "CORPORATE",

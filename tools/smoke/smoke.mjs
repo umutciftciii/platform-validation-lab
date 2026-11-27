@@ -335,7 +335,9 @@ await eachLimited([...refs], FETCH_CONCURRENCY, async (url) => {
 });
 
 // 5. Corporate home (web-corporate). COM-1: every page carries its language; `/` answers one 301
-// to `/en`, which renders (a notice inside the published frame until the designed home, COM-2).
+// to `/en`. COM-2b: `/en` is the CMS page `corporate.home` — 200 once it is published, the site's
+// designed 404 (noindex) before that (an environment without imported content); both in English.
+// Anything else (5xx, an error page without the site's frame) fails.
 try {
   const root = await get(base("web-corporate") + "/");
   record(
@@ -349,8 +351,8 @@ try {
   record(
     "corporate",
     "web-corporate /en",
-    res.status === 200 && html.includes('<html lang="en"'),
-    `HTTP ${res.status}`,
+    (res.status === 200 || res.status === 404) && html.includes('<html lang="en"'),
+    `HTTP ${res.status}${res.status === 404 ? " (home page not published here)" : ""}`,
   );
   const missing = await get(base("web-corporate") + "/en/no-such-page-smoke");
   await missing.arrayBuffer();

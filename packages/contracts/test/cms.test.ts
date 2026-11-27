@@ -5,6 +5,10 @@ import {
   CMS_SECTION_TYPES,
   CMS_SITE_REGISTRY,
   CMS_STATIC_ASSETS,
+  CORPORATE_HOME_FIELDS,
+  CORPORATE_HOME_KEY,
+  CORPORATE_PRODUCTS_FIELDS,
+  CORPORATE_PRODUCTS_KEY,
   CmsHrefSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
@@ -12,10 +16,12 @@ import {
   CmsTemplateContentSchema,
   cmsArticleContentSchema,
   cmsAssetRequired,
+  cmsDesignTemplate,
   cmsFieldsSchema,
   cmsSiteAsset,
   cmsSiteAssets,
   cmsTemplateContentSchema,
+  type CmsField,
 } from "../src/index.js";
 
 const draft = (content: unknown) => ({
@@ -452,5 +458,67 @@ describe("site-scoped media (COM-2a, DP-320)", () => {
         coverAlt: null,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("corporate designed pages (COM-2b, DP-028, DP-094)", () => {
+  const fieldsOf = (fields: readonly CmsField[]): CmsField[] =>
+    fields.flatMap((f) =>
+      f.type === "group" || f.type === "list" ? [f, ...fieldsOf(f.fields)] : [f],
+    );
+
+  it("registers the home page and the portfolio as importable corporate designed pages", () => {
+    for (const [key, path, fields] of [
+      [CORPORATE_HOME_KEY, "/", CORPORATE_HOME_FIELDS],
+      [CORPORATE_PRODUCTS_KEY, "/products", CORPORATE_PRODUCTS_FIELDS],
+    ] as const) {
+      expect(cmsDesignTemplate(key)).toMatchObject({ site: "CORPORATE", kind: "DESIGN", path });
+      expect(cmsDesignTemplate(key)?.fields).toBe(fields);
+      expect(CMS_SITE_REGISTRY.find((e) => e.key === key)).toMatchObject({
+        site: "CORPORATE",
+        kind: "DESIGN",
+        path,
+        importable: true,
+      });
+    }
+  });
+
+  it("has no image field and no field for a counter, a testimonial or a FAQ", () => {
+    const all = [...fieldsOf(CORPORATE_HOME_FIELDS), ...fieldsOf(CORPORATE_PRODUCTS_FIELDS)];
+    expect(all.filter((f) => f.type === "asset")).toEqual([]);
+    expect(all.map((f) => f.key).join(" ")).not.toMatch(
+      /counter|stat|figure|testimonial|review|quote|faq|question|distributor/i,
+    );
+  });
+
+  it("refuses content the schema does not describe and keeps the typical values optional", () => {
+    const schema = cmsFieldsSchema(CORPORATE_PRODUCTS_FIELDS, "CORPORATE");
+    const content = {
+      intro: { eyebrow: null, title: "Product Portfolio", intro: "Base oils." },
+      groups: [
+        {
+          anchor: "base-oils-group1",
+          eyebrow: null,
+          title: "Group I",
+          subtitle: null,
+          description: "Solvent refined.",
+          items: [{ name: "SN 150", type: null, description: null }],
+          applicationsTitle: null,
+          applications: [],
+          link: null,
+        },
+      ],
+      typicalValues: { title: null, columnA: null, columnB: null, note: null, rows: [] },
+      coa: { title: "Request a COA", text: null, button: { label: "Request", href: "/contact" } },
+    };
+    expect(schema.parse(content)).toEqual(content);
+    expect(schema.safeParse({ ...content, counters: [] }).success).toBe(false);
+    const group = content.groups[0]!;
+    // Anchors are addresses: one per group, in the anchor format.
+    expect(schema.safeParse({ ...content, groups: [group, group] }).success).toBe(false);
+    expect(
+      schema.safeParse({ ...content, groups: [{ ...group, anchor: "Group 1" }] }).success,
+    ).toBe(false);
+    expect(schema.safeParse({ ...content, groups: [] }).success).toBe(false);
   });
 });

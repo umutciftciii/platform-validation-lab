@@ -110,10 +110,28 @@ describe("decide", () => {
       locale: "tr",
     });
     assert.deepEqual(closed.calls, [], "nothing of a hidden language is asked");
-    const open = fakeDeps({ "tr /hakkimizda": found }, { publicLocales: async () => ["en", "tr"] });
+    const open = fakeDeps(
+      { "tr /": found, "tr /hakkimizda": found },
+      { publicLocales: async () => ["en", "tr"] },
+    );
     assert.deepEqual(await decide("/tr", "", open.deps), { action: "next" });
     assert.deepEqual(await decide("/tr/hakkimizda", "", open.deps), { action: "next" });
-    assert.deepEqual(open.calls, ["tr /hakkimizda"]);
+    assert.deepEqual(open.calls, ["tr /", "tr /hakkimizda"]);
+  });
+
+  it("renders the home page only where it is published (COM-2b)", async () => {
+    const live = fakeDeps({ "- /": found });
+    assert.deepEqual(await decide("/en", "", live.deps), { action: "next" });
+    assert.deepEqual(live.calls, ["- /"]);
+    // Not published (an environment without imported content): the site's 404, in English.
+    const none = fakeDeps({});
+    assert.deepEqual(await decide("/en", "", none.deps), { action: "not-found", locale: "en" });
+    // The API cannot answer: the page renders and does its own checks.
+    const down = fakeDeps({ "- /": { status: "unknown" } });
+    assert.deepEqual(await decide("/en", "", down.deps), { action: "next" });
+    // A Turkish home page that is public but not published is a 404 too.
+    const trEmpty = fakeDeps({}, { publicLocales: async () => ["en", "tr"] });
+    assert.deepEqual(await decide("/tr", "", trEmpty.deps), { action: "not-found", locale: "tr" });
   });
 
   it("fails closed on the language list and open on the content check", async () => {
