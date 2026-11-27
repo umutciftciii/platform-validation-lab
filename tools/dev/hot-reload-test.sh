@@ -19,7 +19,7 @@ sha() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum
 # name | file | perl substitution (MARK is substituted) | url | container
 TARGETS=(
   "web-bv demo page|apps/web-bv/app/demo/iccsyn-hero-products/page.tsx|s/ICCSYN hero with product groups/ICCSYN hero with product groups MARK/|http://127.0.0.1:3110/demo/iccsyn-hero-products|dream-platform-web-bv"
-  "web-corporate page|apps/web-corporate/app/page.tsx|s/Corporate site skeleton/Corporate site skeleton MARK/|http://127.0.0.1:3111/|dream-platform-web-corporate"
+  "web-corporate page|apps/web-corporate/lib/i18n.ts|s/The new dreampetroleum.com is being prepared./The new dreampetroleum.com is being prepared. MARK/|http://127.0.0.1:3111/en|dream-platform-web-corporate"
   "admin page|apps/admin/app/page.tsx|s/Admin skeleton/Admin skeleton MARK/|http://127.0.0.1:3112/|dream-platform-admin"
   "api controller|apps/api/src/health/health.controller.ts|s/return healthResponse\\(\"api\", APP_VERSION\\);/return healthResponse(\"api\", APP_VERSION + \"-MARK\");/|http://127.0.0.1:3113/health|dream-platform-api"
   "shared contract -> web-corporate|packages/contracts/src/health.ts|s/^    version,$/    version: version + \"-MARK\",/|http://127.0.0.1:3111/api/health|dream-platform-web-corporate"

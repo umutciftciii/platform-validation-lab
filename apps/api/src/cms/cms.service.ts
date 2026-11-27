@@ -83,7 +83,8 @@ import {
   lockSitePaths,
   redirectsTo,
 } from "../seo/redirects.js";
-import { CMS_SEEDS } from "./seed/bv.js";
+import { CMS_SEEDS as BV_SEEDS } from "./seed/bv.js";
+import { CORPORATE_SEEDS } from "./seed/corporate.js";
 import { assertMenuReferences, menuTargets, menuWarnings } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 import { assertLocaleEnabled, siteLocalesOf } from "./site-locales.js";
@@ -100,6 +101,11 @@ const EDIT = "content:edit";
 const PUBLISH = "content:publish";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_SITE = "00000000-0000-0000-0000-000000000000";
+/** The import sources of the designed pages and fragments of both sites (COM-1: corporate). */
+const CMS_SEEDS: Readonly<Record<string, { title: string; content: unknown }>> = {
+  ...BV_SEEDS,
+  ...CORPORATE_SEEDS,
+};
 const RESOURCE = "cms_page";
 /** Version of the content schemas; raised when a template's fields change. */
 const SCHEMA_VERSION = 1;

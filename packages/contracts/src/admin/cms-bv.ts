@@ -14,7 +14,14 @@
  */
 import type { z } from "zod";
 import type { CmsField } from "./cms.js";
-import { BV_FOOTER_KEY, BV_NAV_KEY, BvFooterMenuSchema, BvNavMenuSchema } from "./cms-menu.js";
+import {
+  BV_FOOTER_KEY,
+  BV_NAV_KEY,
+  BvFooterMenuSchema,
+  BvNavMenuSchema,
+  CORPORATE_FOOTER_KEY,
+  CORPORATE_NAV_KEY,
+} from "./cms-menu.js";
 
 const text = (key: string, label: string, max: number, extra: Partial<CmsField> = {}): CmsField =>
   ({ type: "text", key, label, max, required: true, ...extra }) as CmsField;
@@ -399,6 +406,29 @@ export interface BvSiteSeoContent {
 /** DP-209: the registry key of the site SEO defaults. */
 export const BV_SITE_SEO_KEY = "bv.site-seo";
 
+/**
+ * COM-1: the SEO defaults of dreampetroleum.com — the same fields as `bv.site-seo`, except that the
+ * default Open Graph image is optional: the registered static assets (CMS_STATIC_ASSETS) are files
+ * of the BV site, and the corporate site has none of its own yet (its media comes with COM-2/COM-5).
+ */
+export const CORPORATE_SITE_SEO_KEY = "corporate.site-seo";
+export const CORPORATE_SITE_SEO_FIELDS: readonly CmsField[] = BV_SITE_SEO_FIELDS.map((f) =>
+  f.key === "defaultOgImage" && f.type === "asset" ? { ...f, required: false } : f,
+);
+
+/** COM-1: the SEO defaults fragment of each site. */
+export const CMS_SITE_SEO_KEYS = {
+  BV: BV_SITE_SEO_KEY,
+  CORPORATE: CORPORATE_SITE_SEO_KEY,
+} as const;
+export function cmsIsSiteSeo(templateKey: string): boolean {
+  return templateKey === BV_SITE_SEO_KEY || templateKey === CORPORATE_SITE_SEO_KEY;
+}
+/** The fields of a site SEO defaults fragment (by its registry key). */
+export function cmsSiteSeoFields(templateKey: string): readonly CmsField[] {
+  return templateKey === CORPORATE_SITE_SEO_KEY ? CORPORATE_SITE_SEO_FIELDS : BV_SITE_SEO_FIELDS;
+}
+
 // --- registry of designed templates --------------------------------------------------------------
 
 export interface CmsDesignTemplate {
@@ -451,6 +481,33 @@ export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
     path: null,
     fields: BV_SITE_SEO_FIELDS,
   },
+  // COM-1: the fragments of dreampetroleum.com (its designed pages come with COM-2).
+  {
+    key: CORPORATE_NAV_KEY,
+    site: "CORPORATE",
+    kind: "FRAGMENT",
+    title: "Navigation",
+    path: null,
+    fields: [],
+    schema: BvNavMenuSchema,
+  },
+  {
+    key: CORPORATE_FOOTER_KEY,
+    site: "CORPORATE",
+    kind: "FRAGMENT",
+    title: "Footer",
+    path: null,
+    fields: [],
+    schema: BvFooterMenuSchema,
+  },
+  {
+    key: CORPORATE_SITE_SEO_KEY,
+    site: "CORPORATE",
+    kind: "FRAGMENT",
+    title: "SEO defaults",
+    path: null,
+    fields: CORPORATE_SITE_SEO_FIELDS,
+  },
 ];
 
 export function cmsDesignTemplate(key: string): CmsDesignTemplate | undefined {
@@ -459,3 +516,5 @@ export function cmsDesignTemplate(key: string): CmsDesignTemplate | undefined {
 
 /** The fragments a BV page shows around its content. */
 export const BV_FRAGMENT_KEYS = ["bv.site-nav", "bv.site-footer"] as const;
+/** COM-1: the fragments a corporate page shows around its content. */
+export const CORPORATE_FRAGMENT_KEYS = ["corporate.site-nav", "corporate.site-footer"] as const;

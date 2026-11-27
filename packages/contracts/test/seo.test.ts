@@ -10,6 +10,8 @@ import {
   organizationJsonLd,
   seoLocalePath,
   SEO_OG_LOCALES,
+  CATALOGUE_SITE_KEYS,
+  CORPORATE_LOCAL_ORIGIN,
   productJsonLd,
   seoDeployEnv,
   seoPolicy,
@@ -137,7 +139,7 @@ describe("DP-207 resolvable addresses and sitemap contract", () => {
     expect(seoLocalePath("en", "/")).toBe("/en");
     expect(seoLocalePath("en", "/about-us")).toBe("/en/about-us");
     expect(seoLocalePath("nl", "/news/x")).toBe("/nl/news/x");
-    expect(SEO_OG_LOCALES).toEqual({ en: "en_GB", nl: "nl_NL" });
+    expect(SEO_OG_LOCALES).toEqual({ en: "en_GB", nl: "nl_NL", tr: "tr_TR" });
   });
 });
 
@@ -230,6 +232,47 @@ describe("DP-210 redirects", () => {
     );
     expect(seoRedirectLocation("https://example.com/a", "?a=1")).toBe("https://example.com/a");
     expect(seoRedirectTargetIsSitePath("//evil.example")).toBe(false);
-    expect(REDIRECT_SITE_KEYS).toEqual(["BV"]);
+    // COM-1: the corporate site's proxy applies redirects too; only BV has catalogue routes.
+    expect(REDIRECT_SITE_KEYS).toEqual(["BV", "CORPORATE"]);
+    expect(CATALOGUE_SITE_KEYS).toEqual(["BV"]);
+  });
+});
+
+describe("COM-1: the corporate site's SEO policy", () => {
+  it("uses the corporate local origin locally and stays fail-closed elsewhere", () => {
+    const local = seoPolicy({
+      deployEnv: "local",
+      origin: undefined,
+      indexing: undefined,
+      localOrigin: CORPORATE_LOCAL_ORIGIN,
+    });
+    expect(local).toEqual({
+      deployEnv: "local",
+      origin: "http://localhost:3111",
+      indexable: false,
+    });
+    // Without its own origin the BV default stays as before.
+    expect(seoPolicy({ deployEnv: "local", origin: undefined, indexing: undefined }).origin).toBe(
+      "http://localhost:3110",
+    );
+    const prod = seoPolicy({
+      deployEnv: "production",
+      origin: "https://dreampetroleum.com",
+      indexing: "on",
+      localOrigin: CORPORATE_LOCAL_ORIGIN,
+    });
+    expect(prod).toEqual({
+      deployEnv: "production",
+      origin: "https://dreampetroleum.com",
+      indexable: true,
+    });
+    expect(
+      seoPolicy({
+        deployEnv: "staging",
+        origin: undefined,
+        indexing: "on",
+        localOrigin: CORPORATE_LOCAL_ORIGIN,
+      }).origin,
+    ).toBeNull();
   });
 });

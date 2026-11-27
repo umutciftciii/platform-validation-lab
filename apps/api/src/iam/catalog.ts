@@ -119,7 +119,9 @@ export const SITES: readonly SiteDef[] = [
     name: "Dream Petroleum",
     primaryDomain: "dreampetroleum.com",
     defaultLocale: "en",
-    extraLocales: [],
+    // COM-1 (contract 3.2 b: Turkish and English): Turkish for editing, not public until the
+    // owner opens it (ADR-028 D14). The default language stays English (owner decision K3).
+    extraLocales: [{ locale: "tr", sortOrder: 10 }],
   },
 ];
 

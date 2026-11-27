@@ -32,7 +32,7 @@ import {
   type CmsTranslationState,
 } from "./cms.js";
 import { cmsDesignTemplate } from "./cms-bv.js";
-import { cmsIsMenu } from "./cms-menu.js";
+import { BV_FOOTER_KEY, BV_NAV_KEY, cmsIsMenu } from "./cms-menu.js";
 import { menuNlProposal } from "./cms-menu-nl.js";
 
 const VersionSchema = z.number().int().min(1);
@@ -257,7 +257,8 @@ export function cmsWithContentTexts(
 
 /** Languages and templates with a reviewed-pending proposal for "Create translation" (ML-7). */
 export function cmsTranslationHasProposal(templateKey: string, locale: string): boolean {
-  return locale === "nl" && cmsIsMenu(templateKey);
+  // The Dutch proposal is written for the BV menus only (COM-1: the corporate menus have none).
+  return locale === "nl" && (templateKey === BV_NAV_KEY || templateKey === BV_FOOTER_KEY);
 }
 
 /**

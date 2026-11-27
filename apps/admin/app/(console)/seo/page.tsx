@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   ADMIN_SEO_API,
-  BV_SITE_SEO_KEY,
+  CMS_SITE_SEO_KEYS,
   CatalogContextResponseSchema,
   CmsContextResponseSchema,
   SeoOverviewResponseSchema,
   type SeoOverviewItem,
 } from "@dream/contracts";
 import { ImportButton } from "../../../components/cms/import-button";
-import { PageHeader } from "../../../components/catalog/parts";
+import { PageHeader, SiteSwitcher } from "../../../components/catalog/parts";
 import { Icon } from "../../../components/icons";
 import { SeoPreview } from "../../../components/seo/seo-preview";
 import { SeoTabs } from "../../../components/seo/seo-tabs";
@@ -33,8 +33,9 @@ import {
   seoNotes,
   seoPublicPath,
 } from "../../../lib/seo-overview";
-import { bvPublicOrigin } from "../../../lib/seo-server";
-import { CODE_SITE_SEO, previewImageSrc, seoView } from "../../../lib/seo-view";
+import { sitePublicOrigin } from "../../../lib/seo-server";
+import { pickSeoSite, seoSites, withSeoSite } from "../../../lib/seo-site";
+import { previewImageSrc, seoView, siteSeoDefaultsOf } from "../../../lib/seo-view";
 import { serverRead } from "../../../lib/server-api";
 import { requireStaffSession } from "../../../lib/server-session";
 
@@ -44,7 +45,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * DP-209 (ADR-024 D6): the SEO of the BV site in one place. The site defaults are the
+ * DP-209 (ADR-024 D6): the SEO of a site in one place (COM-1: BV or the corporate site, `?site=`). The site defaults are the
  * `bv.site-seo` CMS fragment (edited, published and restored in the page editor); the list shows
  * every page, article and product with its SEO state and opens its existing editor. Nothing is
  * edited or stored here a second time. Permissions: the API answers with what the caller may
@@ -61,9 +62,9 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
     serverRead("/api/v1/admin/cms/context", CmsContextResponseSchema),
     serverRead("/api/v1/admin/catalog/context", CatalogContextResponseSchema),
   ]);
-  const bv =
-    (cms.ok ? cms.data.sites.find((s) => s.key === "BV") : undefined) ??
-    (catalog.ok ? catalog.data.sites.find((s) => s.key === "BV") : undefined);
+  // COM-1: one site at a time (`?site=bv|corporate`, BV by default).
+  const sites = seoSites(cms.ok ? cms.data.sites : null, catalog.ok ? catalog.data.sites : null);
+  const bv = pickSeoSite(sites, params["site"]);
   if (!bv) {
     return (
       <div className="space-y-8">
@@ -91,8 +92,8 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
     );
   }
   const { settings, liveSettings, items, permissions } = res.data;
-  const origin = bvPublicOrigin();
-  const site = liveSettings ?? CODE_SITE_SEO;
+  const origin = sitePublicOrigin(bv.key);
+  const site = siteSeoDefaultsOf(liveSettings);
   const shown = filterSeoItems(items, filter);
   const draft = settings?.draft ?? {};
   const text = (k: string) => (typeof draft[k] === "string" ? (draft[k] as string) : "");
@@ -128,7 +129,16 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
         title={t("seo.overview.title")}
         description={t("seo.overview.description")}
       />
-      <SeoTabs current="overview" t={t} />
+      <SeoTabs current="overview" t={t} siteKey={bv.key} />
+
+      {sites.length > 1 ? (
+        <SiteSwitcher
+          sites={sites}
+          current={bv.id}
+          hrefFor={(s) => withSeoSite("/seo", s.key)}
+          label={t("seo.common.site")}
+        />
+      ) : null}
 
       <p className="flex items-start gap-2 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 ring-1 ring-inset ring-line">
         <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
@@ -167,7 +177,9 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
                 {draftSite.defaultDescription ?? t("seo.overview.defaults.none")}
               </dd>
               <dt className="text-ink-3">{t("seo.overview.defaults.defaultImage")}</dt>
-              <dd className="break-all font-mono text-xs text-ink-2">{draftSite.defaultOgImage}</dd>
+              <dd className="break-all font-mono text-xs text-ink-2">
+                {draftSite.defaultOgImage || t("seo.overview.defaults.none")}
+              </dd>
             </dl>
             {settings ? (
               <div className="flex flex-wrap items-center gap-3">
@@ -187,8 +199,8 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
                 {permissions.editPages ? (
                   <ImportButton
                     siteId={bv.id}
-                    siteParam="bv"
-                    templateKey={BV_SITE_SEO_KEY}
+                    siteParam={bv.key.toLowerCase()}
+                    templateKey={CMS_SITE_SEO_KEYS[bv.key]}
                     title={t("seo.overview.defaults.importTitle")}
                   />
                 ) : null}
@@ -220,7 +232,7 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
           {SEO_FILTERS.map((f) => (
             <Link
               key={f.id}
-              href={f.id === "all" ? "/seo" : `/seo?filter=${f.id}`}
+              href={withSeoSite(f.id === "all" ? "/seo" : `/seo?filter=${f.id}`, bv.key)}
               aria-current={f.id === filter ? "page" : undefined}
               className={cx(
                 "rounded-full px-3 py-1 text-sm ring-1 ring-inset",
@@ -238,7 +250,12 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
         ) : (
           <ul className="divide-y divide-line border-t border-line">
             {shown.map((item) => (
-              <SeoRow key={`${item.source}-${item.id}`} item={item} t={t} />
+              <SeoRow
+                key={`${item.source}-${item.id}`}
+                item={item}
+                t={t}
+                siteParam={bv.key.toLowerCase()}
+              />
             ))}
           </ul>
         )}
@@ -247,7 +264,15 @@ export default async function SeoPage({ searchParams }: PageProps<"/seo">) {
   );
 }
 
-function SeoRow({ item, t }: { item: SeoOverviewItem; t: Translate }) {
+function SeoRow({
+  item,
+  t,
+  siteParam,
+}: {
+  item: SeoOverviewItem;
+  t: Translate;
+  siteParam: string;
+}) {
   const notes = seoNotes(item, t);
   return (
     <li className="px-5 py-3 sm:px-6">
@@ -255,7 +280,7 @@ function SeoRow({ item, t }: { item: SeoOverviewItem; t: Translate }) {
         <div className="min-w-0 space-y-1">
           <p className="flex flex-wrap items-center gap-2">
             <Link
-              href={seoEditHref(item, "bv")}
+              href={seoEditHref(item, siteParam)}
               className="break-words font-medium text-ink underline-offset-2 hover:underline"
             >
               {item.name}

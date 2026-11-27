@@ -487,7 +487,8 @@ describe("the contract texts of the CMS", () => {
   const tr = createTranslator("tr");
 
   it("are all in the dictionary, English word for word", () => {
-    expect(texts.length).toBe(130);
+    // COM-1: +3, the notes of the corporate navigation, footer and SEO defaults.
+    expect(texts.length).toBe(133);
     expect(texts.filter((s) => !hasCmsText(s))).toEqual([]);
     expect(texts.filter((s) => cmsText(s, en) !== s)).toEqual([]);
   });

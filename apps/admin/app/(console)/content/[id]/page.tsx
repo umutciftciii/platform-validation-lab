@@ -21,7 +21,7 @@ import { ADMIN_TIME_ZONE } from "../../../../lib/i18n/config";
 import { dateTimeFormat } from "../../../../lib/i18n/format";
 import { getAdminLocale, getTranslator } from "../../../../lib/i18n/server";
 import { serverRead } from "../../../../lib/server-api";
-import { bvPublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
+import { sitePublicOrigin, siteSeoDefaults } from "../../../../lib/seo-server";
 import { requireStaffSession } from "../../../../lib/server-session";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -134,7 +134,7 @@ export default async function ContentPageEditor({ params }: PageProps<"/content/
             siteKey={site.key}
             siteSeo={siteSeo}
             menuTargets={menuTargets?.ok ? menuTargets.data : null}
-            origin={site.key === "BV" ? bvPublicOrigin() : null}
+            origin={sitePublicOrigin(site.key)}
           />
         ) : (
           <div className="rounded-2xl border border-dashed border-line-strong bg-surface">

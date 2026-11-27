@@ -1,7 +1,8 @@
 /**
  * DP-209: the SEO overview of a site for the admin "SEO" section (contract: @dream/contracts
  * `admin/seo-admin.ts`). Read only: the values are edited in the existing editors (CMS page
- * editor, product SEO tab, the `bv.site-seo` fragment), so nothing is stored twice.
+ * editor, product SEO tab, the `bv.site-seo` / `corporate.site-seo` fragment), so nothing is
+ * stored twice.
  *
  * Authorization (existing permissions, none new): CMS pages with `content:read` of the site,
  * products with `product:read` of the site; a caller with neither is refused (403, audited). The
@@ -9,8 +10,9 @@
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
-  BV_SITE_SEO_KEY,
+  CMS_SITE_SEO_KEYS,
   PublicSiteSeoSettingsSchema,
+  cmsIsSiteSeo,
   readSnapshotAddress,
   seoIsSelfCanonical,
   type SeoOverviewItem,
@@ -96,7 +98,7 @@ export class AdminSeoService {
         const live = pub?.status === "PUBLISHED" && rev !== null;
         const pendingChanges = live && rev.pageVersion !== page.version;
         if (page.kind === "FRAGMENT") {
-          if (page.templateKey === BV_SITE_SEO_KEY) {
+          if (cmsIsSiteSeo(page.templateKey)) {
             const [draft, published] = await Promise.all([
               db.cmsPage.findUnique({ where: { id: page.id }, select: { content: true } }),
               live
@@ -150,7 +152,7 @@ export class AdminSeoService {
       // The published defaults are public (the site serves them); a product editor sees them in
       // the previews without reading the CMS drafts.
       const page = await db.cmsPage.findFirst({
-        where: { siteId, locale, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
+        where: { siteId, locale, kind: "FRAGMENT", templateKey: CMS_SITE_SEO_KEYS[site.key] },
         select: { id: true },
       });
       const pub = page

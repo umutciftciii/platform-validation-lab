@@ -25,12 +25,21 @@ import {
 } from "../../../src/cms/cms-content.js";
 import { BV_FOOTER_SEED, BV_HOME_SEED, BV_NAV_SEED, CMS_SEEDS } from "../../../src/cms/seed/bv.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "../../../src/cms/seed/bv-pages.js";
+import {
+  CORPORATE_FOOTER_SEED,
+  CORPORATE_NAV_SEED,
+  CORPORATE_SEEDS,
+  CORPORATE_SITE_SEO_SEED,
+} from "../../../src/cms/seed/corporate.js";
+
+/** COM-1: the import sources of both sites (the API merges them the same way). */
+const ALL_SEEDS = { ...CMS_SEEDS, ...CORPORATE_SEEDS };
 
 describe("BV import seeds", () => {
   it("has exactly one seed per designed template, and each validates unchanged", () => {
-    expect(Object.keys(CMS_SEEDS).sort()).toEqual(CMS_DESIGN_TEMPLATES.map((t) => t.key).sort());
+    expect(Object.keys(ALL_SEEDS).sort()).toEqual(CMS_DESIGN_TEMPLATES.map((t) => t.key).sort());
     for (const t of CMS_DESIGN_TEMPLATES) {
-      const seed = CMS_SEEDS[t.key]!.content;
+      const seed = ALL_SEEDS[t.key]!.content;
       const parsed = (t.schema ?? cmsFieldsSchema(t.fields)).safeParse(seed);
       expect(parsed.success, `${t.key}: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`).toBe(
         true,
@@ -40,6 +49,26 @@ describe("BV import seeds", () => {
       if (t.schema) expect(parsed.data).toMatchObject(seed as object);
       else expect(parsed.data).toEqual(seed);
     }
+  });
+
+  it("COM-1: the corporate fragments carry only what the live site shows", () => {
+    // Every corporate seed is a corporate fragment of the registry (imported into that site only).
+    for (const key of Object.keys(CORPORATE_SEEDS)) {
+      expect(CMS_DESIGN_TEMPLATES.find((t) => t.key === key)?.site, key).toBe("CORPORATE");
+    }
+    // Pages that do not exist on the new site yet are "not ready yet" (text), never a guessed path.
+    const targets = [
+      ...CORPORATE_NAV_SEED.items.flatMap((i) => [i, ...(i.children ?? [])]),
+      CORPORATE_NAV_SEED.contact,
+    ].map((l) => l.target);
+    expect(targets.filter((t) => t.type === "path")).toEqual([{ type: "path", path: "/" }]);
+    expect(targets.filter((t) => t.type !== "path").every((t) => t.type === "none")).toBe(true);
+    expect(CORPORATE_FOOTER_SEED.contact.email.href).toBe("mailto:info@dreampetroleum.com");
+    expect(CORPORATE_FOOTER_SEED.contact.phone.href).toBe("tel:+902122181357");
+    // No claim of the live site that needs the owner's confirmation (DP-003) is in a fragment.
+    expect(JSON.stringify(CORPORATE_SEEDS)).not.toMatch(/Feitian|only official|tek resmi/i);
+    // No default image: the corporate site has no media of its own yet.
+    expect(CORPORATE_SITE_SEO_SEED.defaultOgImage).toBeNull();
   });
 
   it("keeps the claims and disclosures the source documents require", () => {

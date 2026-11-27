@@ -6,7 +6,7 @@ import {
   SeoRedirectListResponseSchema,
   SEO_REDIRECT_SORTS,
 } from "@dream/contracts";
-import { PageHeader } from "../../../../components/catalog/parts";
+import { PageHeader, SiteSwitcher } from "../../../../components/catalog/parts";
 import { Icon } from "../../../../components/icons";
 import { RedirectManager } from "../../../../components/seo/redirect-manager";
 import { SeoTabs } from "../../../../components/seo/seo-tabs";
@@ -19,6 +19,7 @@ import {
   redirectQuery,
   redirectsApi,
 } from "../../../../lib/redirects-view";
+import { pickSeoSite, seoSites, withSeoSite } from "../../../../lib/seo-site";
 import { serverRead } from "../../../../lib/server-api";
 import { requireStaffSession } from "../../../../lib/server-session";
 
@@ -28,7 +29,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 /**
- * DP-211 (ADR-024 D9): Admin > SEO > Redirects of the BV site. Lists every redirect (manual,
+ * DP-211 (ADR-024 D9): Admin > SEO > Redirects of a site (COM-1: BV or the corporate site,
+ * `?site=`). Lists every redirect (manual,
  * imported and the automatic 301s of moved content) with search, filters, sorting and pages;
  * the client part creates, edits, deletes and imports. The API decides every permission:
  * `content:read`/`product:read` reads, `content:publish` changes, `audit:read` shows history.
@@ -38,14 +40,15 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RedirectsPage({ searchParams }: PageProps<"/seo/redirects">) {
   await requireStaffSession();
   const t = await getTranslator();
-  const params = parseRedirectParams(await searchParams);
+  const raw = await searchParams;
+  const params = parseRedirectParams(raw);
   const [cms, catalog] = await Promise.all([
     serverRead("/api/v1/admin/cms/context", CmsContextResponseSchema),
     serverRead("/api/v1/admin/catalog/context", CatalogContextResponseSchema),
   ]);
-  const bv =
-    (cms.ok ? cms.data.sites.find((s) => s.key === "BV") : undefined) ??
-    (catalog.ok ? catalog.data.sites.find((s) => s.key === "BV") : undefined);
+  // COM-1: one site at a time (`?site=bv|corporate`, BV by default).
+  const sites = seoSites(cms.ok ? cms.data.sites : null, catalog.ok ? catalog.data.sites : null);
+  const bv = pickSeoSite(sites, raw["site"]);
   const header = (
     <PageHeader
       icon="search"
@@ -74,7 +77,7 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
     return (
       <div className="space-y-6 sm:space-y-8">
         {header}
-        <SeoTabs current="redirects" t={t} />
+        <SeoTabs current="redirects" t={t} siteKey={bv.key} />
         <ErrorState title={t("seo.redirects.loadError")}>
           {res.status === 403 ? t("seo.common.forbidden") : t("seo.common.tryAgain")}
         </ErrorState>
@@ -91,7 +94,7 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
   ) => (
     <Link
       key={id}
-      href={`/seo/redirects${redirectQuery(params, { ...patch, page: 1 })}`}
+      href={withSeoSite(`/seo/redirects${redirectQuery(params, { ...patch, page: 1 })}`, bv.key)}
       aria-current={current ? "page" : undefined}
       className={cx(
         "rounded-full px-3 py-1 text-sm ring-1 ring-inset",
@@ -109,7 +112,16 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
   return (
     <div className="space-y-6 sm:space-y-8">
       {header}
-      <SeoTabs current="redirects" t={t} />
+      <SeoTabs current="redirects" t={t} siteKey={bv.key} />
+
+      {sites.length > 1 ? (
+        <SiteSwitcher
+          sites={sites}
+          current={bv.id}
+          hrefFor={(s) => withSeoSite("/seo/redirects", s.key)}
+          label={t("seo.common.site")}
+        />
+      ) : null}
 
       <p className="flex items-start gap-2 rounded-xl bg-surface-2 px-4 py-3 text-sm text-ink-2 ring-1 ring-inset ring-line">
         <Icon name="shield" size={16} className="mt-0.5 shrink-0 text-ink-3" />
@@ -159,6 +171,9 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
               <option value="asc">{t("seo.redirects.find.ascending")}</option>
             </select>
           </label>
+          {bv.key !== "BV" ? (
+            <input type="hidden" name="site" value={bv.key.toLowerCase()} />
+          ) : null}
           {params.origin ? <input type="hidden" name="origin" value={params.origin} /> : null}
           {params.status ? <input type="hidden" name="status" value={params.status} /> : null}
           {params.active ? <input type="hidden" name="active" value={params.active} /> : null}
@@ -226,7 +241,10 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
             {data.page > 1 ? (
               <Link
                 key="prev"
-                href={`/seo/redirects${redirectQuery(params, { page: data.page - 1 })}`}
+                href={withSeoSite(
+                  `/seo/redirects${redirectQuery(params, { page: data.page - 1 })}`,
+                  bv.key,
+                )}
                 className={buttonStyles.secondary}
               >
                 {t("seo.redirects.list.previous")}
@@ -235,7 +253,10 @@ export default async function RedirectsPage({ searchParams }: PageProps<"/seo/re
             {data.page < pages ? (
               <Link
                 key="next"
-                href={`/seo/redirects${redirectQuery(params, { page: data.page + 1 })}`}
+                href={withSeoSite(
+                  `/seo/redirects${redirectQuery(params, { page: data.page + 1 })}`,
+                  bv.key,
+                )}
                 className={buttonStyles.secondary}
               >
                 {t("seo.redirects.list.next")}

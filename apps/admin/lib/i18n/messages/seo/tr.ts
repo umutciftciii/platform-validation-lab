@@ -19,12 +19,13 @@ export const seo: Messages["seo"] = {
       "Rolleriniz Dream Petroleum BV'nin içeriklerini veya ürünlerini okuma yetkisi içermiyor.",
     forbidden: "Bu sitenin içeriklerini veya ürünlerini okuma yetkiniz yok.",
     tryAgain: "Biraz sonra tekrar deneyin.",
+    site: "Site",
   },
   overview: {
     metaTitle: "SEO",
     title: "SEO",
     description:
-      "dreampetroleumbv.com'un arama sonuçları ve bağlantı önizlemeleri: site varsayılanları ile her sayfa, makale ve ürünün SEO'su. Değişiklikler sayfa veya ürün yayınlandığında siteye yansır.",
+      "Seçilen sitenin arama sonuçları ve bağlantı önizlemeleri: site varsayılanları ile her sayfa, makale ve ürünün SEO'su. Değişiklikler sayfa veya ürün yayınlandığında siteye yansır.",
     loadError: "SEO genel bakışı yüklenemedi",
     indexingNote:
       "Arama motorları siteyi yalnızca dizine ekleme açıkken production ortamında dizine ekleyebilir. DEV ve staging, buradaki ayardan bağımsız olarak her zaman noindex yanıtı verir. Yayınlanmamış veya gizli ürünler hiçbir zaman dizine eklenmez.",
@@ -89,7 +90,7 @@ export const seo: Messages["seo"] = {
     metaTitle: "Yönlendirmeler · SEO",
     title: "Yönlendirmeler",
     description:
-      "dreampetroleumbv.com'un eski adresleri ve yönlendirdikleri yerler. Değişiklikler sitede hemen geçerli olur.",
+      "Seçilen sitenin eski adresleri ve yönlendirdikleri yerler. Değişiklikler sitede hemen geçerli olur.",
     loadError: "Yönlendirmeler yüklenemedi",
     rulesNote:
       "Yayındaki içerik her zaman önceliklidir: bir yönlendirme hiçbir zaman yayındaki bir sayfa veya üründen başlamaz ve eski adresinde içerik yayınlandığında devre dışı kalır. Yönlendirmeler zincir oluşturmaz, siteden dışarı çıkmaz ve site haritasında yer almaz. Slug değişikliği yönlendirmeleri taşınan içeriğin bulunabilmesini sağlar ve burada silinemez.",

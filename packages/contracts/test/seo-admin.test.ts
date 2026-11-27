@@ -8,6 +8,9 @@ import {
   BV_SITE_SEO_KEY,
   CMS_DESIGN_TEMPLATES,
   CMS_SITE_REGISTRY,
+  CMS_SITE_SEO_KEYS,
+  CORPORATE_SITE_SEO_FIELDS,
+  CORPORATE_SITE_SEO_KEY,
   CmsPublicPageSchema,
   CmsSeoSchema,
   EMPTY_PRODUCT_SEO,
@@ -17,6 +20,8 @@ import {
   PublishedSnapshotV1Schema,
   SeoCanonicalPathSchema,
   cmsFieldsSchema,
+  cmsIsSiteSeo,
+  cmsSiteSeoFields,
   seoCanonicalPathIsValid,
   seoIsSelfCanonical,
   seoLengthWarning,
@@ -236,5 +241,30 @@ describe("DP-209 site SEO defaults (bv.site-seo)", () => {
     expect(schema.safeParse({ ...ok, defaultOgImage: "https://evil.example/x.png" }).success).toBe(
       false,
     );
+  });
+
+  it("COM-1: the corporate defaults have the same fields, the image optional", () => {
+    expect(CMS_SITE_SEO_KEYS).toEqual({ BV: BV_SITE_SEO_KEY, CORPORATE: CORPORATE_SITE_SEO_KEY });
+    expect(cmsIsSiteSeo(BV_SITE_SEO_KEY)).toBe(true);
+    expect(cmsIsSiteSeo(CORPORATE_SITE_SEO_KEY)).toBe(true);
+    expect(cmsIsSiteSeo("corporate.site-nav")).toBe(false);
+    expect(cmsSiteSeoFields(BV_SITE_SEO_KEY)).toBe(BV_SITE_SEO_FIELDS);
+    const template = CMS_DESIGN_TEMPLATES.find((t) => t.key === CORPORATE_SITE_SEO_KEY);
+    expect(template?.site).toBe("CORPORATE");
+    expect(template?.fields).toBe(CORPORATE_SITE_SEO_FIELDS);
+    const schema = cmsFieldsSchema(CORPORATE_SITE_SEO_FIELDS);
+    const ok = {
+      siteName: "Dream Petroleum",
+      defaultTitle: "Dream Petroleum - Global Energy Markets",
+      defaultDescription: "A global energy and petroleum investment company.",
+      defaultOgImage: null,
+    };
+    expect(PublicSiteSeoSettingsSchema.parse(schema.parse(ok))).toEqual(ok);
+    expect(schema.parse({ ...ok, defaultOgImage: "" })).toEqual(ok);
+    // A BV default image stays valid for BV only through its own (required) field.
+    expect(cmsFieldsSchema(BV_SITE_SEO_FIELDS).safeParse(ok).success).toBe(false);
+    for (const k of ["siteName", "defaultTitle", "defaultDescription"]) {
+      expect(schema.safeParse({ ...ok, [k]: "" }).success, k).toBe(false);
+    }
   });
 });

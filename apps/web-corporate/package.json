@@ -2,13 +2,14 @@
   "name": "@dream/web-corporate",
   "version": "0.1.0",
   "private": true,
-  "description": "dreampetroleum.com public site (multi-locale). Skeleton only in F0-002.",
+  "description": "dreampetroleum.com public site (Turkish and English, CMS-driven since COM-1).",
   "scripts": {
     "dev": "next dev --port 3111",
     "build": "next build",
     "start": "next start --port 3111",
     "lint": "eslint",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"lib/**/*.test.mts\""
   },
   "dependencies": {
     "@dream/contracts": "workspace:*",

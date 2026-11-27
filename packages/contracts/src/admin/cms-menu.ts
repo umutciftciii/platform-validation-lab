@@ -38,11 +38,31 @@ const Id = z
 
 export const BV_NAV_KEY = "bv.site-nav";
 export const BV_FOOTER_KEY = "bv.site-footer";
-export const CMS_MENU_KEYS = [BV_NAV_KEY, BV_FOOTER_KEY] as const;
+/**
+ * COM-1: the menus of dreampetroleum.com. Same schemas, editor, references and public shape as the
+ * BV menus (one menu system); only the registry key differs, so each site has its own fragments.
+ */
+export const CORPORATE_NAV_KEY = "corporate.site-nav";
+export const CORPORATE_FOOTER_KEY = "corporate.site-footer";
+export const CMS_MENU_KEYS = [
+  BV_NAV_KEY,
+  BV_FOOTER_KEY,
+  CORPORATE_NAV_KEY,
+  CORPORATE_FOOTER_KEY,
+] as const;
 export type CmsMenuKey = (typeof CMS_MENU_KEYS)[number];
 export function cmsIsMenu(templateKey: string): templateKey is CmsMenuKey {
   return (CMS_MENU_KEYS as readonly string[]).includes(templateKey);
 }
+/** COM-1: which of the two menu schemas a menu key uses (header or footer). */
+export function cmsMenuKind(key: CmsMenuKey): "nav" | "footer" {
+  return key === BV_NAV_KEY || key === CORPORATE_NAV_KEY ? "nav" : "footer";
+}
+/** COM-1: the header and footer keys of each site. */
+export const CMS_SITE_MENU_KEYS = {
+  BV: { nav: BV_NAV_KEY, footer: BV_FOOTER_KEY },
+  CORPORATE: { nav: CORPORATE_NAV_KEY, footer: CORPORATE_FOOTER_KEY },
+} as const;
 /** The content schema version the menus are written with (version 1: label + href, DP-134). */
 export const CMS_MENU_SCHEMA_VERSION = 2;
 
@@ -257,7 +277,7 @@ export const BvNavMenuSchema = z.preprocess(upgradeNavContent, NavV2Schema);
 export const BvFooterMenuSchema = z.preprocess(upgradeFooterContent, FooterV2Schema);
 
 export function cmsMenuSchema(key: CmsMenuKey) {
-  return key === BV_NAV_KEY ? BvNavMenuSchema : BvFooterMenuSchema;
+  return cmsMenuKind(key) === "nav" ? BvNavMenuSchema : BvFooterMenuSchema;
 }
 
 // --- walking the links of a menu ---------------------------------------------------------------
@@ -610,7 +630,7 @@ export function menuReferencePlan<T extends BvNavMenu | BvFooterMenu>(
   // A deep copy (contracts has no DOM or Node types, so no structuredClone): JSON content only.
   const copy = JSON.parse(JSON.stringify(content)) as T;
   const links =
-    key === BV_NAV_KEY ? navLinks(copy as BvNavMenu) : footerLinks(copy as BvFooterMenu);
+    cmsMenuKind(key) === "nav" ? navLinks(copy as BvNavMenu) : footerLinks(copy as BvFooterMenu);
   const changes: MenuReferenceChange[] = [];
   for (const ref of links) {
     const target = ref.link.target;
