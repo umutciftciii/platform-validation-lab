@@ -377,6 +377,21 @@ export interface BvNewsIndexContent {
   empty: { title: string; text: string };
 }
 
+/** COM-3: the heading of the corporate news list (`/<l>/news`), the same fields as on BV. */
+export const CORPORATE_NEWS_INDEX_KEY = "corporate.news-index";
+export const CORPORATE_NEWS_INDEX_FIELDS: readonly CmsField[] = BV_NEWS_INDEX_FIELDS;
+export type CmsNewsIndexContent = BvNewsIndexContent;
+
+/** COM-3: the designed page that holds the heading of each site's news list. */
+export const CMS_NEWS_INDEX_KEYS = {
+  BV: "bv.news-index",
+  CORPORATE: CORPORATE_NEWS_INDEX_KEY,
+} as const;
+/** Whether a registry key is the news list heading of a site. */
+export function cmsIsNewsIndex(templateKey: string): boolean {
+  return templateKey === CMS_NEWS_INDEX_KEYS.BV || templateKey === CMS_NEWS_INDEX_KEYS.CORPORATE;
+}
+
 // --- bv.site-seo (DP-209) ---------------------------------------------------------------------------
 
 /**
@@ -504,6 +519,15 @@ export const CMS_DESIGN_TEMPLATES: readonly CmsDesignTemplate[] = [
     title: "Products",
     path: CORPORATE_PRODUCTS_PATH,
     fields: CORPORATE_PRODUCTS_FIELDS,
+  },
+  // COM-3: the heading of the corporate news list (the articles are TEMPLATE pages).
+  {
+    key: CORPORATE_NEWS_INDEX_KEY,
+    site: "CORPORATE",
+    kind: "DESIGN",
+    title: "News",
+    path: "/news",
+    fields: CORPORATE_NEWS_INDEX_FIELDS,
   },
   // COM-1: the fragments of dreampetroleum.com.
   {

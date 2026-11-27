@@ -2,7 +2,8 @@
  * COM-1: the corporate site's own interface texts (frame, language selector, 404), per language. Content texts (menus, footer, pages) come from the CMS, never from here.
  * The Turkish texts are interface labels only. COM-2a adds the labels of the designed frame
  * (menu buttons, submenus, footer, contact details, preview); COM-2b the labels of the product
- * portfolio around its CMS content (section list, table headings). The COM-2a placeholder home
+ * portfolio around its CMS content (section list, table headings); COM-3 the labels of the news
+ * list and articles (dates, pages, back link, a withdrawn article). The COM-2a placeholder home
  * is gone: the home page is the CMS page `corporate.home`.
  *
  * Pure (no Next.js, no `@/` imports) so `node --test` runs it as is.
@@ -28,6 +29,20 @@ export interface SiteDictionary {
   notFound: { title: string; text: string; home: string };
   /** COM-2b: the product portfolio's own labels (its texts come from the CMS). */
   portfolio: { onThisPage: string; property: string; unit: string };
+  /** COM-3: the news list and article labels ({page}, {pages}: page numbers). */
+  news: {
+    listLabel: string;
+    readMore: string;
+    back: string;
+    notPublishedYet: string;
+    pagination: string;
+    previous: string;
+    next: string;
+    pageOf: string;
+    pageTitle: string;
+    removedTitle: string;
+    removedText: string;
+  };
   privacy: { title: string; draft: string; draftText: string; version: string };
   unavailable: string;
 }
@@ -61,6 +76,19 @@ const EN: SiteDictionary = {
     home: "Go to the home page",
   },
   portfolio: { onThisPage: "On this page", property: "Property", unit: "Unit" },
+  news: {
+    listLabel: "Articles",
+    readMore: "Read article",
+    back: "All news",
+    notPublishedYet: "Not published yet",
+    pagination: "News pages",
+    previous: "Newer articles",
+    next: "Older articles",
+    pageOf: "Page {page} of {pages}",
+    pageTitle: "{title} · Page {page}",
+    removedTitle: "This article is no longer available",
+    removedText: "It has been taken off the site. The other news and insights are still available.",
+  },
   privacy: {
     title: "Privacy Policy",
     draft: "Draft — not for publication",
@@ -100,6 +128,19 @@ const TR: SiteDictionary = {
     home: "Ana sayfaya git",
   },
   portfolio: { onThisPage: "Bu sayfada", property: "Özellik", unit: "Birim" },
+  news: {
+    listLabel: "Yazılar",
+    readMore: "Yazıyı oku",
+    back: "Tüm haberler",
+    notPublishedYet: "Henüz yayımlanmadı",
+    pagination: "Haber sayfaları",
+    previous: "Daha yeni yazılar",
+    next: "Daha eski yazılar",
+    pageOf: "Sayfa {page} / {pages}",
+    pageTitle: "{title} · Sayfa {page}",
+    removedTitle: "Bu yazı artık yayında değil",
+    removedText: "Yazı siteden kaldırıldı. Diğer haber ve yazılar yayında.",
+  },
   privacy: {
     title: "Gizlilik Politikası",
     draft: "Taslak — yayın için değil",

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   CmsContextResponseSchema,
+  CMS_NEWS_INDEX_KEYS,
   CmsPageListResponseSchema,
   cmsIsArticle,
   type CmsPageSummary,
@@ -78,10 +79,10 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
     ? list.data.items.filter(cmsIsArticle).sort((a, b) => sortKey(b).localeCompare(sortKey(a)))
     : [];
   const newHref = `/content/news/new?site=${sp}`;
-  // DP-153: the heading of the site's news list is the designed page bv.news-index.
-  const heading = list.ok
-    ? list.data.items.find((p) => p.templateKey === "bv.news-index")
-    : undefined;
+  // DP-153: the heading of the site's news list is a designed page (bv.news-index; COM-3:
+  // corporate.news-index on the corporate site).
+  const headingKey = CMS_NEWS_INDEX_KEYS[site.key];
+  const heading = list.ok ? list.data.items.find((p) => p.templateKey === headingKey) : undefined;
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -122,7 +123,7 @@ export default async function NewsListPage({ searchParams }: PageProps<"/content
         </p>
       </div>
 
-      {site.key === "BV" && list.ok ? (
+      {list.ok ? (
         <p className="text-sm text-ink-2">
           {heading ? (
             <span key="heading">

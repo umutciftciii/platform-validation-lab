@@ -288,3 +288,23 @@ export function TemplateSections({
     </article>
   );
 }
+
+/**
+ * COM-3: the body sections of a news article under its own heading (the article title is the
+ * page's only main heading, so every section heading is a second-level one).
+ */
+export function BodySections({
+  sections,
+  locale,
+}: {
+  sections: TemplateSection[];
+  locale: RouteLocale;
+}) {
+  return (
+    <>
+      {sections.map((s) => (
+        <Section key={s.id} section={s} first={false} contact={null} locale={locale} />
+      ))}
+    </>
+  );
+}

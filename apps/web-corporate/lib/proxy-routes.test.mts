@@ -76,7 +76,22 @@ describe("classifyPath", () => {
     assert.equal(classifyPath("/index.html").kind, "legacy");
     // The catalogue routes are BV's; a product address is no content page here.
     assert.notEqual(classifyPath("/en/products/x").kind, "content");
-    assert.notEqual(classifyPath("/en/news/some-post").kind, "content");
+    // COM-3: only the exact news forms are the site's own.
+    assert.equal(classifyPath("/en/news/Some-Post").kind, "legacy");
+    assert.equal(classifyPath("/en/news/a/b").kind, "legacy");
+  });
+
+  it("tells the news list and articles apart (COM-3)", () => {
+    assert.deepEqual(classifyPath("/en/news"), { kind: "content", locale: "en", rest: "/news" });
+    assert.deepEqual(classifyPath("/tr/news/some-post"), {
+      kind: "content",
+      locale: "tr",
+      rest: "/news/some-post",
+    });
+    assert.deepEqual(classifyPath("/news/some-post"), {
+      kind: "unprefixed",
+      rest: "/news/some-post",
+    });
   });
 });
 
@@ -117,6 +132,49 @@ describe("decide", () => {
     assert.deepEqual(await decide("/tr", "", open.deps), { action: "next" });
     assert.deepEqual(await decide("/tr/hakkimizda", "", open.deps), { action: "next" });
     assert.deepEqual(open.calls, ["tr /", "tr /hakkimizda"]);
+  });
+
+  it("renders the news list and articles only where they are live (COM-3)", async () => {
+    const { deps, calls } = fakeDeps({
+      "- /news": found,
+      "- /news/market-note": found,
+      "- /news/withdrawn": { status: "unpublished" },
+    });
+    assert.deepEqual(await decide("/en/news", "", deps), { action: "next" });
+    // The list's pages keep their query (the page decides whether the page exists).
+    assert.deepEqual(await decide("/en/news", "?page=2", deps), { action: "next" });
+    assert.deepEqual(await decide("/en/news/market-note", "", deps), { action: "next" });
+    // An article taken off the site renders its "no longer available" page; unknown is a 404.
+    assert.deepEqual(await decide("/en/news/withdrawn", "", deps), { action: "next" });
+    assert.deepEqual(await decide("/en/news/unknown", "", deps), {
+      action: "not-found",
+      locale: "en",
+    });
+    assert.ok(calls.includes("- /news/market-note"));
+    // A page taken off the site stays a 404 (only articles have the withdrawn page).
+    const page = fakeDeps({ "- /about-us": { status: "unpublished" } });
+    assert.deepEqual(await decide("/en/about-us", "", page.deps), {
+      action: "not-found",
+      locale: "en",
+    });
+    // No published heading: the list is the site's 404.
+    assert.deepEqual(await decide("/en/news", "", fakeDeps({}).deps), {
+      action: "not-found",
+      locale: "en",
+    });
+    // Unprefixed: one 301 into English.
+    assert.deepEqual(await decide("/news/market-note", "", deps), {
+      action: "redirect",
+      location: "/en/news/market-note",
+      status: 301,
+    });
+    // Turkish inside its language once public.
+    const tr = fakeDeps(
+      { "tr /news": found, "tr /news/piyasa-notu": found },
+      { publicLocales: async () => ["en", "tr"] },
+    );
+    assert.deepEqual(await decide("/tr/news/piyasa-notu", "", tr.deps), { action: "next" });
+    assert.deepEqual(tr.calls, ["tr /news/piyasa-notu"]);
   });
 
   it("renders the home page only where it is published (COM-2b)", async () => {
