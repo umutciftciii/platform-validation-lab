@@ -252,7 +252,8 @@ export class PublicCmsService {
         excerpt: c.excerpt,
         coverImage: c.coverImage,
         coverAlt: c.coverAlt,
-        firstPublishedAt: row.firstPublishedAt.toISOString(),
+        // COM-5 (DP-327): the article's original date where it has one.
+        firstPublishedAt: page.firstPublishedAt ?? row.firstPublishedAt.toISOString(),
         publishedAt: row.publishedAt.toISOString(),
       });
     }

@@ -59,6 +59,9 @@ export const contract = {
     coverImageHint: "Optional. A registered site image; uploads arrive with the media library.",
     coverAltLabel: "Cover image alt text",
     coverAltHint: "Required when a cover image is chosen: what the image shows.",
+    originalDateLabel: "Original date",
+    originalDateHint:
+      "Optional. The date the article was first published elsewhere (e.g. on the old site); the site shows and orders it by this date. Empty: the date of its first publication here.",
   },
   /** Fields of the BV designed page and fragments (CMS_DESIGN_TEMPLATES). */
   design: {
@@ -204,6 +207,9 @@ export const contract = {
       "Site name, default title and description of the corporate site (COM-1). Managed under SEO.",
     corporateContact:
       "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
+    corporateContentPage:
+      "From the live site (COM-5). Figures and unconfirmed claims left out (DP-003).",
+    corporateContentArticle: "A post of the live blog (COM-5), with its original date (DP-327).",
   },
   /** Menu target problems (MENU_TARGET_PROBLEMS). */
   problem: {

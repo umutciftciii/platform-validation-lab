@@ -14,6 +14,11 @@ import {
   CORPORATE_NEWS_INDEX_FIELDS,
   CORPORATE_NEWS_INDEX_KEY,
   cmsIsNewsIndex,
+  CORPORATE_CONTENT_REGISTRY,
+  CmsDateSchema,
+  cmsArticleDate,
+  cmsCorporateTrPlace,
+  cmsTranslationProposal,
   CmsHrefSchema,
   CmsPageCreateRequestSchema,
   CmsPageDraftRequestSchema,
@@ -352,7 +357,10 @@ describe("CMS content page sections (DP-135)", () => {
       // A content page, or a news article at /news/<slug> (DP-206).
       if (e.kind === "TEMPLATE") expect(e.path, e.key).toMatch(/^\/(news\/)?[a-z0-9-]+$/);
     }
-    const importable = CMS_SITE_REGISTRY.filter((e) => e.kind === "TEMPLATE" && e.importable);
+    const importable = CMS_SITE_REGISTRY.filter(
+      (e) =>
+        e.kind === "TEMPLATE" && e.importable && (e.site === "BV" || e.key === "corporate.contact"),
+    );
     expect(importable.map((e) => e.path).sort()).toEqual([
       "/about-us",
       "/contact",
@@ -553,5 +561,82 @@ describe("corporate news list heading (COM-3)", () => {
     expect(cmsIsNewsIndex("corporate.news-index")).toBe(true);
     expect(cmsIsNewsIndex("corporate.home")).toBe(false);
     expect(cmsIsNewsIndex("article")).toBe(false);
+  });
+});
+
+describe("corporate content of the live site (COM-5)", () => {
+  const rows = CORPORATE_CONTENT_REGISTRY;
+
+  it("registers seven content pages and 19 news articles, all importable corporate TEMPLATE rows", () => {
+    expect(rows.filter((e) => !e.path!.startsWith("/news/"))).toHaveLength(7);
+    expect(rows.filter((e) => e.path!.startsWith("/news/"))).toHaveLength(19);
+    for (const e of rows) {
+      expect(e).toMatchObject({ site: "CORPORATE", kind: "TEMPLATE", importable: true });
+      expect(CMS_SITE_REGISTRY).toContain(e);
+      expect(e.key).toMatch(/^corporate\.[a-z0-9]+(-[a-z0-9]+)*$/);
+    }
+    expect(new Set(CMS_SITE_REGISTRY.map((e) => `${e.site} ${e.path}`)).size).toBe(
+      CMS_SITE_REGISTRY.filter((e) => e.path !== null).length +
+        new Set(CMS_SITE_REGISTRY.filter((e) => e.path === null).map((e) => e.site)).size,
+    );
+  });
+
+  it("offers a Turkish proposal for every corporate page, article and menu, never elsewhere", () => {
+    for (const e of rows) {
+      const page = {
+        kind: "TEMPLATE",
+        templateKey: e.path!.startsWith("/news/") ? "article" : "standard",
+        path: e.path,
+      };
+      expect(cmsTranslationProposal("CORPORATE", page, "tr"), e.key).not.toBeNull();
+      expect(cmsTranslationProposal("CORPORATE", page, "nl")).toBeNull();
+      expect(cmsTranslationProposal("BV", page, "tr")).toBeNull();
+    }
+    const article = rows.find((e) => e.path!.startsWith("/news/"))!;
+    expect(
+      cmsTranslationProposal(
+        "CORPORATE",
+        { kind: "TEMPLATE", templateKey: "article", path: article.path },
+        "tr",
+      )?.slug,
+    ).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+    for (const key of [
+      "corporate.home",
+      "corporate.products",
+      "corporate.news-index",
+      "corporate.site-nav",
+      "corporate.site-footer",
+    ]) {
+      expect(
+        cmsTranslationProposal("CORPORATE", { kind: "DESIGN", templateKey: key, path: null }, "tr"),
+        key,
+      ).not.toBeNull();
+    }
+    expect(
+      cmsCorporateTrPlace({ kind: "TEMPLATE", templateKey: "standard", path: "/about-us" }),
+    ).toBe("standard|/about-us");
+    // The Dutch BV menus keep their ML-7 proposal.
+    expect(
+      cmsTranslationProposal(
+        "BV",
+        { kind: "FRAGMENT", templateKey: "bv.site-nav", path: null },
+        "nl",
+      ),
+    ).toEqual({
+      title: null,
+      slug: null,
+    });
+  });
+
+  it("dates an article by its original date at noon UTC, else by its first publication (DP-327)", () => {
+    expect(cmsArticleDate("2026-04-16", "2026-11-27T10:00:00.000Z")).toBe(
+      "2026-04-16T12:00:00.000Z",
+    );
+    expect(cmsArticleDate(null, "2026-11-27T10:00:00.000Z")).toBe("2026-11-27T10:00:00.000Z");
+    expect(cmsArticleDate("2026-02-30", "2026-11-27T10:00:00.000Z")).toBe(
+      "2026-11-27T10:00:00.000Z",
+    );
+    expect(CmsDateSchema.safeParse("2026-08-13").success).toBe(true);
+    expect(CmsDateSchema.safeParse("1989-12-31").success).toBe(false);
   });
 });

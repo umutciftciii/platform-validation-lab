@@ -30,6 +30,9 @@ import {
   CmsPreviewResponseSchema,
   CmsPublicBundleSchema,
   menuNlProposal,
+  CORPORATE_CONTENT_REGISTRY,
+  CORPORATE_TR_PROPOSAL_INDEX,
+  cmsTemplateContentSchema,
   CmsPublicNewsSchema,
   CmsPageListResponseSchema,
   CmsPageResponseSchema,
@@ -6786,11 +6789,12 @@ describe("24. the Corporate site on the shared CMS (COM-1)", () => {
       "corporate.site-nav",
     ]);
     const nav = BvNavPublicSchema.parse(com.fragments["corporate.site-nav"]!.content);
-    expect(nav.items[0]).toMatchObject({ label: "Home", href: "/" });
-    // Links to pages that do not exist yet are text, never a guessed address.
+    // COM-5: imported before any corporate page, every link is "not ready" (text), never a guessed
+    // address; the import points a link at its page only where that page is in the CMS.
+    expect(nav.items[0]).toMatchObject({ label: "Home", href: null });
     expect(
       nav.items.flatMap((i) => [i, ...i.children]).filter((i) => i.href !== null),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     const footer = BvFooterPublicSchema.parse(com.fragments["corporate.site-footer"]!.content);
     expect(footer.contact.email.href).toBe("mailto:info@dreampetroleum.com");
     // The BV key never sees a corporate fragment, nor the corporate key a BV one.
@@ -7495,6 +7499,7 @@ describe("26. corporate contact page (COM-4)", () => {
     const page = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${id}`)).body).page;
     expect(page).toMatchObject({ kind: "TEMPLATE", path: "/contact", locale: "en" });
     expect((page.content as { sections: { type: string }[] }).sections.map((s) => s.type)).toEqual([
+      "hero",
       "contact",
     ]);
     expectError(await pub("/page?path=/contact", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
@@ -7579,5 +7584,231 @@ describe("26. corporate contact page (COM-4)", () => {
     ).toBe(200);
     live = await read();
     expect(team()?.href).toBe("/com4-our-team");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// COM-5: the corporate content of the live site — imported as drafts, published only on purpose,
+// articles dated and ordered by their original date (DP-327), Turkish drafts from the live
+// Turkish pages through "Create translation" (the proposal), SEO of what is published.
+// ---------------------------------------------------------------------------------------------
+
+describe("27. corporate content of the live site (COM-5)", () => {
+  let comPublisher: Staff;
+  const ids: Record<string, string> = {};
+  const PAGES = [
+    "corporate.about-us",
+    "corporate.logistics",
+    "corporate.energy-trading",
+    "corporate.storage-distribution",
+    "corporate.sustainability",
+    "corporate.strategic-partnership",
+    "corporate.our-team",
+  ];
+  const articleKeys = () =>
+    CORPORATE_CONTENT_REGISTRY.filter((e) => e.path!.startsWith("/news/")).map((e) => e.key);
+
+  async function publish(id: string): Promise<void> {
+    const p = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    const res = await comPublisher.post(`/pages/${id}/publish`, { version: p.version });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com5-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  afterAll(async () => {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: false },
+    });
+  });
+
+  it("imports the seven pages and 19 posts into the Corporate site only, as drafts", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "corporate.about-us", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    // Section 3 created a corporate page at /about-us: the import never overwrites it.
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "corporate.about-us", dryRun: true }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+    for (const key of [...PAGES.filter((k) => k !== "corporate.about-us"), ...articleKeys()]) {
+      const dry = await comEditor.post(`/sites/${COM}/import`, { key, dryRun: true });
+      expect(dry.status, `${key} ${JSON.stringify(dry.body)}`).toBe(200);
+      const res = await comEditor.post(`/sites/${COM}/import`, { key, dryRun: false });
+      expect(res.status, `${key} ${JSON.stringify(res.body)}`).toBe(200);
+      ids[key] = CmsImportResponseSchema.parse(res.body).pageId!;
+    }
+    expect(Object.keys(ids)).toHaveLength(25);
+    // Drafts: nothing reaches the site until it is published.
+    const live = await owner.cmsPagePublication.count({
+      where: { pageId: { in: Object.values(ids) } },
+    });
+    expect(live).toBe(0);
+    expectError(await pub("/page?path=/logistics", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    expectError(await seo("/resolve?path=/our-team"), 404, "NOT_FOUND");
+    const page = CmsPageResponseSchema.parse(
+      (await comEditor.get(`/pages/${ids["corporate.logistics"]}`)).body,
+    ).page;
+    expect(page).toMatchObject({
+      kind: "TEMPLATE",
+      path: "/logistics",
+      locale: "en",
+      publication: null,
+    });
+    // Never twice.
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "corporate.logistics", dryRun: true }),
+      409,
+      "CONFLICT_STATE",
+      { path: "key", rule: "already_imported" },
+    );
+  });
+
+  async function seo(p: string, key: string = TEST_KEYS.webCorporate): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.49" },
+      }),
+    );
+  }
+
+  it("dates and orders the posts by their original date, also in a preview (DP-327)", async () => {
+    const keys = articleKeys();
+    const first = keys[0]!; // the oldest live post
+    const last = keys.at(-1)!; // the newest live post
+    const a = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${ids[first]}`)).body).page;
+    expect(a.content["originalDate"]).toBe("2026-04-16");
+    const prev = await comEditor.post(`/pages/${ids[first]}/preview`, {});
+    const token = CmsPreviewResponseSchema.parse(prev.body).url.split("/preview/")[1]!;
+    expect(
+      CmsPublicBundleSchema.parse((await pub(`/preview/${token}`, TEST_KEYS.webCorporate)).body)
+        .page.firstPublishedAt,
+    ).toBe("2026-04-16T12:00:00.000Z");
+    // Published newest first by publication order, listed oldest-first by original date.
+    await publish(ids[last]!);
+    await publish(ids[first]!);
+    const news = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    const ours = news.articles.filter((x) => [a.path, `/news/${slugOf(last)}`].includes(x.path));
+    expect(ours.map((x) => x.firstPublishedAt)).toEqual([
+      "2026-08-13T12:00:00.000Z",
+      "2026-04-16T12:00:00.000Z",
+    ]);
+    // An article without an original date keeps the date of its first publication.
+    const noDate = news.articles.find((x) => x.slug === "com3-newer");
+    expect(noDate?.firstPublishedAt.endsWith("T12:00:00.000Z")).toBe(false);
+    // An impossible date is refused when saved.
+    expectError(
+      await comEditor.post(`/pages/${ids[first]}/draft`, {
+        version: a.version,
+        title: a.title,
+        slug: a.slug,
+        seo: a.seo,
+        content: { ...a.content, originalDate: "2026-02-30" },
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+  });
+
+  function slugOf(key: string): string {
+    return CORPORATE_CONTENT_REGISTRY.find((e) => e.key === key)!.path!.slice("/news/".length);
+  }
+
+  it("creates Turkish drafts from the live Turkish pages (proposal), kept off the site", async () => {
+    const logistics = ids["corporate.logistics"]!;
+    // Without the proposal the draft is empty (ML-2); with it, the live Turkish texts.
+    const res = await comEditor.post(`/pages/${logistics}/translations`, {
+      locale: "tr",
+      title: "Lojistik",
+      proposal: true,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const tr = CmsPageResponseSchema.parse(res.body).page;
+    expect(tr).toMatchObject({ locale: "tr", path: "/logistics", translationGroupId: logistics });
+    expect(JSON.stringify(tr.content)).toContain("Hızlı Lojistik");
+    expect(cmsTemplateContentSchema("CORPORATE").safeParse(tr.content).success).toBe(true);
+    // An article: its Turkish slug and its own original date.
+    const key = articleKeys()[0]!;
+    const art = await comEditor.post(`/pages/${ids[key]}/translations`, {
+      locale: "tr",
+      title: "Doğru Solvent Seçimi",
+      proposal: true,
+    });
+    expect(art.status, JSON.stringify(art.body)).toBe(201);
+    const trArt = CmsPageResponseSchema.parse(art.body).page;
+    expect(trArt.path).toBe(
+      `/news/${CORPORATE_TR_PROPOSAL_INDEX[`article|/news/${slugOf(key)}`]!.slug}`,
+    );
+    expect(trArt.content["originalDate"]).toBe("2026-04-07");
+    // A proposal only where one exists: none for the BV site, none in another language.
+    expectError(
+      await bvEditor.post(
+        `/pages/${(await owner.cmsPage.findFirstOrThrow({ where: { siteId: BV, kind: "TEMPLATE", locale: "en", templateKey: "standard" } })).id}/translations`,
+        {
+          locale: "nl",
+          title: "X",
+          slug: "com5-x",
+          proposal: true,
+        },
+      ),
+      400,
+      "VALIDATION_FAILED",
+      { path: "proposal", rule: "unavailable" },
+    );
+    // Drafts in a non-public language: nothing on the site.
+    expectError(
+      await pub("/page?path=/about-us&locale=tr", TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("serves, resolves and lists a published page and its Turkish counterpart only once published", async () => {
+    await publish(ids["corporate.our-team"]!);
+    expect((await seo("/resolve?path=/our-team")).body).toEqual({
+      path: "/our-team",
+      kind: "page",
+    });
+    const entries = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries;
+    expect(entries.some((e) => e.path === "/our-team")).toBe(true);
+    expect(entries.some((e) => e.path === "/logistics")).toBe(false);
+    const team = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/our-team", TEST_KEYS.webCorporate)).body,
+    );
+    expect(JSON.stringify(team.page.content)).not.toMatch(/\d+\+|Experts<|world-class/);
+    // Turkish article published and Turkish public: its own address, the English counterpart.
+    const key = articleKeys()[0]!;
+    const trRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, locale: "tr", translationGroupId: ids[key]! },
+    });
+    await publish(trRow.id);
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: true },
+    });
+    const trNews = CmsPublicNewsSchema.parse(
+      (await pub("/news?locale=tr", TEST_KEYS.webCorporate)).body,
+    );
+    expect(trNews.articles.find((x) => x.path === trRow.path)).toMatchObject({
+      firstPublishedAt: "2026-04-07T12:00:00.000Z",
+    });
+    const trBundle = CmsPublicBundleSchema.parse(
+      (await pub(`/page?path=${trRow.path}&locale=tr`, TEST_KEYS.webCorporate)).body,
+    );
+    expect(trBundle.alternates).toEqual([
+      { locale: "en", path: `/news/${slugOf(key)}`, indexable: true },
+    ]);
   });
 });

@@ -57,6 +57,9 @@ export const contract: Messages["content"]["contract"] = {
       "İsteğe bağlı. Kayıtlı bir site görseli; yükleme özelliği medya kütüphanesiyle gelecek.",
     coverAltLabel: "Kapak görseli alternatif metni",
     coverAltHint: "Kapak görseli seçildiğinde zorunludur: görselin neyi gösterdiğini yazın.",
+    originalDateLabel: "Özgün tarih",
+    originalDateHint:
+      "İsteğe bağlı. Yazının ilk yayımlandığı tarih (ör. eski sitede); site yazıyı bu tarihle gösterir ve sıralar. Boşsa buradaki ilk yayın tarihi kullanılır.",
   },
   /** BV tasarım sayfası ve site geneli bölümlerin alanları (CMS_DESIGN_TEMPLATES). */
   design: {
@@ -206,6 +209,10 @@ export const contract: Messages["content"]["contract"] = {
       "Kurumsal sitenin site adı, varsayılan başlığı ve açıklaması (COM-1). SEO altında yönetilir.",
     corporateContact:
       "Yayınlı alt bilgideki iletişim bilgileri ve iletişim formu; mesajlar CRM'de CORPORATE lead olur (COM-4).",
+    corporateContentPage:
+      "Yayındaki eski siteden (COM-5). Sayılar ve teyit edilmemiş iddialar çıkarıldı (DP-003).",
+    corporateContentArticle:
+      "Yayındaki eski sitenin blog yazısı (COM-5), özgün tarihiyle (DP-327).",
   },
   /** Menü hedefi sorunları (MENU_TARGET_PROBLEMS). */
   problem: {

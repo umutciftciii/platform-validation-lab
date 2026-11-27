@@ -1,6 +1,6 @@
 import Link from "next/link";
 import {
-  cmsTranslationHasProposal,
+  cmsTranslationProposal,
   type CmsMenuLinkWarningRule,
   type CmsPage,
   type CmsSite,
@@ -143,7 +143,7 @@ export function TranslationTabs({
         missing={missing.map((x) => ({
           locale: x.locale,
           label: languageLabel(x.locale, locale),
-          proposal: cmsTranslationHasProposal(page.templateKey, x.locale),
+          ...proposalOf(cmsTranslationProposal(site.key, page, x.locale)),
         }))}
         outdated={
           isTranslation && current?.outdated && current.sourceLatestRevisionNumber !== null
@@ -253,4 +253,9 @@ export function MenuLinkWarnings({
 /** ML-7 rule → its explanation in the UI language (content.editor.translationTabs.menuWarnings.rule). */
 function menuWarning(rule: CmsMenuLinkWarningRule, t: Translate): string {
   return t(`content.editor.translationTabs.menuWarnings.rule.${rule}`);
+}
+
+/** ML-7 / COM-5: whether a proposal is offered, and its title and slug where it has them. */
+function proposalOf(p: { title: string | null; slug: string | null } | null) {
+  return p ? { proposal: true, proposalTitle: p.title, proposalSlug: p.slug } : { proposal: false };
 }
