@@ -30,6 +30,8 @@ export const AI_AUDIT_ACTIONS = [
   "ai.operation.overrun",
   "ai.operation.unknown",
   "ai.operation.discarded",
+  // DP-307: a queued personal-data operation refused at dispatch (terms revoked/renewed; cost 0).
+  "ai.operation.refused",
   "ai.estimate.underrun",
   "ai.reconciliation.record",
   // DP-298 (ADR-031 D6): the owner's record of a provider's data-processing terms.
@@ -84,6 +86,8 @@ export const AI_AUDIT_METADATA_KEYS = [
   "transferMechanism",
   "kvkkTransferMechanism",
   "replaced",
+  // DP-307: the provider-terms record a personal-data operation was reserved/sent under.
+  "dataTermsId",
 ] as const;
 
 const ALLOWED = new Set<string>(AI_AUDIT_METADATA_KEYS);

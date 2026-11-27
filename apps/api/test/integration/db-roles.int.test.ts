@@ -502,6 +502,9 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "ai_module_switched_off", owner: "dp_owner", lead: false },
       { f: "ai_move", owner: "dp_owner", lead: false },
       { f: "ai_operation_view", owner: "dp_owner", lead: false },
+      // DP-307: the provider-terms gate (the owner's exclusive lock, the settlement's hold, the
+      // internal shared hold + validity check).
+      { f: "ai_provider_terms_lock", owner: "dp_owner", lead: false },
       { f: "ai_purge_transient", owner: "dp_owner", lead: false },
       { f: "ai_queue_depth", owner: "dp_owner", lead: false },
       { f: "ai_release", owner: "dp_owner", lead: false },
@@ -515,6 +518,8 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "ai_store_result", owner: "dp_owner", lead: false },
       { f: "ai_sweep", owner: "dp_owner", lead: false },
       { f: "ai_task_plan", owner: "dp_owner", lead: false },
+      { f: "ai_terms_hold", owner: "dp_owner", lead: false },
+      { f: "ai_terms_hold_valid", owner: "dp_owner", lead: false },
       { f: "ai_upper_cost_micros", owner: "dp_owner", lead: false },
       // DP-193: one boolean — may this ACTIVE staff user publish directly on this site.
       { f: "catalog_direct_publish_allowed", owner: "dp_owner", lead: false },
@@ -803,6 +808,34 @@ describe("DP-103: what can step around row-level security", () => {
        WHERE relnamespace = 'public'::regnamespace AND relname = 'AiTransient'`,
     );
     expect(persistence).toEqual([{ p: "u" }]);
+  });
+
+  it("DP-307: the terms gate for the API's role; the internal hold for nobody; one ai_reserve", async () => {
+    const rows = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(DISTINCT r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname IN ('ai_provider_terms_lock', 'ai_terms_hold', 'ai_terms_hold_valid')
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(Object.fromEntries(rows.map((r) => [r.f, r.who]))).toEqual({
+      ai_provider_terms_lock: "dp_app",
+      ai_terms_hold: "dp_app",
+      ai_terms_hold_valid: null,
+    });
+    // The DP-290 signature is gone: a reservation always says whether it carries personal data.
+    const sigs = await su.$queryRawUnsafe<{ a: string }[]>(
+      `SELECT pg_get_function_identity_arguments(p.oid) AS a FROM pg_proc p
+       WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('ai_reserve', 'ai_claim')
+       ORDER BY p.proname`,
+    );
+    expect(sigs.map((r) => r.a)).toEqual([
+      "p_instance text, p_lease_sec integer, p_limit integer",
+      'p_task "AiTaskType", p_site uuid, p_idempotency text, p_input_digest text, p_est_input integer, p_est_output integer, p_instance text, p_cap_daily bigint, p_cap_monthly bigint, p_personal boolean, p_terms uuid',
+    ]);
   });
 
   it("DP-290: lets the API's role run the engine's transitions, never the internal money mover", async () => {

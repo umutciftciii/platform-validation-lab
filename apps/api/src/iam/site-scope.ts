@@ -252,6 +252,8 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     site: { model: "Site", list: false },
     model: { model: "AiModel", list: false },
     price: { model: "AiModelPrice", list: false },
+    // DP-307: the provider-terms record a personal-data operation was reserved under.
+    dataTerms: { model: "AiProviderDataTerms", list: false },
     entries: { model: "AiLedgerEntry", list: true },
     transients: { model: "AiTransient", list: true },
   },
@@ -447,6 +449,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
   AiProviderDataTerms: {
     recordedBy: { model: "User", list: false },
     revokedBy: { model: "User", list: false },
+    operations: { model: "AiOperation", list: true },
   },
   LeadActivity: {
     site: { model: "Site", list: false },
