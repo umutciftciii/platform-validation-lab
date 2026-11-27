@@ -9,6 +9,9 @@ dreampetroleum.com (contract 3.2: Turkish and English). Since COM-1 every page c
   published in the language);
 - `app/[locale]/products` — the product portfolio, the designed page `corporate.products` at
   `/products` (COM-2b: anchored groups, COA request; not the BV catalogue);
+- `app/[locale]/news`, `app/[locale]/news/[slug]` — the news list under the designed page
+  `corporate.news-index` (COM-3: 12 articles a page, `?page=2`) and the articles (the DP-020
+  article model of the shared CMS; a withdrawn article says so, noindex);
 - `app/(preview)/preview/[token]` — a signed admin preview of a draft (DP-321; noindex, no-store);
 - `proxy.ts` + `lib/proxy-routes.ts` — language prefix, real 404s, redirects (Admin > SEO >
   Redirects), trailing slash;

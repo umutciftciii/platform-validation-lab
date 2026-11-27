@@ -80,6 +80,11 @@ export interface PageSeo {
   ogDescription?: string | null;
   /** Published counterparts in the other public languages (CMS read `alternates`). */
   alternates?: readonly HreflangAlternate[];
+  /**
+   * COM-3: the query that is part of the page's own address (`?page=2` of the news list), kept
+   * in its canonical URL; such a page has no hreflang (its content differs per language).
+   */
+  canonicalSearch?: string | null;
 }
 
 /** Metadata of a page: canonical, hreflang, Open Graph, Twitter card and robots. */
@@ -94,13 +99,14 @@ export function pageMetadata(
   const ogDescription = page.ogDescription?.trim() || description;
   const origin = policy.origin;
   const override = seoCanonicalPathIsValid(page.canonicalPath) ? page.canonicalPath : null;
+  const search = !override && page.canonicalSearch ? page.canonicalSearch : "";
   const url = origin
-    ? canonicalUrl(
+    ? `${canonicalUrl(
         origin,
         override ? localizeHref(page.locale, override) : localePath(page.locale, page.path),
-      )
+      )}${search}`
     : undefined;
-  const selfCanonical = !override || override === page.path;
+  const selfCanonical = (!override || override === page.path) && !search;
   const languages =
     origin && selfCanonical && !page.noindex
       ? hreflangMap(page.locale, page.path, page.alternates ?? [])

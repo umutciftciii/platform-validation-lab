@@ -7,6 +7,7 @@ import {
   CMS_SECTIONS_MAX,
   cmsDesignTemplate,
   cmsIsArticle,
+  cmsIsNewsIndex,
   cmsIsMenu,
   cmsIsSiteSeo,
   cmsMenuSchema,
@@ -409,7 +410,7 @@ export function PageEditor({
             fallbackDescription={
               article
                 ? ((articleValues["excerpt"] as string | undefined) ?? null)
-                : page.templateKey === "bv.news-index"
+                : cmsIsNewsIndex(page.templateKey)
                   ? ((design["intro"] as string | undefined) ?? null)
                   : null
             }

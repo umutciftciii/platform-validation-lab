@@ -75,15 +75,40 @@ describe("sitemapUrls", () => {
     );
   });
 
-  it("never lists catalogue or news routes (the corporate site has none)", () => {
+  it("never lists catalogue routes (the corporate site has none)", () => {
     const urls = sitemapUrls(
-      [
-        entry("en", "/products", "products"),
-        entry("en", "/products/x", "product"),
-        entry("en", "/news", "news"),
-      ],
+      [entry("en", "/products", "products"), entry("en", "/products/x", "product")],
       ["en"],
     );
     assert.deepEqual(urls, []);
+  });
+
+  it("lists the news list and its articles with their counterparts (COM-3)", () => {
+    const urls = sitemapUrls(
+      [
+        entry("en", "/news", "news", [{ locale: "tr", path: "/news" }]),
+        entry("tr", "/news", "news", [{ locale: "en", path: "/news" }]),
+        entry("en", "/news/market-note", "article", [{ locale: "tr", path: "/news/piyasa-notu" }]),
+        entry("tr", "/news/piyasa-notu", "article", [{ locale: "en", path: "/news/market-note" }]),
+        entry("en", "/news/english-only", "article"),
+      ],
+      ["en", "tr"],
+    );
+    assert.deepEqual(
+      urls.map((u) => u.href),
+      [
+        "/en/news",
+        "/tr/news",
+        "/en/news/market-note",
+        "/tr/news/piyasa-notu",
+        "/en/news/english-only",
+      ],
+    );
+    assert.deepEqual(urls[2]?.languages, {
+      en: "/en/news/market-note",
+      tr: "/tr/news/piyasa-notu",
+      "x-default": "/en/news/market-note",
+    });
+    assert.equal(urls[4]?.languages, null);
   });
 });

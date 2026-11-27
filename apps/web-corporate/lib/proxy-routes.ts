@@ -1,15 +1,17 @@
 /**
  * COM-1: the address forms `proxy.ts` tells apart before a corporate page renders, and the
  * redirect decision. The rules of the BV site (apps/web-bv/lib/proxy-routes.ts: DP-207, DP-210,
- * DP-211, DP-212, ML-3, ML-4), without the catalogue, news and document forms the corporate site
- * does not have yet (its news list comes with COM-3):
+ * DP-211, DP-212, ML-3, ML-4), without the catalogue and document forms the corporate site does
+ * not have:
  *
  *  - `root`: `/` answers ONE 301 to the default language's home (`/en`); never Accept-Language.
  *  - `home`: `/en`, `/tr`, asked to the SEO resolve API as `/` (COM-2b: the CMS home page; not
  *    published in the language: 404).
  *  - `content`: `/<l>/<slug>`, asked to the SEO resolve API with the STORED address (`/about-us`
  *    in the default language, `/hakkimizda` + `locale=tr` otherwise): live, a redirect (DP-210
- *    slug change, DP-211 manual or imported row), unpublished or nothing.
+ *    slug change, DP-211 manual or imported row), unpublished or nothing. COM-3: the news list
+ *    `/<l>/news` (live while its heading page is published) and an article `/<l>/news/<slug>`
+ *    the same way; an article taken off the site renders its "no longer available" page.
  *  - `privacy`: `/<l>/privacy` where the policy is published in that language.
  *  - `unprefixed`: one of the forms above without a prefix (`/about-us`, `/privacy`): one 301 to
  *    the same address in the default language (query kept).
@@ -61,6 +63,10 @@ type OwnForm = { kind: "home" } | { kind: "privacy" } | { kind: "content" } | nu
 function ownForm(rest: string): OwnForm {
   if (rest === "/") return { kind: "home" };
   const parts = rest.split("/").slice(1);
+  // COM-3: a news article (`/news/<slug>`).
+  if (parts.length === 2 && parts[0] === "news" && SEGMENT.test(parts[1] ?? "")) {
+    return { kind: "content" };
+  }
   if (parts.length !== 1) return null;
   const [slug = ""] = parts;
   if (slug === "privacy") return { kind: "privacy" };
@@ -195,6 +201,10 @@ export async function step(
       if (res.status === "redirect") return redirectStep(res, search);
       // Fail open while the API cannot answer: the page renders and does its own checks (DP-207).
       if (res.status === "found" || res.status === "unknown") return { action: "next" };
+      // COM-3: only an article has a "no longer available" page; a page taken off is a 404.
+      if (res.status === "unpublished" && route.rest.startsWith("/news/")) {
+        return { action: "next" };
+      }
       if (locale === DEFAULT_LOCALE) {
         // An old address in this form (`/en/contact-us`) may have a row of its own.
         const old = await deps.resolve(pathname, search);

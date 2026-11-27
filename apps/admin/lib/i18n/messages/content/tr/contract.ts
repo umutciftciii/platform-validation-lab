@@ -196,6 +196,8 @@ export const contract: Messages["content"]["contract"] = {
       "Hero, şirket tanıtımı, hizmetler, ürün grupları, güçlü yönler ve harekete geçirici bölüm (COM-2b). Sayaç, distribütörlük iddiası veya müşteri yorumu yok.",
     corporateProducts:
       "Ürün portföyü: çapalı gruplar ve COA talebi (COM-2b). Tipik değerler kaynakları onaylanana kadar gizli kalır.",
+    corporateNewsIndex:
+      "Kurumsal haber listesinin başlığı, girişi ve boş durumu (COM-3). Makaleler Haberler altındadır.",
     corporateSiteNav:
       "Her kurumsal sayfanın menü öğeleri ve alt menüleri (menü düzenleyici, COM-1). Henüz var olmayan sayfaların bağlantıları metin olarak kalır.",
     corporateSiteFooter:

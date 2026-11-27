@@ -909,6 +909,17 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     importable: true,
   },
   {
+    key: "corporate.news-index",
+    site: "CORPORATE",
+    kind: "DESIGN",
+    title: "News",
+    path: "/news",
+    managedBy: "cms_pending",
+    stage: "S4",
+    note: "Heading, introduction and empty state of the corporate news list (COM-3). The articles are under News.",
+    importable: true,
+  },
+  {
     key: "corporate.site-nav",
     site: "CORPORATE",
     kind: "FRAGMENT",
