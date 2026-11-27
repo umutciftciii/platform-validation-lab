@@ -6,7 +6,7 @@
  * designed pages and fragments. A form description, not a page builder: no drag and drop, no
  * layout; lists reorder with buttons.
  */
-import { CMS_STATIC_ASSETS, type CmsField } from "@dream/contracts";
+import { cmsAssetRequired, cmsSiteAssets, type CmsField } from "@dream/contracts";
 import type { ReactNode } from "react";
 import { cmsText } from "../../lib/cms-text";
 import { INTL_LOCALE } from "../../lib/i18n/config";
@@ -53,7 +53,11 @@ export function toValues(fields: readonly CmsField[], source: Record<string, unk
 }
 
 /** Request content of a set of fields: blank optional links and link targets become null. */
-export function toContent(fields: readonly CmsField[], values: ItemValue): Record<string, unknown> {
+export function toContent(
+  fields: readonly CmsField[],
+  values: ItemValue,
+  site?: "BV" | "CORPORATE",
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of fields) {
     const v = values[f.key];
@@ -67,7 +71,8 @@ export function toContent(fields: readonly CmsField[], values: ItemValue): Recor
               : "";
         break;
       case "asset":
-        out[f.key] = typeof v === "string" && v ? v : f.required === false ? null : "";
+        // COM-2a (DP-320): an image the page's site may leave empty is stored as null.
+        out[f.key] = typeof v === "string" && v ? v : cmsAssetRequired(f, site) ? "" : null;
         break;
       case "link": {
         const link = (v as LinkValue | null) ?? { label: "", href: "" };
@@ -75,10 +80,10 @@ export function toContent(fields: readonly CmsField[], values: ItemValue): Recor
         break;
       }
       case "group":
-        out[f.key] = toContent(f.fields, (v as ItemValue | null) ?? {});
+        out[f.key] = toContent(f.fields, (v as ItemValue | null) ?? {}, site);
         break;
       case "list":
-        out[f.key] = ((v as ItemValue[]) ?? []).map((item) => toContent(f.fields, item));
+        out[f.key] = ((v as ItemValue[]) ?? []).map((item) => toContent(f.fields, item, site));
         break;
     }
   }
@@ -174,9 +179,9 @@ export function Fields({
         }
         if (f.type === "asset") {
           const v = (values[f.key] as string) ?? "";
-          const options = CMS_STATIC_ASSETS.filter(
-            (a) => a.site === site && f.kinds.includes(a.kind),
-          );
+          // DP-320: only this site's files; an image the site may leave empty can be "none".
+          const options = cmsSiteAssets(site).filter((a) => f.kinds.includes(a.kind));
+          const optionalImage = !cmsAssetRequired(f, site);
           const chosen = options.find((a) => a.src === v);
           return (
             <Field
@@ -201,10 +206,10 @@ export function Fields({
                 onChange={(e) => set(f.key, e.currentTarget.value)}
                 className={cx(FIELD, "font-mono text-sm")}
               >
-                {f.required === false ? (
+                {optionalImage ? (
                   <option value="">{t("content.editor.fields.noImage")}</option>
                 ) : null}
-                {!chosen && !(f.required === false && !v) ? (
+                {!chosen && !(optionalImage && !v) ? (
                   <option value={v}>{v || t("content.editor.fields.choose")}</option>
                 ) : null}
                 {options.map((a) => (

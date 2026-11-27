@@ -32,6 +32,14 @@ describe("toNav", () => {
     assert.equal(nav.contact?.current, false);
   });
 
+  it("keeps only the no-script links with a live target (COM-2a)", () => {
+    const nav = toNav({ ...NAV, noScriptLinks: [link("Home", "/"), link("About Us", null)] }, "/");
+    assert.deepEqual(
+      nav.noScriptLinks.map((l) => [l.label, l.href, l.current]),
+      [["Home", "/", true]],
+    );
+  });
+
   it("marks the home item only on the home page", () => {
     assert.equal(toNav(NAV, "/").items[0]?.current, true);
     assert.equal(isCurrentPath("/", "/about-us"), false);

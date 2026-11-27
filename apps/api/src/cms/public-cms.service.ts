@@ -68,9 +68,10 @@ export class PublicCmsService {
     @Inject(Clock) private readonly clock: Clock,
   ) {}
 
-  private served(row: LiveRow): CmsPublicPage | null {
+  private served(site: PublicSite, row: LiveRow): CmsPublicPage | null {
     const { kind, templateKey } = row.page;
-    if (!contentIsValid(kind, templateKey, row.revision.content)) {
+    // COM-2a (DP-320): with the site's own rules (its files; an image it may leave empty).
+    if (!contentIsValid(kind, templateKey, row.revision.content, site.siteKey)) {
       this.log.error(`a published ${templateKey} revision does not match its schema; not served`);
       return null;
     }
@@ -136,7 +137,7 @@ export class PublicCmsService {
       const row = live.find(
         (r) => r.page.kind === "FRAGMENT" && r.page.templateKey === key && r.page.locale === locale,
       );
-      out[key] = row ? this.served(row) : null;
+      out[key] = row ? this.served(site, row) : null;
     }
     return out;
   }
@@ -155,7 +156,7 @@ export class PublicCmsService {
     const visible = await PublicCmsService.visibleLive(site);
     const live = visible.filter((r) => r.page.locale === locale.locale);
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === path);
-    const page = row ? this.served(row) : null;
+    const page = row ? this.served(site, row) : null;
     if (!page) {
       // DP-020: a page that was live at this address and has been taken off the site answers
       // 404 with the detail `unpublished`, so the site can say so instead of "not found".
@@ -240,7 +241,7 @@ export class PublicCmsService {
     const articles: CmsPublicArticle[] = [];
     for (const row of live) {
       if (!cmsIsArticle(row.page) || !row.revision.path) continue;
-      const page = this.served(row);
+      const page = this.served(site, row);
       if (!page) continue;
       const c = page.content as unknown as CmsArticleContent;
       articles.push({
@@ -262,7 +263,7 @@ export class PublicCmsService {
       (r) => r.page.kind === "DESIGN" && r.page.templateKey === NEWS_INDEX_KEY,
     );
     return {
-      page: index ? this.served(index) : null,
+      page: index ? this.served(site, index) : null,
       articles,
       fragments: await this.fragments(site, live, locale),
       // ML-5: the list's counterparts (its heading page's translation group).
@@ -291,7 +292,7 @@ export class PublicCmsService {
         content: true,
       },
     });
-    if (!draft || !contentIsValid(draft.kind, draft.templateKey, draft.content)) {
+    if (!draft || !contentIsValid(draft.kind, draft.templateKey, draft.content, site.siteKey)) {
       throw new ApiError("NOT_FOUND");
     }
     const { locale: draftLocale, ...draftPage } = draft;
@@ -318,7 +319,7 @@ export class PublicCmsService {
         },
       });
       for (const d of drafts) {
-        if (contentIsValid(d.kind, d.templateKey, d.content))
+        if (contentIsValid(d.kind, d.templateKey, d.content, site.siteKey))
           fragments[d.templateKey] = publicPage(d, null);
       }
     }
@@ -327,7 +328,13 @@ export class PublicCmsService {
       // (published, or its draft before the first publication).
       fragments[target.templateKey] = target;
       const home = await this.homeForFragmentPreview(site, live, draftLocale);
-      if (!home) throw new ApiError("NOT_FOUND");
+      if (!home) {
+        // COM-2a (DP-321): a site without a home page in the CMS yet (corporate until COM-2b)
+        // gets the fragment itself as the page; the site shows its own home around it.
+        if (site.siteKey !== "CORPORATE") throw new ApiError("NOT_FOUND");
+        await resolvePublicMenus(site, live, fragments, locale);
+        return { page: target, fragments, preview: true, locale: draftLocale };
+      }
       await resolvePublicMenus(site, live, fragments, locale);
       return { page: home, fragments, preview: true, locale: draftLocale };
     }
@@ -342,7 +349,7 @@ export class PublicCmsService {
     locale: string,
   ): Promise<CmsPublicPage | null> {
     const row = live.find((r) => r.page.kind !== "FRAGMENT" && r.revision.path === "/");
-    if (row) return this.served(row);
+    if (row) return this.served(site, row);
     const draft = await site.db.cmsPage.findFirst({
       where: { siteId: site.siteId, locale, path: "/" },
       select: {
@@ -354,7 +361,7 @@ export class PublicCmsService {
         content: true,
       },
     });
-    return draft && contentIsValid(draft.kind, draft.templateKey, draft.content)
+    return draft && contentIsValid(draft.kind, draft.templateKey, draft.content, site.siteKey)
       ? publicPage(draft, null)
       : null;
   }

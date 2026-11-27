@@ -438,7 +438,9 @@ export class PublicSeoService {
       where: { id: pub.revisionId },
       select: { content: true },
     });
-    const content = cmsFieldsSchema(cmsSiteSeoFields(templateKey)).safeParse(revision?.content);
+    const content = cmsFieldsSchema(cmsSiteSeoFields(templateKey), site.siteKey).safeParse(
+      revision?.content,
+    );
     const settings = content.success ? PublicSiteSeoSettingsSchema.safeParse(content.data) : null;
     if (!settings?.success) {
       this.log.error(`the published ${templateKey} revision does not match its schema; not served`);

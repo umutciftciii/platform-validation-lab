@@ -19,13 +19,18 @@ export async function NotFoundView({ locale }: { locale: RouteLocale }) {
       languages={frame.languages}
       privacyHref={privacyHref}
     >
-      <article className="page">
-        <h1>{t.notFound.title}</h1>
-        <p>{t.notFound.text}</p>
-        <p>
-          <a href={`/${locale}`}>{t.notFound.home}</a>
-        </p>
-      </article>
+      <section className="section">
+        <div className="container-site">
+          <p className="eyebrow">404</p>
+          <h1 className="section-title mt-5">{t.notFound.title}</h1>
+          <p className="section-lead prose-width mt-6">{t.notFound.text}</p>
+          <p className="mt-10">
+            <a className="btn btn-primary btn-arrow" href={`/${locale}`}>
+              {t.notFound.home}
+            </a>
+          </p>
+        </div>
+      </section>
     </SiteFrame>
   );
 }

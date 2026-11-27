@@ -250,7 +250,14 @@ export async function decide(
 const TRAILING_SLASH = /^((?:\/[^/]+)+)\/$/;
 
 /** Addresses the proxy never decides (kept equal to the matcher in proxy.ts, tested there). */
-export const TECHNICAL_PREFIXES: readonly string[] = ["/_next/", "/__dp/", "/api/", "/media/"];
+export const TECHNICAL_PREFIXES: readonly string[] = [
+  "/_next/",
+  "/__dp/",
+  "/api/",
+  "/media/",
+  // COM-2a (DP-321): signed CMS previews (`/preview/<token>`), never decided by the proxy.
+  "/preview/",
+];
 
 export type RequestDecision = ProxyDecision | { action: "redirect"; location: string; status: 308 };
 

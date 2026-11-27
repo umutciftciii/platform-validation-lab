@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 
 import { NotFoundView } from "@/components/not-found-view";
+import { fontVariables } from "@/lib/fonts";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale } from "@/lib/locale-routing";
 import { NOT_FOUND_LOCALE_HEADER } from "@/lib/not-found";
@@ -27,7 +28,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function GlobalNotFound() {
   const locale = await notFoundLocale();
   return (
-    <html lang={locale}>
+    <html lang={locale} className={fontVariables}>
       <body>
         <NotFoundView locale={locale} />
       </body>

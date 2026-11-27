@@ -126,6 +126,8 @@ export interface CmsEnv {
   targetLocale: string;
   /** DP-210: the site keeps old addresses as redirects (BV). */
   keepsOldAddress: boolean;
+  /** COM-2a (DP-320): the site's key, so content is checked with its own rules (its files). */
+  siteKey?: CmsSite["key"];
 }
 
 /** Whether the page has a content schema the CMS can edit (else it stays managed in code). */
@@ -505,7 +507,7 @@ export async function planCms(db: CmsDb, env: CmsEnv, pkg: TranslationPackage): 
         ),
       );
     let content = build();
-    const issues = contentIssuePaths(src.kind, src.templateKey, content) ?? [];
+    const issues = contentIssuePaths(src.kind, src.templateKey, content, env.siteKey) ?? [];
     let refused = false;
     for (const { unit, field } of contentUnits()) {
       const at = issuePathOf(field.slice("content.".length), content);

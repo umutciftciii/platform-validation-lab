@@ -29,7 +29,7 @@ function notFound(request: NextRequest, locale: RouteLocale): NextResponse {
 export const config = {
   // Every address except the framework, the API routes and static media; the proxy decides which
   // ones need an API call (most need none). Technical prefixes: TECHNICAL_PREFIXES (tested).
-  matcher: ["/", "/((?!_next/|__dp/|api/|media/).+)", "/:path+/"],
+  matcher: ["/", "/((?!_next/|__dp/|api/|media/|preview/).+)", "/:path+/"],
 };
 
 async function deps(): Promise<ProxyDeps> {
