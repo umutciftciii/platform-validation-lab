@@ -57,4 +57,18 @@ describe("legalTextsSnapshotFrom", () => {
     assert.equal(sitePrivacy(snap.blockers, production).publish, false);
     assert.equal(sitePrivacy(snap.blockers, { DP_DEPLOY_ENV: "local" }).publish, true);
   });
+
+  it("DP-306: a missing value of the current policy keeps production unpublished", () => {
+    const snap = legalTextsSnapshotFrom({
+      sets: [EN],
+      pendingReview: [],
+      missingValues: [{ locale: "en", placeholder: "kvkkContact" }],
+    });
+    assert.ok(snap);
+    assert.ok(snap.blockers.includes("DP-306: missing value {kvkkContact} in PRIVACY_POLICY en"));
+    assert.equal(sitePrivacy(snap.blockers, production).publish, false);
+    // An older API sends no missingValues: read as none.
+    const old = legalTextsSnapshotFrom({ sets: [EN], pendingReview: [] });
+    assert.ok(old && !old.blockers.some((b) => b.startsWith("DP-306:")));
+  });
 });

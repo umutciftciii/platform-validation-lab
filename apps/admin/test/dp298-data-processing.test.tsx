@@ -211,8 +211,12 @@ describe("DP-298: legal text helpers", () => {
   });
 
   it("explains the API's rules, with the line of a markup error", () => {
-    expect(view.parseLegalTextRule("duplicate_id:12")).toEqual({ rule: "duplicate_id", line: 12 });
-    expect(view.parseLegalTextRule("stale")).toEqual({ rule: "stale", line: null });
+    expect(view.parseLegalTextRule("duplicate_id:12")).toEqual({
+      rule: "duplicate_id",
+      line: 12,
+      name: null,
+    });
+    expect(view.parseLegalTextRule("stale")).toEqual({ rule: "stale", line: null, name: null });
     expect(view.legalTextRuleMessage("duplicate_id:12", EN)).toBe(
       "Line 12: this section id is used twice. Every section id must be unique.",
     );

@@ -100,6 +100,8 @@ export const legal = {
       textHint: "En fazla {max} karakter. Satır sonları korunur.",
       chars: "{count} / {max} karakter",
       reviewNote: "İnceleyenler için not",
+      placeholders: "Bu belgede kullanılabilecek yer tutucular:",
+      noPlaceholders: "Bu belge yer tutucu kullanmaz.",
       reviewNoteHint: "Hukuk incelemecilerinin neye bakması gerektiği. Hiçbir zaman yayınlanmaz.",
       translates: "Bu metin, güncel İngilizce sürümün ({version}) çevirisidir",
       save: "Taslağı kaydet",
@@ -158,6 +160,19 @@ export const legal = {
       empty: "Politikada en az bir bölüm ({heading} satırı) olmalıdır.",
       published_source_of_same_document:
         "Bir çeviri, aynı belgenin başka bir dildeki yayınlanmış sürümünü göstermelidir.",
+      unknown_placeholder:
+        "{name} bu belgede kullanılabilecek bir yer tutucu değil. Kaldırın veya metnin üstünde listelenenlerden birini kullanın.",
+      missing_value:
+        "{name} için henüz değer yok; bu metin yayımlanamaz. Önce değerin sağlanması gerekir.",
+    },
+    preview: {
+      title: "Önizleme (gösterileceği hâliyle)",
+      hint: "Güncel şirket ve hukuki bilgilerle, web sitesiyle aynı kodla doldurulur.",
+      missingTitle: "Eksik değerler",
+      missingHint:
+        "“[pending: …]” olarak gösterilir. Bir değer eksik olduğu sürece formlar ve gizlilik sayfası production ortamında yayınlanmaz.",
+      none: "Eksik değer yok.",
+      blocked: "Şu anda yayın reddedilir: {reason}",
     },
     api: {
       unreachable: "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip tekrar deneyin.",
