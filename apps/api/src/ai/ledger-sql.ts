@@ -24,6 +24,9 @@ export type ReserveOutcome =
   | "concurrency_limit"
   | "budget_missing"
   | "budget_exceeded"
+  // DP-307: a personal-data reservation without a valid terms record of the task's provider.
+  | "provider_terms_missing"
+  | "provider_terms_revoked"
   | "invalid";
 
 export interface ReserveArgs {
@@ -36,6 +39,9 @@ export interface ReserveArgs {
   instanceId: string;
   capDailyMicros: bigint | null;
   capMonthlyMicros: bigint | null;
+  /** DP-307: the operation sends personal data under this provider-terms record (both or none). */
+  personalData: boolean;
+  dataTermsId: string | null;
 }
 
 export interface ReserveResult {
@@ -51,7 +57,8 @@ export async function sqlReserve(db: Db, a: ReserveArgs): Promise<ReserveResult>
     SELECT operation_id, outcome, reserved_micros FROM ai_reserve(
       ${a.task}::"AiTaskType", ${a.siteId}::uuid, ${a.idempotencyKey}, ${a.inputDigest},
       ${a.estInputTokens}::integer, ${a.estOutputTokens}::integer, ${a.instanceId},
-      ${a.capDailyMicros}::bigint, ${a.capMonthlyMicros}::bigint)`;
+      ${a.capDailyMicros}::bigint, ${a.capMonthlyMicros}::bigint, ${a.personalData}::boolean,
+      ${a.dataTermsId}::uuid)`;
   const r = rows[0];
   if (!r) return { operationId: null, outcome: "invalid", reservedMicros: null };
   return { operationId: r.operation_id, outcome: r.outcome, reservedMicros: r.reserved_micros };
@@ -288,6 +295,8 @@ export interface ClaimedJob {
   siteId: string | null;
   /** The encrypted job payload, handed out once (wiped in the same transaction). */
   payload: string;
+  /** DP-307: the provider-terms record of a personal-data operation (null: none). */
+  dataTermsId: string | null;
 }
 
 /** Claims up to `limit` queued jobs for this instance (atomic; no staff context). */
@@ -304,8 +313,9 @@ export async function sqlClaim(
       op_task: AiTask;
       op_site: string | null;
       op_payload: string;
+      op_terms: string | null;
     }[]
-  >`SELECT op_id, op_actor, op_task, op_site, op_payload
+  >`SELECT op_id, op_actor, op_task, op_site, op_payload, op_terms
       FROM ai_claim(${instanceId}, ${leaseSec}::integer, ${limit}::integer)`;
   return rows.map((r) => ({
     operationId: r.op_id,
@@ -313,6 +323,7 @@ export async function sqlClaim(
     task: r.op_task,
     siteId: r.op_site,
     payload: r.op_payload,
+    dataTermsId: r.op_terms ?? null,
   }));
 }
 
@@ -323,6 +334,8 @@ export type DispatchOutcome =
   | "not_in_flight"
   | "lease_expired"
   | "already_dispatched"
+  // DP-307: the operation's provider-terms record was revoked (or renewed): no request, cost 0.
+  | "provider_terms_revoked"
   | "unknown";
 
 /**
@@ -335,7 +348,35 @@ export async function sqlDispatch(db: Db, operationId: string): Promise<Dispatch
   return rows[0]?.r ?? "unknown";
 }
 
-export type StopSignal = "ai_disabled" | "cancelled" | "not_in_flight" | "lease_expired";
+export type StopSignal =
+  "ai_disabled" | "cancelled" | "provider_terms_revoked" | "not_in_flight" | "lease_expired";
+
+/**
+ * DP-307: in the settlement transaction (whileEnabled), holds the operation and its provider-terms
+ * gate until COMMIT: `provider_terms_revoked` once the record was revoked or renewed.
+ */
+export async function sqlTermsHold(
+  db: Db,
+  operationId: string,
+): Promise<"ok" | "provider_terms_revoked" | "unknown"> {
+  const rows = await db.$queryRaw<{ r: "ok" | "provider_terms_revoked" | "unknown" }[]>`
+    SELECT ai_terms_hold(${operationId}::uuid) AS "r"`;
+  return rows[0]?.r ?? "unknown";
+}
+
+/**
+ * DP-307: the owner's exclusive provider-terms gate, taken before revoking (or renewing, which
+ * revokes) a record: waits for the dispatches that hold it; later ones see the revocation.
+ */
+export async function sqlProviderTermsLock(
+  db: Db,
+  provider: AiProviderValue,
+  lockTimeoutMs: number,
+): Promise<void> {
+  // The wait is bounded like the AI switch's holders (SQLSTATE 55P03 → transient "locked").
+  await db.$executeRaw`SELECT set_config('lock_timeout', ${String(lockTimeoutMs)}, true)`;
+  await db.$queryRaw`SELECT ai_provider_terms_lock(${provider}::"AiProvider") AS "locked"`;
+}
 
 /** Which of these running calls must stop, and why (no staff context). */
 export async function sqlStopSignals(

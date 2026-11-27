@@ -7,11 +7,12 @@
  * aborted, a late answer discarded and never stored), lease end, shutdown.
  */
 import { randomBytes } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { aiCredentialAad, encryptSecret, parseKeyring } from "../../../src/iam/auth/secret-box.js";
 import { PlatformModuleDisabledError } from "../../../src/iam/platform-modules.js";
 import {
   AiRunnerService,
+  DISPATCH_START_DEADLINE_MS,
   callTimeoutSeconds,
   workerConcurrency,
   workerPollMs,
@@ -51,6 +52,8 @@ interface Op {
   stop: boolean;
   instance: string | null;
   dispatched: number | null;
+  /** DP-307: the provider-terms record of a personal-data operation. */
+  terms?: string | null;
 }
 type Settled = { id: string; status: string; errorCode: string | null; outputTokens: number };
 
@@ -61,6 +64,7 @@ function database() {
   const settled: Settled[] = [];
   const unknown: { id: string; code: string }[] = [];
   const audits: string[] = [];
+  const auditRows: { action: string; metadata: Record<string, unknown> }[] = [];
   const st = {
     enabled: true,
     maxConcurrency: 20,
@@ -70,7 +74,14 @@ function database() {
     held: 0,
     unheldCalls: 0,
     version: 1,
+    /** DP-307: revoked (or renewed) provider-terms records. */
+    revokedTerms: new Set<string>(),
+    /** DP-307: lock waits inside ai_dispatch, as a clock skew (ms). */
+    dispatchWaitMs: 0,
+    /** DP-307: a revocation that commits right after the answer, before the settlement. */
+    revokeBeforeSettle: null as string | null,
   };
+  const revoked = (o: Op) => !!o.terms && st.revokedTerms.has(o.terms);
 
   const settle = (id: string, status: string, errorCode: string | null, outputTokens: number) => {
     const o = ops.get(id)!;
@@ -88,9 +99,11 @@ function database() {
         ? "ai_disabled"
         : o.stop
           ? "cancelled"
-          : o.status !== "IN_FLIGHT"
-            ? "not_in_flight"
-            : null;
+          : revoked(o)
+            ? "provider_terms_revoked"
+            : o.status !== "IN_FLIGHT"
+              ? "not_in_flight"
+              : null;
       return reason ? [{ op_id: id, reason }] : [];
     });
   const sql = (instance?: string) => ({
@@ -112,6 +125,7 @@ function database() {
             op_task: "DIAGNOSTIC_PING",
             op_site: null,
             op_payload: o.payload,
+            op_terms: o.terms ?? null,
           });
           o.payload = null; // handed out once
           o.status = "IN_FLIGHT";
@@ -139,11 +153,19 @@ function database() {
               ? "already_dispatched"
               : o.stop
                 ? "cancelled"
-                : "dispatch";
+                : revoked(o)
+                  ? "provider_terms_revoked"
+                  : "dispatch";
         if (r === "dispatch") o.dispatched = st.version;
+        if (st.dispatchWaitMs) skew.ms += st.dispatchWaitMs;
         return [{ r }];
       }
       if (q.includes("ai_credential_ciphertext")) return [{ c: stored }];
+      if (q.includes("ai_terms_hold")) {
+        const o = ops.get(values[0] as string)!;
+        if (st.revokeBeforeSettle) st.revokedTerms.add(st.revokeBeforeSettle);
+        return [{ r: revoked(o) ? "provider_terms_revoked" : "ok" }];
+      }
       if (q.includes("ai_settle")) {
         return [
           {
@@ -158,14 +180,16 @@ function database() {
       }
       if (q.includes("ai_store_result")) {
         const o = ops.get(values[0] as string)!;
-        if (!st.enabled || o.status !== "SUCCEEDED" || o.stop) return [{ r: "refused" }];
+        if (!st.enabled || o.status !== "SUCCEEDED" || o.stop || revoked(o)) {
+          return [{ r: "refused" }];
+        }
         results.set(o.id, values[1] as string);
         return [{ r: "stored" }];
       }
       throw new Error(`unexpected SQL ${q}`);
     },
   });
-  return { ops, results, settled, unknown, audits, st, settle, sql };
+  return { ops, results, settled, unknown, audits, auditRows, st, settle, sql };
 }
 
 function instance(
@@ -182,8 +206,10 @@ function instance(
     ...tx,
     $transaction: async (fn: (t: unknown) => Promise<unknown>) => fn(tx),
     auditEvent: {
-      createMany: async (a: { data: { action: string }[] }) =>
-        void db.audits.push(a.data[0]!.action),
+      createMany: async (a: { data: { action: string; metadata: Record<string, unknown> }[] }) => {
+        db.audits.push(a.data[0]!.action);
+        db.auditRows.push({ action: a.data[0]!.action, metadata: a.data[0]!.metadata });
+      },
     },
   };
   const modules = {
@@ -205,7 +231,10 @@ function instance(
     instanceId: name,
     callPlan: async (id: string) => {
       const o = db.ops.get(id)!;
-      return o.status === "IN_FLIGHT" && db.st.enabled && !o.stop
+      return o.status === "IN_FLIGHT" &&
+        db.st.enabled &&
+        !o.stop &&
+        !(o.terms && db.st.revokedTerms.has(o.terms))
         ? { provider: "OPENAI", providerModelId: "gpt-x", credentialId: CRED, projectRef: null }
         : null;
     },
@@ -256,8 +285,16 @@ function instance(
   };
 }
 
+/** DP-307: a clock skew the stub adds while ai_dispatch "waits" for locks. */
+const skew = { ms: 0 };
+
 let seq = 0;
-function enqueue(db: ReturnType<typeof database>, input = "ping", actor = "actor-1"): string {
+function enqueue(
+  db: ReturnType<typeof database>,
+  input = "ping",
+  actor = "actor-1",
+  terms: string | null = null,
+): string {
   const id = `op-${++seq}`;
   const payload = sealInput(keyring, id, actor, {
     input,
@@ -273,6 +310,7 @@ function enqueue(db: ReturnType<typeof database>, input = "ping", actor = "actor
     stop: false,
     instance: null,
     dispatched: null,
+    terms,
   });
   return id;
 }
@@ -596,6 +634,124 @@ describe("DP-297: the worker on the database queue", () => {
     await until(() => a.calls() === workerConcurrency());
     expect(a.calls()).toBe(workerConcurrency());
     expect([...db.ops.values()].filter((o) => o.status === "RESERVED")).toHaveLength(3);
+    await a.runner.onModuleDestroy();
+  });
+
+  // DP-307: the provider-terms record of a personal-data operation, checked again at dispatch.
+  const TERMS = "0190c0de-0000-7000-8000-000000000307";
+
+  it("DP-307: terms revoked between the claim and the dispatch: no request, FAILED cost 0, audited with the record", async () => {
+    const db = database();
+    const a = instance(db, "api-a", async () => OK);
+    const id = enqueue(db, "personal", "actor-1", TERMS);
+    // The owner's revocation commits after the claim; this instance has not polled since.
+    db.st.afterClaim = () => void db.st.revokedTerms.add(TERMS);
+    await a.runner.tick();
+    await until(() => db.settled.length === 1);
+    expect(a.calls()).toBe(0);
+    expect(db.ops.get(id)!.dispatched).toBeNull();
+    expect(db.settled).toEqual([
+      { id, status: "FAILED", errorCode: "provider_terms_revoked", outputTokens: 0 },
+    ]);
+    expect(db.unknown).toEqual([]);
+    expect(db.results.size).toBe(0);
+    await until(() => db.auditRows.length === 1);
+    expect(db.auditRows[0]).toMatchObject({
+      action: "ai.operation.refused",
+      metadata: {
+        operationId: id,
+        code: "provider_terms_revoked",
+        personalData: true,
+        dataTermsId: TERMS,
+      },
+    });
+    await a.runner.onModuleDestroy();
+  });
+
+  it("DP-307: the dispatch itself refuses revoked terms (ai_dispatch): no request, cost 0", async () => {
+    const db = database();
+    const a = instance(db, "api-a", async () => OK);
+    const id = enqueue(db, "personal", "actor-1", TERMS);
+    // Revoked after the call plan was read: only ai_dispatch can see it.
+    let planned = false;
+    const ledger = (a.runner as unknown as { ledger: { callPlan: (id: string) => unknown } })
+      .ledger;
+    const plan = ledger.callPlan.bind(ledger);
+    ledger.callPlan = async (op: string) => {
+      const p = await plan(op);
+      planned = true;
+      db.st.revokedTerms.add(TERMS);
+      return p;
+    };
+    await a.runner.whenIdle();
+    expect(planned).toBe(true);
+    expect(a.calls()).toBe(0);
+    expect(db.settled).toEqual([
+      { id, status: "FAILED", errorCode: "provider_terms_revoked", outputTokens: 0 },
+    ]);
+    await a.runner.onModuleDestroy();
+  });
+
+  it("DP-307: terms revoked while the call runs: stopped at the next poll, the answer is not kept", async () => {
+    const db = database();
+    const a = instance(db, "api-a", (_i, signal) => wait(10_000, signal).then(() => OK));
+    const id = enqueue(db, "personal", "actor-1", TERMS);
+    await a.runner.tick();
+    await until(() => a.calls() === 1);
+    db.st.revokedTerms.add(TERMS);
+    await a.runner.tick(); // the poll sees provider_terms_revoked and aborts
+    await until(() => db.unknown.length === 1);
+    expect(db.unknown).toEqual([{ id, code: "provider_terms_revoked" }]);
+    expect(db.results.size).toBe(0);
+    expect(a.calls()).toBe(1);
+    await a.runner.onModuleDestroy();
+  });
+
+  it("DP-307: terms revoked between the answer and its settlement: DISCARDED under the held gate, never stored", async () => {
+    const db = database();
+    const a = instance(db, "api-a", async () => OK);
+    const id = enqueue(db, "personal", "actor-1", TERMS);
+    db.st.revokeBeforeSettle = TERMS;
+    await a.runner.whenIdle();
+    expect(a.calls()).toBe(1);
+    expect(db.settled).toEqual([
+      { id, status: "DISCARDED", errorCode: "provider_terms_revoked", outputTokens: 2 },
+    ]);
+    expect(db.results.size).toBe(0);
+    expect(db.audits).toContain("ai.operation.discarded");
+    await a.runner.onModuleDestroy();
+  });
+
+  it("DP-307: an operation without personal data never takes the terms gate at settlement", async () => {
+    const db = database();
+    const a = instance(db, "api-a", async () => OK);
+    const id = enqueue(db);
+    db.st.revokeBeforeSettle = TERMS; // would only be seen by ai_terms_hold
+    await a.runner.whenIdle();
+    expect(db.settled).toEqual([{ id, status: "SUCCEEDED", errorCode: null, outputTokens: 2 }]);
+    expect(draft(db, id)).toBe("pong");
+    await a.runner.onModuleDestroy();
+  });
+
+  it("DP-307: no request is started once the dispatch transaction is past its start deadline", async () => {
+    const db = database();
+    const a = instance(db, "api-a", async () => OK);
+    const id = enqueue(db);
+    const real = Date.now.bind(Date);
+    const now = vi.spyOn(Date, "now").mockImplementation(() => real() + skew.ms);
+    try {
+      // The lock waits inside ai_dispatch used the transaction's time.
+      db.st.dispatchWaitMs = DISPATCH_START_DEADLINE_MS + 1;
+      await a.runner.tick();
+      await until(() => db.settled.length === 1);
+    } finally {
+      now.mockRestore();
+      skew.ms = 0;
+    }
+    expect(a.calls()).toBe(0);
+    expect(db.settled).toEqual([
+      { id, status: "FAILED", errorCode: "dispatch_timeout", outputTokens: 0 },
+    ]);
     await a.runner.onModuleDestroy();
   });
 

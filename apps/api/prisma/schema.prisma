@@ -2357,12 +2357,17 @@ model AiOperation {
   /// DP-297: the provider request was permitted (ai_dispatch) under this AI switch version.
   dispatchedAt          DateTime?       @db.Timestamptz(3)
   dispatchSwitchVersion Int?
+  /// DP-307: the operation sends personal data under exactly this provider-terms record; the
+  /// record is checked again (ai_dispatch) when the request is sent.
+  personalData          Boolean         @default(false)
+  dataTermsId           String?         @db.Uuid
   createdAt           DateTime          @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime          @default(now()) @db.Timestamptz(3)
 
   site       Site?           @relation(fields: [siteId], references: [id], onDelete: Restrict)
   model      AiModel         @relation(fields: [modelId], references: [id], onDelete: Restrict)
   price      AiModelPrice    @relation(fields: [priceId], references: [id], onDelete: Restrict)
+  dataTerms  AiProviderDataTerms? @relation(fields: [dataTermsId], references: [id], onDelete: Restrict)
   entries    AiLedgerEntry[]
   transients AiTransient[]
 
@@ -2370,6 +2375,7 @@ model AiOperation {
   @@index([status, leaseUntil])
   @@index([siteId, createdAt])
   @@index([createdAt])
+  @@index([dataTermsId], map: "AiOperation_dataTermsId_idx", where: raw("(\"dataTermsId\" IS NOT NULL)"))
 }
 
 /// DP-297 (ADR-030 D10): the encrypted input and draft answer of an operation, at most 15 minutes.
@@ -2574,6 +2580,7 @@ model AiProviderDataTerms {
 
   recordedBy User  @relation("AiProviderTermsRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
   revokedBy  User? @relation("AiProviderTermsRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  operations AiOperation[]
 
   @@unique([provider], map: "AiProviderDataTerms_active_provider_key", where: raw("\"revokedAt\" IS NULL"))
   @@index([provider, recordedAt])
