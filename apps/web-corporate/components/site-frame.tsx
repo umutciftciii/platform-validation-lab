@@ -4,11 +4,16 @@
  * `corporate.site-footer` (nothing from code). A link without a live target is shown as text with
  * the menu's pending note; the Privacy Policy link only where the policy is published (DP-095).
  * A preview (DP-321) carries a bar that says so.
+ * COM-6: the cookie choice (components/cookie-consent.tsx) where GA4 is configured for the
+ * environment; never in a preview (a draft is not measured). "Cookie settings" in the footer
+ * reopens it.
  */
 import type { ReactNode } from "react";
 
+import { CookieConsent, CookieSettingsButton } from "@/components/cookie-consent";
 import { SiteHeader, type HeaderLabels } from "@/components/site-header";
 import type { NavLink, SiteFooter, SiteNav } from "@/lib/cms";
+import { measurementIdOf } from "@/lib/consent";
 import { dictionary } from "@/lib/i18n";
 import { localePath, type LanguageOption, type RouteLocale } from "@/lib/locale-routing";
 
@@ -36,10 +41,13 @@ function Footer({
   footer,
   privacyHref,
   locale,
+  cookieSettings,
 }: {
   footer: SiteFooter;
   privacyHref: string | null;
   locale: RouteLocale;
+  /** COM-6: the "Cookie settings" button where the cookie choice is shown. */
+  cookieSettings: boolean;
 }) {
   const t = dictionary(locale);
   const note = footer.pendingNote;
@@ -118,7 +126,7 @@ function Footer({
         <div aria-hidden className="footer-rule" />
         <div className="footer-bottom">
           <span>{footer.copyright}</span>
-          {legal.length ? (
+          {legal.length || cookieSettings ? (
             <nav aria-label={t.footer.legal}>
               <ul className="footer-legal">
                 {legal.map((l) => (
@@ -126,6 +134,11 @@ function Footer({
                     <FooterLink link={l} note={note} newTab={t.newTab} />
                   </li>
                 ))}
+                {cookieSettings ? (
+                  <li>
+                    <CookieSettingsButton label={t.cookies.settings} />
+                  </li>
+                ) : null}
               </ul>
             </nav>
           ) : null}
@@ -169,6 +182,8 @@ export function SiteFrame({
   children: ReactNode;
 }) {
   const t = dictionary(locale);
+  // COM-6: per environment, never in code; without an id there is no optional cookie to ask for.
+  const measurementId = preview ? null : measurementIdOf();
   return (
     <>
       <a className="skip-link" href="#content">
@@ -191,7 +206,17 @@ export function SiteFrame({
       <main id="content" tabIndex={-1} className="outline-none">
         {children}
       </main>
-      {footer ? <Footer footer={footer} privacyHref={privacyHref} locale={locale} /> : null}
+      {footer ? (
+        <Footer
+          footer={footer}
+          privacyHref={privacyHref}
+          locale={locale}
+          cookieSettings={measurementId !== null}
+        />
+      ) : null}
+      {measurementId ? (
+        <CookieConsent measurementId={measurementId} labels={t.cookies} privacyHref={privacyHref} />
+      ) : null}
     </>
   );
 }

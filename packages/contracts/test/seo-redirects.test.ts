@@ -52,7 +52,8 @@ describe("DP-211 redirect sources", () => {
       "/news",
       "/privacy",
       "/api",
-      "/de",
+      // COM-6: "/de" is a language home of the old dreampetroleum.com now; "/fr" never was.
+      "/fr",
       "/sitemap",
       "/sitemap.xml",
       "/Robots.txt",
@@ -110,6 +111,17 @@ describe("DP-212 old-site sources (legacy URL map)", () => {
     expect(src("/en/products?page=2&category=White-Oil")).toBe(
       "/en/products?category=White-Oil&page=2",
     );
+  });
+
+  it("accepts the language homes of the old dreampetroleum.com (COM-6), no other two letters", () => {
+    for (const l of ["ru", "zh", "es", "de"]) {
+      expect(src(`/${l}`)).toBe(`/${l}`);
+      expect(src(`/${l.toUpperCase()}/`)).toBe(`/${l}`);
+      expect(redirectSourceIsLegacy(`/${l}`)).toBe(true);
+    }
+    expect(src("/ru/blogs/16/pravilnyj-vybor")).toBe("/ru/blogs/16/pravilnyj-vybor");
+    expect(src("/nl")).toBe("!reserved");
+    expect(src("/fr")).toBe("!reserved");
   });
 
   it("tells old-site sources from the site's own forms", () => {
