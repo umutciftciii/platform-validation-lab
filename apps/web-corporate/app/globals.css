@@ -1845,6 +1845,15 @@
   }
 }
 
+/* COM-5: the live site's lists inside CMS texts are "• " lines; keep their line breaks. */
+
+@layer components {
+  .rich > p,
+  .card p {
+    white-space: pre-line;
+  }
+}
+
 /* Motion only where it helps, and none when the visitor asks for less. */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -8,6 +8,7 @@ import {
   CmsTemplateContentSchema,
   cmsArticleContentSchema,
   cmsDesignTemplate,
+  cmsArticleDate,
   cmsIsArticle,
   cmsSlugOfPath,
   cmsFieldsSchema,
@@ -470,8 +471,24 @@ export function publicPage(
     content: asObject(row.content),
     revisionNumber: revision?.revisionNumber ?? null,
     publishedAt: revision?.publishedAt.toISOString() ?? null,
-    firstPublishedAt: revision?.firstPublishedAt.toISOString() ?? null,
+    firstPublishedAt: articleDate(row, revision),
   };
+}
+
+/**
+ * The date of a page as the sites show it: revision 1's publication; COM-5 (DP-327) an article's
+ * original date where it has one (in a preview too).
+ */
+function articleDate(
+  row: { kind: CmsPage["kind"]; templateKey: string; content: unknown },
+  revision: { firstPublishedAt: Date } | null,
+): string | null {
+  const first = revision?.firstPublishedAt.toISOString() ?? null;
+  if (!cmsIsArticle(row)) return first;
+  const original = asObject(row.content)["originalDate"];
+  if (typeof original !== "string") return first;
+  const date = cmsArticleDate(original, first ?? "");
+  return date === "" ? null : date;
 }
 
 // --- preview tokens -------------------------------------------------------------------------------

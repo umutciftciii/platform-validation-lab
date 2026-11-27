@@ -134,7 +134,8 @@ export function Fields({
           // DP-020: a field required together with a sibling (an image's alt text) is never
           // labelled optional; it is required while the sibling has a value.
           const requiredNow = f.requiredWith ? Boolean(values[f.requiredWith]) : false;
-          const optional = !f.required && !f.format && !f.requiredWith;
+          // COM-5 (DP-327): an optional date is labelled optional like a plain text.
+          const optional = !f.required && (!f.format || f.format === "date") && !f.requiredWith;
           const hint =
             fieldHint ??
             (f.format === "href"
@@ -164,6 +165,7 @@ export function Fields({
               ) : (
                 <input
                   id={id}
+                  type={f.format === "date" ? "date" : undefined}
                   maxLength={f.max}
                   value={v}
                   readOnly={readOnly}
