@@ -21,6 +21,12 @@ export const PRIVACY_CONTROLLER = {
   /** Whether a DPO is required (owner/legal) and, if so, how to reach them. */
   dpo: null as { required: false } | { required: true; contact: string } | null,
   supervisoryAuthority: "Autoriteit Persoonsgegevens",
+  /**
+   * DP-306: the contact for requests under Turkish Law No. 6698 (KVKK), if KVKK applies (DP-308,
+   * legal review). Only a policy that uses `{kvkkContact}` needs it; while it is null such a
+   * policy is not published in production (`privacyBlockersFor`, missing values).
+   */
+  kvkkContact: null as string | null,
 } as const;
 
 /**
@@ -86,6 +92,11 @@ export function privacyBlockersFor(
   pendingReview: readonly { key: string; locale: string; version: string }[] | null,
   controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
   values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
+  /**
+   * DP-306: placeholders of a current published policy whose value is missing and that are no
+   * blocker of their own (e.g. `{kvkkContact}`; see legal-placeholders.ts `policyMissingValues`).
+   */
+  missingValues: readonly { locale: string; placeholder: string }[] = [],
 ): string[] {
   const out = privacyBlockers(controller, values, true, true).filter((b) => !b.startsWith("D-T4:"));
   if (pendingReview === null) {
@@ -93,6 +104,9 @@ export function privacyBlockersFor(
     return out;
   }
   for (const p of pendingReview) out.push(`DP-298: legal review of ${p.key} ${p.version}`);
+  for (const m of missingValues) {
+    out.push(`DP-306: missing value {${m.placeholder}} in PRIVACY_POLICY ${m.locale}`);
+  }
   return out;
 }
 
@@ -230,11 +244,14 @@ export interface PrivacyFillLabels {
       | "kvkNumber"
       | "privacyEmail"
       | "dpo"
-      | "supervisoryAuthority",
+      | "supervisoryAuthority"
+      | "kvkkContact",
       string
     >
   >;
   openPoints: Readonly<Record<PrivacyOpenPoint, string>>;
+  /** DP-306: `{policyVersion}` of a draft (the version is named when it is published). */
+  policyVersionDraft: string;
 }
 
 export const PRIVACY_FILL_LABELS_EN: PrivacyFillLabels = {
@@ -247,7 +264,9 @@ export const PRIVACY_FILL_LABELS_EN: PrivacyFillLabels = {
     privacyEmail: "privacy contact e-mail",
     dpo: "DPO decision",
     supervisoryAuthority: "supervisory authority",
+    kvkkContact: "KVKK contact (Turkish data protection law)",
   },
+  policyVersionDraft: "[version assigned on publication]",
   openPoints: Object.fromEntries(
     Object.entries(PRIVACY_POLICY_OPEN_POINTS).map(([key, point]) => [key, point.label]),
   ) as Record<PrivacyOpenPoint, string>,
@@ -262,15 +281,24 @@ function dpoText(
 }
 
 /**
- * Fills the placeholders; a missing value becomes a visible "[pending: …]" marker. ML-10: the
- * marker and the names of the missing values follow `labels` (English by default, unchanged).
+ * DP-306 (ADR-031 D1): the value of each placeholder this module can fill, and the result of
+ * filling a text. `missing` names the placeholders whose value is not decided yet (each renders as
+ * the visible "[pending: …]" marker). `{policyVersion}` is the version being shown — never missing:
+ * a draft shows `labels.policyVersionDraft`. Placeholders this module does not know stay as they
+ * are; `legal-placeholders.ts` refuses them before a text is saved or published.
  */
-export function fillPrivacyText(
+export interface PlaceholderFill {
+  text: string;
+  missing: string[];
+}
+
+export function resolvePlaceholders(
   text: string,
   controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
   values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
   labels: PrivacyFillLabels = PRIVACY_FILL_LABELS_EN,
-): string {
+  policyVersion: string | null = null,
+): PlaceholderFill {
   const known: Record<string, [string | null, string]> = {
     legalName: [controller.legalName, labels.fields.legalName],
     registeredAddress: [controller.registeredAddress, labels.fields.registeredAddress],
@@ -278,13 +306,34 @@ export function fillPrivacyText(
     privacyEmail: [controller.privacyEmail, labels.fields.privacyEmail],
     dpo: [dpoText(controller.dpo, labels), labels.fields.dpo],
     supervisoryAuthority: [controller.supervisoryAuthority, labels.fields.supervisoryAuthority],
+    kvkkContact: [controller.kvkkContact ?? null, labels.fields.kvkkContact],
   };
   for (const key of Object.keys(PRIVACY_POLICY_OPEN_POINTS)) {
     known[key] = [values[key as PrivacyOpenPoint], labels.openPoints[key as PrivacyOpenPoint]];
   }
-  return text.replace(/\{([a-zA-Z]+)\}/g, (match, key: string) => {
-    const entry = known[key];
+  const missing = new Set<string>();
+  const out = text.replace(/\{([a-zA-Z]+)\}/g, (match, key: string) => {
+    if (key === "policyVersion") return policyVersion ?? labels.policyVersionDraft;
+    const entry = Object.hasOwn(known, key) ? known[key] : undefined;
     if (!entry) return match;
-    return entry[0] ?? labels.pending.replace("{label}", entry[1]);
+    if (entry[0] !== null) return entry[0];
+    missing.add(key);
+    return labels.pending.replace("{label}", entry[1]);
   });
+  return { text: out, missing: [...missing] };
+}
+
+/**
+ * Fills the placeholders; a missing value becomes a visible "[pending: …]" marker. ML-10: the
+ * marker and the names of the missing values follow `labels` (English by default, unchanged).
+ * DP-306: `{kvkkContact}` and `{policyVersion}` (the version shown) are filled too.
+ */
+export function fillPrivacyText(
+  text: string,
+  controller: typeof PRIVACY_CONTROLLER = PRIVACY_CONTROLLER,
+  values: Readonly<Record<PrivacyOpenPoint, string | null>> = PRIVACY_POLICY_VALUES,
+  labels: PrivacyFillLabels = PRIVACY_FILL_LABELS_EN,
+  policyVersion: string | null = null,
+): string {
+  return resolvePlaceholders(text, controller, values, labels, policyVersion).text;
 }

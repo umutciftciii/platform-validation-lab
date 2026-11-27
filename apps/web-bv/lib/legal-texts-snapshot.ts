@@ -32,6 +32,11 @@ export function legalTextsSnapshotFrom(payload: unknown): LegalTextsSnapshot | n
   if (!parsed.success) return null;
   return {
     registry: legalTextRegistryFrom(parsed.data.sets),
-    blockers: privacyBlockersFor(parsed.data.pendingReview),
+    blockers: privacyBlockersFor(
+      parsed.data.pendingReview,
+      undefined,
+      undefined,
+      parsed.data.missingValues,
+    ),
   };
 }

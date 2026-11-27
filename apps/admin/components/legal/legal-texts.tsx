@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import {
+  ALLOWED_PLACEHOLDERS,
   LEGAL_DOCUMENTS,
   type LegalDocumentKey,
   type LegalTextsOverview,
@@ -45,6 +46,7 @@ import {
   shortHash,
   textLength,
   usesPolicyMarkup,
+  legalTextRuleMessage,
 } from "../../lib/legal-texts-view";
 import { Field, FormMessage, TEXTAREA } from "../catalog/parts";
 import { ConfirmDialog, Dialog, DialogBody, DialogFooter, DialogForm } from "../dialog";
@@ -229,6 +231,7 @@ function TextDialog({ id, title, onClose }: { id: string; title: string; onClose
     <Dialog title={title} size="lg" closeLabel={t("legal.texts.common.close")} onClose={onClose}>
       <DialogBody>
         <VersionText version={version} error={error} loading={loading} />
+        {version ? <VersionPreview key="preview" version={version} /> : null}
       </DialogBody>
       <DialogFooter>
         <button type="button" className={buttonStyles.secondary} onClick={onClose}>
@@ -272,6 +275,61 @@ function VersionText({
     >
       {version.text}
     </pre>
+  );
+}
+
+/**
+ * DP-306: the text as the API fills it (the same code as the website): the preview, the values
+ * still missing and why publication would be refused now.
+ */
+export function VersionPreview({ version }: { version: LegalTextVersionDetail }) {
+  const t = useT();
+  const p = version.preview;
+  const reason = p.publicationProblem ? legalTextRuleMessage(p.publicationProblem, t) : undefined;
+  return (
+    <section aria-labelledby={`preview-${version.id}`} className="mt-4 space-y-2">
+      <h3 id={`preview-${version.id}`} className="text-sm font-semibold text-ink">
+        {t("legal.texts.preview.title")}
+      </h3>
+      <p className="text-xs text-ink-3">{t("legal.texts.preview.hint")}</p>
+      <pre
+        lang={version.locale}
+        className="max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-surface p-3 font-sans text-sm leading-relaxed text-ink"
+      >
+        {p.text}
+      </pre>
+      <div className="text-sm">
+        <p className="font-medium text-ink">{t("legal.texts.preview.missingTitle")}</p>
+        {p.missing.length === 0 ? (
+          <p key="none" className="text-ink-3">
+            {t("legal.texts.preview.none")}
+          </p>
+        ) : (
+          <>
+            <ul key="list" className="mt-1 flex flex-wrap gap-1.5">
+              {p.missing.map((name) => (
+                <li key={name}>
+                  <code
+                    lang="en"
+                    className="rounded bg-amber-soft px-1.5 py-0.5 text-xs text-amber-ink"
+                  >
+                    {`{${name}}`}
+                  </code>
+                </li>
+              ))}
+            </ul>
+            <p key="hint" className="mt-1 text-xs text-ink-3">
+              {t("legal.texts.preview.missingHint")}
+            </p>
+          </>
+        )}
+      </div>
+      {reason ? (
+        <FormMessage key="blocked" kind="error">
+          {t("legal.texts.preview.blocked", { reason })}
+        </FormMessage>
+      ) : null}
+    </section>
   );
 }
 
@@ -553,7 +611,13 @@ function DraftEditorDialog({
   onDone: (message: string) => void;
 }) {
   const t = useT();
-  const ids = { text: useId(), note: useId(), translates: useId(), help: useId() };
+  const ids = {
+    text: useId(),
+    note: useId(),
+    translates: useId(),
+    help: useId(),
+    placeholders: useId(),
+  };
   const change = useDataChange();
   const [text, setText] = useState("");
   const [note, setNote] = useState("");
@@ -657,6 +721,18 @@ function DraftEditorDialog({
                 {t("legal.texts.markupHelp", { heading: MARKUP_HEADING, item: MARKUP_ITEM })}
               </p>
             ) : null}
+            <p key="placeholders" id={ids.placeholders} className="text-xs text-ink-2">
+              {ALLOWED_PLACEHOLDERS[docKey].length === 0 ? (
+                t("legal.texts.draft.noPlaceholders")
+              ) : (
+                <>
+                  <span>{t("legal.texts.draft.placeholders")} </span>
+                  <code lang="en" className="break-words text-ink-3">
+                    {ALLOWED_PLACEHOLDERS[docKey].map((n) => `{${n}}`).join(" ")}
+                  </code>
+                </>
+              )}
+            </p>
             <Field
               label={t("legal.texts.draft.text")}
               htmlFor={ids.text}
@@ -669,7 +745,9 @@ function DraftEditorDialog({
                 rows={usesPolicyMarkup(docKey) ? 18 : 8}
                 maxLength={max + 2_000}
                 spellCheck
-                aria-describedby={usesPolicyMarkup(docKey) ? ids.help : undefined}
+                aria-describedby={
+                  usesPolicyMarkup(docKey) ? `${ids.help} ${ids.placeholders}` : ids.placeholders
+                }
                 aria-invalid={length > max || undefined}
                 disabled={waiting}
                 className={cx(TEXTAREA, usesPolicyMarkup(docKey) && "font-mono text-sm")}
@@ -790,6 +868,7 @@ function PublishDialog({
                 {t("legal.texts.publish.hash", { hash: version.sha256 })}
               </p>
             ) : null}
+            {version ? <VersionPreview key="preview" version={version} /> : null}
             {change.error ? <FormMessage kind="error">{change.error}</FormMessage> : null}
           </DialogBody>
           <DialogFooter>
@@ -806,7 +885,7 @@ function PublishDialog({
               type="button"
               className={buttonStyles.primary}
               onClick={() => void confirm()}
-              disabled={change.busy || !version}
+              disabled={change.busy || !version || version.preview.publicationProblem !== null}
             >
               {change.busy ? <Spinner size={14} /> : null}
               <span>{t("legal.texts.publish.confirm")}</span>
