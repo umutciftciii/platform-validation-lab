@@ -18,13 +18,15 @@ export const seo = {
     noAccessText: "Your roles do not include reading content or products of Dream Petroleum BV.",
     forbidden: "You are not allowed to read the content or products of this site.",
     tryAgain: "Try again in a moment.",
+    /** COM-1: the accessible name of the site switcher. */
+    site: "Site",
   },
   /** Admin > SEO (app/(console)/seo/page.tsx, lib/seo-overview.ts). */
   overview: {
     metaTitle: "SEO",
     title: "SEO",
     description:
-      "Search results and link previews of dreampetroleumbv.com: the site defaults and the SEO of every page, article and product. Changes reach the site when the page or product is published.",
+      "Search results and link previews of the chosen site: the site defaults and the SEO of every page, article and product. Changes reach the site when the page or product is published.",
     loadError: "The SEO overview could not be loaded",
     indexingNote:
       "Search engines may index the site only in production with indexing switched on. DEV and staging always answer noindex, whatever is set here. Unpublished or hidden products are never indexed.",
@@ -89,7 +91,7 @@ export const seo = {
     metaTitle: "Redirects · SEO",
     title: "Redirects",
     description:
-      "Old addresses of dreampetroleumbv.com and where they lead. Changes take effect on the site at once.",
+      "Old addresses of the chosen site and where they lead. Changes take effect on the site at once.",
     loadError: "The redirects could not be loaded",
     rulesNote:
       "Live content always wins: a redirect never starts at a published page or product, and it is switched off when content is published at its old address. Redirects never chain, never leave the site and never appear in the sitemap. Slug-change redirects keep moved content findable and cannot be deleted here.",

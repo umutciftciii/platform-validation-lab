@@ -2203,7 +2203,10 @@ describe("17. slug changes and automatic 301 (DP-210)", () => {
       expect(r.target, `self at ${r.sourcePath}`).not.toBe(r.sourcePath);
     }
     for (const r of active) {
-      const res = await resolve(r.sourcePath, siteId === BV ? TEST_KEYS.webBv : undefined);
+      const res = await resolve(
+        r.sourcePath,
+        siteId === BV ? TEST_KEYS.webBv : TEST_KEYS.webCorporate,
+      );
       expect(res.body?.redirect, `live content at ${r.sourcePath}`).toBeDefined();
     }
   }
@@ -2591,7 +2594,7 @@ describe("17. slug changes and automatic 301 (DP-210)", () => {
     await expectConsistent();
   });
 
-  it("the Corporate site moves its pages as before (no redirects there)", async () => {
+  it("COM-1: the Corporate site keeps the old address of a moved page too, for its own key", async () => {
     const created = await comEditor.post(`/sites/${COM}/pages`, {
       title: "Com",
       slug: "dp210-com",
@@ -2602,14 +2605,19 @@ describe("17. slug changes and automatic 301 (DP-210)", () => {
     expect((await setSlug(id, "dp210-com-2", comEditor)).status).toBe(200);
     const res = await publish(id, comPublisher);
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(CmsPageResponseSchema.parse(res.body).page).toMatchObject({
-      keepsOldAddress: false,
-      redirectsHere: [],
+    expect(CmsPageResponseSchema.parse(res.body).page.keepsOldAddress).toBe(true);
+    const rows = await owner.siteRedirect.findMany({ where: { siteId: COM } });
+    expect(rows.map((r) => [r.sourcePath, r.target, r.origin, r.active])).toEqual([
+      ["/dp210-com", "/dp210-com-2", "SLUG_CHANGE", true],
+    ]);
+    expect((await resolve("/dp210-com", TEST_KEYS.webCorporate)).body).toEqual({
+      path: "/dp210-com",
+      redirect: { target: "/dp210-com-2", statusCode: 301 },
     });
-    expect(await owner.siteRedirect.count({ where: { siteId: COM } })).toBe(0);
-    expectError(await resolve("/dp210-com", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
-    // A BV redirect is never answered for the Corporate key.
+    // Each site answers only its own: the BV key never sees the Corporate redirect, nor the other way.
+    expectError(await resolve("/dp210-com"), 404, "NOT_FOUND");
     expectError(await resolve("/dp210-c", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    await expectConsistent(COM);
   });
 
   it("404 regression: unknown, draft and malformed addresses stay 404; restore is a draft", async () => {
@@ -2746,13 +2754,15 @@ describe("18. redirect management (DP-211)", () => {
     });
     expect(denied).not.toBeNull();
     expect(await owner.siteRedirect.count({ where: { sourcePath: "/dp211-denied" } })).toBe(0);
-    // Corporate applies no redirects: 404 for its own publisher; a malformed site id is 404/403.
-    expectError(
-      await comPublisher2.get(`/api/v1/admin/seo/sites/${COM}/redirects`),
-      404,
-      "NOT_FOUND",
-      { path: "site", rule: "no_redirects" },
-    );
+    // COM-1: the Corporate site manages its own redirects; its list never shows a BV row.
+    const com = await comPublisher2.get(`/api/v1/admin/seo/sites/${COM}/redirects`);
+    expect(com.status, JSON.stringify(com.body)).toBe(200);
+    const comList = SeoRedirectListResponseSchema.parse(com.body);
+    expect(comList.site.key).toBe("CORPORATE");
+    expect(comList.permissions.manage).toBe(true);
+    expect(comList.items.every((i) => !i.sourcePath.startsWith("/dp211"))).toBe(true);
+    // A BV publisher has no right on the Corporate site (refused and audited).
+    expectError(await manager.get(`/api/v1/admin/seo/sites/${COM}/redirects`), 403, "FORBIDDEN");
     expectError(
       await manager.get(`/api/v1/admin/seo/sites/not-a-uuid/redirects`),
       403,
@@ -4220,6 +4230,8 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     { site: "BV", locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
     { site: "BV", locale: "nl", enabled: true, public: false, isDefault: false, sortOrder: 10 },
     { site: "COM", locale: "en", enabled: true, public: true, isDefault: true, sortOrder: 0 },
+    // COM-1 (contract 3.2 b): Turkish from the catalogue sync, for editing, not public.
+    { site: "COM", locale: "tr", enabled: true, public: false, isDefault: false, sortOrder: 10 },
   ];
   const shape = (rows: Awaited<ReturnType<typeof rowsOf>>) =>
     rows
@@ -4337,7 +4349,8 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
   });
 
   it("lets dp_app read the languages and nothing else", async () => {
-    expect(await asApp.siteLocale.count()).toBe(3);
+    // BV en + nl, Corporate en + tr (COM-1).
+    expect(await asApp.siteLocale.count()).toBe(4);
     await rejectsDb(
       asApp.siteLocale.update({
         where: { siteId_locale: { siteId: BV, locale: "nl" } },
@@ -4456,12 +4469,12 @@ describe("21. site languages (ML-1, DP-073, ADR-028 D2)", () => {
     ]);
     const com = CmsContextResponseSchema.parse((await comEditor.get("/context")).body);
     expect(com.sites.map((s) => [s.key, s.locales.map((l) => l.locale)])).toEqual([
-      ["CORPORATE", ["en"]],
+      ["CORPORATE", ["en", "tr"]],
     ]);
     const all = CmsContextResponseSchema.parse((await root.get("/context")).body);
     expect(all.sites.map((s) => [s.key, s.locales.length])).toEqual([
       ["BV", 2],
-      ["CORPORATE", 1],
+      ["CORPORATE", 2],
     ]);
     expect(CmsContextResponseSchema.parse((await nobody.get("/context")).body).sites).toEqual([]);
     // The page response carries the same read-only list (no route changes a language).
@@ -6700,5 +6713,169 @@ describe("23. translation packages (ML-13a, DP-244, ADR-028 D13)", () => {
     const fp = await fingerprint();
     expect((await report(root, "import", pkg)).written).toEqual(NOTHING_WRITTEN);
     expect(await fingerprint()).toBe(fp);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// COM-1: the Corporate site on the shared CMS — its own fragments (navigation, footer, SEO
+// defaults) imported and published like BV's, served only for its own key, its sitemap and SEO
+// defaults, Turkish editable but hidden, and no catalogue addresses.
+// ---------------------------------------------------------------------------------------------
+
+describe("24. the Corporate site on the shared CMS (COM-1)", () => {
+  let comPublisher: Staff;
+  const ids: Record<string, string> = {};
+
+  async function seo(p: string, key: string = TEST_KEYS.webCorporate): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/seo${p}`, {
+        headers: { "x-dp-proxy-key": key, "x-dp-client-ip": "10.20.30.47" },
+      }),
+    );
+  }
+  async function publish(id: string): Promise<Res> {
+    const p = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    return comPublisher.post(`/pages/${id}/publish`, { version: p.version });
+  }
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com1-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  it("imports the corporate fragments into the Corporate site only", async () => {
+    for (const key of ["corporate.site-nav", "corporate.site-footer", "corporate.site-seo"]) {
+      // A corporate key is no template of the BV site.
+      expectError(
+        await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: true }),
+        400,
+        "VALIDATION_FAILED",
+        { path: "key", rule: "unknown_template" },
+      );
+      const res = await comEditor.post(`/sites/${COM}/import`, { key, dryRun: false });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      ids[key] = CmsImportResponseSchema.parse(res.body).pageId!;
+      const page = CmsPageResponseSchema.parse(
+        (await comEditor.get(`/pages/${ids[key]}`)).body,
+      ).page;
+      expect(page).toMatchObject({ kind: "FRAGMENT", templateKey: key, locale: "en", path: null });
+    }
+    // And a BV key is no template of the Corporate site.
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "bv.site-nav", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+  });
+
+  it("serves the published corporate menus for the corporate key only, in their public shape", async () => {
+    // Unpublished: no frame (nothing from code).
+    const before = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(before.fragments["corporate.site-nav"]).toBeNull();
+    for (const key of ["corporate.site-nav", "corporate.site-footer"]) {
+      const res = await publish(ids[key]!);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    const com = CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body);
+    expect(Object.keys(com.fragments).sort()).toEqual([
+      "corporate.site-footer",
+      "corporate.site-nav",
+    ]);
+    const nav = BvNavPublicSchema.parse(com.fragments["corporate.site-nav"]!.content);
+    expect(nav.items[0]).toMatchObject({ label: "Home", href: "/" });
+    // Links to pages that do not exist yet are text, never a guessed address.
+    expect(
+      nav.items.flatMap((i) => [i, ...i.children]).filter((i) => i.href !== null),
+    ).toHaveLength(1);
+    const footer = BvFooterPublicSchema.parse(com.fragments["corporate.site-footer"]!.content);
+    expect(footer.contact.email.href).toBe("mailto:info@dreampetroleum.com");
+    // The BV key never sees a corporate fragment, nor the corporate key a BV one.
+    const bv = CmsPublicNewsSchema.parse((await pub("/news")).body);
+    expect(Object.keys(bv.fragments).some((k) => k.startsWith("corporate."))).toBe(false);
+    expect(Object.keys(com.fragments).some((k) => k.startsWith("bv."))).toBe(false);
+  });
+
+  it("serves the corporate SEO defaults without an image, per site", async () => {
+    const res = await publish(ids["corporate.site-seo"]!);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const com = PublicSiteSeoResponseSchema.parse((await seo("/settings")).body);
+    expect(com.settings).toEqual({
+      siteName: "Dream Petroleum",
+      defaultTitle: "Dream Petroleum - Global Energy Markets",
+      defaultDescription:
+        "Dream Petroleum is a global energy and petroleum investment company operating across midstream and downstream markets.",
+      defaultOgImage: null,
+    });
+    const bv = PublicSiteSeoResponseSchema.parse((await seo("/settings", TEST_KEYS.webBv)).body);
+    expect(bv.settings?.siteName).not.toBe("Dream Petroleum");
+    // The admin overview of the Corporate site shows its own defaults.
+    const o = SeoOverviewResponseSchema.parse(
+      (await comPublisher.get(`/api/v1/admin/seo/sites/${COM}/overview`)).body,
+    );
+    expect(o.settings?.pageId).toBe(ids["corporate.site-seo"]);
+    expect(o.liveSettings?.siteName).toBe("Dream Petroleum");
+  });
+
+  it("lists and resolves corporate pages only, never catalogue addresses", async () => {
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "About",
+      slug: "com1-about",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = CmsPageResponseSchema.parse(created.body).page.id;
+    expect((await publish(id)).status).toBe(200);
+    const com = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries;
+    expect(com.map((e) => e.path)).toContain("/com1-about");
+    expect(com.some((e) => e.kind === "products" || e.kind === "product")).toBe(false);
+    expect(com.every((e) => e.locale === "en")).toBe(true);
+    const bv = PublicSitemapResponseSchema.parse((await seo("/sitemap", TEST_KEYS.webBv)).body);
+    expect(bv.entries.map((e) => e.path)).not.toContain("/com1-about");
+    expect(bv.entries.some((e) => e.path === "/products")).toBe(true);
+    expect((await seo(`/resolve?path=${encodeURIComponent("/com1-about")}`)).body).toEqual({
+      path: "/com1-about",
+      kind: "page",
+    });
+    expectError(
+      await seo(`/resolve?path=${encodeURIComponent("/com1-about")}`, TEST_KEYS.webBv),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(await seo(`/resolve?path=${encodeURIComponent("/products/x")}`), 404, "NOT_FOUND");
+  });
+
+  it("edits Turkish but keeps it hidden until it is made public", async () => {
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Team",
+      slug: "com1-team",
+    });
+    const en = CmsPageResponseSchema.parse(created.body).page;
+    const tr = await comEditor.post(`/pages/${en.id}/translations`, {
+      locale: "tr",
+      title: "Ekibimiz",
+      slug: "ekibimiz",
+    });
+    expect(tr.status, JSON.stringify(tr.body)).toBe(201);
+    const trPage = CmsPageResponseSchema.parse(tr.body).page;
+    expect(trPage.locale).toBe("tr");
+    // A language the Corporate site does not have is refused.
+    expect(
+      (await comEditor.post(`/pages/${en.id}/translations`, { locale: "nl", title: "X" })).status,
+    ).toBe(409);
+    // Not public: nothing of it reaches the site, its sitemap or its language list.
+    expectError(
+      await pub(`/page?path=/ekibimiz&locale=tr`, TEST_KEYS.webCorporate),
+      404,
+      "NOT_FOUND",
+    );
+    expectError(await seo(`/resolve?path=/ekibimiz&locale=tr`), 404, "NOT_FOUND");
+    expectError(await seo(`/resolve?path=${encodeURIComponent("/tr/ekibimiz")}`), 404, "NOT_FOUND");
+    const locales = PublicSiteLocalesResponseSchema.parse(
+      (await pub("/locales", TEST_KEYS.webCorporate)).body,
+    );
+    expect(locales.locales.map((l) => l.locale)).toEqual(["en"]);
   });
 });

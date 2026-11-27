@@ -29,6 +29,10 @@
 // DP-298 (ADR-031): a lead's document request labels its notice "Notice acknowledged (information,
 // not consent)" instead of "Privacy notice"; leads-en is recorded again with DP298_RECORD_EN=1
 // (only that file). The lead page's new Consents panel is not in it (its read answers 404 there).
+// COM-1: Admin > SEO shows one site at a time (a site switcher and site-neutral descriptions) and
+// Content lists the corporate fragments to import; seo-en and content-en are recorded again with
+// COM1_RECORD_EN=1. The recording they replace is kept in fixtures/com1-en, and
+// test/com1-en-texts.test.ts allows only the approved changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -51,7 +55,8 @@ const RECORD =
   process.env["ML14_RECORD_EN"] === "1" ||
   process.env["DP275_RECORD_EN"] === "1" ||
   process.env["DP285_RECORD_EN"] === "1" ||
-  process.env["DP298_RECORD_EN"] === "1";
+  process.env["DP298_RECORD_EN"] === "1" ||
+  process.env["COM1_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

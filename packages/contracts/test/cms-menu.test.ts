@@ -9,9 +9,15 @@ import {
   BvNavMenuSchema,
   BvNavPublicSchema,
   CMS_DESIGN_TEMPLATES,
+  CMS_SITE_MENU_KEYS,
+  CORPORATE_FOOTER_KEY,
+  CORPORATE_NAV_KEY,
   MENU_HIDDEN,
   MENU_LIMITS,
   cmsIsMenu,
+  cmsMenuKind,
+  cmsMenuSchema,
+  cmsTranslationHasProposal,
   footerLinks,
   menuPublicFooter,
   menuPublicNav,
@@ -394,6 +400,30 @@ describe("admin checks and the reference conversion", () => {
       expect(t?.fields).toEqual([]);
     }
     expect(cmsIsMenu("bv.home")).toBe(false);
+  });
+
+  it("COM-1: registers the corporate menus with the same schemas, each site its own keys", () => {
+    for (const key of [CORPORATE_NAV_KEY, CORPORATE_FOOTER_KEY]) {
+      expect(cmsIsMenu(key)).toBe(true);
+      const t = CMS_DESIGN_TEMPLATES.find((x) => x.key === key);
+      expect(t?.site).toBe("CORPORATE");
+      expect(t?.kind).toBe("FRAGMENT");
+      expect(t?.fields).toEqual([]);
+    }
+    expect(cmsMenuKind(BV_NAV_KEY)).toBe("nav");
+    expect(cmsMenuKind(CORPORATE_NAV_KEY)).toBe("nav");
+    expect(cmsMenuKind(BV_FOOTER_KEY)).toBe("footer");
+    expect(cmsMenuKind(CORPORATE_FOOTER_KEY)).toBe("footer");
+    expect(cmsMenuSchema(CORPORATE_NAV_KEY)).toBe(BvNavMenuSchema);
+    expect(cmsMenuSchema(CORPORATE_FOOTER_KEY)).toBe(BvFooterMenuSchema);
+    expect(CMS_SITE_MENU_KEYS.CORPORATE).toEqual({
+      nav: CORPORATE_NAV_KEY,
+      footer: CORPORATE_FOOTER_KEY,
+    });
+    expect(CMS_SITE_MENU_KEYS.BV).toEqual({ nav: BV_NAV_KEY, footer: BV_FOOTER_KEY });
+    // The Dutch menu proposal is BV's only (ML-7).
+    expect(cmsTranslationHasProposal(CORPORATE_NAV_KEY, "nl")).toBe(false);
+    expect(cmsTranslationHasProposal(BV_NAV_KEY, "nl")).toBe(true);
   });
 });
 

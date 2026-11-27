@@ -17,11 +17,12 @@
  *  4. A loop is refused (409 `redirect_loop`). Rules 1-3 never build one, and the database trigger
  *     `SiteRedirect_no_chain` refuses chains (and so loops) for every writer, DP-211 included.
  *
- * Only the sites whose frontend applies redirects (contracts REDIRECT_SITE_KEYS, the BV site) get
- * redirects; elsewhere a slug change moves the address as before DP-210. Audit events name paths
+ * Only the sites whose frontend applies redirects (contracts REDIRECT_SITE_KEYS: BV, and since COM-1
+ * the corporate site) get redirects; elsewhere a slug change moves the address as before DP-210.
+ * Products only on a site with catalogue routes (`keepsOldProductAddress`). Audit events name paths
  * only (no content).
  */
-import { REDIRECT_SITE_KEYS } from "@dream/contracts";
+import { CATALOGUE_SITE_KEYS, REDIRECT_SITE_KEYS } from "@dream/contracts";
 import { ApiError } from "../iam/http/api-error.js";
 import type { StaffAccess } from "../iam/staff/access.js";
 import type { ScopedTx } from "../catalog/master.js";
@@ -39,6 +40,19 @@ export function keepsOldAddress(
 ): boolean {
   const key = sites.find((s) => s.id === siteId)?.key;
   return key !== undefined && REDIRECT_SITE_KEYS.includes(key);
+}
+
+/**
+ * COM-1: a product's old address is kept only on a site whose frontend has the catalogue routes
+ * (contracts CATALOGUE_SITE_KEYS, the BV site): the corporate site applies redirects for its pages
+ * but has no `/products/<slug>` address to keep.
+ */
+export function keepsOldProductAddress(
+  sites: readonly { id: string; key: string }[],
+  siteId: string,
+): boolean {
+  const key = sites.find((s) => s.id === siteId)?.key;
+  return keepsOldAddress(sites, siteId) && key !== undefined && CATALOGUE_SITE_KEYS.includes(key);
 }
 
 /**

@@ -10,7 +10,10 @@
  *    while live (published, listing visible, master not archived: catalog/live.ts). DP-209: a
  *    page or product with noindex, or whose canonical names another address, is left out too
  *    (from its PUBLISHED state: a draft never changes the sitemap).
- *  - `settings()` (DP-209): the published site SEO defaults (`bv.site-seo`), or null.
+ *  - `settings()` (DP-209): the published site SEO defaults (`bv.site-seo`; COM-1 the corporate
+ *    site's `corporate.site-seo`), or null.
+ *  - COM-1: the corporate site has no catalogue routes (contracts CATALOGUE_SITE_KEYS): neither
+ *    `resolve` nor `sitemap` answers a product address or the product list for it.
  *  - DP-210: `resolve(path)` answers an address without live content with its active redirect
  *    (`{ path, redirect: { target, statusCode } }`), so the proxy can send a 301 before rendering.
  *    Old addresses never appear in the sitemap (it lists live content only).
@@ -35,12 +38,13 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   readSnapshot,
   readSnapshotAddress,
-  BV_SITE_SEO_FIELDS,
-  BV_SITE_SEO_KEY,
+  CATALOGUE_SITE_KEYS,
+  CMS_SITE_SEO_KEYS,
   PublicSiteSeoSettingsSchema,
   SEO_RESOLVABLE_PATH,
   cmsFieldsSchema,
   cmsIsArticle,
+  cmsSiteSeoFields,
   cmsLocaleAddress,
   normalizeRedirectQuery,
   seoIsSelfCanonical,
@@ -90,6 +94,11 @@ export function kindOf(path: string, page: { kind: string; templateKey: string }
 }
 
 const byPath = (a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path, "en");
+
+/** COM-1: whether the site's frontend has the catalogue routes (contracts CATALOGUE_SITE_KEYS). */
+function hasCatalogue(site: Pick<PublicSite, "siteKey">): boolean {
+  return CATALOGUE_SITE_KEYS.includes(site.siteKey);
+}
 
 /** The reads the live-address helpers need: a site-scoped client and the site (DP-211 shares them). */
 export type SiteReader = Pick<PublicSite, "db" | "siteId">;
@@ -313,7 +322,7 @@ export class PublicSeoService {
       if (moved) return { ...moved, path };
       throw new ApiError("NOT_FOUND");
     }
-    if (path.startsWith(PRODUCTS_PREFIX)) {
+    if (path.startsWith(PRODUCTS_PREFIX) && hasCatalogue(site)) {
       const [hit] = await PublicSeoService.liveProductPaths(
         site,
         path.slice(PRODUCTS_PREFIX.length),
@@ -364,7 +373,7 @@ export class PublicSeoService {
         : null;
     const query = parsedQuery?.ok ? parsedQuery.value : "";
     const address = cmsLocaleAddress(path, rawLocale, defaultLocale);
-    if (path.startsWith(PRODUCTS_PREFIX)) {
+    if (path.startsWith(PRODUCTS_PREFIX) && hasCatalogue(site)) {
       const inLocale = (slug: string) =>
         PublicSeoService.liveProductPaths(site, slug, rawLocale).then(([hit]) => hit);
       const hit = await inLocale(path.slice(PRODUCTS_PREFIX.length));
@@ -413,9 +422,10 @@ export class PublicSeoService {
     if (typeof locale !== "string" || !locales.some((l) => l.locale === locale)) {
       throw new ApiError("NOT_FOUND");
     }
-    if (site.siteKey !== "BV") return none;
+    // COM-1: each site has its own SEO defaults fragment (`bv.site-seo`, `corporate.site-seo`).
+    const templateKey = CMS_SITE_SEO_KEYS[site.siteKey];
     const page = await site.db.cmsPage.findFirst({
-      where: { siteId: site.siteId, locale, kind: "FRAGMENT", templateKey: BV_SITE_SEO_KEY },
+      where: { siteId: site.siteId, locale, kind: "FRAGMENT", templateKey },
       select: { id: true },
     });
     if (!page) return none;
@@ -428,10 +438,10 @@ export class PublicSeoService {
       where: { id: pub.revisionId },
       select: { content: true },
     });
-    const content = cmsFieldsSchema(BV_SITE_SEO_FIELDS).safeParse(revision?.content);
+    const content = cmsFieldsSchema(cmsSiteSeoFields(templateKey)).safeParse(revision?.content);
     const settings = content.success ? PublicSiteSeoSettingsSchema.safeParse(content.data) : null;
     if (!settings?.success) {
-      this.log.error("the published bv.site-seo revision does not match its schema; not served");
+      this.log.error(`the published ${templateKey} revision does not match its schema; not served`);
       return none;
     }
     return { settings: settings.data, publishedAt: pub.publishedAt.toISOString() };
@@ -450,12 +460,18 @@ export class PublicSeoService {
   async sitemap(ctx: RequestContext): Promise<PublicSitemapResponse> {
     const site = await this.sites.begin(ctx);
     const { defaultLocale, locales } = await publicSiteLocales(site.db, site.siteId);
+    // COM-1: a site without catalogue routes lists no product and no product list.
+    const withCatalogue = hasCatalogue(site);
     const [pages, products, ...translated] = await Promise.all([
       PublicSeoService.livePages(site, { publicOnly: true }),
-      PublicSeoService.liveProductPaths(site),
+      withCatalogue ? PublicSeoService.liveProductPaths(site) : Promise.resolve([]),
       ...locales
         .filter((l) => l.locale !== defaultLocale)
-        .map((l) => PublicSeoService.liveProductPaths(site, undefined, l.locale)),
+        .map((l) =>
+          withCatalogue
+            ? PublicSeoService.liveProductPaths(site, undefined, l.locale)
+            : Promise.resolve([]),
+        ),
     ]);
     const others = locales.filter((l) => l.locale !== defaultLocale);
     const catalogueOf = (locale: string): LivePath[] =>
@@ -482,7 +498,7 @@ export class PublicSeoService {
       // The product list is an app page; its designed heading page may switch it to noindex.
       // ML-8c: in another language it exists only while that language has a live product.
       const productsIndex = own.find((p) => p.kind === "products");
-      const hasList = locale === defaultLocale || catalogue.length > 0;
+      const hasList = withCatalogue && (locale === defaultLocale || catalogue.length > 0);
       drafts.push(
         ...of("home")
           .filter(listed)

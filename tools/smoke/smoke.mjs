@@ -3,7 +3,7 @@
 // Checks: health endpoints, the BV CMS home page, demo redirects and preview headers, every file
 // in apps/web-bv/public (status + SHA-256 against the repo copy), media referenced by the
 // rendered BV pages,
-// the web-corporate skeleton home page, the admin console's sign-in gate and the clickjacking
+// the web-corporate home (COM-1: /, /en and a 404), the admin console's sign-in gate and the clickjacking
 // headers of the admin console and the API (DP-014), the privacy pages and lead form texts
 // (DP-095), and in DEV the HTTPS proxy (DP-119).
 import { createHash, X509Certificate } from "node:crypto";
@@ -334,20 +334,37 @@ await eachLimited([...refs], FETCH_CONCURRENCY, async (url) => {
   }
 });
 
-// 5. Skeleton home page (web-corporate)
+// 5. Corporate home (web-corporate). COM-1: every page carries its language; `/` answers one 301
+// to `/en`, which renders (a notice inside the published frame until the designed home, COM-2).
 try {
-  const res = await get(base("web-corporate") + "/");
-  record("skeleton", "web-corporate /", res.status === 200, `HTTP ${res.status}`);
+  const root = await get(base("web-corporate") + "/");
+  record(
+    "corporate",
+    "web-corporate / -> /en",
+    root.status === 301 && (root.headers.get("location") ?? "").endsWith("/en"),
+    `HTTP ${root.status} ${root.headers.get("location") ?? ""}`,
+  );
+  const res = await get(base("web-corporate") + "/en");
+  const html = await res.text();
+  record(
+    "corporate",
+    "web-corporate /en",
+    res.status === 200 && html.includes('<html lang="en"'),
+    `HTTP ${res.status}`,
+  );
+  const missing = await get(base("web-corporate") + "/en/no-such-page-smoke");
+  await missing.arrayBuffer();
+  record("corporate", "web-corporate 404", missing.status === 404, `HTTP ${missing.status}`);
 } catch (e) {
-  record("skeleton", "web-corporate /", false, String(e));
+  record("corporate", "web-corporate /en", false, String(e));
 }
 
 // 5b. Privacy policy (DP-095 D-T5) on both sites, and the current lead form texts (D-T7). Local
 // stacks run as DP_DEPLOY_ENV=local, where the draft is shown with its banner.
-// ML-3: the BV policy lives at /en/privacy (English only, ADR-028 D12).
+// ML-3: the BV policy lives at /en/privacy (English only, ADR-028 D12); COM-1: the corporate one too.
 for (const [service, policyPath] of [
   ["web-bv", "/en/privacy"],
-  ["web-corporate", "/privacy"],
+  ["web-corporate", "/en/privacy"],
 ]) {
   try {
     const res = await get(base(service) + policyPath);

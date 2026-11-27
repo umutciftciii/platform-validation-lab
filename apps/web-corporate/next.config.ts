@@ -1,11 +1,16 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@dream/ui"],
+  // COM-1 (ML-4 rule): the trailing-slash 308 is answered by proxy.ts (`decideRequest`), so an old
+  // address with a slash that redirects needs one hop, not 308 + 301.
+  skipTrailingSlashRedirect: true,
   experimental: {
-    // DP-084: no persistent Turbopack dev cache, see apps/admin/next.config.ts (next dev 16.4
-    // reload loop, vercel/next.js#100267). Dev only.
+    // The root layouts are per language (`app/[locale]`); an address no route matches gets
+    // `app/global-not-found.tsx` (as web-bv, ML-3).
+    globalNotFound: true,
+    // DP-084 / DP-176: dev only, as in web-bv and admin.
     turbopackFileSystemCacheForDev: false,
+    reactDebugChannel: false,
   },
 };
 

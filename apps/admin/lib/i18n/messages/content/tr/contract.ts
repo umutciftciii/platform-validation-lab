@@ -158,6 +158,12 @@ export const contract: Messages["content"]["contract"] = {
     bvPrivacy:
       "Onay kayıtlarına bağlı, sürümlü hukuki metin. Yalnızca yeni bir sürümle değiştirilebilir.",
     corporateHome: "Şu an iskelet. S4'te dreampetroleum.com envanterinden oluşturulacak.",
+    corporateSiteNav:
+      "Her kurumsal sayfanın menü öğeleri ve alt menüleri (menü düzenleyici, COM-1). Henüz var olmayan sayfaların bağlantıları metin olarak kalır.",
+    corporateSiteFooter:
+      "Her kurumsal sayfanın şirket metni, iletişim bilgileri, bağlantı sütunları, sosyal ve yasal bağlantıları (COM-1).",
+    corporateSiteSeo:
+      "Kurumsal sitenin site adı, varsayılan başlığı ve açıklaması (COM-1). SEO altında yönetilir.",
   },
   /** Menü hedefi sorunları (MENU_TARGET_PROBLEMS). */
   problem: {

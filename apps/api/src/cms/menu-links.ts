@@ -23,8 +23,8 @@
 import {
   cmsLocaleAddress,
   MENU_HIDDEN,
-  BV_FOOTER_KEY,
-  BV_NAV_KEY,
+  CMS_SITE_MENU_KEYS,
+  cmsMenuKind,
   BvFooterMenuSchema,
   BvNavMenuSchema,
   readSnapshot,
@@ -54,7 +54,7 @@ import { liveRows, type CmsDb, type LiveRow } from "./cms-content.js";
 const MAX_TARGETS = 2000;
 
 function linksOf(key: CmsMenuKey, content: unknown): MenuLinkRef[] | null {
-  if (key === BV_NAV_KEY) {
+  if (cmsMenuKind(key) === "nav") {
     const parsed = BvNavMenuSchema.safeParse(content);
     return parsed.success ? navLinks(parsed.data) : null;
   }
@@ -434,10 +434,11 @@ export async function resolvePublicMenus(
   fragments: Record<string, CmsPublicPage | null>,
   locale: MenuLocale,
 ): Promise<void> {
-  for (const key of [BV_NAV_KEY, BV_FOOTER_KEY] as const) {
+  const keys = CMS_SITE_MENU_KEYS[site.siteKey];
+  for (const key of [keys.nav, keys.footer] as const) {
     const page = fragments[key];
     if (!page) continue;
-    if (key === BV_NAV_KEY) {
+    if (cmsMenuKind(key) === "nav") {
       const parsed = BvNavMenuSchema.safeParse(page.content);
       if (!parsed.success) {
         fragments[key] = null;

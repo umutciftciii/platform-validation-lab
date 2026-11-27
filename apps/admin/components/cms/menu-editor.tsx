@@ -11,8 +11,8 @@
  * live, and the reference conversion: fixed site paths that can become content references.
  */
 import {
-  BV_NAV_KEY,
   MENU_LIMITS,
+  cmsMenuKind,
   MENU_SOCIAL_NETWORKS,
   MENU_TARGET_PROBLEMS,
   footerLinks,
@@ -98,7 +98,7 @@ export function MenuEditor({
 }) {
   return (
     <>
-      {menuKey === BV_NAV_KEY ? (
+      {cmsMenuKind(menuKey) === "nav" ? (
         <NavEditor
           key="nav"
           value={value as BvNavMenu}
@@ -1402,7 +1402,9 @@ function StructurePreview({
 }) {
   const t = useT();
   const links =
-    menuKey === BV_NAV_KEY ? navLinks(value as BvNavMenu) : footerLinks(value as BvFooterMenu);
+    cmsMenuKind(menuKey) === "nav"
+      ? navLinks(value as BvNavMenu)
+      : footerLinks(value as BvFooterMenu);
   const problems = targets
     ? links
         .map((l) => ({
@@ -1435,7 +1437,7 @@ function StructurePreview({
           </ul>
         </div>
       ) : null}
-      {menuKey === BV_NAV_KEY ? (
+      {cmsMenuKind(menuKey) === "nav" ? (
         <ul key="nav" className="text-sm">
           {(value as BvNavMenu).items.map((item, i) => (
             <PreviewLink key={`p-${i}`} link={item} targets={targets} sub={item.children} />

@@ -97,6 +97,8 @@ const SAME_IN_TR = new Set([
   "dashboard.overview.greeting",
   // ML-12e: the word "Site" (the same in Turkish), messages made only of parameters, a name, CRM
   "leads.list.site",
+  // COM-1: the site switcher's name in Admin > SEO ("Site" in both languages, as leads.list.site).
+  "seo.common.site",
   "staff.assign.site",
   "staff.invite.site",
   "staff.page.unknownSite",

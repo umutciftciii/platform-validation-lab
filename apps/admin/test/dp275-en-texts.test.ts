@@ -54,13 +54,38 @@ function leaves(tree: Tree, prefix = ""): Record<string, string> {
   return out;
 }
 
+/**
+ * COM-1: Admin > SEO shows the chosen site (BV or the corporate site), so the two descriptions that
+ * named dreampetroleumbv.com name "the chosen site"; nothing else of their wording changed.
+ */
+/** COM-1: the render recordings it replaced (kept in fixtures/com1-en, see com1-en-texts). */
+const COM1_REPLACED: readonly string[] = ["seo-en", "content-en"];
+
+const COM1_CHANGED: Readonly<Record<string, string>> = {
+  "seo.overview.description":
+    "Search results and link previews of the chosen site: the site defaults and the SEO of every page, article and product. Changes reach the site when the page or product is published.",
+  "seo.redirects.description":
+    "Old addresses of the chosen site and where they lead. Changes take effect on the site at once.",
+};
+
+describe("COM-1: the SEO descriptions name the chosen site", () => {
+  it("changes exactly the two descriptions, the site name only", () => {
+    const before = load("dp275-en", "en-dictionary");
+    const now = leaves(en as unknown as Tree);
+    for (const [k, text] of Object.entries(COM1_CHANGED)) {
+      expect(now[k], k).toBe(text);
+      expect(before[k]!.replace("dreampetroleumbv.com", "the chosen site"), k).toBe(text);
+    }
+  });
+});
+
 describe("DP-275: the English dictionary changed only where approved", () => {
   const before = load("dp275-en", "en-dictionary");
   const now = leaves(en as unknown as Tree);
 
   it("changes only the tab names and the sentences naming them", () => {
     const changed = Object.keys(before)
-      .filter((k) => k in now && now[k] !== before[k])
+      .filter((k) => k in now && now[k] !== before[k] && !(k in COM1_CHANGED))
       .sort();
     expect(changed).toEqual([
       "catalog.common.tabs.media",
@@ -108,8 +133,15 @@ describe("DP-275: the English dictionary changed only where approved", () => {
       Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k)),
     ).toEqual([
       "errors.DATABASE_UNAVAILABLE",
+      // COM-1: the notes of the corporate fragments in Content (CMS_SITE_REGISTRY, contract texts).
+      "content.contract.registry.corporateSiteNav",
+      "content.contract.registry.corporateSiteFooter",
+      "content.contract.registry.corporateSiteSeo",
       "content.editor.translationTabs.summary.notPublishedNoSource",
+      // COM-1: the site switcher of Admin > SEO.
+      "seo.common.site",
     ]);
+    expect(now["seo.common.site"]).toBe("Site");
     expect(now["errors.DATABASE_UNAVAILABLE"]).toBe(
       "The database is not available right now. Try again later.",
     );
@@ -143,7 +175,8 @@ describe("DP-270/272/275: EN renders changed only where approved", () => {
   for (const file of RENDERS) {
     it(file, () => {
       const before = load("dp275-en", file);
-      const after = load("catalog-en", file);
+      // COM-1 recorded seo-en and content-en again; the recording it replaced is the DP-275 one.
+      const after = load(COM1_REPLACED.includes(file) ? "com1-en" : "catalog-en", file);
       expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
       let changed = 0;
       let splits = 0;

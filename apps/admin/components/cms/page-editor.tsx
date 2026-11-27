@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  BV_SITE_SEO_KEY,
   CMS_ARTICLE_FIELDS,
   CMS_ARTICLE_SECTION_TYPES,
   CMS_SECTION_TYPES,
@@ -9,6 +8,7 @@ import {
   cmsDesignTemplate,
   cmsIsArticle,
   cmsIsMenu,
+  cmsIsSiteSeo,
   cmsMenuSchema,
   type CmsArticleDraftRequest,
   type CmsField,
@@ -426,7 +426,7 @@ export function PageEditor({
             onChange={(patch) => change(setSeo)({ ...seo, ...patch })}
             onOgImage={change(setOgImage)}
           />
-        ) : page.templateKey === BV_SITE_SEO_KEY ? (
+        ) : cmsIsSiteSeo(page.templateKey) ? (
           <SiteSeoPreview values={design} origin={origin} locale={page.locale} />
         ) : null}
       </div>
@@ -725,8 +725,8 @@ function PageSeoPanel({
     {
       ...values,
       path,
-      // ML-5: the public address in the page's language (BV); Corporate has no prefixes.
-      locale: siteKey === "BV" ? locale : null,
+      // ML-5: the public address in the page's language; COM-1: the corporate site too.
+      locale,
       fallbackTitle,
       fallbackDescription,
       ogImageUrl: chosen,
