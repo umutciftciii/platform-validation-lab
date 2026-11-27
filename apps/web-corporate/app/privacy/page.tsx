@@ -22,7 +22,8 @@ export default async function PrivacyPage() {
   if (!gate.publish || !texts) notFound();
   const policy = texts.privacyPolicy;
   const fill = (t: string) =>
-    fillPrivacyText(t, PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, policy.labels);
+    // DP-306: {policyVersion} is the version shown.
+    fillPrivacyText(t, PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, policy.labels, policy.version);
   return (
     <SkeletonShell service="web-corporate · privacy" title="Privacy Policy">
       {gate.draft ? (

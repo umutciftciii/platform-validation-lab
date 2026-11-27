@@ -14,6 +14,9 @@
 import { createHash } from "node:crypto";
 import {
   FORM_LEGAL_DOCUMENTS,
+  PRIVACY_FILL_LABELS,
+  PRIVACY_FILL_LABELS_EN,
+  policyMissingValues,
   PrivacySectionsSchema,
   legalTextRegistryFrom,
   privacyBlockersFor,
@@ -68,6 +71,8 @@ export interface LegalTextReader {
 export interface PublishedTexts {
   sets: PublicLegalTextSet[];
   pendingReview: PublicLegalTextsResponse["pendingReview"];
+  /** DP-306: missing values of the current policies that are no blocker of their own. */
+  missingValues: PublicLegalTextsResponse["missingValues"];
   registry: LegalTextRegistry;
   blockers: string[];
   /** Current published version per `key|locale`. */
@@ -95,6 +100,7 @@ export function publishedTextsFrom(rows: readonly PublishedRow[]): PublishedText
   const locales = [...new Set(rows.map((r) => r.locale))].sort();
   const sets: PublicLegalTextSet[] = [];
   const pendingReview: PublicLegalTextsResponse["pendingReview"] = [];
+  const missingValues: PublicLegalTextsResponse["missingValues"] = [];
   for (const locale of locales) {
     const get = (key: LegalDocumentKey) => current.get(currentKey(key, locale));
     const policy = get("PRIVACY_POLICY");
@@ -130,6 +136,13 @@ export function publishedTextsFrom(rows: readonly PublishedRow[]): PublishedText
       },
       translates,
     });
+    // DP-306: a value the current policy uses but nobody supplied (e.g. {kvkkContact}).
+    for (const placeholder of policyMissingValues(sections.data as PrivacySection[], {
+      labels: PRIVACY_FILL_LABELS[locale] ?? PRIVACY_FILL_LABELS_EN,
+      version: policy.version,
+    })) {
+      missingValues.push({ locale, placeholder });
+    }
     for (const key of FORM) {
       const r = get(key) as PublishedRow;
       if (r.legalReview !== "APPROVED") {
@@ -140,8 +153,9 @@ export function publishedTextsFrom(rows: readonly PublishedRow[]): PublishedText
   return {
     sets,
     pendingReview,
+    missingValues,
     registry: legalTextRegistryFrom(sets),
-    blockers: privacyBlockersFor(pendingReview),
+    blockers: privacyBlockersFor(pendingReview, undefined, undefined, missingValues),
     current,
   };
 }

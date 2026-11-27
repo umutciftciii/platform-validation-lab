@@ -5158,3 +5158,123 @@ describe("DP-298 legal texts, consent records and AI provider terms (ADR-031)", 
     await expect(asApp.aiProviderDataTerms.delete({ where: { id: t.id } })).rejects.toThrow();
   });
 });
+
+describe("DP-306 legal text placeholders (ADR-031 D1)", () => {
+  let god: Staff;
+  async function call(who: Staff, method: string, p: string, body?: unknown): Promise<Res> {
+    const headers: Record<string, string> = {
+      "x-dp-proxy-key": TEST_KEYS.admin,
+      "x-dp-client-ip": "10.20.30.42",
+      cookie: `__Host-dp_admin_session=${who.token}`,
+    };
+    if (method !== "GET") headers["origin"] = ADMIN_ORIGIN;
+    if (body !== undefined) headers["content-type"] = "application/json";
+    return parse(
+      await fetch(`${base}/api/v1/admin${p}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+  }
+  const snapshot = async () =>
+    PublicLegalTextsResponseSchema.parse(
+      (
+        await parse(
+          await fetch(`${base}/api/v1/public/legal-texts`, {
+            headers: { "x-dp-proxy-key": KEY.bv },
+          }),
+        )
+      ).body,
+    );
+
+  beforeAll(async () => {
+    const designated = await owner.systemOwner.findFirstOrThrow({ select: { userId: true } });
+    god = await staff("dp306-god", [], root.userId, designated.userId);
+  });
+
+  it("refuses unknown and wrong-document placeholders when a draft is saved", async () => {
+    expectError(
+      await call(root, "POST", "/legal-texts/drafts", {
+        key: "CONTACT_NOTICE",
+        locale: "en",
+        text: "Our AI providers {aiProviders} answer you.",
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "text", rule: "unknown_placeholder:aiProviders" },
+    );
+    expectError(
+      await call(root, "POST", "/legal-texts/drafts", {
+        key: "PRIVACY_POLICY",
+        locale: "en",
+        text: "## Transfers {#t}\n\nWe send data to {transferCountries}.",
+      }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "text", rule: "unknown_placeholder:transferCountries" },
+    );
+    expect(await owner.legalTextVersion.count({ where: { status: "DRAFT", locale: "en" } })).toBe(
+      0,
+    );
+  });
+
+  it("previews a notice with its missing value and refuses to publish it", async () => {
+    const created = await call(root, "POST", "/legal-texts/drafts", {
+      key: "MARKETING_CONSENT",
+      locale: "en",
+      text: "Yes, send me product news. I can withdraw this by writing to {privacyEmail}.",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const v = LegalTextVersionResponseSchema.parse(created.body).version;
+    expect(v.preview).toMatchObject({
+      placeholders: ["privacyEmail"],
+      missing: ["privacyEmail"],
+      publicationProblem: "missing_value:privacyEmail",
+    });
+    expect(v.preview.text).toContain("[pending: privacy contact e-mail]");
+    expectError(
+      await call(god, "POST", `/legal-texts/versions/${v.id}/publish`, { sha256: v.sha256 }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "text", rule: "missing_value:privacyEmail" },
+    );
+    expect((await owner.legalTextVersion.findUniqueOrThrow({ where: { id: v.id } })).status).toBe(
+      "DRAFT",
+    );
+    expect((await call(root, "DELETE", `/legal-texts/drafts/${v.id}`)).status).toBe(204);
+  });
+
+  it("publishes a policy with {kvkkContact}; production stays blocked by the missing value", async () => {
+    const before = await snapshot();
+    expect(before.missingValues).toEqual([]);
+    const current = await owner.legalTextVersion.findFirstOrThrow({
+      where: { key: "PRIVACY_POLICY", locale: "en", status: "PUBLISHED" },
+      orderBy: { publishedAt: "desc" },
+    });
+    const text = `${current.text}\n\n## Turkish data protection law {#kvkk}\n\nRequests under KVKK: {kvkkContact}. This is version {policyVersion}.`;
+    const created = await call(root, "POST", "/legal-texts/drafts", {
+      key: "PRIVACY_POLICY",
+      locale: "en",
+      text,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const draft = LegalTextVersionResponseSchema.parse(created.body).version;
+    expect(draft.preview.missing).toContain("kvkkContact");
+    expect(draft.preview.text).toContain("This is version [version assigned on publication].");
+    const published = await call(god, "POST", `/legal-texts/versions/${draft.id}/publish`, {
+      sha256: draft.sha256,
+    });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    const p = LegalTextVersionResponseSchema.parse(published.body).version;
+    // The policy keeps its placeholders (filled when shown); its preview names the version.
+    expect(p.preview.text).toContain(`This is version ${p.version}.`);
+    expect(
+      (await owner.legalTextVersion.findUniqueOrThrow({ where: { id: draft.id } })).text,
+    ).toContain("{kvkkContact}");
+    const after = await snapshot();
+    expect(after.missingValues).toEqual([{ locale: "en", placeholder: "kvkkContact" }]);
+    const ov = LegalTextsOverviewSchema.parse((await call(root, "GET", "/legal-texts")).body);
+    expect(ov.blockers).toContain("DP-306: missing value {kvkkContact} in PRIVACY_POLICY en");
+  });
+});

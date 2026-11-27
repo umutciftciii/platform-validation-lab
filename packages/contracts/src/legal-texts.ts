@@ -129,7 +129,9 @@ const NL: LegalTextSet = {
         privacyEmail: "e-mailadres voor privacyvragen",
         dpo: "besluit over de functionaris voor gegevensbescherming",
         supervisoryAuthority: "toezichthoudende autoriteit",
+        kvkkContact: "KVKK-contactpersoon (Turkse wet bescherming persoonsgegevens)",
       },
+      policyVersionDraft: "[versie wordt bij publicatie toegekend]",
       openPoints: {
         processors: "lijst van hosting- en dienstverleners (verwerkers)",
         transfers: "doorgiften buiten de EER, indien van toepassing",
