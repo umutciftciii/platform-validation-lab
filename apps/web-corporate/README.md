@@ -12,6 +12,10 @@ dreampetroleum.com (contract 3.2: Turkish and English). Since COM-1 every page c
 - `app/[locale]/news`, `app/[locale]/news/[slug]` — the news list under the designed page
   `corporate.news-index` (COM-3: 12 articles a page, `?page=2`) and the articles (the DP-020
   article model of the shared CMS; a withdrawn article says so, noindex);
+- `app/lead-form/contact` — the contact form's server side (COM-4): forwards the form to the
+  platform API with this site's key (a CORPORATE CONTACT_FORM lead in the CRM); the form itself is
+  the contact section of a CMS page (`corporate.contact` at `/contact`), offered only where the
+  privacy texts may be published (DP-095) in the page's language (ML-10);
 - `app/(preview)/preview/[token]` — a signed admin preview of a draft (DP-321; noindex, no-store);
 - `proxy.ts` + `lib/proxy-routes.ts` — language prefix, real 404s, redirects (Admin > SEO >
   Redirects), trailing slash;
@@ -27,6 +31,6 @@ amber `#faae36` only as an accent, Inter Tight + Manrope via `next/font`), the h
 (`CMS_STATIC_ASSETS` with `site: "CORPORATE"`, served from `public/media/`); none are registered
 until their rights are confirmed (DP-320), and every section is laid out without one.
 
-Environment: `DP_API_URL`, `DP_PROXY_KEY_WEB_CORPORATE`, `DP_DEPLOY_ENV`,
+Environment: `DP_API_URL`, `DP_PROXY_KEY_WEB_CORPORATE`, `DP_DEPLOY_ENV`, `DP_TRUSTED_PROXY_HOPS`,
 `DP_PUBLIC_ORIGIN_CORPORATE` (default `http://localhost:3111` locally), `DP_SEO_INDEXING`.
 Health: `GET /api/health`. Unit tests: `pnpm --filter @dream/web-corporate test`.

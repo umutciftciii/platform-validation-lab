@@ -204,6 +204,8 @@ export const contract: Messages["content"]["contract"] = {
       "Her kurumsal sayfanın şirket metni, iletişim bilgileri, bağlantı sütunları, sosyal ve yasal bağlantıları (COM-1).",
     corporateSiteSeo:
       "Kurumsal sitenin site adı, varsayılan başlığı ve açıklaması (COM-1). SEO altında yönetilir.",
+    corporateContact:
+      "Yayınlı alt bilgideki iletişim bilgileri ve iletişim formu; mesajlar CRM'de CORPORATE lead olur (COM-4).",
   },
   /** Menü hedefi sorunları (MENU_TARGET_PROBLEMS). */
   problem: {

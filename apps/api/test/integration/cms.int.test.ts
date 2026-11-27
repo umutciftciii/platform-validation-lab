@@ -7461,3 +7461,123 @@ describe("25. corporate news (COM-3)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// COM-4: the corporate contact page — imported into the Corporate site only, published at
+// /contact for the corporate key, so the COM-2b links to /contact (Contact Us, COA request,
+// Enquire for Availability) reach a live page.
+// ---------------------------------------------------------------------------------------------
+
+describe("26. corporate contact page (COM-4)", () => {
+  let comPublisher: Staff;
+
+  beforeAll(async () => {
+    comPublisher = await staff(
+      "com4-publisher",
+      [{ role: "content_publisher", site: COM }],
+      root.userId,
+    );
+  });
+
+  it("imports corporate.contact into the Corporate site only and serves it there", async () => {
+    expectError(
+      await bvEditor.post(`/sites/${BV}/import`, { key: "corporate.contact", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+    const res = await comEditor.post(`/sites/${COM}/import`, {
+      key: "corporate.contact",
+      dryRun: false,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const id = CmsImportResponseSchema.parse(res.body).pageId!;
+    const page = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${id}`)).body).page;
+    expect(page).toMatchObject({ kind: "TEMPLATE", path: "/contact", locale: "en" });
+    expect((page.content as { sections: { type: string }[] }).sections.map((s) => s.type)).toEqual([
+      "contact",
+    ]);
+    expectError(await pub("/page?path=/contact", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    const live = CmsPageResponseSchema.parse((await comPublisher.get(`/pages/${id}`)).body).page;
+    const published = await comPublisher.post(`/pages/${id}/publish`, { version: live.version });
+    expect(published.status, JSON.stringify(published.body)).toBe(200);
+    const bundle = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/contact", TEST_KEYS.webCorporate)).body,
+    );
+    expect(bundle.page).toMatchObject({ kind: "TEMPLATE", path: "/contact" });
+    expect(Object.keys(bundle.fragments).every((k) => k.startsWith("corporate."))).toBe(true);
+    // The BV site's /contact is its own page (or none), never the corporate one.
+    const bv = await pub("/page?path=/contact");
+    expect(JSON.stringify(bv.body)).not.toContain("corporate.");
+  });
+
+  it("links the menu's Contact Us and Blogs once their pages are live (COM-2b/COM-3 links)", async () => {
+    const navRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, templateKey: "corporate.site-nav", locale: "en" },
+    });
+    const contactRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, path: "/contact", locale: "en" },
+    });
+    const newsRow = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, templateKey: "corporate.news-index", locale: "en" },
+    });
+    // A page created for this check, not published yet: its menu link stays text.
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Our Team",
+      slug: "com4-our-team",
+    });
+    const teamId = CmsPageResponseSchema.parse(created.body).page.id;
+    const nav = CmsPageResponseSchema.parse((await comEditor.get(`/pages/${navRow.id}`)).body).page;
+    const content = nav.content as {
+      items: { label: string; target: unknown; children?: unknown[] }[];
+      contact: { label: string; target: unknown };
+    };
+    const items = content.items.map((item) =>
+      item.label === "Blogs"
+        ? { ...item, target: { type: "page", pageId: newsRow.id } }
+        : item.label === "Company"
+          ? {
+              ...item,
+              children: [{ label: "Our Team", target: { type: "page", pageId: teamId } }],
+            }
+          : item,
+    );
+    const saved = await comEditor.post(`/pages/${navRow.id}/draft`, {
+      version: nav.version,
+      title: nav.title,
+      seo: nav.seo,
+      content: {
+        ...content,
+        items,
+        contact: { label: "Contact Us", target: { type: "page", pageId: contactRow.id } },
+      },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const fresh = CmsPageResponseSchema.parse(
+      (await comPublisher.get(`/pages/${navRow.id}`)).body,
+    ).page;
+    const out = await comPublisher.post(`/pages/${navRow.id}/publish`, { version: fresh.version });
+    expect(out.status, JSON.stringify(out.body)).toBe(200);
+    const read = async () =>
+      BvNavPublicSchema.parse(
+        CmsPublicNewsSchema.parse((await pub("/news", TEST_KEYS.webCorporate)).body).fragments[
+          "corporate.site-nav"
+        ]!.content,
+      );
+    let live = await read();
+    expect(live.contact).toMatchObject({ label: "Contact Us", href: "/contact" });
+    expect(live.items.find((i) => i.label === "Blogs")).toMatchObject({ href: "/news" });
+    const team = () =>
+      live.items.find((i) => i.label === "Company")!.children.find((c) => c.label === "Our Team");
+    expect(team()?.href).toBeNull();
+    // Published: the same menu links it, without editing the menu again.
+    const teamPage = CmsPageResponseSchema.parse(
+      (await comPublisher.get(`/pages/${teamId}`)).body,
+    ).page;
+    expect(
+      (await comPublisher.post(`/pages/${teamId}/publish`, { version: teamPage.version })).status,
+    ).toBe(200);
+    live = await read();
+    expect(team()?.href).toBe("/com4-our-team");
+  });
+});

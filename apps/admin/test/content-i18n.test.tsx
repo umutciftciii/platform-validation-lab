@@ -490,8 +490,9 @@ describe("the contract texts of the CMS", () => {
     // COM-1: +3, the notes of the corporate navigation, footer and SEO defaults. COM-2b: +31, the
     // 30 new labels and hints of the corporate home page and portfolio and the portfolio's
     // registry note (the home page's note is replaced, not added). COM-3: +1, the note of the
-    // corporate news list heading (its field texts are the BV heading's).
-    expect(texts.length).toBe(165);
+    // corporate news list heading (its field texts are the BV heading's). COM-4: +1, the note of
+    // the corporate contact page.
+    expect(texts.length).toBe(166);
     expect(texts.filter((s) => !hasCmsText(s))).toEqual([]);
     expect(texts.filter((s) => cmsText(s, en) !== s)).toEqual([]);
   });

@@ -229,6 +229,22 @@ describe("BV content page seeds (DP-135)", () => {
   });
 });
 
+describe("corporate contact page (COM-4)", () => {
+  it("imports the contact page with a contact section, valid on the corporate site, no claim", () => {
+    const seed = CMS_PAGE_SEEDS["corporate.contact"]!;
+    expect(seed.slug).toBe("contact");
+    expect(seed.content.sections.map((s) => s.type)).toEqual(["contact"]);
+    expect(contentIsValid("TEMPLATE", "standard", seed.content, "CORPORATE")).toBe(true);
+    expect(CMS_SITE_REGISTRY.find((e) => e.key === "corporate.contact")).toMatchObject({
+      site: "CORPORATE",
+      kind: "TEMPLATE",
+      path: "/contact",
+      importable: true,
+    });
+    expect(JSON.stringify(seed)).not.toMatch(/\d+\s*(\+|%)|Feitian|official|guarantee|B\.V\./i);
+  });
+});
+
 describe("BV company pages and blog post of the live site (DP-206)", () => {
   it("imports the three company pages from the live site", () => {
     for (const key of ["bv.strategic-partnership", "bv.sustainability", "bv.our-team"]) {

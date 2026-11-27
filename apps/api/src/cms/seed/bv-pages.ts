@@ -636,6 +636,31 @@ export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
       ],
     },
   },
+  /**
+   * COM-4 (DP-030): the contact page of dreampetroleum.com (/en/contact, /tr/contact as its
+   * translation). The contact details come from the published corporate footer; the form is the
+   * shared contact form → CRM (a CORPORATE lead). Neutral editorial texts without any claim; the
+   * live page's own words come with the COM-5 import. The note is shown while the form may not be
+   * offered (production until the privacy texts are approved).
+   */
+  "corporate.contact": {
+    slug: "contact",
+    title: "Contact Us",
+    seo: seo("Contact Us | Dream Petroleum"),
+    content: {
+      sections: [
+        {
+          id: "contact-details",
+          type: "contact",
+          title: "Get in Touch",
+          intro: null,
+          formTitle: "Send Us a Message",
+          formNote:
+            "The contact form is not available yet. Please call us or write to us by e-mail in the meantime.",
+        },
+      ],
+    },
+  },
 };
 
 export interface CmsArticleSeed {

@@ -356,6 +356,8 @@ describe("CMS content page sections (DP-135)", () => {
     expect(importable.map((e) => e.path).sort()).toEqual([
       "/about-us",
       "/contact",
+      // COM-4: the corporate contact page (corporate.contact).
+      "/contact",
       "/energy-trading",
       "/logistics",
       "/news/why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets",

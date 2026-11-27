@@ -5288,3 +5288,122 @@ describe("DP-306 legal text placeholders (ADR-031 D1)", () => {
     expect(ov.blockers).toContain("DP-306: missing value {kvkkContact} in PRIVACY_POLICY en");
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// COM-4: the dreampetroleum.com contact form → CRM. The corporate site's server forwards the
+// shared contact form with its own proxy key: the lead is the CORPORATE site's, its source is
+// CONTACT_FORM, the notice version is stored with the message, the site's staff see it and BV's
+// never do, and the same rate limits and CSRF origin check apply as on BV.
+// ---------------------------------------------------------------------------------------------
+
+describe("COM-4 corporate contact form → CRM lead", () => {
+  const contact = (input: Record<string, unknown> = {}) => ({
+    fullName: "Ada Lovelace",
+    company: "Analytical Engines Ltd",
+    email: "ada@engines.example",
+    country: "TR",
+    phone: "",
+    subject: "Group II base oil availability",
+    message: "Could you tell us about the availability of Group II base oils?",
+    privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    locale: "en",
+    website: "",
+    ...input,
+  });
+  async function sendCom(
+    body: Record<string, unknown>,
+    { ip = freshIp(), origin = COM_ORIGIN }: { ip?: string; origin?: string } = {},
+  ): Promise<Res> {
+    return parse(
+      await fetch(`${base}/api/v1/public/leads/contact-messages`, {
+        method: "POST",
+        headers: {
+          "x-dp-proxy-key": KEY.com,
+          origin,
+          "content-type": "application/json",
+          "x-dp-client-ip": ip,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+  let comSales: Staff;
+  let bvSales: Staff;
+
+  beforeAll(async () => {
+    comSales = await staff("com4-sales", [], root.userId, undefined, { memberships: [COM] });
+    await assignRole(comSales, "sales_crm_user", COM);
+    bvSales = await staff("com4-bv", [], root.userId, undefined, { memberships: [BV] });
+    await assignRole(bvSales, "sales_crm_user", BV);
+  });
+
+  it("stores the message on a CORPORATE CONTACT_FORM lead with the notice version", async () => {
+    const res = await sendCom(contact());
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toEqual({ received: true });
+    const lead = await owner.lead.findFirstOrThrow({
+      where: { email: "ada@engines.example", anonymisedAt: null },
+    });
+    expect(lead).toMatchObject({
+      siteId: COM,
+      source: "CONTACT_FORM",
+      company: "Analytical Engines Ltd",
+      country: "TR",
+    });
+    // One lead per person and site: none on BV.
+    expect(await owner.lead.count({ where: { siteId: BV, email: "ada@engines.example" } })).toBe(0);
+    const messages = await owner.leadContactMessage.findMany({ where: { leadId: lead.id } });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      siteId: COM,
+      subject: "Group II base oil availability",
+      privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+    });
+    // The staff notification (DP-221) is the corporate site's.
+    const notes = await owner.leadNotification.findMany({ where: { leadId: lead.id } });
+    expect(notes.every((n) => n.siteId === COM)).toBe(true);
+  });
+
+  it("shows the lead to the corporate site's sales staff with its site and source, never to BV's", async () => {
+    const lead = await owner.lead.findFirstOrThrow({ where: { email: "ada@engines.example" } });
+    const list = LeadListResponseSchema.parse(
+      (await comSales.leads("?source=CONTACT_FORM")).body,
+    ).items;
+    expect(list.find((l) => l.id === lead.id)).toMatchObject({
+      siteKey: "CORPORATE",
+      source: "CONTACT_FORM",
+    });
+    expect(list.every((l) => l.siteKey === "CORPORATE")).toBe(true);
+    const detail = LeadDetailResponseSchema.parse((await comSales.leads(`/${lead.id}`)).body);
+    expect(detail.contactMessages.map((m) => m.subject)).toEqual([
+      "Group II base oil availability",
+    ]);
+    expectError(await bvSales.leads(`/${lead.id}`), 404, "NOT_FOUND");
+    const bvList = LeadListResponseSchema.parse((await bvSales.leads("?source=CONTACT_FORM")).body);
+    expect(bvList.items.some((l) => l.id === lead.id)).toBe(false);
+  });
+
+  it("refuses another site's origin, a filled honeypot and missing fields; stores nothing", async () => {
+    const before = await owner.leadContactMessage.count({ where: { siteId: COM } });
+    expect(
+      (await sendCom(contact({ email: "csrf@engines.example" }), { origin: BV_ORIGIN })).status,
+    ).toBe(403);
+    expect((await sendCom(contact({ email: "bot@engines.example", website: "x" }))).status).toBe(
+      400,
+    );
+    const missing = await sendCom(contact({ email: "missing@engines.example", company: "" }));
+    expect(missing.status).toBe(400);
+    expect(await owner.leadContactMessage.count({ where: { siteId: COM } })).toBe(before);
+  });
+
+  it("applies the same rate limits as BV (per client IP) before writing anything", async () => {
+    const ip = freshIp();
+    for (let i = 0; i < 5; i++) {
+      const res = await sendCom(contact({ email: `limit${i}@engines.example` }), { ip });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    }
+    const sixth = await sendCom(contact({ email: "limit5@engines.example" }), { ip });
+    expectError(sixth, 429, "RATE_LIMITED");
+    expect(await owner.lead.count({ where: { email: "limit5@engines.example" } })).toBe(0);
+  });
+});
