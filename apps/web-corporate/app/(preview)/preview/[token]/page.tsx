@@ -5,6 +5,7 @@ import { ArticlePage, NewsList } from "@/components/news-pages";
 import { ProductsPage } from "@/components/products-page";
 import { SiteFrame } from "@/components/site-frame";
 import { TemplateSections } from "@/components/template-sections";
+import { contactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE } from "@/lib/locale-routing";
 import { newsPage } from "@/lib/news-view";
@@ -45,6 +46,11 @@ export default async function PreviewPage({ params }: PageProps<"/preview/[token
   const view = res.data;
   if (view.kind === "template") {
     const page = view.page;
+    // COM-4: a preview shows the form as the published page would (another language than English
+    // counts as not public here: a preview proves nothing about a language).
+    const form = page.sections.some((s) => s.type === "contact")
+      ? await contactSectionForm(view.locale, { preview: true })
+      : null;
     return (
       <SiteFrame
         locale={view.locale}
@@ -58,6 +64,7 @@ export default async function PreviewPage({ params }: PageProps<"/preview/[token
           title={page.title}
           sections={page.sections}
           contact={page.footer?.contact ?? null}
+          form={form}
           locale={view.locale}
         />
       </SiteFrame>

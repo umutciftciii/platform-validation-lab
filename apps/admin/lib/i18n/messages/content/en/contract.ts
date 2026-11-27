@@ -202,6 +202,8 @@ export const contract = {
       "Company text, contact details, link columns, social and legal links of every corporate page (COM-1).",
     corporateSiteSeo:
       "Site name, default title and description of the corporate site (COM-1). Managed under SEO.",
+    corporateContact:
+      "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
   },
   /** Menu target problems (MENU_TARGET_PROBLEMS). */
   problem: {

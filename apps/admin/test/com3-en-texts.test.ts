@@ -28,7 +28,8 @@ const LIST =
 
 describe("COM-3: EN renders changed only where approved", () => {
   const before = load("com3-en", "content-en");
-  const after = load("catalog-en", "content-en");
+  // COM-4 recorded content-en again; the COM-3 recording is kept in fixtures/com4-en.
+  const after = load("com4-en", "content-en");
 
   it("changes exactly the corporate route list", () => {
     expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());

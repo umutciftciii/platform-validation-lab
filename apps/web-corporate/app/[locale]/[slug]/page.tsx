@@ -6,6 +6,7 @@ import { cache } from "react";
 import { SiteFrame } from "@/components/site-frame";
 import { TemplateSections } from "@/components/template-sections";
 import { getPublishedPage } from "@/lib/cms";
+import { contactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale } from "@/lib/locale-routing";
 import { privacyLink } from "@/lib/privacy";
@@ -67,6 +68,10 @@ export default async function CmsPage({ params }: { params: Params }) {
     );
   }
   const view = res.data;
+  // COM-4: the contact form, read only for a page with a contact section.
+  const form = view.sections.some((s) => s.type === "contact")
+    ? await contactSectionForm(locale)
+    : null;
   return (
     <SiteFrame
       locale={locale}
@@ -79,6 +84,7 @@ export default async function CmsPage({ params }: { params: Params }) {
         title={view.title}
         sections={view.sections}
         contact={view.footer?.contact ?? null}
+        form={form}
         locale={locale}
       />
     </SiteFrame>

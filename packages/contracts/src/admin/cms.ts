@@ -953,6 +953,17 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     importable: true,
   },
   {
+    key: "corporate.contact",
+    site: "CORPORATE",
+    kind: "TEMPLATE",
+    title: "Contact Us",
+    path: "/contact",
+    managedBy: "cms_pending",
+    stage: "S4",
+    note: "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
+    importable: true,
+  },
+  {
     key: "corporate.privacy",
     site: "CORPORATE",
     kind: "LEGAL",

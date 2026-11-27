@@ -3,12 +3,47 @@
  * The Turkish texts are interface labels only. COM-2a adds the labels of the designed frame
  * (menu buttons, submenus, footer, contact details, preview); COM-2b the labels of the product
  * portfolio around its CMS content (section list, table headings); COM-3 the labels of the news
- * list and articles (dates, pages, back link, a withdrawn article). The COM-2a placeholder home
+ * list and articles (dates, pages, back link, a withdrawn article); COM-4 the contact form's
+ * labels and answers (its notice is the published legal text, never from here). The COM-2a
+ * placeholder home
  * is gone: the home page is the CMS page `corporate.home`.
  *
  * Pure (no Next.js, no `@/` imports) so `node --test` runs it as is.
  */
 import type { RouteLocale } from "./locale-routing.ts";
+
+/** COM-4: the contact form's labels and answers ({count}: minutes, {version}: notice version). */
+export interface ContactFormLabels {
+  name: string;
+  email: string;
+  company: string;
+  country: string;
+  phone: string;
+  subject: string;
+  message: string;
+  optional: string;
+  requiredNote: string;
+  select: string;
+  website: string;
+  tooManyOne: string;
+  tooManyOther: string;
+  checkFields: string;
+  unavailable: string;
+  failed: string;
+  noConnection: string;
+  thankYou: string;
+  received: string;
+  outdated: string;
+  reload: string;
+  noticeTitle: string;
+  noticeVersion: string;
+  readPrivacyPolicy: string;
+  newTab: string;
+  send: string;
+  sending: string;
+  /** Shown with the disabled form where the notice of the page's language is not approved. */
+  notInLanguage: string;
+}
 
 export interface SiteDictionary {
   skipToContent: string;
@@ -44,6 +79,7 @@ export interface SiteDictionary {
     removedText: string;
   };
   privacy: { title: string; draft: string; draftText: string; version: string };
+  contactForm: ContactFormLabels;
   unavailable: string;
 }
 
@@ -94,6 +130,38 @@ const EN: SiteDictionary = {
     draft: "Draft — not for publication",
     draftText: "Not shown in production until these are settled:",
     version: "Version",
+  },
+  contactForm: {
+    name: "Your name",
+    email: "Your e-mail",
+    company: "Company",
+    country: "Country",
+    phone: "Phone number",
+    subject: "Subject",
+    message: "Your message",
+    optional: "(optional)",
+    requiredNote: "Fields marked * are required.",
+    select: "Select…",
+    website: "Website",
+    tooManyOne: "Too many messages. Please try again in about {count} minute.",
+    tooManyOther: "Too many messages. Please try again in about {count} minutes.",
+    checkFields: "Please check these fields:",
+    unavailable: "The contact form is not available right now. Please call or e-mail us.",
+    failed: "Something went wrong. Please try again in a moment, or call or e-mail us.",
+    noConnection: "No connection. Please try again.",
+    thankYou: "Thank you",
+    received: "We have received your message and will reply by e-mail.",
+    outdated:
+      "Our privacy information was updated after you opened this page. Read the current version, then send your message again.",
+    reload: "Reload the page",
+    noticeTitle: "How we use your details",
+    noticeVersion: "Notice version {version}",
+    readPrivacyPolicy: "Read the Privacy Policy",
+    newTab: "(opens in a new tab)",
+    send: "Send message",
+    sending: "Sending…",
+    notInLanguage:
+      "The contact form is not available in this language yet. Please call or e-mail us, or use the English version of this page.",
   },
   unavailable: "This page is temporarily unavailable. Please try again in a moment.",
 };
@@ -146,6 +214,40 @@ const TR: SiteDictionary = {
     draft: "Taslak — yayın için değil",
     draftText: "Bunlar tamamlanana kadar production ortamında gösterilmez:",
     version: "Sürüm",
+  },
+  contactForm: {
+    name: "Adınız",
+    email: "E-posta adresiniz",
+    company: "Şirket",
+    country: "Ülke",
+    phone: "Telefon numarası",
+    subject: "Konu",
+    message: "Mesajınız",
+    optional: "(isteğe bağlı)",
+    requiredNote: "* ile işaretli alanlar zorunludur.",
+    select: "Seçin…",
+    website: "Web sitesi",
+    tooManyOne: "Çok fazla mesaj gönderildi. Lütfen yaklaşık {count} dakika sonra tekrar deneyin.",
+    tooManyOther:
+      "Çok fazla mesaj gönderildi. Lütfen yaklaşık {count} dakika sonra tekrar deneyin.",
+    checkFields: "Lütfen şu alanları kontrol edin:",
+    unavailable: "İletişim formu şu anda kullanılamıyor. Lütfen bizi arayın veya e-posta gönderin.",
+    failed:
+      "Bir sorun oluştu. Lütfen biraz sonra tekrar deneyin ya da bizi arayın veya e-posta gönderin.",
+    noConnection: "Bağlantı yok. Lütfen tekrar deneyin.",
+    thankYou: "Teşekkür ederiz",
+    received: "Mesajınızı aldık; size e-posta ile dönüş yapacağız.",
+    outdated:
+      "Bu sayfayı açtıktan sonra gizlilik bilgilendirmemiz güncellendi. Güncel metni okuyun, ardından mesajınızı yeniden gönderin.",
+    reload: "Sayfayı yenile",
+    noticeTitle: "Bilgilerinizi nasıl kullanıyoruz",
+    noticeVersion: "Bilgilendirme sürümü {version}",
+    readPrivacyPolicy: "Gizlilik Politikasını okuyun",
+    newTab: "(yeni sekmede açılır)",
+    send: "Mesajı gönder",
+    sending: "Gönderiliyor…",
+    notInLanguage:
+      "İletişim formu bu dilde henüz kullanılamıyor. Lütfen bizi arayın veya e-posta gönderin ya da sayfanın İngilizce sürümünü kullanın.",
   },
   unavailable: "Bu sayfa geçici olarak kullanılamıyor. Lütfen biraz sonra tekrar deneyin.",
 };
