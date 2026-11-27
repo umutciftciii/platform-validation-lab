@@ -29,7 +29,9 @@ import { BV_FOOTER_SEED, BV_HOME_SEED, BV_NAV_SEED, CMS_SEEDS } from "../../../s
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "../../../src/cms/seed/bv-pages.js";
 import {
   CORPORATE_FOOTER_SEED,
+  CORPORATE_HOME_SEED,
   CORPORATE_NAV_SEED,
+  CORPORATE_PRODUCTS_SEED,
   CORPORATE_SEEDS,
   CORPORATE_SITE_SEO_SEED,
 } from "../../../src/cms/seed/corporate.js";
@@ -71,6 +73,42 @@ describe("BV import seeds", () => {
     expect(JSON.stringify(CORPORATE_SEEDS)).not.toMatch(/Feitian|only official|tek resmi/i);
     // No default image: the corporate site has no media of its own yet.
     expect(CORPORATE_SITE_SEO_SEED.defaultOgImage).toBeNull();
+  });
+
+  it("COM-2b: the corporate home and portfolio carry no unconfirmed claim", () => {
+    for (const key of ["corporate.home", "corporate.products"]) {
+      const t = CMS_DESIGN_TEMPLATES.find((x) => x.key === key)!;
+      expect(t).toMatchObject({ site: "CORPORATE", kind: "DESIGN" });
+      // With the corporate site's own rules (no image fields at all).
+      expect(validateContent("DESIGN", key, ALL_SEEDS[key]!.content, "CORPORATE")).toEqual(
+        ALL_SEEDS[key]!.content,
+      );
+    }
+    const text = JSON.stringify([CORPORATE_HOME_SEED, CORPORATE_PRODUCTS_SEED]);
+    // Owner decisions 2026-11-27 (DP-003): no distributorship claim, counter, percentage,
+    // testimonial or FAQ commitment; no certification, purity or guarantee statement (DP-002).
+    for (const claim of [
+      /Feitian|official distributor|only official/i,
+      /\d+\s*(\+|%|K\+)/,
+      /Daniel Foster|Ahmed Al Mansouri|Michael Chen|Business Partner|Procurement Director/,
+      /minimum order|MOQ|Letter of Credit|\bLC\b|SGS|Incoterms|\bFOB\b|\bCIF\b|\bDAP\b/,
+      /ASTM|\bISO\b|certified|purity|food grade|guarantee|world-class|terminal/i,
+    ]) {
+      expect(text, String(claim)).not.toMatch(claim);
+    }
+    // The typical values table stays hidden: no row until its source is approved.
+    expect(CORPORATE_PRODUCTS_SEED.typicalValues.rows).toEqual([]);
+    // Links lead only to pages of this package (/products and its sections) or to the contact
+    // page; pages that do not exist yet (About Us, the services) are not linked.
+    const anchors = new Set(CORPORATE_PRODUCTS_SEED.groups.map((g) => g.anchor));
+    const hrefs = [...text.matchAll(/"href":"([^"]+)"/g)].map((m) => m[1]!);
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) {
+      const [path, anchor] = href.split("#");
+      expect(["/contact", "/products"], href).toContain(path);
+      if (anchor) expect(anchors.has(anchor), href).toBe(true);
+    }
+    expect(CORPORATE_PRODUCTS_SEED.coa.button.href).toBe("/contact");
   });
 
   it("keeps the claims and disclosures the source documents require", () => {

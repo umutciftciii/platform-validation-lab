@@ -44,3 +44,19 @@ export function mapHref(company: string, addressLines: readonly { text: string }
   const query = [company.trim(), address].filter(Boolean).join(", ");
   return `${MAPS_SEARCH}?query=${encodeURIComponent(query)}`;
 }
+
+/**
+ * COM-2b (DP-002): the typical values table of the portfolio is on the page only with at least
+ * one row; the import leaves it empty until the source of the values is approved.
+ */
+export function showsTypicalValues(table: { rows: readonly unknown[] }): boolean {
+  return table.rows.length > 0;
+}
+
+/** COM-2b: grade names alone are a compact list; with a type or description, cards. */
+export function gradeLayout(
+  items: readonly { type: string | null; description: string | null }[],
+): "none" | "chips" | "cards" {
+  if (!items.length) return "none";
+  return items.every((i) => !i.type && !i.description) ? "chips" : "cards";
+}

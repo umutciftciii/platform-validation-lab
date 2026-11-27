@@ -6982,16 +6982,168 @@ describe("24. the Corporate site on the shared CMS (COM-1)", () => {
     expectError(await pub("/page?path=/com2a-preview", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
   });
 
-  it("previews a corporate fragment while the site has no home page in the CMS (COM-2a)", async () => {
+  // COM-2b (DP-028, DP-094): the designed home page and the product portfolio.
+  it("has no fragment preview while the corporate home is not in the CMS (COM-2b)", async () => {
     const res = await comEditor.post(`/pages/${ids["corporate.site-footer"]}/preview`, {});
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const token = CmsPreviewResponseSchema.parse(res.body).url.split("/preview/")[1]!;
+    // COM-2a's stand-in (the fragment as the page) is gone: nothing to show the fragment on.
+    expectError(await pub(`/preview/${token}`, TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+  });
+
+  it("imports the corporate home and portfolio into the Corporate site only (COM-2b)", async () => {
+    for (const [key, path] of [
+      ["corporate.home", "/"],
+      ["corporate.products", "/products"],
+    ] as const) {
+      expectError(
+        await bvEditor.post(`/sites/${BV}/import`, { key, dryRun: true }),
+        400,
+        "VALIDATION_FAILED",
+        { path: "key", rule: "unknown_template" },
+      );
+      const dry = await comEditor.post(`/sites/${COM}/import`, { key, dryRun: true });
+      expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+      const res = await comEditor.post(`/sites/${COM}/import`, { key, dryRun: false });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      ids[key] = CmsImportResponseSchema.parse(res.body).pageId!;
+      const page = CmsPageResponseSchema.parse(
+        (await comEditor.get(`/pages/${ids[key]}`)).body,
+      ).page;
+      expect(page).toMatchObject({ kind: "DESIGN", templateKey: key, locale: "en", path });
+      // Never twice (ADR-020 D7).
+      expectError(
+        await comEditor.post(`/sites/${COM}/import`, { key, dryRun: false }),
+        409,
+        "CONFLICT_STATE",
+        { path: "key", rule: "already_imported" },
+      );
+      // A draft: nothing on the site before it is published.
+      expectError(await pub(`/page?path=${path}`, TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+    }
+    expectError(
+      await comEditor.post(`/sites/${COM}/import`, { key: "bv.home", dryRun: true }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "key", rule: "unknown_template" },
+    );
+  });
+
+  it("refuses claim fields and keeps the typical values optional (COM-2b)", async () => {
+    const page = CmsPageResponseSchema.parse(
+      (await comEditor.get(`/pages/${ids["corporate.home"]}`)).body,
+    ).page;
+    const save = (content: Record<string, unknown>, version = page.version) =>
+      comEditor.post(`/pages/${page.id}/draft`, { version, title: "Home", seo: NO_SEO, content });
+    const c = page.content as Record<string, Record<string, unknown>>;
+    // The schema has no field for a counter or a testimonial: such content is refused.
+    expectError(
+      await save({
+        ...c,
+        hero: { ...c["hero"], counters: [{ value: "50+", label: "Countries" }] },
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(await save({ ...c, testimonials: [] }), 400, "VALIDATION_FAILED");
+    const products = CmsPageResponseSchema.parse(
+      (await comEditor.get(`/pages/${ids["corporate.products"]}`)).body,
+    ).page;
+    const pc = products.content as Record<string, Record<string, unknown>>;
+    expect(pc["typicalValues"]?.["rows"]).toEqual([]);
+    // Two groups with the same anchor would give two sections the same address.
+    const groups = pc["groups"] as unknown as Record<string, unknown>[];
+    expectError(
+      await comEditor.post(`/pages/${products.id}/draft`, {
+        version: products.version,
+        title: "Products",
+        seo: NO_SEO,
+        content: { ...pc, groups: [groups[0], { ...groups[1], anchor: groups[0]!["anchor"] }] },
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("previews the corporate home draft, and fragments on it (COM-2b, DP-321)", async () => {
+    const home = await comEditor.post(`/pages/${ids["corporate.home"]}/preview`, {});
+    expect(home.status, JSON.stringify(home.body)).toBe(200);
+    const token = CmsPreviewResponseSchema.parse(home.body).url.split("/preview/")[1]!;
+    expect(token).toMatch(/^v1\.[0-9a-f-]{36}\.CORPORATE\./);
     const view = CmsPublicBundleSchema.parse(
       (await pub(`/preview/${token}`, TEST_KEYS.webCorporate)).body,
     );
-    // The fragment itself is the page; the site shows its own home around it.
-    expect(view.page).toMatchObject({ kind: "FRAGMENT", templateKey: "corporate.site-footer" });
-    expect(view.fragments["corporate.site-footer"]).not.toBeNull();
+    expect(view.page).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "corporate.home",
+      path: "/",
+      revisionNumber: null,
+    });
     expect(view.fragments["corporate.site-nav"]).not.toBeNull();
+    expectError(await pub(`/preview/${token}`), 404, "NOT_FOUND");
+    // A fragment's draft is shown on the real home page now (its draft before it is published).
+    const footer = await comEditor.post(`/pages/${ids["corporate.site-footer"]}/preview`, {});
+    const ftoken = CmsPreviewResponseSchema.parse(footer.body).url.split("/preview/")[1]!;
+    const fview = CmsPublicBundleSchema.parse(
+      (await pub(`/preview/${ftoken}`, TEST_KEYS.webCorporate)).body,
+    );
+    expect(fview.page).toMatchObject({ kind: "DESIGN", templateKey: "corporate.home" });
+    // The portfolio's preview is the portfolio.
+    const products = await comEditor.post(`/pages/${ids["corporate.products"]}/preview`, {});
+    const ptoken = CmsPreviewResponseSchema.parse(products.body).url.split("/preview/")[1]!;
+    const pview = CmsPublicBundleSchema.parse(
+      (await pub(`/preview/${ptoken}`, TEST_KEYS.webCorporate)).body,
+    );
+    expect(pview.page).toMatchObject({ kind: "DESIGN", templateKey: "corporate.products" });
+  });
+
+  it("publishes the corporate home and portfolio for the corporate key only (COM-2b)", async () => {
+    for (const key of ["corporate.home", "corporate.products"]) {
+      const res = await publish(ids[key]!);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    const home = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/", TEST_KEYS.webCorporate)).body,
+    );
+    expect(home.page).toMatchObject({ kind: "DESIGN", templateKey: "corporate.home", path: "/" });
+    expect(home.page.revisionNumber).toBe(1);
+    const products = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/products", TEST_KEYS.webCorporate)).body,
+    );
+    expect(products.page).toMatchObject({ templateKey: "corporate.products", path: "/products" });
+    // The BV key never sees them (the BV site has no CMS page at /products).
+    expectError(await pub("/page?path=/products"), 404, "NOT_FOUND");
+    const bvHome = await pub("/page?path=/");
+    expect(JSON.stringify(bvHome.body)).not.toContain("corporate.");
+    // SEO: both addresses resolve on the corporate site and are listed in its sitemap.
+    expect((await seo("/resolve?path=/products")).status).toBe(200);
+    const entries = PublicSitemapResponseSchema.parse((await seo("/sitemap")).body).entries;
+    expect(entries.find((e) => e.path === "/")).toMatchObject({ kind: "home", locale: "en" });
+    expect(entries.find((e) => e.path === "/products")).toMatchObject({
+      kind: "page",
+      locale: "en",
+    });
+    const bvEntries = PublicSitemapResponseSchema.parse(
+      (await seo("/sitemap", TEST_KEYS.webBv)).body,
+    ).entries;
+    expect(bvEntries.some((e) => e.path === "/products" && e.kind === "page")).toBe(false);
+  });
+
+  it("creates the Turkish home as a draft that stays off the site (COM-2b, ML-2)", async () => {
+    const res = await comEditor.post(`/pages/${ids["corporate.home"]}/translations`, {
+      locale: "tr",
+      title: "Ana Sayfa",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const tr = CmsPageResponseSchema.parse(res.body).page;
+    expect(tr).toMatchObject({
+      kind: "DESIGN",
+      templateKey: "corporate.home",
+      locale: "tr",
+      path: "/",
+      translationGroupId: ids["corporate.home"],
+      publication: null,
+    });
+    expectError(await pub("/page?path=/&locale=tr", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
   });
 });
