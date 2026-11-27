@@ -5244,8 +5244,12 @@ describe("18. ML-8b language tabs: states, source revisions, languages of a publ
       ["nl", false, false, "DRAFT", "MANUAL"],
     ]);
     expect(langs[1]).toMatchObject({ hasText: true, public: false, requiredMissing: [] });
-    // Corporate has English only
-    expect(wf.sites.find((x) => x.siteId === COM)!.languages.map((l) => l.locale)).toEqual(["en"]);
+    // Corporate: English and (COM-1) Turkish, which is not public.
+    const com = wf.sites.find((x) => x.siteId === COM)!.languages;
+    expect(com.map((l) => [l.locale, l.public])).toEqual([
+      ["en", true],
+      ["tr", false],
+    ]);
   });
 
   it("choosing Dutch: enabled and complete only, a confirmed manual check, the publisher's right", async () => {

@@ -156,6 +156,12 @@ export const contract = {
     bvProductDetail: "Published product snapshots. Edit them under Products.",
     bvPrivacy: "Versioned legal text tied to consent records. Changed only through a new version.",
     corporateHome: "Skeleton today. Built from the dreampetroleum.com inventory in S4.",
+    corporateSiteNav:
+      "Menu items and submenus of every corporate page (menu editor, COM-1). Links to pages that do not exist yet stay as text.",
+    corporateSiteFooter:
+      "Company text, contact details, link columns, social and legal links of every corporate page (COM-1).",
+    corporateSiteSeo:
+      "Site name, default title and description of the corporate site (COM-1). Managed under SEO.",
   },
   /** Menu target problems (MENU_TARGET_PROBLEMS). */
   problem: {

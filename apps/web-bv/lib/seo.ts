@@ -299,7 +299,12 @@ export const siteSeo = cache(async (locale: RouteLocale = DEFAULT_LOCALE): Promi
       console.error("public seo: the settings response does not match the contract");
       return CODE_SITE_SEO;
     }
-    return parsed.data.settings ?? CODE_SITE_SEO;
+    const settings = parsed.data.settings;
+    // COM-1: the contract allows a site without a default image; BV always has one (required
+    // field), the code default covers it anyway.
+    return settings
+      ? { ...settings, defaultOgImage: settings.defaultOgImage ?? DEFAULT_OG_IMAGE }
+      : CODE_SITE_SEO;
   } catch {
     console.error("public seo: settings failed (network)");
     return CODE_SITE_SEO;

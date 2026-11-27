@@ -25,8 +25,24 @@ export const CODE_SITE_SEO = {
 };
 export type SiteSeoDefaults = typeof CODE_SITE_SEO;
 
+/**
+ * The defaults of a site from its published settings (the code defaults while none). COM-1: a site
+ * without a default image (the corporate site) previews without one ("").
+ */
+export function siteSeoDefaultsOf(
+  live: {
+    siteName: string;
+    defaultTitle: string;
+    defaultDescription: string;
+    defaultOgImage: string | null;
+  } | null,
+): SiteSeoDefaults {
+  return live ? { ...live, defaultOgImage: live.defaultOgImage ?? "" } : CODE_SITE_SEO;
+}
+
 /** An image of a preview: a site path is loaded from the site's origin, other URLs as they are. */
 export function previewImageSrc(url: string, origin: string | null): string | null {
+  if (url === "") return null;
   if (!url.startsWith("/")) return url;
   return origin ? `${origin}${url}` : null;
 }
@@ -35,9 +51,9 @@ export interface SeoDraft {
   /** The page's own address on the site, inside its language ("/about-us"). */
   path: string;
   /**
-   * ML-5: the page's language on the BV site; the preview shows the public address with its
-   * prefix (`/en/about-us`, `/nl/over-ons`) as the site renders it. Default: English. null: a
-   * site without language prefixes (Corporate).
+   * ML-5: the page's language; the preview shows the public address with its prefix
+   * (`/en/about-us`, `/nl/over-ons`, COM-1 `/tr/...` on the corporate site) as the site renders
+   * it. Default: English. null: an address without a language prefix.
    */
   locale?: string | null;
   /** The page's name: the title when no SEO title is set (CMS pages) or the product name. */

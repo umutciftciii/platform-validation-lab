@@ -20,6 +20,7 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import {
   BV_FRAGMENT_KEYS,
+  CORPORATE_FRAGMENT_KEYS,
   cmsIsArticle,
   cmsSlugOfPath,
   seoIsSelfCanonical,
@@ -53,7 +54,8 @@ const PATH = /^\/(news\/[a-z0-9]+(-[a-z0-9]+)*|([a-z0-9]+(-[a-z0-9]+)*)?)$/;
 const NEWS_INDEX_KEY = "bv.news-index";
 const FRAGMENTS: Readonly<Record<"BV" | "CORPORATE", readonly string[]>> = {
   BV: BV_FRAGMENT_KEYS,
-  CORPORATE: [],
+  // COM-1: the corporate navigation and footer.
+  CORPORATE: CORPORATE_FRAGMENT_KEYS,
 };
 
 @Injectable()

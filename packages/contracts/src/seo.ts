@@ -158,6 +158,8 @@ export function seoDeployEnv(raw: string | undefined): SeoDeployEnv {
 
 /** Local default origin of the BV site (the DEV port), used for canonical URLs in development. */
 export const BV_LOCAL_ORIGIN = "http://localhost:3110";
+/** COM-1: local default origin of the corporate site (its DEV port). */
+export const CORPORATE_LOCAL_ORIGIN = "http://localhost:3111";
 
 /**
  * The public origin of a site (scheme + host, no path) from its environment value. https only
@@ -198,9 +200,11 @@ export function seoPolicy(env: {
   deployEnv: string | undefined;
   origin: string | undefined;
   indexing: string | undefined;
+  /** COM-1: the site's local origin (default: the BV site's). */
+  localOrigin?: string;
 }): SeoPolicy {
   const deployEnv = seoDeployEnv(env.deployEnv);
-  const origin = seoPublicOrigin(env.origin, deployEnv);
+  const origin = seoPublicOrigin(env.origin, deployEnv, env.localOrigin);
   const indexable = deployEnv === "production" && env.indexing?.trim() === "on" && origin !== null;
   return { deployEnv, origin, indexable };
 }
@@ -217,7 +221,11 @@ export function seoLocalePath(locale: string, path: string): string {
 }
 
 /** The Open Graph locale of a language (`og:locale`): en → en_GB, nl → nl_NL. */
-export const SEO_OG_LOCALES: Readonly<Record<string, string>> = { en: "en_GB", nl: "nl_NL" };
+export const SEO_OG_LOCALES: Readonly<Record<string, string>> = {
+  en: "en_GB",
+  nl: "nl_NL",
+  tr: "tr_TR",
+};
 
 /** The canonical absolute URL of a site path ("/products/x"); query and fragment are dropped. */
 export function canonicalUrl(origin: string, path: string): string {
@@ -402,7 +410,8 @@ export const PublicSiteSeoSettingsSchema = z.strictObject({
   siteName: z.string(),
   defaultTitle: z.string(),
   defaultDescription: z.string(),
-  defaultOgImage: z.string().startsWith("/"),
+  /** COM-1: null on a site without a default image (the corporate site has no assets yet). */
+  defaultOgImage: z.string().startsWith("/").nullable(),
 });
 export type PublicSiteSeoSettings = z.infer<typeof PublicSiteSeoSettingsSchema>;
 
@@ -419,10 +428,18 @@ export const SITE_REDIRECT_ORIGINS = ["MANUAL", "SLUG_CHANGE", "IMPORT"] as cons
 export type SiteRedirectOrigin = (typeof SITE_REDIRECT_ORIGINS)[number];
 
 /**
- * Sites whose frontend applies the redirects (the BV proxy). Only there does a slug change of a
- * published page, article or product keep the old address; elsewhere it moves as before.
+ * Sites whose frontend applies the redirects (the proxy of each site). Only there does a slug
+ * change of a published page, article or product keep the old address; elsewhere it moves as
+ * before. COM-1: the corporate site's proxy applies them too.
  */
-export const REDIRECT_SITE_KEYS: readonly string[] = ["BV"];
+export const REDIRECT_SITE_KEYS: readonly string[] = ["BV", "CORPORATE"];
+
+/**
+ * COM-1: sites whose frontend has the product catalogue routes (`/products`, `/products/<slug>`).
+ * The corporate site has none yet (its portfolio pages are content pages), so the API neither
+ * resolves nor lists catalogue addresses for it.
+ */
+export const CATALOGUE_SITE_KEYS: readonly string[] = ["BV"];
 
 /** Whether an https URL target or a same-site path (the DB CHECK of SiteRedirect, simplified). */
 export function seoRedirectTargetIsSitePath(target: string): boolean {

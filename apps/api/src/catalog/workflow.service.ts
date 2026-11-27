@@ -61,7 +61,7 @@ import { mapDbError, staleVersion } from "./errors.js";
 import { lockMaster, type ScopedTx } from "./master.js";
 import {
   applyAddressChange,
-  keepsOldAddress,
+  keepsOldProductAddress,
   lockSitePaths,
   redirectsTo,
 } from "../seo/redirects.js";
@@ -318,7 +318,7 @@ export class WorkflowService {
     // DP-210: older addresses of the product per site (BV only; one small read per site).
     const redirects = new Map<string, string[]>();
     for (const s of a.sites) {
-      if (readable.includes(s.id) && keepsOldAddress(a.sites, s.id)) {
+      if (readable.includes(s.id) && keepsOldProductAddress(a.sites, s.id)) {
         redirects.set(s.id, await redirectsTo(db, s.id, "PRODUCT", id));
       }
     }
@@ -382,7 +382,7 @@ export class WorkflowService {
                 ? `${PRODUCTS_PATH}${snapshotSlug(p.snapshot)}`
                 : null,
             next: `${PRODUCTS_PATH}${product.slug}`,
-            keepsOldAddress: keepsOldAddress(a.sites, s.id),
+            keepsOldAddress: keepsOldProductAddress(a.sites, s.id),
             redirectsHere: redirects.get(s.id) ?? [],
           },
           readiness: checkPublication({
@@ -966,7 +966,7 @@ export class WorkflowService {
           ...(manualReview.length ? { manualReview } : {}),
         };
         // DP-210: the previous address answers 301 with the new one (BV); older redirects follow.
-        if (keepsOldAddress(a.sites, siteId)) {
+        if (keepsOldProductAddress(a.sites, siteId)) {
           await applyAddressChange(tx, a, {
             siteId,
             contentType: "PRODUCT",
