@@ -3,7 +3,8 @@
  * public address in its language, only in languages the site has routes for AND that are public
  * now (fail closed to the default language), with `xhtml:link` alternates towards counterparts
  * listed in the same sitemap (reciprocal by construction). The corporate site has no catalogue
- * routes, so product entries are never listed (the API sends none for it either).
+ * routes, so product entries are never listed (the API sends none for it either). Only the first
+ * page of the news list is listed (its next pages are reached from it).
  *
  * Pure (no Next.js, no fetch, no `@/` imports) so `node --test` runs it as is.
  */
@@ -19,8 +20,11 @@ export interface SitemapUrl {
   languages: HreflangMap | null;
 }
 
-/** Entry kinds the corporate site has routes for (COM-1: the home and content pages). */
-const ROUTED_KINDS: readonly PublicSitemapEntry["kind"][] = ["home", "page"];
+/**
+ * Entry kinds the corporate site has routes for (COM-1: the home and content pages; COM-3: the
+ * news list and its articles).
+ */
+const ROUTED_KINDS: readonly PublicSitemapEntry["kind"][] = ["home", "page", "news", "article"];
 
 export function sitemapUrls(
   entries: readonly PublicSitemapEntry[],

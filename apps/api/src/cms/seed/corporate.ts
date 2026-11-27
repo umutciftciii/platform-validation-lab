@@ -14,12 +14,14 @@
  *    have no meta description). No default Open Graph image: the corporate site has no media of
  *    its own yet (COM-2/COM-5).
  * Turkish versions are translations made in the admin (ML-2 "Create translation"), not seeds.
- * COM-2b adds the designed home page and the product portfolio (below).
+ * COM-2b adds the designed home page and the product portfolio (below); COM-3 the heading of the
+ * news list.
  */
 import type {
   BvFooterMenuInput,
   BvNavMenuInput,
   BvSiteSeoContent,
+  CmsNewsIndexContent,
   CorporateHomeContent,
   CorporateProductsContent,
 } from "@dream/contracts";
@@ -427,9 +429,25 @@ export const CORPORATE_PRODUCTS_SEED: CorporateProductsContent = {
   },
 };
 
+/**
+ * COM-3: the heading of the news list. The eyebrow and heading are the live Blogs page's ("Blogs",
+ * "News & Insights"); the live page has no introduction or empty state, so those two are neutral
+ * editorial texts without any claim, to be reviewed with the COM-5 content import.
+ */
+export const CORPORATE_NEWS_INDEX_SEED: CmsNewsIndexContent = {
+  eyebrow: "Blogs",
+  title: "News & Insights",
+  intro: "News and articles from Dream Petroleum.",
+  empty: {
+    title: "No articles yet",
+    text: "Articles will appear here once they are published.",
+  },
+};
+
 export const CORPORATE_SEEDS: Readonly<Record<string, { title: string; content: unknown }>> = {
   "corporate.home": { title: "Home", content: CORPORATE_HOME_SEED },
   "corporate.products": { title: "Products", content: CORPORATE_PRODUCTS_SEED },
+  "corporate.news-index": { title: "News", content: CORPORATE_NEWS_INDEX_SEED },
   "corporate.site-nav": { title: "Navigation", content: CORPORATE_NAV_SEED },
   "corporate.site-footer": { title: "Footer", content: CORPORATE_FOOTER_SEED },
   "corporate.site-seo": { title: "SEO defaults", content: CORPORATE_SITE_SEO_SEED },

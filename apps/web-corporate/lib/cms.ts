@@ -11,6 +11,9 @@
  *    `corporate.site-nav` and `corporate.site-footer` of its language and its counterparts.
  *  - `getPublishedHome(locale)`, `getPublishedProducts(locale)` (COM-2b): the designed pages
  *    `corporate.home` at `/` and `corporate.products` at `/products`, the same way.
+ *  - `getNews(locale)`, `getPublishedArticle(slug, locale)` (COM-3): the news list at `/news` under
+ *    the published heading `corporate.news-index`, and a published article at `/news/<slug>` (an
+ *    article taken off the site says so: "unpublished").
  *  - `getSiteFrame(path, locale)`: the navigation and footer alone, for pages outside the CMS (the
  *    privacy policy, the 404, a home page that is not published).
  *  - `getPreview(token)` (COM-2a, DP-321): the draft a signed preview link names, in its draft's
@@ -21,7 +24,9 @@
 import {
   BvFooterPublicSchema,
   BvNavPublicSchema,
+  CMS_NEWS_INDEX_KEYS,
   CMS_SITE_MENU_KEYS,
+  CORPORATE_NEWS_INDEX_FIELDS,
   CORPORATE_HOME_FIELDS,
   CORPORATE_HOME_KEY,
   CORPORATE_PRODUCTS_FIELDS,
@@ -31,10 +36,13 @@ import {
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
   PUBLIC_CMS_API,
+  cmsArticleContentSchema,
   cmsFieldsSchema,
   cmsIsArticle,
   cmsTemplateContentSchema,
   type CmsLink,
+  type CmsNewsIndexContent,
+  type CmsPublicArticle,
   type CorporateHomeContent,
   type CorporateProductsContent,
   type CmsPublicAlternate,
@@ -48,6 +56,7 @@ import {
   isRouteLocale,
   languageOptions,
   localePath,
+  localizeHref,
   localizeLinks,
   storedAddress,
   type LanguageOption,
@@ -149,6 +158,43 @@ type DesignKey = keyof typeof DESIGNS;
 const isDesignKey = (key: string): key is DesignKey => Object.hasOwn(DESIGNS, key);
 
 export type Read<T> = { ok: true; data: T } | { ok: false; reason: "not_found" | "unavailable" };
+/** COM-3: a read that can also say an article was taken off the site. */
+export type ArticleRead<T> = Read<T> | { ok: false; reason: "unpublished" };
+
+/** COM-3: the heading of the news list, from the designed page `corporate.news-index`. */
+export interface NewsHeading {
+  title: string;
+  seo: CmsPublicPage["seo"];
+  copy: CmsNewsIndexContent;
+}
+
+/** COM-3: the published articles (newest first) under the list heading, with the frame. */
+export interface NewsView extends SiteFrame {
+  heading: NewsHeading;
+  /** Each article's `path` is its public address in the list's language. */
+  articles: CmsPublicArticle[];
+  alternates: readonly CmsPublicAlternate[];
+  locale: RouteLocale;
+}
+
+/** COM-3: a news article at `/news/<slug>` with its frame. */
+export interface ArticleView extends SiteFrame {
+  /** The stored path inside its language ("/news/<slug>"). */
+  path: string;
+  title: string;
+  seo: CmsPublicPage["seo"];
+  excerpt: string;
+  coverImage: string | null;
+  coverAlt: string | null;
+  sections: TemplateSection[];
+  /** Its first publication; null in the preview of an article never published. */
+  firstPublishedAt: string | null;
+  alternates: readonly CmsPublicAlternate[];
+  locale: RouteLocale;
+}
+
+const NEWS_INDEX_KEY = CMS_NEWS_INDEX_KEYS.CORPORATE;
+const NEWS_INDEX = cmsFieldsSchema(CORPORATE_NEWS_INDEX_FIELDS, "CORPORATE");
 
 /**
  * The frame of a page from the API's fragments, every internal link given the prefix of `locale`
@@ -329,12 +375,160 @@ async function templateView(
   };
 }
 
+/** The list heading of a `corporate.news-index` page; null for another page or invalid content. */
+function newsHeading(page: CmsPublicPage | null): NewsHeading | null {
+  if (!page || page.kind !== "DESIGN" || page.templateKey !== NEWS_INDEX_KEY) return null;
+  const parsed = NEWS_INDEX.safeParse(page.content);
+  if (!parsed.success) {
+    console.error("public cms: the news heading does not match the contract; not rendered");
+    return null;
+  }
+  return { title: page.title, seo: page.seo, copy: parsed.data as unknown as CmsNewsIndexContent };
+}
+
+/** COM-3: the site's news read of a language (articles, heading, fragments, counterparts). */
+async function readNews(locale: RouteLocale): Promise<
+  Read<{
+    heading: NewsHeading | null;
+    articles: CmsPublicArticle[];
+    frame: SiteFrame;
+    alternates: CmsPublicAlternate[];
+  }>
+> {
+  const res = await apiGet(`${PUBLIC_CMS_API}/news${localeQuery(locale, "?")}`);
+  if (!res) return { ok: false, reason: "unavailable" };
+  if (res.status === 404) return { ok: false, reason: "not_found" };
+  if (!res.ok) return { ok: false, reason: "unavailable" };
+  const parsed = CmsPublicNewsSchema.safeParse(await res.json().catch(() => null));
+  if (!parsed.success) {
+    console.error("public cms: the news response does not match the contract; not rendered");
+    return { ok: false, reason: "unavailable" };
+  }
+  const alternates = parsed.data.alternates ?? [];
+  const frame = frameOf(parsed.data.fragments, storedAddress(locale, "/news"), locale);
+  return {
+    ok: true,
+    data: {
+      heading: newsHeading(parsed.data.page),
+      articles: parsed.data.articles.map((a) => ({ ...a, path: localizeHref(locale, a.path) })),
+      alternates,
+      frame: {
+        footer: frame.footer,
+        nav: frame.nav
+          ? { ...frame.nav, languages: await languagesFor(locale, "/news", alternates) }
+          : null,
+      },
+    },
+  };
+}
+
+/**
+ * COM-3: the news list of a language — the published articles under the published heading
+ * (`corporate.news-index`). Without a published heading the list does not exist in that language
+ * (not found: the site's 404, as the proxy decides); an empty list is a normal answer.
+ */
+export async function getNews(locale: RouteLocale = DEFAULT_LOCALE): Promise<Read<NewsView>> {
+  const res = await readNews(locale);
+  if (!res.ok) return res;
+  const { heading, articles, alternates, frame } = res.data;
+  if (!heading) return { ok: false, reason: "not_found" };
+  return { ok: true, data: { heading, articles, alternates, locale, ...frame } };
+}
+
+/** Whether a 404 body says the page was published here and has been taken off the site. */
+function unpublishedBody(body: unknown): boolean {
+  const details = (body as { error?: { details?: unknown } } | null)?.error?.details;
+  return (
+    Array.isArray(details) &&
+    details.some(
+      (d) =>
+        typeof d === "object" && d !== null && (d as { rule?: unknown }).rule === "unpublished",
+    )
+  );
+}
+
+/** COM-3: a published article at `/news/<slug>` of a language. */
+export async function getPublishedArticle(
+  slug: string,
+  locale: RouteLocale = DEFAULT_LOCALE,
+): Promise<ArticleRead<ArticleView>> {
+  if (!SLUG.test(slug) || slug.length > 80) return { ok: false, reason: "not_found" };
+  const res = await apiGet(
+    `${PUBLIC_CMS_API}/page?path=${encodeURIComponent(`/news/${slug}`)}${localeQuery(locale, "&")}`,
+  );
+  if (!res) return { ok: false, reason: "unavailable" };
+  if (res.status === 404) {
+    return unpublishedBody(await res.json().catch(() => null))
+      ? { ok: false, reason: "unpublished" }
+      : { ok: false, reason: "not_found" };
+  }
+  if (!res.ok) return { ok: false, reason: "unavailable" };
+  const bundle = CmsPublicBundleSchema.safeParse(await res.json().catch(() => null));
+  if (!bundle.success) {
+    console.error("public cms: the article response does not match the contract; not rendered");
+    return { ok: false, reason: "unavailable" };
+  }
+  const { page, fragments } = bundle.data;
+  if (!cmsIsArticle(page) || !page.path) return { ok: false, reason: "not_found" };
+  const alternates = CmsPublicAlternateSchema.array()
+    .max(20)
+    .safeParse(bundle.data.alternates ?? []);
+  const view = await articleView(
+    { ...page, path: page.path },
+    fragments,
+    locale,
+    alternates.success ? alternates.data : [],
+  );
+  return view ? { ok: true, data: view } : { ok: false, reason: "unavailable" };
+}
+
+/** An article with its frame, or null when its content does not match the contract. */
+async function articleView(
+  page: CmsPublicPage & { path: string },
+  fragments: Record<string, CmsPublicPage | null>,
+  locale: RouteLocale,
+  counterparts: readonly CmsPublicAlternate[],
+): Promise<ArticleView | null> {
+  // The corporate site's own rules (DP-320): a cover is one of its files or none.
+  const content = cmsArticleContentSchema("CORPORATE").safeParse(page.content);
+  if (!content.success) {
+    console.error("public cms: the article content does not match the contract; not rendered");
+    return null;
+  }
+  const c = content.data as unknown as {
+    excerpt: string;
+    coverImage: string | null;
+    coverAlt: string | null;
+    sections: TemplateSection[];
+  };
+  const frame = frameOf(fragments, storedAddress(locale, "/news"), locale);
+  return {
+    path: page.path,
+    title: page.title,
+    seo: page.seo,
+    excerpt: c.excerpt,
+    coverImage: c.coverImage,
+    coverAlt: c.coverAlt,
+    sections: localizeLinks(c.sections, locale),
+    firstPublishedAt: page.firstPublishedAt ?? null,
+    alternates: counterparts,
+    locale,
+    footer: frame.footer,
+    nav: frame.nav
+      ? { ...frame.nav, languages: await languagesFor(locale, page.path, counterparts) }
+      : null,
+  };
+}
+
 /** COM-2a (DP-321): what a preview link shows. */
 export type PreviewView =
   | { kind: "template"; locale: RouteLocale; page: TemplatePageView }
   /** COM-2b: the home page — its draft, or the page a fragment's draft is shown on. */
   | { kind: "home"; locale: RouteLocale; page: HomeView }
-  | { kind: "products"; locale: RouteLocale; page: ProductsView };
+  | { kind: "products"; locale: RouteLocale; page: ProductsView }
+  /** COM-3: an article's draft, and the list heading's draft over the published articles. */
+  | { kind: "article"; locale: RouteLocale; page: ArticleView }
+  | { kind: "news"; locale: RouteLocale; page: NewsView };
 
 const PREVIEW_TOKEN = /^v1\.[0-9a-f-]{36}\.CORPORATE\.\d{10,13}\.[0-9a-f]{64}$/;
 
@@ -358,9 +552,38 @@ export async function getPreview(token: string): Promise<Read<PreviewView>> {
   const locale: RouteLocale = isRouteLocale(bundle.data.locale)
     ? bundle.data.locale
     : DEFAULT_LOCALE;
+  if (cmsIsArticle(page)) {
+    if (!page.path) return { ok: false, reason: "not_found" };
+    const view = await articleView({ ...page, path: page.path }, fragments, locale, []);
+    return view
+      ? { ok: true, data: { kind: "article", locale, page: view } }
+      : { ok: false, reason: "unavailable" };
+  }
+  if (page.kind === "DESIGN" && page.templateKey === NEWS_INDEX_KEY) {
+    // The heading's draft over the published articles of its language (also before the heading
+    // was ever published: the list read answers without a heading then).
+    const heading = newsHeading(page);
+    if (!heading) return { ok: false, reason: "unavailable" };
+    const list = await readNews(locale);
+    const frame = frameOf(fragments, storedAddress(locale, "/news"), locale);
+    return {
+      ok: true,
+      data: {
+        kind: "news",
+        locale,
+        page: {
+          heading,
+          articles: list.ok ? list.data.articles : [],
+          alternates: [],
+          locale,
+          footer: frame.footer,
+          nav: frame.nav ? { ...frame.nav, languages: await languagesFor(locale, "/news") } : null,
+        },
+      },
+    };
+  }
   if (page.kind === "TEMPLATE") {
-    // News articles are COM-3; until then their preview is not shown here.
-    if (cmsIsArticle(page) || !page.path) return { ok: false, reason: "not_found" };
+    if (!page.path) return { ok: false, reason: "not_found" };
     const view = await templateView({ ...page, path: page.path }, fragments, locale, []);
     return view
       ? { ok: true, data: { kind: "template", locale, page: view } }
@@ -396,8 +619,8 @@ export async function getPreview(token: string): Promise<Read<PreviewView>> {
 
 /**
  * The published navigation and footer of a language for a page outside the CMS. The public news
- * read carries the site's fragments (the corporate site has no news list yet: no heading, no
- * articles); both are null while the API cannot answer, and the page shows its minimal frame.
+ * read carries the site's fragments; both are null while the API cannot answer, and the page shows
+ * its minimal frame.
  */
 export async function getSiteFrame(
   path: string,

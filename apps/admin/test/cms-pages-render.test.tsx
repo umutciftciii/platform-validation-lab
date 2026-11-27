@@ -236,6 +236,55 @@ describe("/content/news renders on the server (DP-020)", () => {
   });
 });
 
+describe("/content/news on the corporate site (COM-3)", () => {
+  const COM_ARTICLE = "0190f2a1-0000-7000-8000-0000000000c3";
+  const COM_HEADING = "0190f2a1-0000-7000-8000-0000000000c4";
+  const comArticle = summary({
+    ...(articlePage as Record<string, unknown>),
+    id: COM_ARTICLE,
+    siteId: COM,
+    path: "/news/corporate-update",
+    title: "Corporate update (fixture)",
+  });
+  const comHeading = summary({
+    id: COM_HEADING,
+    siteId: COM,
+    kind: "DESIGN",
+    templateKey: "corporate.news-index",
+    path: "/news",
+    title: "News",
+    sectionCount: 0,
+  });
+
+  it("lists the corporate articles and links the corporate list heading", async () => {
+    reads.set(`/api/v1/admin/cms/sites/${COM}/pages`, {
+      site: site("CORPORATE", COM),
+      items: [comHeading, comArticle],
+    });
+    const html = renderToStaticMarkup(
+      await NewsListPage({ searchParams: Promise.resolve({ site: "corporate" }) } as never),
+    );
+    expect(html).toContain("Corporate update (fixture)");
+    expect(html).toContain("/news/corporate-update");
+    expect(html).not.toContain("Market update (fixture)");
+    expect(html).toContain(`/content/${COM_HEADING}?site=corporate`);
+    expect(html).toContain("/content/news/new?site=corporate");
+  });
+
+  it("says when the corporate list heading is not imported yet", async () => {
+    reads.set(`/api/v1/admin/cms/sites/${COM}/pages`, {
+      site: site("CORPORATE", COM),
+      items: [comArticle],
+    });
+    const html = renderToStaticMarkup(
+      await NewsListPage({ searchParams: Promise.resolve({ site: "corporate" }) } as never),
+    );
+    expect(html).toContain("/content?site=corporate");
+    // A BV heading never counts for the corporate list.
+    expect(html).not.toContain("bv.news-index");
+  });
+});
+
 describe("/content/[id] renders on the server", () => {
   it("renders a designed page with its fields and the publication panel", async () => {
     const html = renderToStaticMarkup(
