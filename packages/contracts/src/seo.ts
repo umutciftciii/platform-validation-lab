@@ -33,8 +33,13 @@ export const SEO_RESOLVABLE_PATH = new RegExp(
 
 // --- DP-212: addresses of the old site (legacy URL map, ADR-024 D9) -----------------------------
 
-/** The locale prefixes of the old dreampetroleumbv.com (`/en/…`, `/tr/…`). */
-export const SEO_LEGACY_LOCALES: readonly string[] = ["en", "tr"];
+/**
+ * The locale prefixes of the old sites: dreampetroleumbv.com (`/en/…`, `/tr/…`) and, COM-6, the
+ * old dreampetroleum.com, which also served Russian, Chinese, Spanish and German (`/ru`, `/zh`,
+ * `/es`, `/de`). Their homes may be redirect sources; other two-letter first segments stay
+ * reserved for the sites' own languages.
+ */
+export const SEO_LEGACY_LOCALES: readonly string[] = ["en", "tr", "ru", "zh", "es", "de"];
 
 /**
  * First segments that belong to the site itself (framework, API, previews, forms, documents,

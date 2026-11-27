@@ -2171,7 +2171,7 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
   },
   "standard|/contact": {
     title: "Bize Ulaşın",
-    slug: "iletisim",
+    slug: "contact",
     content: {
       sections: [
         {

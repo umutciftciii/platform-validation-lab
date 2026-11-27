@@ -68,6 +68,11 @@ import type { SiteScopedClient } from "../../src/iam/site-scope.js";
 import { DRY_RUN_LIMITS, IMPORT_LIMITS } from "../../src/translation-packages/limits.js";
 import { ADMIN_ORIGIN, TEST_KEYS, apiTestEnv } from "./helpers/auth-env.js";
 import { DP_212_PAIRS, ML_4_PAIRS } from "../fixtures/legacy-url-map.js";
+import {
+  CORPORATE_LEGACY_INVENTORY,
+  CORPORATE_REDIRECTS_CSV,
+  CORPORATE_TR_PUBLIC_CSV,
+} from "../fixtures/corporate-legacy-map.js";
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CLI = path.join(API_DIR, "dist/iam/iam-cli.js");
@@ -2886,9 +2891,10 @@ describe("18. redirect management (DP-211)", () => {
     await bad("/dp211-v", "//evil.example", 400, { path: "target", rule: "external" });
     await bad("/dp211-v", "/api/x", 400, { path: "target", rule: "reserved" });
     await bad("/products", "/x", 400, { path: "source", rule: "reserved" });
-    // DP-212: /en and /tr are old-site sources now; other language codes stay reserved, and
-    // upper case is lower-cased (so a malformed source is one with a space, "..", "//", ...).
-    await bad("/de", "/x", 400, { path: "source", rule: "reserved" });
+    // DP-212: /en and /tr are old-site sources now (COM-6: also /ru, /zh, /es, /de of the old
+    // dreampetroleum.com); other language codes stay reserved, and upper case is lower-cased
+    // (so a malformed source is one with a space, "..", "//", ...).
+    await bad("/fr", "/x", 400, { path: "source", rule: "reserved" });
     await bad("/dp211 v", "/x", 400, { path: "source", rule: "format" });
     await bad("/dp211/../x", "/x", 400, { path: "source", rule: "format" });
     await bad("/dp211-v#x", "/x", 400, { path: "source", rule: "fragment" });
@@ -3297,13 +3303,13 @@ describe("19. old-site addresses and the legacy URL map (DP-212)", () => {
     }
   });
 
-  it("the locale homes /en and /tr are sources; other language codes, internals and files are not", async () => {
+  it("the old locale homes (/en, /tr; COM-6 /ru, /zh, /es, /de) are sources; other language codes, internals and files are not", async () => {
     // (The real /en row comes with the map; the rule is checked on /tr here.)
     await create("/tr", "/");
     expect(await redirectOf("/tr")).toEqual({ target: "/", statusCode: 301 });
     expect(await redirectOf("/TR")).toEqual({ target: "/", statusCode: 301 });
     for (const [source, rule] of [
-      ["/de", "reserved"],
+      ["/fr", "reserved"],
       ["/Media/x.jpg", "reserved"],
       ["/sitemap.xml", "reserved"],
       ["/api/v1/x", "reserved"],
@@ -7810,5 +7816,181 @@ describe("27. corporate content of the live site (COM-5)", () => {
     expect(trBundle.alternates).toEqual([
       { locale: "en", path: `/news/${slugOf(key)}`, indexable: true },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// COM-6: the old dreampetroleum.com addresses — the real import files (generated fixture of
+// docs/cms/corporate-content/redirects) through Admin > SEO > Redirects > Import on the
+// Corporate site, the one-hop answers of the resolve API, the Turkish transition file, and the
+// Turkish contact page at /tr/contact (never a second contact page).
+// ---------------------------------------------------------------------------------------------
+
+describe("28. old corporate addresses and the Turkish contact address (COM-6)", () => {
+  let comAdmin: Staff;
+  const R = () => `/api/v1/admin/seo/sites/${COM}/redirects`;
+  const imp = (csv: string, dryRun: boolean, planHash?: string) =>
+    comAdmin.post(`${R()}/import`, { csv, dryRun, ...(planHash ? { planHash } : {}) });
+  async function resolve(p: string, locale?: string): Promise<Res> {
+    const q = `path=${encodeURIComponent(p)}${locale ? `&locale=${locale}` : ""}`;
+    return parse(
+      await fetch(`${base}/api/v1/public/seo/resolve?${q}`, {
+        headers: { "x-dp-proxy-key": TEST_KEYS.webCorporate, "x-dp-client-ip": "10.20.30.50" },
+      }),
+    );
+  }
+  /** The stored form of a public address (the API stores English without its prefix). */
+  const stored = (pub: string) =>
+    pub === "/en" ? "/" : pub.startsWith("/en/") ? pub.slice(3) : pub;
+  const rows = CORPORATE_LEGACY_INVENTORY.filter((r) => r.decision === "ROW");
+  const run = async (csv: string, rowCount: number) => {
+    const dry = SeoRedirectImportResponseSchema.parse((await imp(csv, true)).body);
+    expect(dry.summary.rows).toBe(rowCount);
+    expect(dry.summary.error, JSON.stringify(dry.rows.filter((r) => r.action === "error"))).toBe(0);
+    // A target that is not live yet is only a warning (published later, DP-211 rule).
+    for (const r of dry.rows) {
+      expect(
+        r.warnings.every((w) => w === "target:not_live"),
+        `${r.source} ${r.warnings.join(",")}`,
+      ).toBe(true);
+    }
+    const done = await imp(csv, false, dry.planHash);
+    expect(done.status, JSON.stringify(done.body).slice(0, 500)).toBe(200);
+    return dry.summary;
+  };
+
+  beforeAll(async () => {
+    comAdmin = await staff("com6-site-admin", [{ role: "site_admin", site: COM }], root.userId);
+  });
+
+  afterAll(async () => {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: false },
+    });
+  });
+
+  it("imports the 163 rows of the map on the Corporate site; a second run writes nothing", async () => {
+    expect(rows).toHaveLength(163);
+    const first = await run(CORPORATE_REDIRECTS_CSV, 163);
+    expect(first).toMatchObject({ create: 163, update: 0, error: 0 });
+    const again = SeoRedirectImportResponseSchema.parse(
+      (await imp(CORPORATE_REDIRECTS_CSV, true)).body,
+    );
+    expect(again.summary).toMatchObject({ unchanged: 163, create: 0, update: 0 });
+    // Every row is a 301 of the Corporate site, none on BV.
+    const saved = await owner.siteRedirect.findMany({
+      where: { siteId: COM, origin: "IMPORT", note: { startsWith: "COM-6" } },
+    });
+    expect(saved).toHaveLength(163);
+    expect(saved.every((r) => r.statusCode === 301 && r.active)).toBe(true);
+    expect(
+      await owner.siteRedirect.count({ where: { siteId: BV, note: { startsWith: "COM-6" } } }),
+    ).toBe(0);
+  });
+
+  it("answers every old address with its own content in one hop (no chain, no loop, no home page fallback)", async () => {
+    for (const r of rows) {
+      for (const p of [r.source, r.source.toUpperCase()]) {
+        const answer = await resolve(p);
+        expect(answer.status, `${p} ${JSON.stringify(answer.body)}`).toBe(200);
+        expect(answer.body.redirect, p).toEqual({ target: stored(r.now), statusCode: 301 });
+      }
+    }
+    // Only the old language homes go to the home page; no other old address does.
+    const toHome = rows.filter((r) => r.now === "/en").map((r) => r.source);
+    expect(toHome.sort()).toEqual(["/de", "/es", "/ru", "/zh"]);
+    // No active row points at the plain source of another active row.
+    const active = await owner.siteRedirect.findMany({ where: { siteId: COM, active: true } });
+    const plain = new Set(active.filter((r) => r.sourceQuery === "").map((r) => r.sourcePath));
+    for (const r of active) expect(plain.has(r.target.split("?")[0]!), r.sourcePath).toBe(false);
+    // The shortened slugs (COM-5: 80 characters): the old long address reaches the new one.
+    const shortened = rows.filter(
+      (r) => r.kind === "article" && r.lang === "en" && !r.source.endsWith(r.now.slice(9)),
+    );
+    expect(shortened.length).toBeGreaterThan(0);
+    // An address the old site never had stays a 404; old addresses never reach the sitemap.
+    expectError(await resolve("/ru/no-such-page"), 404, "NOT_FOUND");
+    const paths = PublicSitemapResponseSchema.parse(
+      (
+        await parse(
+          await fetch(`${base}/api/v1/public/seo/sitemap`, {
+            headers: { "x-dp-proxy-key": TEST_KEYS.webCorporate, "x-dp-client-ip": "10.20.30.50" },
+          }),
+        )
+      ).body,
+    ).entries.map((e) => e.path);
+    for (const r of rows) expect(paths, r.source).not.toContain(r.source);
+  });
+
+  it("starts the Turkish contact page at /tr/contact, once (no second contact page)", async () => {
+    const en = await owner.cmsPage.findFirstOrThrow({
+      where: { siteId: COM, path: "/contact", locale: "en" },
+    });
+    const res = await comEditor.post(`/pages/${en.id}/translations`, {
+      locale: "tr",
+      title: "Bize Ulaşın",
+      proposal: true,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const tr = CmsPageResponseSchema.parse(res.body).page;
+    expect(tr).toMatchObject({ locale: "tr", path: "/contact", translationGroupId: en.id });
+    expect(JSON.stringify(tr.content)).toContain("Bize Ulaşın");
+    // Again (with the proposal, or with the old slug): 409, the group has its Turkish page.
+    for (const extra of [{}, { slug: "iletisim" }]) {
+      expectError(
+        await comEditor.post(`/pages/${en.id}/translations`, {
+          locale: "tr",
+          title: "Bize Ulaşın",
+          proposal: true,
+          ...extra,
+        }),
+        409,
+        "CONFLICT_STATE",
+        { path: "locale", rule: "exists" },
+      );
+    }
+    const contacts = await owner.cmsPage.findMany({
+      where: { siteId: COM, locale: "tr", path: { in: ["/contact", "/iletisim"] } },
+    });
+    expect(contacts.map((p) => p.path)).toEqual(["/contact"]);
+  });
+
+  it("the Turkish transition: old Turkish posts to their Turkish page, /tr/iletisim to /tr/contact", async () => {
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: true },
+    });
+    const turkish = CORPORATE_LEGACY_INVENTORY.filter(
+      (r) => r.decision === "ROW" && r.trPublic !== r.now,
+    );
+    expect(turkish).toHaveLength(19);
+    const summary = await run(CORPORATE_TR_PUBLIC_CSV, 20);
+    expect(summary).toMatchObject({ update: 19, create: 1 });
+    for (const r of turkish) {
+      expect((await resolve(r.source)).body.redirect, r.source).toEqual({
+        target: r.trPublic,
+        statusCode: 301,
+      });
+      expect(r.trPublic.startsWith("/tr/news/")).toBe(true);
+    }
+    expect((await resolve("/iletisim", "tr")).body.redirect).toEqual({
+      target: "/tr/contact",
+      statusCode: 301,
+    });
+    // The other languages keep their English counterparts.
+    const other = rows.find((r) => r.lang === "ru" && r.kind === "article")!;
+    expect((await resolve(other.source)).body.redirect).toEqual({
+      target: stored(other.now),
+      statusCode: 301,
+    });
+    // Back to today's state (Turkish not public): the first file again, /tr/iletisim hidden.
+    const back = await run(CORPORATE_REDIRECTS_CSV, 163);
+    expect(back).toMatchObject({ update: 19, unchanged: 144, error: 0 });
+    await owner.siteLocale.update({
+      where: { siteId_locale: { siteId: COM, locale: "tr" } },
+      data: { public: false },
+    });
+    expectError(await resolve("/iletisim", "tr"), 404, "NOT_FOUND");
   });
 });
