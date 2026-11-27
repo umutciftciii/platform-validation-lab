@@ -314,6 +314,8 @@ services:
       # DP-298: the legal texts come from the API with this site's proxy key.
       DP_API_URL: http://api:3000
       DP_PROXY_KEY_WEB_CORPORATE: ${DEV_DP_PROXY_KEY_WEB_CORPORATE:?set DEV_DP_PROXY_KEY_WEB_CORPORATE in .env}
+      # COM-6: GA4 of this environment (empty: no analytics, no cookie banner), as compose.yaml.
+      DP_GA4_MEASUREMENT_ID_CORPORATE: ${DP_GA4_MEASUREMENT_ID_CORPORATE:-}
     volumes: *dev-volumes
     depends_on: *after-install
     command: ["node_modules/.bin/next", "dev", "--port", "3000", "--hostname", "0.0.0.0"]

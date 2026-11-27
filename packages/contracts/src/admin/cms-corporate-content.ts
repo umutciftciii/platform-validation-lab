@@ -453,6 +453,6 @@ export const CORPORATE_TR_PROPOSAL_INDEX: Readonly<
   },
   "standard|/contact": {
     title: "Bize Ulaşın",
-    slug: "iletisim",
+    slug: "contact",
   },
 };
