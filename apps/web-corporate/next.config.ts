@@ -12,6 +12,29 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: false,
     reactDebugChannel: false,
   },
+  // COM-2a (DP-321): preview links carry a signed token: never cached, never sent on as a
+  // referrer, never indexed (as web-bv).
+  headers() {
+    return Promise.resolve([
+      {
+        source: "/preview/:token",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      },
+    ]);
+  },
+  // COM-2a: Tailwind 4 (the same version and loader as web-bv).
+  turbopack: {
+    rules: {
+      "*.css": {
+        loaders: ["@tailwindcss/turbopack"],
+        as: "*.css",
+      },
+    },
+  },
 };
 
 export default nextConfig;

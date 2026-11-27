@@ -15,16 +15,16 @@ import {
   BV_NEWS_INDEX_FIELDS,
   BvFooterPublicSchema,
   BvNavPublicSchema,
-  CmsArticleContentSchema,
   CmsPublicAlternateSchema,
   type CmsPublicAlternate,
   CmsPublicBundleSchema,
   CmsPublicNewsSchema,
-  CmsTemplateContentSchema,
   PUBLIC_CMS_API,
+  cmsArticleContentSchema,
   cmsAsset,
   cmsFieldsSchema,
   cmsIsArticle,
+  cmsTemplateContentSchema,
   type BvFooterPublic,
   type BvHomeContent,
   type BvNavPublic,
@@ -452,7 +452,8 @@ function mapPage(json: unknown, locale: RouteLocale): AnyPageView | null {
     return heading ? { kind: "newsIndex", heading, nav, footer, locale, preview } : null;
   }
   if (cmsIsArticle(page)) {
-    const content = CmsArticleContentSchema.safeParse(page.content);
+    // COM-2a (DP-320): the BV site's own rules (its files; every split section has an image).
+    const content = cmsArticleContentSchema("BV").safeParse(page.content);
     if (!content.success) return null;
     const c = content.data as Record<string, unknown>;
     return {
@@ -472,7 +473,7 @@ function mapPage(json: unknown, locale: RouteLocale): AnyPageView | null {
     };
   }
   if (page.kind === "TEMPLATE") {
-    const content = CmsTemplateContentSchema.safeParse(page.content);
+    const content = cmsTemplateContentSchema("BV").safeParse(page.content);
     if (!content.success) return null;
     return {
       kind: "template",

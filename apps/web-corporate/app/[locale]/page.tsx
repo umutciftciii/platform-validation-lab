@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 
+import { HomePlaceholder } from "@/components/home-placeholder";
 import { SiteFrame } from "@/components/site-frame";
 import { getSiteFrame } from "@/lib/cms";
-import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale, type RouteLocale } from "@/lib/locale-routing";
 import { privacyLink } from "@/lib/privacy";
 import { pageMetadata, siteSeo } from "@/lib/seo";
@@ -15,8 +15,9 @@ async function localeOf(params: PageProps<"/[locale]">["params"]): Promise<Route
 
 /**
  * COM-1: the corporate home at `/en`, `/tr` (`/` answers 301 to `/en` in proxy.ts). Its designed
- * page comes with COM-2 (the dreampetroleum.com inventory); until then a short notice inside the
- * published navigation and footer, never indexed (noindex) and never in the sitemap.
+ * page comes with COM-2b (`corporate.home`); until then a short notice in the corporate design
+ * (COM-2a) inside the published navigation and footer, never indexed (noindex) and never in the
+ * sitemap.
  */
 export async function generateMetadata({ params }: PageProps<"/[locale]">): Promise<Metadata> {
   await connection();
@@ -28,7 +29,6 @@ export async function generateMetadata({ params }: PageProps<"/[locale]">): Prom
 export default async function Home({ params }: PageProps<"/[locale]">) {
   await connection();
   const locale = await localeOf(params);
-  const t = dictionary(locale);
   const [frame, privacyHref] = await Promise.all([getSiteFrame("/", locale), privacyLink(locale)]);
   return (
     <SiteFrame
@@ -38,10 +38,7 @@ export default async function Home({ params }: PageProps<"/[locale]">) {
       languages={frame.languages}
       privacyHref={privacyHref}
     >
-      <article className="page">
-        <h1>{t.home.title}</h1>
-        <p>{t.home.text}</p>
-      </article>
+      <HomePlaceholder locale={locale} />
     </SiteFrame>
   );
 }

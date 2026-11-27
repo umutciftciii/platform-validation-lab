@@ -6878,4 +6878,120 @@ describe("24. the Corporate site on the shared CMS (COM-1)", () => {
     );
     expect(locales.locales.map((l) => l.locale)).toEqual(["en"]);
   });
+
+  // COM-2a (DP-320): each site's pages point at that site's own files; the corporate design works
+  // without images, so a corporate split section may have none (BV keeps it required).
+  const BV_IMAGE = "/media/services-showcase/logistics-desktop.webp";
+  const splitSection = (image: string | null, imageAlt: string | null) => ({
+    id: "sec-com2a-split",
+    type: "split",
+    eyebrow: "Services",
+    title: "Logistics",
+    body: "Sea and road.",
+    image,
+    imageAlt,
+    imageNote: null,
+  });
+  const NO_SEO = { title: null, description: null, noindex: false };
+
+  it("keeps each site's media apart (COM-2a, DP-320)", async () => {
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Logistics",
+      slug: "com2a-logistics",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const save = (content: unknown, seo: Record<string, unknown> = NO_SEO, version = p.version) =>
+      comEditor.post(`/pages/${p.id}/draft`, {
+        version,
+        title: "Logistics",
+        slug: "com2a-logistics",
+        seo,
+        content,
+      });
+    // A BV file on a corporate page: refused, as content and as the link-preview image.
+    expectError(
+      await save({ sections: [splitSection(BV_IMAGE, "A tanker.")] }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "content.sections.0.image", rule: "custom" },
+    );
+    expectError(
+      await save({ sections: [] }, { ...NO_SEO, ogImage: BV_IMAGE }),
+      400,
+      "VALIDATION_FAILED",
+      { path: "seo.ogImage", rule: "asset" },
+    );
+    // No image: valid on the corporate site, published and served as it is.
+    const saved = await save({ sections: [splitSection(null, null)] });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect((await publish(p.id)).status).toBe(200);
+    const live = CmsPublicBundleSchema.parse(
+      (await pub("/page?path=/com2a-logistics", TEST_KEYS.webCorporate)).body,
+    );
+    expect(live.page.content["sections"]).toEqual([splitSection(null, null)]);
+
+    // BV keeps the image required.
+    const bvPage = CmsPageResponseSchema.parse(
+      (await bvEditor.post(`/sites/${BV}/pages`, { title: "Split", slug: "com2a-bv-split" })).body,
+    ).page;
+    const bvSave = (content: unknown) =>
+      bvEditor.post(`/pages/${bvPage.id}/draft`, {
+        version: bvPage.version,
+        title: "Split",
+        slug: "com2a-bv-split",
+        seo: NO_SEO,
+        content,
+      });
+    expectError(await bvSave({ sections: [splitSection(null, null)] }), 400, "VALIDATION_FAILED", {
+      path: "content.sections.0.image",
+      rule: "custom",
+    });
+    expect((await bvSave({ sections: [splitSection(BV_IMAGE, "A tanker.")] })).status).toBe(200);
+  });
+
+  it("previews a corporate draft on its own site only (COM-2a, DP-321)", async () => {
+    const created = await comEditor.post(`/sites/${COM}/pages`, {
+      title: "Draft only",
+      slug: "com2a-preview",
+    });
+    const p = CmsPageResponseSchema.parse(created.body).page;
+    const saved = await comEditor.post(`/pages/${p.id}/draft`, {
+      version: p.version,
+      title: "Draft only",
+      slug: "com2a-preview",
+      seo: NO_SEO,
+      content: { sections: [{ id: "sec-com2a-text", type: "text", title: null, body: "Draft." }] },
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const res = await comEditor.post(`/pages/${p.id}/preview`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const token = CmsPreviewResponseSchema.parse(res.body).url.split("/preview/")[1]!;
+    expect(token).toMatch(/^v1\.[0-9a-f-]{36}\.CORPORATE\./);
+    const view = CmsPublicBundleSchema.parse(
+      (await pub(`/preview/${token}`, TEST_KEYS.webCorporate)).body,
+    );
+    expect(view).toMatchObject({
+      preview: true,
+      locale: "en",
+      page: { kind: "TEMPLATE", path: "/com2a-preview", revisionNumber: null },
+    });
+    expect(Object.keys(view.fragments).every((k) => k.startsWith("corporate."))).toBe(true);
+    // Never on the BV site, and the draft itself stays off the corporate site.
+    expectError(await pub(`/preview/${token}`), 404, "NOT_FOUND");
+    expectError(await pub("/page?path=/com2a-preview", TEST_KEYS.webCorporate), 404, "NOT_FOUND");
+  });
+
+  it("previews a corporate fragment while the site has no home page in the CMS (COM-2a)", async () => {
+    const res = await comEditor.post(`/pages/${ids["corporate.site-footer"]}/preview`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const token = CmsPreviewResponseSchema.parse(res.body).url.split("/preview/")[1]!;
+    const view = CmsPublicBundleSchema.parse(
+      (await pub(`/preview/${token}`, TEST_KEYS.webCorporate)).body,
+    );
+    // The fragment itself is the page; the site shows its own home around it.
+    expect(view.page).toMatchObject({ kind: "FRAGMENT", templateKey: "corporate.site-footer" });
+    expect(view.fragments["corporate.site-footer"]).not.toBeNull();
+    expect(view.fragments["corporate.site-nav"]).not.toBeNull();
+  });
 });

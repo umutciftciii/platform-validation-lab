@@ -48,39 +48,43 @@ export default async function PrivacyPage({ params }: { params: Params }) {
       languages={frame.languages}
       privacyHref={privacyPolicyHref(locale, locales)}
     >
-      <article className="page privacy">
-        <h1>{t.privacy.title}</h1>
-        {gate.draft ? (
-          <div role="note" className="draft-note">
-            <p>
-              <strong>{t.privacy.draft}</strong>
-            </p>
-            <p>{t.privacy.draftText}</p>
-            <ul>
-              {gate.blockers.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        <p className="version">
-          {t.privacy.version} {policy.version}
-        </p>
-        {policy.sections.map((section) => (
-          <section key={section.id} id={section.id}>
-            <h2>{section.title}</h2>
-            {section.paragraphs.map((p) => (
-              <p key={p}>{fill(p)}</p>
-            ))}
-            {section.list ? (
-              <ul>
-                {section.list.map((item) => (
-                  <li key={item}>{fill(item)}</li>
-                ))}
-              </ul>
+      <article className="section">
+        <div className="container-site">
+          <div className="prose-width legal-text">
+            <h1 className="section-title">{t.privacy.title}</h1>
+            {gate.draft ? (
+              <div role="note" className="notice mt-6">
+                <p>
+                  <strong>{t.privacy.draft}</strong>
+                </p>
+                <p>{t.privacy.draftText}</p>
+                <ul>
+                  {gate.blockers.map((b) => (
+                    <li key={b}>{b}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
-          </section>
-        ))}
+            <p className="text-sm text-ink-3">
+              {t.privacy.version} {policy.version}
+            </p>
+            {policy.sections.map((section) => (
+              <section key={section.id} id={section.id}>
+                <h2>{section.title}</h2>
+                {section.paragraphs.map((p) => (
+                  <p key={p}>{fill(p)}</p>
+                ))}
+                {section.list ? (
+                  <ul>
+                    {section.list.map((item) => (
+                      <li key={item}>{fill(item)}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+            ))}
+          </div>
+        </div>
       </article>
     </SiteFrame>
   );

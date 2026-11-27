@@ -1,21 +1,22 @@
 /**
- * COM-1: the frame of every corporate page — skip link, navigation with one level of submenus,
- * language selector, main content and footer — rendered only from the published
- * `corporate.site-nav` / `corporate.site-footer` (nothing from code). A link without a live target
- * is shown as text with the menu's pending note; the Privacy Policy link only where the policy is
- * published. Plain HTML and CSS, no client JavaScript: the visual design is COM-2.
+ * COM-2a: the frame of every corporate page — skip link, header (components/site-header.tsx),
+ * main content and footer — rendered only from the published `corporate.site-nav` /
+ * `corporate.site-footer` (nothing from code). A link without a live target is shown as text with
+ * the menu's pending note; the Privacy Policy link only where the policy is published (DP-095).
+ * A preview (DP-321) carries a bar that says so.
  */
 import type { ReactNode } from "react";
 
+import { SiteHeader, type HeaderLabels } from "@/components/site-header";
 import type { NavLink, SiteFooter, SiteNav } from "@/lib/cms";
 import { dictionary } from "@/lib/i18n";
-import type { LanguageOption, RouteLocale } from "@/lib/locale-routing";
+import { localePath, type LanguageOption, type RouteLocale } from "@/lib/locale-routing";
 
-function Item({ link, note }: { link: NavLink; note: string }) {
+function FooterLink({ link, note, newTab }: { link: NavLink; note: string; newTab: string }) {
   if (!link.href) {
     return (
       <span className="pending">
-        {link.label} <small>({note})</small>
+        {link.label} <span className="pending-note">({note})</span>
       </span>
     );
   }
@@ -26,138 +27,126 @@ function Item({ link, note }: { link: NavLink; note: string }) {
       {...(link.newTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
     >
       {link.label}
+      {link.newTab ? <span className="sr-only"> {newTab}</span> : null}
     </a>
   );
 }
 
-function Languages({ options, locale }: { options: LanguageOption[]; locale: RouteLocale }) {
-  const t = dictionary(locale);
-  return (
-    <nav aria-label={t.languages} className="languages">
-      <ul>
-        {options.map((o) => (
-          <li key={o.locale} lang={o.locale}>
-            {o.href && !o.current ? (
-              <a href={o.href} hrefLang={o.locale}>
-                {o.label}
-              </a>
-            ) : (
-              <span aria-current={o.current ? "true" : undefined}>
-                {o.label}
-                {!o.available ? <small> ({t.comingSoon})</small> : null}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
-function Header({
-  nav,
-  languages,
+function Footer({
+  footer,
+  privacyHref,
   locale,
 }: {
-  nav: SiteNav | null;
-  languages: LanguageOption[];
+  footer: SiteFooter;
+  privacyHref: string | null;
   locale: RouteLocale;
 }) {
   const t = dictionary(locale);
-  return (
-    <header className="site-header">
-      <a className="brand" href={`/${locale}`}>
-        Dream Petroleum
-      </a>
-      {nav ? (
-        <nav aria-label={t.menu} className="main-nav">
-          <ul>
-            {nav.items.map((item) => (
-              <li key={item.label}>
-                <Item link={item} note={nav.pendingNote} />
-                {item.children.length ? (
-                  <ul>
-                    {item.children.map((child) => (
-                      <li key={child.label}>
-                        <Item link={child} note={nav.pendingNote} />
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </li>
-            ))}
-            {nav.contact ? (
-              <li className="contact">
-                <Item link={nav.contact} note={nav.pendingNote} />
-              </li>
-            ) : null}
-          </ul>
-        </nav>
-      ) : null}
-      <Languages options={nav?.languages ?? languages} locale={locale} />
-    </header>
-  );
-}
-
-function Footer({ footer, privacyHref }: { footer: SiteFooter; privacyHref: string | null }) {
   const note = footer.pendingNote;
   // DP-095: the Privacy Policy link only where the policy is published (else no link at all).
-  const legal = footer.legal.filter((l) => !l.href?.endsWith("/privacy") || privacyHref !== null);
+  const legal = footer.legal
+    .filter((l) => !l.href?.endsWith("/privacy") || privacyHref !== null)
+    .map((l) => (l.href?.endsWith("/privacy") && privacyHref ? { ...l, href: privacyHref } : l));
+  const { contact } = footer;
   return (
-    <footer className="site-footer">
-      <div className="footer-intro">
-        <p className="headline">{footer.headline}</p>
-        <p>{footer.intro}</p>
-        {footer.cta ? <Item link={footer.cta} note={note} /> : null}
-      </div>
-      <address>
-        <strong>{footer.contact.title}</strong>
-        <span>{footer.contact.company}</span>
-        {footer.contact.addressLines.map((l) => (
-          <span key={l.text}>{l.text}</span>
-        ))}
-        {footer.contact.phone.visible ? (
-          <a href={footer.contact.phone.href}>{footer.contact.phone.label}</a>
-        ) : null}
-        {footer.contact.email.visible ? (
-          <a href={footer.contact.email.href}>{footer.contact.email.label}</a>
-        ) : null}
-      </address>
-      {footer.columns.map((col) => (
-        <div key={col.title} className="footer-column">
-          <strong>{col.title}</strong>
-          <ul>
-            {col.links.map((l) => (
-              <li key={l.label}>
-                <Item link={l} note={note} />
-              </li>
-            ))}
-          </ul>
+    <footer className="site-footer on-dark" aria-label={t.footer.label}>
+      <div className="container-site">
+        <div className="footer-top">
+          <p className="footer-headline">{footer.headline}</p>
+          <div>
+            <p className="footer-intro">{footer.intro}</p>
+            {footer.cta ? (
+              footer.cta.href ? (
+                <a href={footer.cta.href} className="btn btn-accent btn-arrow">
+                  {footer.cta.label}
+                </a>
+              ) : (
+                <FooterLink link={footer.cta} note={note} newTab={t.newTab} />
+              )
+            ) : null}
+          </div>
         </div>
-      ))}
-      {footer.social.length ? (
-        <ul className="social">
-          {footer.social.map((s) => (
-            <li key={s.href}>
-              <a href={s.href} target="_blank" rel="noopener noreferrer">
-                {s.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="legal">
-        <span>{footer.copyright}</span>
-        {legal.map((l) => (
-          <Item
-            key={l.label}
-            link={l.href?.endsWith("/privacy") && privacyHref ? { ...l, href: privacyHref } : l}
-            note={note}
-          />
+        <div aria-hidden className="footer-rule" />
+      </div>
+      <div className="container-site footer-grid">
+        <div>
+          <h2 className="footer-title">{contact.title}</h2>
+          <address>
+            <span className="footer-company">{contact.company}</span>
+            {contact.addressLines.map((l) => (
+              <span key={l.text}>{l.text}</span>
+            ))}
+            <span className="footer-contact-lines">
+              {contact.phone.visible ? (
+                <a href={contact.phone.href}>{contact.phone.label}</a>
+              ) : null}
+              {contact.email.visible ? (
+                <a href={contact.email.href}>{contact.email.label}</a>
+              ) : null}
+            </span>
+          </address>
+        </div>
+        {footer.columns.map((col) => (
+          <div key={col.title}>
+            <h2 className="footer-title">{col.title}</h2>
+            <ul className="footer-list">
+              {col.links.map((l) => (
+                <li key={l.label}>
+                  <FooterLink link={l} note={note} newTab={t.newTab} />
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
+        {footer.social.length ? (
+          <div>
+            <h2 className="footer-title">{t.footer.social}</h2>
+            <ul className="footer-list">
+              {footer.social.map((s) => (
+                <li key={s.href}>
+                  <a href={s.href} target="_blank" rel="noopener noreferrer">
+                    {s.label}
+                    <span className="sr-only"> {t.newTab}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+      <div className="container-site">
+        <div aria-hidden className="footer-rule" />
+        <div className="footer-bottom">
+          <span>{footer.copyright}</span>
+          {legal.length ? (
+            <nav aria-label={t.footer.legal}>
+              <ul className="footer-legal">
+                {legal.map((l) => (
+                  <li key={l.label}>
+                    <FooterLink link={l} note={note} newTab={t.newTab} />
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          ) : null}
+        </div>
       </div>
     </footer>
   );
+}
+
+function headerLabels(locale: RouteLocale): HeaderLabels {
+  const t = dictionary(locale);
+  return {
+    menu: t.menu,
+    languages: t.languages,
+    comingSoon: t.comingSoon,
+    openMenu: t.openMenu,
+    closeMenu: t.closeMenu,
+    openSubmenu: t.openSubmenu,
+    newTab: t.newTab,
+    homeLink: t.homeLink,
+  };
 }
 
 export function SiteFrame({
@@ -166,6 +155,7 @@ export function SiteFrame({
   footer,
   languages,
   privacyHref,
+  preview = false,
   children,
 }: {
   locale: RouteLocale;
@@ -174,6 +164,8 @@ export function SiteFrame({
   languages: LanguageOption[];
   /** The policy's address where it is published, null otherwise (DP-095). */
   privacyHref: string | null;
+  /** DP-321: a draft shown through a signed preview link. */
+  preview?: boolean;
   children: ReactNode;
 }) {
   const t = dictionary(locale);
@@ -182,9 +174,24 @@ export function SiteFrame({
       <a className="skip-link" href="#content">
         {t.skipToContent}
       </a>
-      <Header nav={nav} languages={languages} locale={locale} />
-      <main id="content">{children}</main>
-      {footer ? <Footer footer={footer} privacyHref={privacyHref} /> : null}
+      {preview ? (
+        <div role="note" className="preview-bar">
+          <p className="container-site m-0">
+            <strong>{t.preview.badge}</strong>
+            {t.preview.text}
+          </p>
+        </div>
+      ) : null}
+      <SiteHeader
+        homeHref={localePath(locale, "/")}
+        nav={nav}
+        languages={languages}
+        labels={headerLabels(locale)}
+      />
+      <main id="content" tabIndex={-1} className="outline-none">
+        {children}
+      </main>
+      {footer ? <Footer footer={footer} privacyHref={privacyHref} locale={locale} /> : null}
     </>
   );
 }

@@ -19,6 +19,8 @@ import {
 } from "@dream/contracts";
 import {
   PREVIEW_TTL_MS,
+  assertSiteImage,
+  contentIsValid,
   issuePreviewToken,
   validateContent,
   verifyPreviewToken,
@@ -286,5 +288,55 @@ describe("news articles (DP-020)", () => {
     expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "article" })).toBe(true);
     expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "standard" })).toBe(false);
     expect(validateContent("TEMPLATE", "article", valid)).toEqual(valid);
+  });
+});
+
+describe("site-scoped media (COM-2a, DP-320)", () => {
+  const BV_IMAGE = "/media/services-showcase/logistics-desktop.webp";
+  const page = (image: string | null, imageAlt: string | null) => ({
+    sections: [
+      {
+        id: "sec-com2a-01",
+        type: "split",
+        eyebrow: null,
+        title: "Logistics",
+        body: "Sea and road.",
+        image,
+        imageAlt,
+        imageNote: null,
+      },
+    ],
+  });
+
+  it("refuses a BV file on a corporate page (400 content.<path> asset)", () => {
+    expect(() =>
+      validateContent("TEMPLATE", "standard", page(BV_IMAGE, "Alt"), "CORPORATE"),
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_FAILED" }));
+    expect(validateContent("TEMPLATE", "standard", page(BV_IMAGE, "Alt"), "BV")).toBeTruthy();
+  });
+
+  it("a corporate split section without an image is valid; on BV it is not", () => {
+    expect(contentIsValid("TEMPLATE", "standard", page(null, null), "CORPORATE")).toBe(true);
+    expect(contentIsValid("TEMPLATE", "standard", page(null, null), "BV")).toBe(false);
+  });
+
+  it("the link-preview image is the page's own site's file", () => {
+    expect(() => assertSiteImage(BV_IMAGE, "BV")).not.toThrow();
+    expect(() => assertSiteImage(null, "CORPORATE")).not.toThrow();
+    expect(() => assertSiteImage(BV_IMAGE, "CORPORATE")).toThrow(
+      expect.objectContaining({ code: "VALIDATION_FAILED" }),
+    );
+  });
+
+  it("every import seed uses its own site's files only", () => {
+    for (const [key, seed] of Object.entries(ALL_SEEDS)) {
+      const site = key.startsWith("corporate.") ? "CORPORATE" : "BV";
+      const t = CMS_DESIGN_TEMPLATES.find((x) => x.key === key);
+      if (!t) continue;
+      expect(contentIsValid(t.kind, key, seed.content, site), key).toBe(true);
+    }
+    for (const [key, seed] of Object.entries(CMS_PAGE_SEEDS)) {
+      expect(contentIsValid("TEMPLATE", "standard", seed.content, "BV"), key).toBe(true);
+    }
   });
 });

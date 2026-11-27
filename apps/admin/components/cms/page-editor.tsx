@@ -166,7 +166,7 @@ export function PageEditor({
       : { ...seoValues(page.seo), ogImage: page.seo.ogImage };
     const sectionContent = sections.map((s) => {
       const def = SECTION_BY_TYPE.get(s.type);
-      return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values) : {}) };
+      return { id: s.id, type: s.type, ...(def ? toContent(def.fields, s.values, siteKey) : {}) };
     });
     const body: CmsPageDraftRequest | CmsFixedDraftRequest | CmsArticleDraftRequest = template
       ? {
@@ -176,7 +176,7 @@ export function PageEditor({
           content:
             menuKey && menu
               ? (menu as unknown as Record<string, unknown>)
-              : toContent(template.fields, design),
+              : toContent(template.fields, design, siteKey),
         }
       : article
         ? {
@@ -185,7 +185,7 @@ export function PageEditor({
             slug,
             seo: seoBody,
             content: {
-              ...(toContent(CMS_ARTICLE_FIELDS, articleValues) as {
+              ...(toContent(CMS_ARTICLE_FIELDS, articleValues, siteKey) as {
                 excerpt: string;
                 coverImage: string | null;
                 coverAlt: string | null;
@@ -466,7 +466,7 @@ export function PageEditor({
           version={version}
           dirty={dirty}
           canPublish={canPublish}
-          previewable={siteKey === "BV"}
+          previewable
         />
 
         <HistoryPanel

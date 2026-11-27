@@ -110,6 +110,7 @@ export class TranslationPackagesService {
       defaultLocale: def,
       targetLocale: target,
       keepsOldAddress: keepsOldAddress(a.sites, siteId),
+      siteKey: a.sites.find((s) => s.id === siteId)?.key as CmsEnv["siteKey"],
     };
   }
 
