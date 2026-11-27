@@ -180,12 +180,28 @@ export const LegalTextVersionSummarySchema = z.strictObject({
 });
 export type LegalTextVersionSummary = z.infer<typeof LegalTextVersionSummarySchema>;
 
+/**
+ * DP-306: the text as it would be shown, filled by the same code as the sites
+ * (legal-placeholders.ts): for the policy its markup with values filled, for a notice the words
+ * that publication would freeze. `missing` names the placeholders without a value (shown as
+ * "[pending: …]"), `placeholders` every placeholder the text uses.
+ */
+export const LegalTextPreviewSchema = z.strictObject({
+  text: z.string(),
+  placeholders: z.array(z.string()),
+  missing: z.array(z.string()),
+  /** Why publishing it now would be refused (`missing_value:<name>`), or null. */
+  publicationProblem: z.string().nullable(),
+});
+export type LegalTextPreview = z.infer<typeof LegalTextPreviewSchema>;
+
 export const LegalTextVersionDetailSchema = LegalTextVersionSummarySchema.extend({
   /**
    * The text. For the privacy policy, the editor markup (`policyToMarkup`): `## Title {#id}`
    * starts a section, blank lines separate paragraphs, `- ` starts a list item.
    */
   text: z.string(),
+  preview: LegalTextPreviewSchema,
 });
 export type LegalTextVersionDetail = z.infer<typeof LegalTextVersionDetailSchema>;
 
@@ -280,6 +296,13 @@ export type PublicLegalTextSet = z.infer<typeof PublicLegalTextSetSchema>;
 
 export const PublicLegalTextsResponseSchema = z.strictObject({
   sets: z.array(PublicLegalTextSetSchema),
+  /**
+   * DP-306: placeholders of the current policy of an offered language whose value is missing and
+   * that are no blocker of their own (production gate). Older APIs send none.
+   */
+  missingValues: z
+    .array(z.strictObject({ locale: z.string(), placeholder: z.string() }))
+    .default([]),
   /** Legal review states of the current versions (the production gate). */
   pendingReview: z.array(
     z.strictObject({ key: LegalDocumentKeySchema, locale: z.string(), version: z.string() }),

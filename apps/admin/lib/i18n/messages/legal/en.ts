@@ -101,6 +101,8 @@ export const legal = {
       textHint: "At most {max} characters. Line breaks are kept.",
       chars: "{count} of {max} characters",
       reviewNote: "Note for the reviewers",
+      placeholders: "Placeholders this document may use:",
+      noPlaceholders: "This document uses no placeholders.",
       reviewNoteHint: "What the legal reviewers should check. Never published.",
       translates: "This is a translation of the current English version ({version})",
       save: "Save draft",
@@ -159,6 +161,19 @@ export const legal = {
       empty: "The policy needs at least one section (a line {heading}).",
       published_source_of_same_document:
         "A translation must name the published version of the same document in another language.",
+      unknown_placeholder:
+        "{name} is not a placeholder this document may use. Remove it, or use one listed above the text.",
+      missing_value:
+        "{name} has no value yet, so this text cannot be published. The value must be supplied first.",
+    },
+    preview: {
+      title: "Preview (as it will be shown)",
+      hint: "Filled with the current company and legal details, by the same code as the website.",
+      missingTitle: "Missing values",
+      missingHint:
+        "Shown as “[pending: …]”. While a value is missing, the forms and the privacy page stay unpublished in production.",
+      none: "No value is missing.",
+      blocked: "Publishing is refused now: {reason}",
     },
     api: {
       unreachable: "The server could not be reached. Check your connection and try again.",

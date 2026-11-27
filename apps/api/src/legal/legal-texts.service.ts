@@ -21,8 +21,18 @@ import {
   LegalTextPublishRequestSchema,
   LegalTextReviewRequestSchema,
   UuidSchema,
+  PRIVACY_FILL_LABELS,
+  PRIVACY_FILL_LABELS_EN,
+  fillLegalText,
+  fillPolicySections,
+  placeholderProblem,
+  placeholdersIn,
   policyEvidenceText,
   policyFromMarkup,
+  policyPlaceholderProblem,
+  policyToMarkup,
+  publicationText,
+  type LegalTextPreview,
   type LegalDocumentKey,
   type LegalTextHistoryResponse,
   type LegalTextVersionDetail,
@@ -128,13 +138,64 @@ export function evidenceOf(
   const text = raw.replace(/\r\n?/g, "\n").trim();
   if (text.length === 0) throw invalid("text", "required");
   if (text.length > LEGAL_DOCUMENTS[key].maxChars) throw invalid("text", "too_long");
-  if (key !== "PRIVACY_POLICY") return { text, sections: null, sha256: sha256Hex(text) };
+  if (key !== "PRIVACY_POLICY") {
+    // DP-306: only the placeholders this document type may use.
+    const problem = placeholderProblem(key, text);
+    if (problem) throw invalid("text", problem);
+    return { text, sections: null, sha256: sha256Hex(text) };
+  }
   const parsed = policyFromMarkup(text);
   if (!parsed.ok) throw invalid("text", `${parsed.rule}:${parsed.line}`);
+  const problem = policyPlaceholderProblem(parsed.sections);
+  if (problem) throw invalid("text", problem);
   return {
     text,
     sections: parsed.sections,
     sha256: sha256Hex(policyEvidenceText(parsed.sections)),
+  };
+}
+
+const labelsFor = (locale: string) => PRIVACY_FILL_LABELS[locale] ?? PRIVACY_FILL_LABELS_EN;
+
+/**
+ * DP-306: the text as it would be shown, filled by the shared code of the sites. The policy: its
+ * markup with the values filled (`{policyVersion}` = its version, a draft marker while a draft).
+ * A notice or consent text: the words publication would freeze (values filled in).
+ */
+export function previewOf(
+  key: LegalDocumentKey,
+  locale: string,
+  text: string,
+  version: string | null,
+): LegalTextPreview {
+  const labels = labelsFor(locale);
+  const placeholders = placeholdersIn(text);
+  if (key === "PRIVACY_POLICY") {
+    const parsed = policyFromMarkup(text);
+    if (!parsed.ok) {
+      return {
+        text,
+        placeholders,
+        missing: [],
+        publicationProblem: `${parsed.rule}:${parsed.line}`,
+      };
+    }
+    const filled = fillPolicySections(parsed.sections, { labels, version });
+    return {
+      text: policyToMarkup(filled.sections),
+      placeholders,
+      missing: filled.missing,
+      publicationProblem: policyPlaceholderProblem(parsed.sections),
+    };
+  }
+  const filled = fillLegalText(text, { labels, version: null });
+  const pub = publicationText(key, text, { labels });
+  const future = placeholdersIn(filled.text).filter((n) => !filled.missing.includes(n));
+  return {
+    text: filled.text,
+    placeholders,
+    missing: [...filled.missing, ...future],
+    publicationProblem: pub.ok ? null : pub.rule,
   };
 }
 
@@ -162,7 +223,7 @@ export class LegalTextsService {
   async publicSnapshot(ctx: RequestContext): Promise<PublicLegalTextsResponse> {
     // Platform-wide texts: a site's proxy key, no Site row needed (fail closed for the admin key).
     const t = await loadPublishedTexts(this.sites.platform(ctx));
-    return { sets: t.sets, pendingReview: t.pendingReview };
+    return { sets: t.sets, missingValues: t.missingValues, pendingReview: t.pendingReview };
   }
 
   // --- admin -----------------------------------------------------------------------------------
@@ -215,7 +276,11 @@ export class LegalTextsService {
   }
 
   private detail(r: Row, names: Map<string, string>): LegalTextVersionDetail {
-    return { ...this.summary(r, names), text: r.text };
+    return {
+      ...this.summary(r, names),
+      text: r.text,
+      preview: previewOf(r.key, r.locale, r.text, r.version),
+    };
   }
 
   async overview(ctx: RequestContext): Promise<LegalTextsOverview> {
@@ -448,6 +513,11 @@ export class LegalTextsService {
       });
       if (!cur || cur.status !== "DRAFT") throw conflict("published");
       if (cur.sha256 !== input.sha256) throw conflict("stale", "sha256");
+      // DP-306: a notice or consent text is evidence — its values are filled in now and frozen;
+      // a missing value (or a placeholder of processing that does not happen yet) refuses it.
+      const frozen = publicationText(cur.key, cur.text, { labels: labelsFor(cur.locale) });
+      if (!frozen.ok) throw invalid("text", frozen.rule);
+      const textChanged = frozen.text !== cur.text;
       const sameDay = await tx.legalTextVersion.count({
         where: {
           key: cur.key,
@@ -464,11 +534,22 @@ export class LegalTextsService {
           publishedAt: now,
           publishedById: access.userId,
           updatedAt: now,
+          ...(textChanged
+            ? {
+                text: frozen.text,
+                sha256: sha256Hex(frozen.text),
+                // An approval is for exact words; filled-in values make new words.
+                legalReview: "REQUIRED",
+                reviewApprovedAt: null,
+                reviewApprovedById: null,
+              }
+            : {}),
         },
         select: SELECT,
       });
       await this.auditEvent(access, raw, "legal_text.published", published, PUBLISH, {
         legalReview: published.legalReview,
+        valuesFilledIn: textChanged,
       });
       return published;
     });

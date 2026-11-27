@@ -105,15 +105,21 @@ export function legalTextActions(
   return { current, draft };
 }
 
-/** A rule of a refused legal-text call, split from its line number (`duplicate_id:12`). */
+/**
+ * A rule of a refused legal-text call, split from its line number (`duplicate_id:12`) or, DP-306,
+ * from the placeholder it names (`unknown_placeholder:aiProviders`).
+ */
 export interface LegalTextRule {
   rule: string;
   line: number | null;
+  name: string | null;
 }
 
 export function parseLegalTextRule(raw: string): LegalTextRule {
   const m = /^([a-z_]+):(\d+)$/.exec(raw);
-  return m ? { rule: m[1]!, line: Number(m[2]) } : { rule: raw, line: null };
+  if (m) return { rule: m[1]!, line: Number(m[2]), name: null };
+  const n = /^([a-z_]+):([A-Za-z][A-Za-z0-9]*)$/.exec(raw);
+  return n ? { rule: n[1]!, line: null, name: n[2]! } : { rule: raw, line: null, name: null };
 }
 
 export const LEGAL_TEXT_RULES = [
@@ -128,15 +134,18 @@ export const LEGAL_TEXT_RULES = [
   "duplicate_id",
   "empty",
   "published_source_of_same_document",
+  // DP-306: placeholders.
+  "unknown_placeholder",
+  "missing_value",
 ] as const;
 type LegalTextRuleKey = (typeof LEGAL_TEXT_RULES)[number];
 
 /** The message of a legal-text API rule in the UI language; undefined for an unknown rule. */
 export function legalTextRuleMessage(raw: string, t: Translate): string | undefined {
-  const { rule, line } = parseLegalTextRule(raw);
+  const { rule, line, name } = parseLegalTextRule(raw);
   if (!(LEGAL_TEXT_RULES as readonly string[]).includes(rule)) return undefined;
   const key = `legal.texts.rules.${rule as LegalTextRuleKey}` as const;
-  const params = { line: line ?? 1, heading: MARKUP_HEADING };
+  const params = { line: line ?? 1, heading: MARKUP_HEADING, name: `{${name ?? ""}}` };
   return (t as unknown as (k: string, p: Record<string, string | number>) => string)(key, params);
 }
 

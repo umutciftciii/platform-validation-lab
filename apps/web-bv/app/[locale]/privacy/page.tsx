@@ -55,7 +55,8 @@ async function PrivacyPolicy({ locale }: { locale: RouteLocale }) {
   if (!texts || texts.locale !== locale) notFound();
   const policy = texts.privacyPolicy;
   const fill = (t: string) =>
-    fillPrivacyText(t, PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, policy.labels);
+    // DP-306: {policyVersion} is the version shown.
+    fillPrivacyText(t, PRIVACY_CONTROLLER, PRIVACY_POLICY_VALUES, policy.labels, policy.version);
   const ui = dictionary(locale).privacy;
   return (
     <article className="mx-auto max-w-3xl pt-6 lg:pt-10">

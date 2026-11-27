@@ -30,5 +30,6 @@ export * from "./privacy.js";
 export * from "./legal-texts.js";
 export * from "./data-processing.js";
 export * from "./admin/legal-texts.js";
+export * from "./legal-placeholders.js";
 export * from "./seo.js";
 export * from "./site-locales.js";

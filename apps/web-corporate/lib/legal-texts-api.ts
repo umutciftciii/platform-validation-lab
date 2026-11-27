@@ -65,7 +65,12 @@ async function fetchLegalTexts(): Promise<LegalTextsSnapshot | null> {
     }
     return {
       registry: legalTextRegistryFrom(parsed.data.sets),
-      blockers: privacyBlockersFor(parsed.data.pendingReview),
+      blockers: privacyBlockersFor(
+        parsed.data.pendingReview,
+        undefined,
+        undefined,
+        parsed.data.missingValues,
+      ),
     };
   } catch {
     console.error("legal texts: request failed (network)");
