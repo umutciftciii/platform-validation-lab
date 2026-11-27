@@ -17,6 +17,7 @@ import {
   useId,
   useReducer,
   useRef,
+  useSyncExternalStore,
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -50,6 +51,14 @@ const NO_SCRIPT_CSS =
   ".nav-item:hover>.nav-sub,.nav-item:focus-within>.nav-sub{visibility:visible;opacity:1;translate:0 0}";
 
 type Dispatch = (action: MenuAction) => void;
+
+// COM-7: over a full-width picture the header is transparent until the page scrolls.
+function onScroll(notify: () => void): () => void {
+  window.addEventListener("scroll", notify, { passive: true });
+  return () => window.removeEventListener("scroll", notify);
+}
+const scrolled = () => window.scrollY > 24;
+const notScrolled = () => false;
 
 function Wordmark({ href, label }: { href: string; label: string }) {
   return (
@@ -265,13 +274,17 @@ export function SiteHeader({
   nav,
   languages,
   labels,
+  overlay = false,
 }: {
   homeHref: string;
   nav: SiteNav | null;
   languages: LanguageOption[];
   labels: HeaderLabels;
+  /** COM-7: the page opens with a full-width picture: a transparent header over it. */
+  overlay?: boolean;
 }) {
   const [state, dispatch] = useReducer(menuReducer, INITIAL_MENU_STATE);
+  const solid = useSyncExternalStore(onScroll, scrolled, notScrolled);
   const dialog = useRef<HTMLDialogElement>(null);
   const pendingNote = nav?.pendingNote ?? "";
 
@@ -302,7 +315,11 @@ export function SiteHeader({
   const options = nav?.languages ?? languages;
 
   return (
-    <header className="site-header">
+    <header
+      className="site-header"
+      data-overlay={overlay ? "true" : undefined}
+      data-solid={overlay && solid ? "true" : undefined}
+    >
       <noscript>
         <style>{NO_SCRIPT_CSS}</style>
       </noscript>

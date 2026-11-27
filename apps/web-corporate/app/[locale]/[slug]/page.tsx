@@ -10,6 +10,7 @@ import { contactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale } from "@/lib/locale-routing";
 import { privacyLink } from "@/lib/privacy";
+import { opensWithPicture } from "@/lib/section-view";
 import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
 
 // One API read per request for the metadata and the page.
@@ -79,6 +80,7 @@ export default async function CmsPage({ params }: { params: Params }) {
       footer={view.footer}
       languages={view.nav?.languages ?? []}
       privacyHref={privacyHref}
+      overlay={opensWithPicture(view.sections)}
     >
       <TemplateSections
         title={view.title}

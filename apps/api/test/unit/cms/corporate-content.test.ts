@@ -13,6 +13,7 @@ import {
   cmsCorporateTrPlace,
   cmsDesignTemplate,
   cmsPathForSlug,
+  cmsSiteAsset,
   cmsSlugOfPath,
   cmsTemplateContentSchema,
   type CmsArticleContent,
@@ -64,10 +65,19 @@ describe("corporate content pages (COM-5)", () => {
     }
   });
 
-  it("carries no figure, superlative or commitment that waits for the owner (DP-003), no image", () => {
+  it("carries no figure, superlative or commitment that waits for the owner (DP-003); pictures only from the visual pack", () => {
     const text = JSON.stringify(CORPORATE_PAGE_SEEDS);
     expect(text).not.toMatch(UNCONFIRMED);
-    expect(text).not.toMatch(/\/media\/|\.jpe?g|\.png|\.webp/);
+    // COM-7: the only pictures are the visual pack's registered corporate files (representative
+    // scenes, alt texts that say so); none of the live site's images (DP-326).
+    const all = JSON.stringify([CORPORATE_PAGE_SEEDS, CORPORATE_SEEDS, CORPORATE_TR_PROPOSALS]);
+    const files = [...all.matchAll(/"(\/media\/[^"]+)"/g)].map((m) => m[1]!);
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of new Set(files)) expect(cmsSiteAsset(f, "CORPORATE"), f).toBeDefined();
+    expect(all).not.toMatch(/\.jpe?g|\.png/);
+    for (const alt of all.matchAll(/"imageAlt":"([^"]+)"/g)) {
+      expect(alt[1]).toMatch(/^(Representative scene|Temsili sahne): /);
+    }
     expect(JSON.stringify(CORPORATE_TR_PROPOSALS)).not.toMatch(
       /Feitian|tek resmi|dünya standartlarında/i,
     );

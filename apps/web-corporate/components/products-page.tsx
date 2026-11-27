@@ -5,14 +5,19 @@
  * request. Every text is the CMS content; only the section list and the table headings are
  * interface labels (lib/i18n.ts). This is not the BV catalogue: no product pages, no data sheets.
  *
+ * COM-7: the heading may carry a picture of the visual pack (full width, under a transparent
+ * header); the groups are numbered sections whose sticky heading column and grade cards alternate
+ * their ground, with the section list as a bar of anchors.
+ *
  * Typical values (DP-002): the table is shown only when it has rows; the import leaves it empty
  * until the source of the values is approved, so the section is not on the page at all.
  */
 import type { CorporateProductGroup, CorporateProductsContent } from "@dream/contracts";
 
+import { Picture } from "@/components/picture";
 import { dictionary } from "@/lib/i18n";
 import type { RouteLocale } from "@/lib/locale-routing";
-import { gradeLayout, paragraphsOf, showsTypicalValues } from "@/lib/section-view";
+import { corporateImage, gradeLayout, paragraphsOf, showsTypicalValues } from "@/lib/section-view";
 
 function Paragraphs({ text, className }: { text: string | null; className?: string }) {
   const list = paragraphsOf(text);
@@ -52,29 +57,41 @@ function Items({ items }: { items: CorporateProductGroup["items"] }) {
   );
 }
 
-function Group({ group, tint }: { group: CorporateProductGroup; tint: boolean }) {
+function Group({
+  group,
+  index,
+  total,
+}: {
+  group: CorporateProductGroup;
+  index: number;
+  total: number;
+}) {
   const headingId = `${group.anchor}-title`;
   return (
     <section
       id={group.anchor}
-      className={`section product-group ${tint ? "section-tint" : "section-plain"}`}
+      className={`band product-group ${index % 2 === 1 ? "band-mist" : ""}`}
       aria-labelledby={headingId}
     >
       <div className="container-site product-group-grid">
-        <div className="split-head">
+        <div className="product-group-head">
+          <p className="group-index" aria-hidden>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <span className="group-index-total">/ {String(total).padStart(2, "0")}</span>
+          </p>
           {group.eyebrow ? <p className="eyebrow">{group.eyebrow}</p> : null}
-          <h2 id={headingId} className="section-title">
+          <h2 id={headingId} className="block-title">
             {group.title}
           </h2>
           {group.subtitle ? <p className="group-subtitle">{group.subtitle}</p> : null}
         </div>
         <div className="product-group-body">
-          <Paragraphs text={group.description} className="section-lead" />
+          <Paragraphs text={group.description} className="block-lead" />
           <Items items={group.items} />
           {group.applications.length ? (
             <div className="applications">
               {group.applicationsTitle ? <h3>{group.applicationsTitle}</h3> : null}
-              <ul className="cta-points on-light">
+              <ul className="tick-list tick-list-light">
                 {group.applications.map((a) => (
                   <li key={a.text}>{a.text}</li>
                 ))}
@@ -104,7 +121,7 @@ function TypicalValues({
   if (!showsTypicalValues(table)) return null;
   const t = dictionary(locale).portfolio;
   return (
-    <section className="section section-plain" aria-label={table.title ?? undefined}>
+    <section className="band" aria-label={table.title ?? undefined}>
       <div className="container-site">
         <div className="table-wrap">
           <table className="values-table">
@@ -146,40 +163,59 @@ export function ProductsPage({
   const t = dictionary(locale).portfolio;
   return (
     <article>
-      <header className="hero hero-compact on-dark">
-        <div className="container-site">
+      <header
+        className={`page-hero on-dark ${corporateImage(intro.image) ? "page-hero-picture" : "page-hero-plain"}`}
+      >
+        {corporateImage(intro.image) ? (
+          <div className="page-hero-media">
+            <Picture
+              src={intro.image}
+              alt={intro.imageAlt}
+              className="page-hero-image"
+              sizes="100vw"
+              eager
+            />
+            <span aria-hidden className="page-hero-shade" />
+          </div>
+        ) : null}
+        <div className="container-site page-hero-inner">
           {intro.eyebrow ? <p className="eyebrow">{intro.eyebrow}</p> : null}
-          <h1>{intro.title}</h1>
-          <Paragraphs text={intro.intro} className="hero-intro" />
-          {groups.length > 1 ? (
-            <nav className="anchor-nav" aria-label={t.onThisPage}>
-              <ul>
-                {groups.map((g) => (
-                  <li key={g.anchor}>
-                    <a href={`#${g.anchor}`}>{g.title}</a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          ) : null}
+          <h1 className="page-hero-title">{intro.title}</h1>
+          <Paragraphs text={intro.intro} className="page-hero-intro" />
         </div>
       </header>
+      {groups.length > 1 ? (
+        <nav className="anchor-bar" aria-label={t.onThisPage}>
+          <div className="container-site">
+            <ol>
+              {groups.map((g, i) => (
+                <li key={g.anchor}>
+                  <a href={`#${g.anchor}`}>
+                    <span aria-hidden className="anchor-num">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    {g.title}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </nav>
+      ) : null}
       {groups.map((g, i) => (
-        <Group key={g.anchor} group={g} tint={i % 2 === 1} />
+        <Group key={g.anchor} group={g} index={i} total={groups.length} />
       ))}
       <TypicalValues table={typicalValues} locale={locale} />
-      <section className="section section-plain">
+      <section className="band band-tight">
         <div className="container-site">
-          <div className="cta-panel on-dark">
+          <div className="cta-band on-dark">
             <div>
-              <h2>{coa.title}</h2>
-              {coa.text ? <p>{coa.text}</p> : null}
+              <h2 className="cta-band-title">{coa.title}</h2>
+              {coa.text ? <p className="cta-band-text">{coa.text}</p> : null}
             </div>
-            <div>
-              <a className="btn btn-accent btn-arrow" href={coa.button.href}>
-                {coa.button.label}
-              </a>
-            </div>
+            <a className="btn btn-accent btn-arrow" href={coa.button.href}>
+              {coa.button.label}
+            </a>
           </div>
         </div>
       </section>

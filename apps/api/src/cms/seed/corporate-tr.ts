@@ -60,6 +60,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           title: "Taşımacılığı Hızlı ve Güvenli Hale Getiriyoruz",
           intro: "Hayallerinizi taşımak için yola çıkıyoruz.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+          imageAlt: "Temsili sahne: liman rıhtımında bir karayolu tankeri ve tanker gemisi",
         },
         {
           id: "logistics-s02",
@@ -139,6 +141,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           intro:
             "Disiplinli ticaret ve güvenilir tedarik zinciri uygulamasıyla küresel enerji kaynaklarını stratejik piyasa talebiyle buluşturuyoruz.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-energy-trading.webp",
+          imageAlt: "Temsili sahne: alacakaranlıkta endüstriyel bir limanda demirli tanker",
         },
         {
           id: "energy-trading-s02",
@@ -271,6 +275,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           title: "Depolama ve Dağıtım",
           intro: null,
           cta: null,
+          image: "/media/visual-pack-v1/hero-storage-terminal.webp",
+          imageAlt: "Temsili sahne: alacakaranlıkta depolama tankları ve boru hatları",
         },
         {
           id: "storage-distribution-s02",
@@ -453,6 +459,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           title: "Stratejik Ortaklık",
           intro: "Güçlü işbirlikleri ve küresel büyüme vizyonumuz.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-petrochemicals.webp",
+          imageAlt: "Temsili sahne: bir petrokimya tesisinin proses kuleleri ve boru hatları",
         },
         {
           id: "strategic-partnership-s02",
@@ -1547,6 +1555,43 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           label: "Tüm Portföyü Görüntüle",
           href: "/products",
         },
+        slides: [
+          {
+            label: "Enerji Ticareti",
+            title: "Enerji Ticareti ve Tedariği",
+            intro:
+              "Disiplinli ticaret ve güvenilir tedarik zinciri uygulamasıyla küresel enerji kaynaklarını stratejik piyasa talebiyle buluşturuyoruz.",
+            image: "/media/visual-pack-v1/hero-energy-trading.webp",
+            imageAlt: "Temsili sahne: alacakaranlıkta endüstriyel bir limanda demirli tanker",
+            cta: { label: "Enerji Ticareti ve Tedariği", href: "/energy-trading" },
+          },
+          {
+            label: "Lojistik ve Tedarik",
+            title: "Taşımacılığı Hızlı ve Güvenli Hale Getiriyoruz",
+            intro: "Deneyimli kadromuz ve teknolojimiz ile ürünlerinizi güvenle taşıyoruz.",
+            image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+            imageAlt: "Temsili sahne: liman rıhtımında bir karayolu tankeri ve tanker gemisi",
+            cta: { label: "Lojistik", href: "/logistics" },
+          },
+          {
+            label: "Depolama ve Dağıtım",
+            title: "Depolama ve Dağıtım",
+            intro:
+              "Ürünü depolama tesislerinden doğrudan son kullanıcı konumlarına taşıyan tam entegre taşıma çözümleri.",
+            image: "/media/visual-pack-v1/hero-storage-terminal.webp",
+            imageAlt: "Temsili sahne: alacakaranlıkta depolama tankları ve boru hatları",
+            cta: { label: "Depolama ve Dağıtım", href: "/storage-distribution" },
+          },
+          {
+            label: "Petrokimya",
+            title: "Petrokimyasal Ürün Tedariği",
+            intro:
+              "Güvenilir ortaklar aracılığıyla sağlanan aromatik, alifatik ve çözücü bazlı ürünler.",
+            image: "/media/visual-pack-v1/hero-petrochemicals.webp",
+            imageAlt: "Temsili sahne: bir petrokimya tesisinin proses kuleleri ve boru hatları",
+            cta: { label: "Tüm Portföyü Görüntüle", href: "/products#petrochemicals" },
+          },
+        ],
       },
       overview: {
         eyebrow: "Şirket Özeti",
@@ -1572,23 +1617,31 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
             title: "Enerji Ticareti ve Tedariği",
             description:
               "Disiplinli ticaret ve güvenilir tedarik zinciri uygulamasıyla küresel enerji kaynaklarını stratejik piyasa talebiyle buluşturuyoruz.",
-            href: null,
+            href: "/energy-trading",
+            image: "/media/visual-pack-v1/hero-energy-trading.webp",
+            imageAlt: "Temsili sahne: alacakaranlıkta endüstriyel bir limanda demirli tanker",
           },
           {
             title: "Lojistik",
             description: "Deneyimli kadromuz ve teknolojimiz ile ürünlerinizi güvenle taşıyoruz.",
-            href: null,
+            href: "/logistics",
+            image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+            imageAlt: "Temsili sahne: liman rıhtımında bir karayolu tankeri ve tanker gemisi",
           },
           {
             title: "Depolama ve Dağıtım",
             description: null,
-            href: null,
+            href: "/storage-distribution",
+            image: "/media/visual-pack-v1/hero-storage-terminal.webp",
+            imageAlt: "Temsili sahne: alacakaranlıkta depolama tankları ve boru hatları",
           },
           {
             title: "Sürdürülebilirlik",
             description:
               "Sorumlu enerji dağıtımı ve çevresel yönetim ile ilerlemeyi teşvik ediyoruz.",
-            href: null,
+            href: "/sustainability",
+            image: null,
+            imageAlt: null,
           },
         ],
       },
@@ -1658,6 +1711,11 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           },
         ],
       },
+      news: {
+        eyebrow: "Bloglar",
+        title: "Haberler ve İçgörüler",
+        link: { label: "Bloglar", href: "/news" },
+      },
       cta: {
         title: "Şeffaf, Yapılandırılmış ve Uzun Vadeli Ticari Değer",
         text: "Yaklaşımımız; uluslararası orta ve alt segment pazarlarda disiplinli risk yönetimi, esnek yapılar ve tutarlı icrayı birleştirir.",
@@ -1679,6 +1737,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
           label: "Bize Ulaşın",
           href: "/contact",
         },
+        image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+        imageAlt: "Temsili sahne: liman rıhtımında bir karayolu tankeri ve tanker gemisi",
       },
     },
   },
@@ -1691,6 +1751,8 @@ export const CORPORATE_TR_PROPOSALS: Readonly<Record<string, CorporateTrProposal
         title: "Ürün Portföyü",
         intro:
           "Küresel enerji piyasalarında yüksek kaliteli baz yağlar, solventler ve petrokimya ürünleri tedariki.",
+        image: "/media/visual-pack-v1/hero-petrochemicals.webp",
+        imageAlt: "Temsili sahne: bir petrokimya tesisinin proses kuleleri ve boru hatları",
       },
       groups: [
         {

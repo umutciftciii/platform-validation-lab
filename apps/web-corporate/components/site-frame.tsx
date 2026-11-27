@@ -169,6 +169,7 @@ export function SiteFrame({
   languages,
   privacyHref,
   preview = false,
+  overlay = false,
   children,
 }: {
   locale: RouteLocale;
@@ -179,6 +180,8 @@ export function SiteFrame({
   privacyHref: string | null;
   /** DP-321: a draft shown through a signed preview link. */
   preview?: boolean;
+  /** COM-7: the page opens with a full-width picture (the header lies over it; not in a preview). */
+  overlay?: boolean;
   children: ReactNode;
 }) {
   const t = dictionary(locale);
@@ -202,6 +205,7 @@ export function SiteFrame({
         nav={nav}
         languages={languages}
         labels={headerLabels(locale)}
+        overlay={overlay && !preview}
       />
       <main id="content" tabIndex={-1} className="outline-none">
         {children}
