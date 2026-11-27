@@ -33,8 +33,17 @@ export function TranslationActions({
   slugEditable: boolean;
   slug: string | null;
   slugPrefix: string;
-  /** ML-7: `proposal` — the language has a reviewed-pending proposal for this page (menus, nl). */
-  missing: { locale: string; label: string; proposal?: boolean }[];
+  /**
+   * ML-7: `proposal` — the language has a reviewed-pending proposal for this page (menus, nl).
+   * COM-5: the corporate Turkish proposals also bring their Turkish title and slug.
+   */
+  missing: {
+    locale: string;
+    label: string;
+    proposal?: boolean;
+    proposalTitle?: string | null;
+    proposalSlug?: string | null;
+  }[];
   outdated: { latest: number } | null;
 }) {
   const t = useT();
@@ -47,6 +56,7 @@ export function TranslationActions({
 
   if (!canEdit) return null;
   const offersProposal = missing.some((m) => m.locale === locale && m.proposal);
+  const chosen = missing.find((m) => m.locale === locale);
 
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -133,6 +143,7 @@ export function TranslationActions({
               name="title"
               required
               maxLength={200}
+              defaultValue={chosen?.proposalTitle ?? undefined}
               autoFocus
               aria-invalid={invalid("title")}
               className={FIELD}
@@ -153,7 +164,7 @@ export function TranslationActions({
                   name="slug"
                   required
                   maxLength={80}
-                  defaultValue={slug ?? ""}
+                  defaultValue={chosen?.proposalSlug ?? slug ?? ""}
                   spellCheck={false}
                   aria-invalid={invalid("slug")}
                   className={cx(FIELD, "rounded-l-none font-mono")}

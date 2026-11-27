@@ -19,6 +19,7 @@ export * from "./admin/ai.js";
 export * from "./admin/cms.js";
 export * from "./admin/cms-bv.js";
 export * from "./admin/cms-corporate.js";
+export * from "./admin/cms-corporate-content.js";
 export * from "./admin/cms-menu.js";
 export * from "./admin/cms-menu-nl.js";
 export * from "./admin/cms-publication.js";

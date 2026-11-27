@@ -43,6 +43,10 @@
 // COM-4: Content lists the corporate contact page (`corporate.contact`) to import; content-en is
 // recorded again with COM4_RECORD_EN=1. The recording it replaces is kept in fixtures/com4-en,
 // and test/com4-en-texts.test.ts allows only the approved change against it.
+// COM-5: Content lists the corporate pages and posts of the live site to import, and the article
+// editor has the original date field (DP-327); content-en is recorded again with
+// COM5_RECORD_EN=1. The recording it replaces is kept in fixtures/com5-en, and
+// test/com5-en-texts.test.ts allows only the approved changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -69,7 +73,8 @@ const RECORD =
   process.env["COM1_RECORD_EN"] === "1" ||
   process.env["COM2B_RECORD_EN"] === "1" ||
   process.env["COM3_RECORD_EN"] === "1" ||
-  process.env["COM4_RECORD_EN"] === "1";
+  process.env["COM4_RECORD_EN"] === "1" ||
+  process.env["COM5_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

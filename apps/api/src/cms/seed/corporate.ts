@@ -5,9 +5,9 @@
  *
  * Every text and value is taken from the live English site (https://dreampetroleum.com/en, header
  * and footer, read 2026-11-27); nothing is invented:
- *  - menu labels and their order are the live header's; the live pages do not exist on the new
- *    site yet (COM-5 imports them), so every link except the home page is "not ready yet" (shown
- *    as text) until an editor points it at the imported page;
+ *  - menu labels and their order are the live header's; COM-5: every link names its page by
+ *    address and the import points it at the imported page (`corporateMenuTargets`), so it is a
+ *    link while that page is live and text otherwise;
  *  - the footer's company text, head office address, phone, e-mail and social profiles are the live
  *    footer's (the e-mail address is the one the live page protects against scrapers);
  *  - the SEO defaults are the live site's title and its company overview sentence (the live pages
@@ -17,6 +17,7 @@
  * COM-2b adds the designed home page and the product portfolio (below); COM-3 the heading of the
  * news list.
  */
+import { CORPORATE_NEWS_INDEX_LIVE } from "./corporate-pages.js";
 import type {
   BvFooterMenuInput,
   BvNavMenuInput,
@@ -31,33 +32,43 @@ const HOME = { type: "path", path: "/" } as const;
 
 const PENDING = "Coming soon";
 
+/**
+ * COM-5: a page of the corporate site by its address. On import the API turns it into a reference
+ * to the CMS page at that address (linked while it is live, text otherwise; never a broken link)
+ * or "not ready" where the site has no such page yet (`corporateMenuTargets`).
+ */
+const at = (path: string) => ({ type: "path", path }) as const;
+
 export const CORPORATE_NAV_SEED: BvNavMenuInput = {
   items: [
     { label: "Home", target: HOME },
-    { label: "Products", target: NONE },
+    { label: "Products", target: at("/products") },
     {
       label: "Services",
       target: NONE,
       children: [
-        { label: "Logistics", target: NONE },
-        { label: "Energy Trading & Supply", target: NONE },
-        { label: "Storage & Distribution", target: NONE },
+        { label: "Logistics", target: at("/logistics") },
+        { label: "Energy Trading & Supply", target: at("/energy-trading") },
+        { label: "Storage & Distribution", target: at("/storage-distribution") },
       ],
     },
     {
       label: "Company",
       target: NONE,
       children: [
-        { label: "About Us", target: NONE },
-        { label: "Strategic Partnership", target: NONE },
-        { label: "Sustainability", target: NONE },
-        { label: "Our Team", target: NONE },
+        { label: "About Us", target: at("/about-us") },
+        { label: "Strategic Partnership", target: at("/strategic-partnership") },
+        { label: "Sustainability", target: at("/sustainability") },
+        { label: "Our Team", target: at("/our-team") },
       ],
     },
-    { label: "Blogs", target: NONE },
+    { label: "Blogs", target: at("/news") },
   ],
-  contact: { label: "Contact Us", target: NONE },
-  noScriptLinks: [{ label: "Home", target: HOME }],
+  contact: { label: "Contact Us", target: at("/contact") },
+  noScriptLinks: [
+    { label: "Home", target: HOME },
+    { label: "Contact Us", target: at("/contact") },
+  ],
   pendingNote: PENDING,
 };
 
@@ -90,22 +101,24 @@ export const CORPORATE_FOOTER_SEED: BvFooterMenuInput = {
     {
       title: "Core Areas",
       links: [
-        { label: "Transportation, Storage & Wholesale Marketing", target: NONE },
-        { label: "Energy Trading & Supply", target: NONE },
-        { label: "Storage & Distribution", target: NONE },
-        { label: "Base Oils (Group I, II and III)", target: NONE },
-        { label: "Petrochemical Products", target: NONE },
-        { label: "Sea & Road Logistics", target: NONE },
+        { label: "Transportation, Storage & Wholesale Marketing", target: at("/logistics") },
+        { label: "Energy Trading & Supply", target: at("/energy-trading") },
+        { label: "Storage & Distribution", target: at("/storage-distribution") },
+        // No page of their own: the product portfolio (its groups are sections of /products).
+        { label: "Base Oils (Group I, II and III)", target: at("/products") },
+        { label: "Petrochemical Products", target: at("/products") },
+        { label: "Sea & Road Logistics", target: at("/logistics") },
       ],
     },
     {
       title: "Company Profile",
       links: [
-        { label: "About Us", target: NONE },
-        { label: "Our Team", target: NONE },
-        { label: "Strategic Partnership", target: NONE },
-        { label: "Core Strengths", target: NONE },
-        { label: "Contact Us", target: NONE },
+        { label: "About Us", target: at("/about-us") },
+        { label: "Our Team", target: at("/our-team") },
+        { label: "Strategic Partnership", target: at("/strategic-partnership") },
+        // The live site links "Core Strengths" to its About Us page.
+        { label: "Core Strengths", target: at("/about-us") },
+        { label: "Contact Us", target: at("/contact") },
       ],
     },
   ],
@@ -430,14 +443,15 @@ export const CORPORATE_PRODUCTS_SEED: CorporateProductsContent = {
 };
 
 /**
- * COM-3: the heading of the news list. The eyebrow and heading are the live Blogs page's ("Blogs",
- * "News & Insights"); the live page has no introduction or empty state, so those two are neutral
- * editorial texts without any claim, to be reviewed with the COM-5 content import.
+ * COM-3: the heading of the news list. The eyebrow is the menu label ("Blogs"); COM-5: the heading
+ * and introduction are the live Blogs page's. The live page has no empty state: its two texts are
+ * neutral editorial texts without any claim.
  */
 export const CORPORATE_NEWS_INDEX_SEED: CmsNewsIndexContent = {
   eyebrow: "Blogs",
-  title: "News & Insights",
-  intro: "News and articles from Dream Petroleum.",
+  // COM-5: the live Blogs page's heading and introduction.
+  title: CORPORATE_NEWS_INDEX_LIVE.title,
+  intro: CORPORATE_NEWS_INDEX_LIVE.intro,
   empty: {
     title: "No articles yet",
     text: "Articles will appear here once they are published.",

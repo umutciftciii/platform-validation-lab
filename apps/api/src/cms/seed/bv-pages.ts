@@ -16,6 +16,8 @@
  *
  * Used by the import only; it never overwrites a page that exists (ADR-020 D7).
  */
+import { CORPORATE_ARTICLE_SEEDS } from "./corporate-articles.js";
+import { CORPORATE_CONTACT_CONTENT, CORPORATE_PAGE_SEEDS } from "./corporate-pages.js";
 import type { CmsArticleContent, CmsSeoInput } from "@dream/contracts";
 
 const CONTACT = "/contact";
@@ -39,7 +41,7 @@ export interface CmsPageSeed {
 
 const seo = (title: string): CmsSeoInput => ({ title, description: null, noindex: false });
 
-export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
+const PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
   "bv.contact": {
     slug: "contact",
     title: "Contact Us",
@@ -647,19 +649,9 @@ export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
     slug: "contact",
     title: "Contact Us",
     seo: seo("Contact Us | Dream Petroleum"),
-    content: {
-      sections: [
-        {
-          id: "contact-details",
-          type: "contact",
-          title: "Get in Touch",
-          intro: null,
-          formTitle: "Send Us a Message",
-          formNote:
-            "The contact form is not available yet. Please call us or write to us by e-mail in the meantime.",
-        },
-      ],
-    },
+    // COM-5: the live contact page's heading, introduction and form title (the note is shown while
+    // the form may not be offered).
+    content: CORPORATE_CONTACT_CONTENT,
   },
 };
 
@@ -676,7 +668,7 @@ export interface CmsArticleSeed {
  * (DP-152), so they are kept as the article's details. The date the site shows is the first
  * publication here; the live post is from July 2026 (cover uploaded 2026-07-20).
  */
-export const CMS_ARTICLE_SEEDS: Readonly<Record<string, CmsArticleSeed>> = {
+const ARTICLE_SEEDS: Readonly<Record<string, CmsArticleSeed>> = {
   "bv.news-oil-prices-us-iran": {
     slug: "why-are-oil-prices-falling-the-impact-of-the-us-iran-agreement-on-energy-markets",
     title: "Why Are Oil Prices Falling? The Impact Of The US-Iran Agreement On Energy Markets",
@@ -707,4 +699,16 @@ export const CMS_ARTICLE_SEEDS: Readonly<Record<string, CmsArticleSeed>> = {
       ],
     },
   },
+};
+
+/** Content-page seeds by registry key: BV's (DP-135/DP-206) and COM-5's corporate pages. */
+export const CMS_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
+  ...PAGE_SEEDS,
+  ...CORPORATE_PAGE_SEEDS,
+};
+
+/** News-article seeds by registry key: BV's live post (DP-206) and COM-5's corporate posts. */
+export const CMS_ARTICLE_SEEDS: Readonly<Record<string, CmsArticleSeed>> = {
+  ...ARTICLE_SEEDS,
+  ...CORPORATE_ARTICLE_SEEDS,
 };

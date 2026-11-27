@@ -97,7 +97,11 @@ export const CmsPublicPageSchema = z.object({
   /** null in a preview (the draft has no revision yet). */
   revisionNumber: z.number().int().nullable(),
   publishedAt: IsoDate.nullable(),
-  /** DP-020: the first publication (revision 1); the date an article shows. null in a preview. */
+  /**
+   * DP-020: the first publication (revision 1); the date an article shows. null in a preview.
+   * COM-5 (DP-327): for an article with an original date, that date (`cmsArticleDate`), also in
+   * a preview.
+   */
   firstPublishedAt: IsoDate.nullable(),
 });
 export type CmsPublicPage = z.infer<typeof CmsPublicPageSchema>;

@@ -5,6 +5,8 @@ import {
   CMS_DESIGN_TEMPLATES,
   CMS_RESERVED_SLUGS,
   CmsArticleContentSchema,
+  type CmsArticleContent,
+  cmsArticleContentSchema,
   CmsArticleSlugSchema,
   cmsArticlePath,
   cmsIsArticle,
@@ -60,13 +62,21 @@ describe("BV import seeds", () => {
     for (const key of Object.keys(CORPORATE_SEEDS)) {
       expect(CMS_DESIGN_TEMPLATES.find((t) => t.key === key)?.site, key).toBe("CORPORATE");
     }
-    // Pages that do not exist on the new site yet are "not ready yet" (text), never a guessed path.
+    // COM-5: every link names a page of the corporate import set by its address (the import turns
+    // it into a page reference); the parents of submenus have no target of their own.
     const targets = [
       ...CORPORATE_NAV_SEED.items.flatMap((i) => [i, ...(i.children ?? [])]),
       CORPORATE_NAV_SEED.contact,
+      ...CORPORATE_FOOTER_SEED.columns.flatMap((c) => c.links),
     ].map((l) => l.target);
-    expect(targets.filter((t) => t.type === "path")).toEqual([{ type: "path", path: "/" }]);
-    expect(targets.filter((t) => t.type !== "path").every((t) => t.type === "none")).toBe(true);
+    const corporatePaths = new Set(
+      CMS_SITE_REGISTRY.filter((e) => e.site === "CORPORATE" && e.path).map((e) => e.path),
+    );
+    for (const t of targets) {
+      if (t.type === "path") expect(corporatePaths.has(t.path), t.path).toBe(true);
+      else expect(t.type).toBe("none");
+    }
+    expect(targets.filter((t) => t.type === "none")).toHaveLength(2);
     expect(CORPORATE_FOOTER_SEED.contact.email.href).toBe("mailto:info@dreampetroleum.com");
     expect(CORPORATE_FOOTER_SEED.contact.phone.href).toBe("tel:+902122181357");
     // No claim of the live site that needs the owner's confirmation (DP-003) is in a fragment.
@@ -233,7 +243,8 @@ describe("corporate contact page (COM-4)", () => {
   it("imports the contact page with a contact section, valid on the corporate site, no claim", () => {
     const seed = CMS_PAGE_SEEDS["corporate.contact"]!;
     expect(seed.slug).toBe("contact");
-    expect(seed.content.sections.map((s) => s.type)).toEqual(["contact"]);
+    // COM-5: the live contact page's heading and introduction above the contact section.
+    expect(seed.content.sections.map((s) => s.type)).toEqual(["hero", "contact"]);
     expect(contentIsValid("TEMPLATE", "standard", seed.content, "CORPORATE")).toBe(true);
     expect(CMS_SITE_REGISTRY.find((e) => e.key === "corporate.contact")).toMatchObject({
       site: "CORPORATE",
@@ -262,12 +273,17 @@ describe("BV company pages and blog post of the live site (DP-206)", () => {
     for (const [key, seed] of Object.entries(CMS_ARTICLE_SEEDS)) {
       expect(CmsArticleSlugSchema.parse(seed.slug), key).toBe(seed.slug);
       expect(cmsArticlePath(seed.slug)).toBe(entries.find((e) => e.key === key)?.path);
-      const parsed = CmsArticleContentSchema.safeParse(seed.content);
+      const site = key.startsWith("corporate.") ? "CORPORATE" : "BV";
+      const parsed = cmsArticleContentSchema(site).safeParse(seed.content);
       expect(parsed.success, `${key}: ${JSON.stringify(parsed.error?.issues.slice(0, 3))}`).toBe(
         true,
       );
-      expect(parsed.data).toEqual(seed.content);
-      expect(cmsAsset(seed.content.coverImage!)?.kind, key).toBe("image");
+      // COM-5 (DP-327): an article without an original date stores null.
+      expect(parsed.data).toEqual({ originalDate: null, ...seed.content });
+      // BV's live post has its cover; the corporate posts have none until their rights are
+      // confirmed (DP-326).
+      if (site === "BV") expect(cmsAsset(seed.content.coverImage!)?.kind, key).toBe("image");
+      else expect(seed.content.coverImage, key).toBeNull();
       // Publishable: a summary and at least one body section (DP-020).
       expect(seed.content.excerpt.length).toBeGreaterThan(0);
       expect(seed.content.sections.length).toBeGreaterThan(0);
@@ -322,10 +338,32 @@ describe("news articles (DP-020)", () => {
   };
 
   it("accepts an article with or without a cover; blank optional fields become null", () => {
-    expect(CmsArticleContentSchema.parse(valid)).toEqual(valid);
+    expect(CmsArticleContentSchema.parse(valid)).toEqual({ ...valid, originalDate: null });
     expect(
       CmsArticleContentSchema.parse({ ...valid, coverImage: "", coverAlt: " ", sections: [] }),
-    ).toEqual({ excerpt: "Summary.", coverImage: null, coverAlt: null, sections: [] });
+    ).toEqual({
+      excerpt: "Summary.",
+      coverImage: null,
+      coverAlt: null,
+      originalDate: null,
+      sections: [],
+    });
+  });
+
+  it("COM-5 (DP-327): keeps a real original date and refuses anything else", () => {
+    expect(CmsArticleContentSchema.parse({ ...valid, originalDate: "2026-04-16" })).toMatchObject({
+      originalDate: "2026-04-16",
+    });
+    const blank = CmsArticleContentSchema.parse({
+      ...valid,
+      originalDate: "",
+    }) as CmsArticleContent;
+    expect(blank.originalDate).toBeNull();
+    for (const bad of ["2026-02-30", "16.04.2026", "2026-4-16", "1989-12-31", "x"]) {
+      expect(CmsArticleContentSchema.safeParse({ ...valid, originalDate: bad }).success, bad).toBe(
+        false,
+      );
+    }
   });
 
   it("requires a summary, alt text with a cover, registered images and body section types", () => {
@@ -355,7 +393,7 @@ describe("news articles (DP-020)", () => {
     expect(CmsSlugSchema.safeParse("news").success).toBe(false);
     expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "article" })).toBe(true);
     expect(cmsIsArticle({ kind: "TEMPLATE", templateKey: "standard" })).toBe(false);
-    expect(validateContent("TEMPLATE", "article", valid)).toEqual(valid);
+    expect(validateContent("TEMPLATE", "article", valid)).toEqual({ ...valid, originalDate: null });
   });
 });
 

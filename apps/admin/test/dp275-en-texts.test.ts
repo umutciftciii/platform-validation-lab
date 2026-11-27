@@ -85,7 +85,12 @@ const com2b = (k: string) =>
   k.startsWith("content.contract.design.corporate") ||
   k === "content.contract.registry.corporateProducts" ||
   k === "content.contract.registry.corporateNewsIndex" ||
-  k === "content.contract.registry.corporateContact";
+  k === "content.contract.registry.corporateContact" ||
+  // COM-5: the notes of the live site's pages and posts, the article's original date.
+  k === "content.contract.registry.corporateContentPage" ||
+  k === "content.contract.registry.corporateContentArticle" ||
+  k === "content.contract.article.originalDateLabel" ||
+  k === "content.contract.article.originalDateHint";
 
 describe("COM-2b: the corporate designed pages' contract texts", () => {
   it("changes only the home page's registry note and adds only the new field texts", () => {
@@ -99,7 +104,8 @@ describe("COM-2b: the corporate designed pages' contract texts", () => {
     }
     const added = Object.keys(now).filter((k) => !(k in before) && com2b(k));
     // COM-3: +1, the corporate news list heading's registry note. COM-4: +1, the contact page's.
-    expect(added).toHaveLength(33);
+    // COM-5: +4 (two registry notes, the original date's label and hint).
+    expect(added).toHaveLength(37);
     expect(now["content.contract.registry.corporateContact"]).toBe(
       "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
     );

@@ -20,6 +20,7 @@
  * - No fallback (D7): a language without published content shows nothing; English is never served
  *   in its place.
  */
+import { CORPORATE_TR_PROPOSAL_INDEX } from "./cms-corporate-content.js";
 import { z } from "zod";
 import { LocaleTagSchema } from "../site-locales.js";
 import {
@@ -259,6 +260,34 @@ export function cmsWithContentTexts(
 export function cmsTranslationHasProposal(templateKey: string, locale: string): boolean {
   // The Dutch proposal is written for the BV menus only (COM-1: the corporate menus have none).
   return locale === "nl" && (templateKey === BV_NAV_KEY || templateKey === BV_FOOTER_KEY);
+}
+
+/**
+ * COM-5 (DP-038): the place of a corporate source page among the Turkish proposals — a designed
+ * page or fragment by its registry key, a content page or article by its template and English
+ * address (`standard|/about-us`, `article|/news/<slug>`).
+ */
+export function cmsCorporateTrPlace(page: {
+  kind: string;
+  templateKey: string;
+  path: string | null;
+}): string {
+  return page.kind === "TEMPLATE" ? `${page.templateKey}|${page.path ?? ""}` : page.templateKey;
+}
+
+/**
+ * The proposal "Create translation" may start from, or null: the Dutch BV menus (ML-7; their own
+ * title and slug), or COM-5's Turkish proposal of a corporate page (the live Turkish page, with
+ * its Turkish title and, for a content page or article, its Turkish slug).
+ */
+export function cmsTranslationProposal(
+  siteKey: string,
+  page: { kind: string; templateKey: string; path: string | null },
+  locale: string,
+): { title: string | null; slug: string | null } | null {
+  if (cmsTranslationHasProposal(page.templateKey, locale)) return { title: null, slug: null };
+  if (siteKey !== "CORPORATE" || locale !== "tr") return null;
+  return CORPORATE_TR_PROPOSAL_INDEX[cmsCorporateTrPlace(page)] ?? null;
 }
 
 /**

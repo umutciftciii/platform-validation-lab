@@ -39,7 +39,10 @@ import {
   cmsSlugOfPath,
   cmsStructureWarnings,
   cmsTranslationDraft,
-  cmsTranslationHasProposal,
+  cmsTranslationProposal,
+  cmsCorporateTrPlace,
+  cmsContentTexts,
+  cmsWithContentTexts,
   cmsTranslationSlugSchema,
   type CmsContextResponse,
   type CmsHistoryResponse,
@@ -75,6 +78,7 @@ import {
   type PageBase,
   type SeoColumns,
   type PageRow,
+  type CmsDb,
 } from "./cms-content.js";
 import { mapCmsDbError, staleVersion } from "./errors.js";
 import {
@@ -86,6 +90,8 @@ import {
 } from "../seo/redirects.js";
 import { CMS_SEEDS as BV_SEEDS } from "./seed/bv.js";
 import { CORPORATE_SEEDS } from "./seed/corporate.js";
+import { CORPORATE_TR_PROPOSALS } from "./seed/corporate-tr.js";
+import { corporateSeedMenuTargets } from "./seed/menu-targets.js";
 import { assertMenuReferences, menuTargets, menuWarnings } from "./menu-links.js";
 import { CMS_ARTICLE_SEEDS, CMS_PAGE_SEEDS } from "./seed/bv-pages.js";
 import { assertLocaleEnabled, siteLocalesOf } from "./site-locales.js";
@@ -508,12 +514,18 @@ export class CmsService {
     const input = parseBody(CmsImportRequestSchema, body);
     const site = await CmsService.site(a, siteId);
     const plan = CmsService.importPlan(input.key, site.key);
-    const content = validateContent(plan.kind, plan.templateKey, plan.content, site.key);
+    const db0 = a.db({ siteIds: [siteId], includePlatform: false });
+    // COM-5: the corporate menus point at the corporate pages that are in the CMS already.
+    const seedContent =
+      site.key === "CORPORATE" && cmsIsMenu(plan.templateKey)
+        ? await CmsService.corporateMenuTargets(db0, siteId, defaultLocaleOf(site), plan.content)
+        : plan.content;
+    const content = validateContent(plan.kind, plan.templateKey, seedContent, site.key);
     const summary = Object.entries(content).map(([field, value]) => ({
       field,
       items: Array.isArray(value) ? value.length : null,
     }));
-    const db = a.db({ siteIds: [siteId], includePlatform: false });
+    const db = db0;
     // ML-2: imports write the site's default language (the content in code is English).
     const locale = defaultLocaleOf(site);
     // Never overwrite (ADR-020 D7): a designed page by its registry key, a content page by its path.
@@ -562,6 +574,29 @@ export class CmsService {
       // A concurrent import of the same key: the registry or path unique index answers.
       return mapCmsDbError(e);
     }
+  }
+
+  /**
+   * COM-5 (DP-038): the menu seeds of the corporate site name their targets by address (`path`).
+   * An address of a CMS page of the site (default language, any state) becomes a reference to that
+   * page, so the menu links it exactly while it is live and shows the label as text otherwise
+   * (DP-219); the privacy policy stays an address (an app page); any other address is "not ready"
+   * (`none`). Nothing in the menu can become a broken link. Import the pages first.
+   */
+  private static async corporateMenuTargets(
+    db: CmsDb,
+    siteId: string,
+    locale: string,
+    content: unknown,
+  ): Promise<unknown> {
+    const rows = await db.cmsPage.findMany({
+      where: { siteId, locale, path: { not: null } },
+      select: { id: true, path: true },
+    });
+    return corporateSeedMenuTargets(
+      content,
+      new Map(rows.flatMap((r) => (r.path ? [[r.path, r.id] as const] : []))),
+    );
   }
 
   /**
@@ -971,10 +1006,16 @@ export class CmsService {
     await assertLocaleEnabled(db, row.siteId, input.locale);
     const site = await CmsService.site(a, row.siteId);
     const article = cmsIsArticle(row);
+    // ML-7 / COM-5: the proposal the draft may start from (the Dutch BV menus; the live Turkish
+    // corporate pages), or 400 `proposal` `unavailable`.
+    const proposal = input.proposal ? cmsTranslationProposal(site.key, row, input.locale) : null;
+    if (input.proposal && !proposal) {
+      throw new ApiError("VALIDATION_FAILED", [{ path: "proposal", rule: "unavailable" }]);
+    }
     let path = row.path;
     if (row.kind === "TEMPLATE" && row.path) {
       const parsed = cmsTranslationSlugSchema(article).safeParse(
-        input.slug ?? cmsSlugOfPath(row.path),
+        input.slug ?? proposal?.slug ?? cmsSlugOfPath(row.path),
       );
       if (!parsed.success) {
         throw new ApiError("VALIDATION_FAILED", [
@@ -1007,15 +1048,32 @@ export class CmsService {
       orderBy: { revisionNumber: "desc" },
       select: { id: true, revisionNumber: true },
     });
-    // ML-7: the menus in Dutch may start from the reviewed-pending proposal (still a draft).
-    if (input.proposal && !cmsTranslationHasProposal(row.templateKey, input.locale)) {
-      throw new ApiError("VALIDATION_FAILED", [{ path: "proposal", rule: "unavailable" }]);
-    }
-    const content = cmsTranslationDraft(
-      row,
-      asObject(row.content),
-      input.proposal ? { locale: input.locale } : undefined,
-    );
+    // COM-5: a corporate Turkish proposal is the whole live Turkish content (still a draft); the
+    // Dutch menu proposal fills the English structure (ML-7).
+    const corporateTr =
+      proposal && site.key === "CORPORATE" && input.locale === "tr"
+        ? CORPORATE_TR_PROPOSALS[cmsCorporateTrPlace(row)]
+        : undefined;
+    const content = corporateTr
+      ? row.kind === "TEMPLATE"
+        ? // A content page or article: the whole live Turkish content (a post may be longer).
+          (structuredClone(corporateTr.content) as Record<string, unknown>)
+        : // A designed page or menu: the English structure (links, menu targets, shared contact
+          // details) with the Turkish texts.
+          cmsWithContentTexts(
+            row,
+            asObject(row.content),
+            new Map(
+              cmsContentTexts(row, corporateTr.content).flatMap((t) =>
+                t.value ? [[t.path, t.value] as const] : [],
+              ),
+            ),
+          )
+      : cmsTranslationDraft(
+          row,
+          asObject(row.content),
+          input.proposal ? { locale: input.locale } : undefined,
+        );
     try {
       const id = await db.$transaction(async (tx) => {
         if (path && keepsOldAddress(a.sites, row.siteId)) {

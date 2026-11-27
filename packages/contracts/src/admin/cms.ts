@@ -15,6 +15,7 @@
  *   (`details: [{ path: "version", rule: "stale" }]`).
  * - S1 stores drafts only. Publication, revisions and preview come in S2; nothing here is public.
  */
+import { CORPORATE_CONTENT_REGISTRY } from "./cms-corporate-content.js";
 import { z } from "zod";
 import { UuidSchema } from "../auth/common.js";
 import { SEO_TEXT_LIMITS, SeoCanonicalPathSchema } from "../seo.js";
@@ -104,8 +105,9 @@ export type CmsField =
        * anchor:   a DOM id / stable key (lower-case kebab-case);
        * position: a focal point, CSS object-position "X% Y%";
        * href:     an optional link target (null = a page that does not exist yet, shown as text).
+       * date:     COM-5 (DP-327): an optional calendar date, `YYYY-MM-DD` (null = none).
        */
-      format?: "anchor" | "position" | "href";
+      format?: "anchor" | "position" | "href" | "date";
       /**
        * Required as soon as the sibling field with this key has a value (e.g. an image's alt
        * text); the schema of the whole object checks it, the admin labels it accordingly.
@@ -254,6 +256,36 @@ export const CmsHrefSchema = plain(500)
     { message: "href" },
   );
 
+/**
+ * COM-5 (DP-327): a calendar date `YYYY-MM-DD` that exists (2026-02-30 is refused), from 1990 on.
+ */
+export const CmsDateSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: "date" })
+  .refine(
+    (v) => {
+      const d = new Date(`${v}T12:00:00.000Z`);
+      return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v && v >= "1990-01-01";
+    },
+    { message: "date" },
+  );
+
+/**
+ * COM-5 (DP-327): the date an article shows and is ordered by — its original date (the date it
+ * was first published on the old site) when it has one, else its first publication here. The
+ * original date is given at noon UTC so that it is the same calendar day in every time zone the
+ * sites format dates in.
+ */
+export function cmsArticleDate(
+  originalDate: string | null | undefined,
+  firstPublishedAt: string,
+): string {
+  return originalDate && CmsDateSchema.safeParse(originalDate).success
+    ? `${originalDate}T12:00:00.000Z`
+    : firstPublishedAt;
+}
+
 export const CmsLinkSchema = z.strictObject({
   label: requiredText(80),
   href: CmsHrefSchema,
@@ -273,6 +305,10 @@ function textSchema(field: Extract<CmsField, { type: "text" }>): z.ZodType {
       return requiredText(12).pipe(z.string().regex(POSITION, { message: "position" }));
     case "href":
       return CmsHrefSchema.nullish()
+        .or(z.literal("").transform(() => null))
+        .transform((v) => v ?? null);
+    case "date":
+      return CmsDateSchema.nullish()
         .or(z.literal("").transform(() => null))
         .transform((v) => v ?? null);
     default:
@@ -604,6 +640,14 @@ export const CMS_ARTICLE_FIELDS: readonly CmsField[] = [
     requiredWith: "coverImage",
     hint: "Required when a cover image is chosen: what the image shows.",
   },
+  {
+    type: "text",
+    key: "originalDate",
+    label: "Original date",
+    max: 10,
+    format: "date",
+    hint: "Optional. The date the article was first published elsewhere (e.g. on the old site); the site shows and orders it by this date. Empty: the date of its first publication here.",
+  },
 ];
 
 /** Section types an article body may use (no page hero, no contact form). */
@@ -649,6 +693,8 @@ export interface CmsArticleContent {
   excerpt: string;
   coverImage: string | null;
   coverAlt: string | null;
+  /** COM-5 (DP-327): `YYYY-MM-DD`; absent in content saved before it existed (= null). */
+  originalDate?: string | null;
   sections: CmsSection[];
 }
 
@@ -973,6 +1019,8 @@ export const CMS_SITE_REGISTRY: readonly CmsRegistryEntry[] = [
     stage: null,
     note: "Versioned legal text tied to consent records. Changed only through a new version.",
   },
+  // COM-5 (DP-038): the content pages and news articles of the live site (generated).
+  ...CORPORATE_CONTENT_REGISTRY,
 ];
 
 // --- requests --------------------------------------------------------------------------------
