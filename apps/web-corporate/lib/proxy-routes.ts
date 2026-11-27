@@ -5,7 +5,8 @@
  * does not have yet (its news list comes with COM-3):
  *
  *  - `root`: `/` answers ONE 301 to the default language's home (`/en`); never Accept-Language.
- *  - `home`: `/en`, `/tr`.
+ *  - `home`: `/en`, `/tr`, asked to the SEO resolve API as `/` (COM-2b: the CMS home page; not
+ *    published in the language: 404).
  *  - `content`: `/<l>/<slug>`, asked to the SEO resolve API with the STORED address (`/about-us`
  *    in the default language, `/hakkimizda` + `locale=tr` otherwise): live, a redirect (DP-210
  *    slug change, DP-211 manual or imported row), unpublished or nothing.
@@ -165,8 +166,17 @@ export async function step(
   const locale = route.locale;
   if (!(await localeIsPublic(locale, deps))) return { action: "not-found", locale };
   switch (route.kind) {
-    case "home":
-      return { action: "next" };
+    case "home": {
+      // COM-2b: the home page is the CMS page `corporate.home`; not published in the language, it
+      // is the site's 404 (decided here, so the 404 page carries the language), as content pages.
+      const res =
+        locale === DEFAULT_LOCALE
+          ? await deps.resolve("/", search)
+          : await deps.resolve("/", search, locale);
+      if (res.status === "redirect") return redirectStep(res, search);
+      if (res.status === "found" || res.status === "unknown") return { action: "next" };
+      return { action: "not-found", locale };
+    }
     case "privacy":
       return deps.privacyPublished && deps.privacyLocales.includes(locale)
         ? { action: "next" }

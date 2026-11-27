@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { connection } from "next/server";
+import { cache } from "react";
 
-import { HomePlaceholder } from "@/components/home-placeholder";
+import { HomePage } from "@/components/home-page";
 import { SiteFrame } from "@/components/site-frame";
-import { getSiteFrame } from "@/lib/cms";
+import { getPublishedHome } from "@/lib/cms";
+import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale, type RouteLocale } from "@/lib/locale-routing";
 import { privacyLink } from "@/lib/privacy";
-import { pageMetadata, siteSeo } from "@/lib/seo";
+import { noindexMetadata, pageMetadata, siteSeo } from "@/lib/seo";
+
+// One API read per request for the metadata and the page.
+const published = cache(getPublishedHome);
 
 async function localeOf(params: PageProps<"/[locale]">["params"]): Promise<RouteLocale> {
   const { locale } = await params;
@@ -14,31 +20,63 @@ async function localeOf(params: PageProps<"/[locale]">["params"]): Promise<Route
 }
 
 /**
- * COM-1: the corporate home at `/en`, `/tr` (`/` answers 301 to `/en` in proxy.ts). Its designed
- * page comes with COM-2b (`corporate.home`); until then a short notice in the corporate design
- * (COM-2a) inside the published navigation and footer, never indexed (noindex) and never in the
- * sitemap.
+ * COM-2b: the corporate home at `/en`, `/tr` (`/` answers 301 to `/en` in proxy.ts) — the
+ * published `corporate.home` of that language with the published navigation and footer. Not
+ * published in the language: the site's 404 (HTTP 404, noindex), never content from code (the
+ * COM-2a placeholder is gone). The API unreachable: the unavailable notice.
  */
 export async function generateMetadata({ params }: PageProps<"/[locale]">): Promise<Metadata> {
   await connection();
   const locale = await localeOf(params);
+  const res = await published(locale);
+  if (!res.ok) {
+    if (res.reason === "not_found") notFound();
+    return noindexMetadata("Dream Petroleum");
+  }
+  const { seo, alternates } = res.data;
   const site = await siteSeo(locale);
-  return pageMetadata({ path: "/", locale, title: site.defaultTitle, noindex: true }, site);
+  // Without an SEO title of its own the home page uses the site's default title (as on BV).
+  return pageMetadata(
+    {
+      path: "/",
+      locale,
+      title: seo.title ?? site.defaultTitle,
+      description: seo.description,
+      noindex: seo.noindex,
+      canonicalPath: seo.canonicalPath,
+      ogTitle: seo.ogTitle,
+      ogDescription: seo.ogDescription,
+      alternates,
+    },
+    site,
+  );
 }
 
 export default async function Home({ params }: PageProps<"/[locale]">) {
   await connection();
   const locale = await localeOf(params);
-  const [frame, privacyHref] = await Promise.all([getSiteFrame("/", locale), privacyLink(locale)]);
+  const res = await published(locale);
+  if (!res.ok && res.reason === "not_found") notFound();
+  const privacyHref = await privacyLink(locale);
+  if (!res.ok) {
+    return (
+      <SiteFrame locale={locale} nav={null} footer={null} languages={[]} privacyHref={privacyHref}>
+        <div className="container-site section">
+          <p className="notice prose-width">{dictionary(locale).unavailable}</p>
+        </div>
+      </SiteFrame>
+    );
+  }
+  const view = res.data;
   return (
     <SiteFrame
       locale={locale}
-      nav={frame.nav}
-      footer={frame.footer}
-      languages={frame.languages}
+      nav={view.nav}
+      footer={view.footer}
+      languages={view.nav?.languages ?? []}
       privacyHref={privacyHref}
     >
-      <HomePlaceholder locale={locale} />
+      <HomePage content={view.content} />
     </SiteFrame>
   );
 }

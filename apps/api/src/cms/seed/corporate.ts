@@ -14,8 +14,15 @@
  *    have no meta description). No default Open Graph image: the corporate site has no media of
  *    its own yet (COM-2/COM-5).
  * Turkish versions are translations made in the admin (ML-2 "Create translation"), not seeds.
+ * COM-2b adds the designed home page and the product portfolio (below).
  */
-import type { BvFooterMenuInput, BvNavMenuInput, BvSiteSeoContent } from "@dream/contracts";
+import type {
+  BvFooterMenuInput,
+  BvNavMenuInput,
+  BvSiteSeoContent,
+  CorporateHomeContent,
+  CorporateProductsContent,
+} from "@dream/contracts";
 
 const NONE = { type: "none" } as const;
 const HOME = { type: "path", path: "/" } as const;
@@ -123,7 +130,306 @@ export const CORPORATE_SITE_SEO_SEED: Omit<BvSiteSeoContent, "defaultOgImage"> &
   defaultOgImage: null,
 };
 
+/**
+ * COM-2b: the home page, from the live English home page (https://dreampetroleum.com/en, read
+ * 2026-11-27) and, for the service cards, the introductions of the live service pages. Left out
+ * on purpose (owner decisions 2026-11-27, DP-003): the "only official distributor" heading, every
+ * counter (50+ countries, 100K+, 25K+, 16+, 100%), the customer testimonials, the FAQ (commercial
+ * commitments: MOQ, LC, SGS, Incoterms), the "Flexible Trade Terms" strength (FOB/CIF terms), the
+ * quality-standards sentence of the product block and the Storage & Distribution introduction
+ * ("world-class terminal services": ownership to be confirmed). The pages behind About Us and the
+ * service cards do not exist on the new site yet (COM-5): those cards carry no link until then.
+ */
+export const CORPORATE_HOME_SEED: CorporateHomeContent = {
+  hero: {
+    eyebrow: "Dream Petroleum",
+    title: "Global Energy Markets",
+    intro:
+      "Dream Petroleum is a global energy and petroleum investment company operating across midstream and downstream markets, delivering transparent and reliable execution across international trade networks.",
+    primary: { label: "Contact Us", href: "/contact" },
+    secondary: { label: "View Full Portfolio", href: "/products" },
+  },
+  overview: {
+    eyebrow: "Company Overview",
+    title:
+      "Our strategic position is built on deep industry expertise and a clear understanding of global petroleum trade dynamics.",
+    body: "We allocate capital to infrastructure development and commercial petroleum marketing initiatives with a disciplined, governance-driven approach.\n\nWe operate with transparency, reliability, and professional execution across all markets.",
+    highlights: [
+      {
+        title: "Mid & Downstream Focus",
+        description:
+          "Investment in transportation, storage, wholesale marketing, refining-related activities, and downstream distribution networks.",
+      },
+    ],
+    link: null,
+  },
+  services: {
+    eyebrow: "Services",
+    title: "Reliable Delivery Across Global Markets",
+    intro:
+      "We provide integrated sea and road logistics capabilities with coordinated shipment control and timely product distribution.",
+    items: [
+      {
+        title: "Energy Trading & Supply",
+        description:
+          "Connecting global energy resources with strategic market demand through disciplined trading and reliable supply chain execution.",
+        href: null,
+      },
+      {
+        title: "Logistics",
+        description: "We transport your products safely with our experienced staff and technology.",
+        href: null,
+      },
+      { title: "Storage & Distribution", description: null, href: null },
+      {
+        title: "Sustainability",
+        description:
+          "Driving progress through responsible energy distribution and environmental stewardship.",
+        href: null,
+      },
+    ],
+  },
+  productGroups: {
+    eyebrow: "Product Portfolio",
+    title: "Base Oils and Petrochemical Supply Solutions",
+    intro: null,
+    items: [
+      {
+        title: "Group I Base Oils",
+        description:
+          "SN Series and Bright Stock grades for broad industrial and commercial applications.",
+        href: "/products#base-oils-group1",
+      },
+      {
+        title: "Group II Base Oils",
+        description:
+          "High viscosity index grades supporting high-performance lubricant formulations.",
+        href: "/products#base-oils-group2",
+      },
+      {
+        title: "Group III Base Oils",
+        description:
+          "High viscosity index grades refined using advanced hydrocracking technology, offering superior oxidation stability.",
+        href: "/products#base-oils-group3",
+      },
+      {
+        title: "Petrochemical Product Supply",
+        description:
+          "Aromatic, aliphatic, and solvent-based products supplied through trusted partners.",
+        href: "/products#petrochemicals",
+      },
+    ],
+    link: { label: "View Full Portfolio", href: "/products" },
+  },
+  strengths: {
+    eyebrow: "Core Strengths",
+    title: "Why Dream Petroleum?",
+    items: [
+      {
+        title: "Global Market Access",
+        description:
+          "Strong supplier relationships and reliable commercial channels in international markets.",
+      },
+      {
+        title: "Risk & Commercial Discipline",
+        description:
+          "Structured contracts, controlled exposure, and transparent financial frameworks.",
+      },
+      {
+        title: "Operational Reliability",
+        description:
+          "Coordinated logistics, shipment control, and consistent supply chain execution.",
+      },
+      {
+        title: "Structured Solutions",
+        description:
+          "Flexible structures tailored to partner requirements across varied shipment volumes.",
+      },
+      {
+        title: "Long-Term Value",
+        description:
+          "Partnership model focused on continuity, reliability, and sustainable commercial growth.",
+      },
+    ],
+  },
+  cta: {
+    title: "Transparent, Structured, and Long-Term Commercial Value",
+    text: "Our approach combines disciplined risk management, flexible structures, and consistent execution across international midstream and downstream markets.",
+    points: [
+      { text: "Structured solutions aligned with global trade requirements." },
+      { text: "Risk-managed contracts and controlled commercial exposure." },
+      { text: "Reliable execution across sea and road logistics channels." },
+      { text: "Long-term partnerships built on operational transparency." },
+    ],
+    button: { label: "Contact Us", href: "/contact" },
+  },
+};
+
+/**
+ * COM-2b: the product portfolio, from the live English page (https://dreampetroleum.com/en/products,
+ * read 2026-11-27), with the live anchors of its sections. Left out on purpose: the typical values
+ * table (rows empty, so the site hides it, until its source is approved: DP-002), the grade
+ * details of the live pop-up, and the certification, purity and guarantee statements that need a
+ * source ("Quality Certified / ASTM Standards Compliant", "Highest Purity", "99% Purity", "Food
+ * Grade Options", "tested ... to guarantee performance", the viscosity index figure "120+", the
+ * "high purity" sentence of Group III, the "High-Purity" heading of the solvents and the FOB/CIF
+ * statement). The COA request and the availability enquiry go to the contact page (/contact).
+ */
+export const CORPORATE_PRODUCTS_SEED: CorporateProductsContent = {
+  intro: {
+    eyebrow: null,
+    title: "Product Portfolio",
+    intro:
+      "Supplying high-quality base oils, solvents, and petrochemical products across global energy markets.",
+  },
+  groups: [
+    {
+      anchor: "base-oils-group1",
+      eyebrow: "Base Oils",
+      title: "Group I",
+      subtitle: "Base Oils (Solvent Neutral)",
+      description:
+        "Our Group I base oils are produced using solvent refining processes, providing excellent solubility and reliable performance for a wide range of industrial and marine lubricants.",
+      items: [
+        "SN 150",
+        "SN 300",
+        "SN 350",
+        "SN 500",
+        "SN 600",
+        "SN 900",
+        "SN 1250",
+        "Bright Stock (BS)",
+      ].map((name) => ({ name, type: null, description: null })),
+      applicationsTitle: "Key Applications",
+      applications: [
+        { text: "General-purpose engine oils" },
+        { text: "Marine lubricant formulations" },
+        { text: "Industrial gear & transmission fluids" },
+        { text: "Metalworking fluids & process oils" },
+      ],
+      link: null,
+    },
+    {
+      anchor: "base-oils-group2",
+      eyebrow: "Advanced Performance",
+      title: "Group II",
+      subtitle: "Base Oils (Hydro-treated)",
+      description:
+        "Produced through hydro-processing to remove impurities, Group II base oils offer superior oxidation stability, lower volatility, and higher viscosity index compared to Group I.",
+      items: [
+        {
+          name: "HVI 4",
+          type: null,
+          description: "Light viscosity grade for high-performance automotive oils.",
+        },
+        {
+          name: "HVI 6",
+          type: null,
+          description: "Balanced performance for premium industrial lubricants.",
+        },
+        {
+          name: "HVI 8",
+          type: null,
+          description: "Heavy viscosity grade for heavy-duty machinery & gear systems.",
+        },
+      ],
+      applicationsTitle: null,
+      applications: [],
+      link: null,
+    },
+    {
+      anchor: "base-oils-group3",
+      eyebrow: "High Technology & Performance",
+      title: "Group III",
+      subtitle: "Base Oils (Synthetic Blend)",
+      description:
+        "Group III base oils are formulated using severe hydrocracking technology, featuring an extra-high viscosity index.",
+      items: ["Group III 2 cSt", "Group III 4 cSt", "Group III 6 cSt", "Group III 8 cSt"].map(
+        (name) => ({ name, type: null, description: null }),
+      ),
+      applicationsTitle: null,
+      applications: [],
+      link: null,
+    },
+    {
+      anchor: "solvents",
+      eyebrow: null,
+      title: "Hydrocarbon Solvents",
+      subtitle: null,
+      description:
+        "We supply a range of aliphatic and aromatic solvents critical for paints, coatings, adhesives, and extraction industries.",
+      items: [
+        {
+          name: "White Spirit",
+          type: "Aliphatic",
+          description:
+            "Commonly known as mineral spirits, used as a paint thinner and mild degreaser.",
+        },
+        {
+          name: "Hexane (C6)",
+          type: "Aliphatic",
+          description:
+            "Critical for edible oil extraction and as a fast-evaporating adhesive solvent.",
+        },
+        {
+          name: "Toluene",
+          type: "Aromatic",
+          description:
+            "Clear aromatic solvent used in resins, plastics, and as high-octane fuel additive.",
+        },
+        {
+          name: "Xylene",
+          type: "Aromatic",
+          description:
+            "Versatile solvent for paints, rubber, and PET plastic production (para-xylene).",
+        },
+      ],
+      applicationsTitle: null,
+      applications: [],
+      link: null,
+    },
+    {
+      anchor: "petrochemicals",
+      eyebrow: "Broad Spectrum Supply",
+      title: "Specialty Petrochemicals",
+      subtitle: null,
+      description:
+        "Depending on market availability, we supply a wide range of petrochemical intermediates and finished products to fulfill global demand.",
+      items: [
+        {
+          name: "Polymers",
+          type: null,
+          description: "Polypropylene (PP), Polystyrene (PS), and Polyethylene (PE) resins.",
+        },
+        {
+          name: "Intermediates",
+          type: null,
+          description: "Ethylene, Propylene, and various chemical building blocks.",
+        },
+      ],
+      applicationsTitle: null,
+      applications: [],
+      link: { label: "Enquire for Availability", href: "/contact" },
+    },
+  ],
+  typicalValues: {
+    title: "Technical Analysis (Typical)",
+    columnA: "Group I",
+    columnB: "Group II",
+    note: "Data provided as typical values for reference only. Specific COA available upon request.",
+    // DP-002: no row until the source of the values is approved; the site hides the table.
+    rows: [],
+  },
+  coa: {
+    title: "Request a Certificate of Analysis (COA)",
+    text: "Specific COA available upon request.",
+    button: { label: "Request Documentation", href: "/contact" },
+  },
+};
+
 export const CORPORATE_SEEDS: Readonly<Record<string, { title: string; content: unknown }>> = {
+  "corporate.home": { title: "Home", content: CORPORATE_HOME_SEED },
+  "corporate.products": { title: "Products", content: CORPORATE_PRODUCTS_SEED },
   "corporate.site-nav": { title: "Navigation", content: CORPORATE_NAV_SEED },
   "corporate.site-footer": { title: "Footer", content: CORPORATE_FOOTER_SEED },
   "corporate.site-seo": { title: "SEO defaults", content: CORPORATE_SITE_SEO_SEED },

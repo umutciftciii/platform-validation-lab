@@ -130,6 +130,41 @@ export const contract: Messages["content"]["contract"] = {
     bvSiteSeoDefaultOgImageLabel: "Varsayılan Open Graph görseli",
     bvSiteSeoDefaultOgImageHint:
       "Kendi görseli olmayan sayfaların bağlantı önizlemelerinde gösterilir. En iyi sonuç için yaklaşık 1200×630 kullanın.",
+    corporateHomeHeroHint:
+      "Sayfanın başlığı. Owner teyidi olmadan distribütörlük iddiası veya rakam yazılmaz.",
+    corporateHomeHeroSecondaryLabel: "İkinci buton",
+    corporateHomeOverviewLabel: "Şirket tanıtımı",
+    corporateHomeOverviewHighlightsLabel: "Öne çıkanlar",
+    corporateHomeOverviewHighlightsItemLabel: "Öne çıkan",
+    corporateHomeCardHrefHint:
+      "Bu sitenin bir yolu, ör. /products#base-oils-group1. Boş: kart bağlantı olmaz.",
+    corporateHomeStrengthsLabel: "Güçlü yönler",
+    corporateHomeStrengthsHint:
+      "Yalnız niteliksel ifadeler: teyitli kaynağı olmayan sayaç veya yüzde yazılmaz.",
+    corporateHomeStrengthsItemLabel: "Güçlü yön",
+    corporateHomeCtaPointsLabel: "Maddeler",
+    corporateHomeCtaPointsItemLabel: "Madde",
+    corporateProductsIntroLabel: "Sayfa başlığı",
+    corporateProductsGroupsHint:
+      "Her grup için bu sırayla bir bölüm. Çapa, bölümün adresidir (/products#çapa).",
+    corporateProductsGroupsSubtitleLabel: "Alt başlık",
+    corporateProductsGroupsItemsLabel: "Ürünler",
+    corporateProductsGroupsItemsItemLabel: "Ürün",
+    corporateProductsGroupsItemsTypeLabel: "Tür",
+    corporateProductsGroupsApplicationsTitleLabel: "Uygulamalar başlığı",
+    corporateProductsGroupsApplicationsLabel: "Uygulamalar",
+    corporateProductsGroupsApplicationsItemLabel: "Uygulama",
+    corporateProductsTypicalValuesLabel: "Tipik değerler",
+    corporateProductsTypicalValuesHint:
+      "Değerlerin kaynağı onaylanana kadar gizli (DP-002): o zamana kadar satırları boş bırakın. Tablo yalnız en az bir satır varken gösterilir.",
+    corporateProductsTypicalValuesColumnALabel: "Birinci değer sütunu",
+    corporateProductsTypicalValuesColumnBLabel: "İkinci değer sütunu",
+    corporateProductsTypicalValuesRowsPropertyLabel: "Özellik",
+    corporateProductsTypicalValuesRowsUnitLabel: "Birim",
+    corporateProductsTypicalValuesRowsValueALabel: "Birinci değer",
+    corporateProductsTypicalValuesRowsValueBLabel: "İkinci değer",
+    corporateProductsCoaLabel: "Analiz Sertifikası (COA)",
+    corporateProductsCoaHint: "COA talepleri iletişim sayfasına yönlendirilir.",
   },
   /** CMS'de (henüz) olmayan rotaların notları (CMS_SITE_REGISTRY). */
   registry: {
@@ -157,7 +192,10 @@ export const contract: Messages["content"]["contract"] = {
     bvProductDetail: "Yayındaki ürün anlık görüntüleri. Ürünler altında düzenleyin.",
     bvPrivacy:
       "Onay kayıtlarına bağlı, sürümlü hukuki metin. Yalnızca yeni bir sürümle değiştirilebilir.",
-    corporateHome: "Şu an iskelet. S4'te dreampetroleum.com envanterinden oluşturulacak.",
+    corporateHome:
+      "Hero, şirket tanıtımı, hizmetler, ürün grupları, güçlü yönler ve harekete geçirici bölüm (COM-2b). Sayaç, distribütörlük iddiası veya müşteri yorumu yok.",
+    corporateProducts:
+      "Ürün portföyü: çapalı gruplar ve COA talebi (COM-2b). Tipik değerler kaynakları onaylanana kadar gizli kalır.",
     corporateSiteNav:
       "Her kurumsal sayfanın menü öğeleri ve alt menüleri (menü düzenleyici, COM-1). Henüz var olmayan sayfaların bağlantıları metin olarak kalır.",
     corporateSiteFooter:

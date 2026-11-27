@@ -68,6 +68,34 @@ const COM1_CHANGED: Readonly<Record<string, string>> = {
     "Old addresses of the chosen site and where they lead. Changes take effect on the site at once.",
 };
 
+/**
+ * COM-2b: the registry note of the corporate home page describes the designed page now (it was
+ * "Skeleton today"), word for word the contract text.
+ */
+const COM2B_CHANGED: Readonly<Record<string, string>> = {
+  "content.contract.registry.corporateHome":
+    "Hero, company overview, services, product groups, strengths and a call to action (COM-2b). No counters, distributorship claims or testimonials.",
+};
+/** COM-2b: the field texts of the corporate home page and portfolio, and the portfolio's note. */
+const com2b = (k: string) =>
+  k.startsWith("content.contract.design.corporate") ||
+  k === "content.contract.registry.corporateProducts";
+
+describe("COM-2b: the corporate designed pages' contract texts", () => {
+  it("changes only the home page's registry note and adds only the new field texts", () => {
+    const before = load("dp275-en", "en-dictionary");
+    const now = leaves(en as unknown as Tree);
+    for (const [k, text] of Object.entries(COM2B_CHANGED)) {
+      expect(now[k], k).toBe(text);
+      expect(before[k], k).toBe(
+        "Skeleton today. Built from the dreampetroleum.com inventory in S4.",
+      );
+    }
+    const added = Object.keys(now).filter((k) => !(k in before) && com2b(k));
+    expect(added).toHaveLength(31);
+  });
+});
+
 describe("COM-1: the SEO descriptions name the chosen site", () => {
   it("changes exactly the two descriptions, the site name only", () => {
     const before = load("dp275-en", "en-dictionary");
@@ -85,7 +113,9 @@ describe("DP-275: the English dictionary changed only where approved", () => {
 
   it("changes only the tab names and the sentences naming them", () => {
     const changed = Object.keys(before)
-      .filter((k) => k in now && now[k] !== before[k] && !(k in COM1_CHANGED))
+      .filter(
+        (k) => k in now && now[k] !== before[k] && !(k in COM1_CHANGED) && !(k in COM2B_CHANGED),
+      )
       .sort();
     expect(changed).toEqual([
       "catalog.common.tabs.media",
@@ -130,7 +160,9 @@ describe("DP-275: the English dictionary changed only where approved", () => {
     expect(Object.keys(before).filter(dp298)).toEqual([]);
     // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
     expect(
-      Object.keys(now).filter((k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k)),
+      Object.keys(now).filter(
+        (k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k) && !com2b(k),
+      ),
     ).toEqual([
       "errors.DATABASE_UNAVAILABLE",
       // COM-1: the notes of the corporate fragments in Content (CMS_SITE_REGISTRY, contract texts).
