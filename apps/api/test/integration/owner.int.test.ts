@@ -3165,7 +3165,8 @@ describe("DP-290: budgets, reservations and settlement", () => {
       const r = await tx.$queryRaw<Reserved[]>`
         SELECT operation_id, outcome, reserved_micros FROM ai_reserve('DIAGNOSTIC_PING'::"AiTaskType",
           ${o.site ?? null}::uuid, ${o.key ?? key()}, ${o.digest ?? digest(1)}, ${o.in ?? 100}::integer,
-          ${o.out ?? 16}::integer, 'int-test', ${o.capDaily ?? null}::bigint, NULL::bigint)`;
+          ${o.out ?? 16}::integer, 'int-test', ${o.capDaily ?? null}::bigint, NULL::bigint,
+          false, NULL::uuid)`;
       return r[0]!;
     });
   }
@@ -5058,4 +5059,335 @@ describe("DP-297: the AI queue over two API processes", () => {
       200,
     );
   }, 60_000);
+});
+
+// DP-307 (ADR-031 D6, ADR-030 D10): a personal-data operation names its provider-terms record;
+// the record is checked when the operation is reserved AND again when its paid request is sent
+// (ai_dispatch, in the transaction that hands the request to the transport). A revocation or a
+// renewal takes the provider's exclusive terms gate: it waits for the dispatches that hold it, and
+// after its COMMIT every dispatch answers provider_terms_revoked (no request, cost 0). The test is
+// the worker (dp_app), so the order of the two connections is under its control.
+describe("DP-307: provider terms checked again at dispatch", () => {
+  const AI = "/owner/modules/ai/platform";
+  const TERMS = (p: string) => `/ai/providers/${p}/data-terms`;
+  const TERMS_BODY = {
+    dpaReference: "DPA-TEST-307",
+    dpaSignedOn: "2026-11-27",
+    transferMechanism: "SCC",
+    kvkkTransferMechanism: "NOT_APPLICABLE",
+    dataRegion: "EU",
+    retentionSetting: "zero data retention",
+    noTraining: true,
+  };
+  let owner: Staff;
+  let admin: Staff; // ai_administrator (ai:invoke)
+  let seq = 0;
+  const key = () => `dp307-${Date.now()}-${seq++}`;
+  const token = (s: Staff) => (s as unknown as { token: string }).token;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const fn1 = async (q: Promise<{ r: string }[]>) => (await q)[0]!.r;
+  const row = (id: string) => dbo.aiOperation.findUniqueOrThrow({ where: { id } });
+
+  async function record(provider = "OPENAI"): Promise<string> {
+    const res = await owner.call("POST", TERMS(provider), TERMS_BODY);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    return (
+      await dbo.aiProviderDataTerms.findFirstOrThrow({
+        where: { provider: provider as "OPENAI", revokedAt: null },
+      })
+    ).id;
+  }
+  const revoke = (provider = "OPENAI") => owner.call("POST", `${TERMS(provider)}/revoke`, {});
+
+  interface Reserved {
+    operation_id: string | null;
+    outcome: string;
+    reserved_micros: bigint | null;
+  }
+  /** A reservation in the admin's staff context, with its (dummy) encrypted input queued. */
+  function reserve(
+    personal: boolean,
+    terms: string | null,
+    o: { key?: string; enqueue?: boolean } = {},
+  ): Promise<Reserved> {
+    return asApp.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT leads_rls_set_staff_context(${token(admin)})`;
+      const r = (
+        await tx.$queryRaw<Reserved[]>`
+          SELECT operation_id, outcome, reserved_micros FROM ai_reserve('DIAGNOSTIC_PING'::"AiTaskType",
+            NULL::uuid, ${o.key ?? key()}, ${"a".repeat(64)}, 100::integer, 16::integer, 'int-307',
+            NULL::bigint, NULL::bigint, ${personal}::boolean, ${terms}::uuid)`
+      )[0]!;
+      if (r.outcome === "reserved" && o.enqueue !== false) {
+        const q = await tx.$queryRaw<
+          { r: string }[]
+        >`SELECT ai_enqueue(${r.operation_id}::uuid, ${"sealed-input-307"}) AS "r"`;
+        expect(q[0]!.r).toBe("queued");
+      }
+      return r;
+    });
+  }
+  async function reserved(terms: string | null): Promise<string> {
+    const r = await reserve(terms !== null, terms);
+    expect(r.outcome).toBe("reserved");
+    return r.operation_id!;
+  }
+  const claim = (n: number) =>
+    asApp.$queryRaw<{ op_id: string; op_terms: string | null }[]>`
+      SELECT op_id, op_terms FROM ai_claim('int-307', 60, ${n}::integer)`;
+  const dispatch = (id: string) =>
+    fn1(asApp.$queryRaw<{ r: string }[]>`SELECT ai_dispatch(${id}::uuid) AS "r"`);
+  /** What the runner does with a refused dispatch: FAILED, zero usage (DP-291 settlement). */
+  const settleRefused = (id: string, code: string) =>
+    fn1(
+      asApp.$queryRaw<{ r: string }[]>`
+        SELECT ai_settle(${id}::uuid, 'FAILED'::"AiOperationStatus", 0, 0, 0, 0, 0, NULL, ${code}) AS "r"`,
+    );
+  const mismatches = async () =>
+    Number(
+      (
+        await asApp.$queryRaw<
+          { n: bigint }[]
+        >`SELECT count(*)::bigint AS "n" FROM ai_ledger_mismatches()`
+      )[0]!.n,
+    );
+  const reservedNow = async () =>
+    (await dbo.aiBudgetUsage.findMany()).reduce((a, u) => a + u.reservedMicros, 0n);
+  async function clearActive() {
+    for (const o of await dbo.aiOperation.findMany({
+      where: { status: { in: ["RESERVED", "IN_FLIGHT"] } },
+    })) {
+      if (o.status === "RESERVED") {
+        await asApp.$queryRaw`SELECT ai_release(${o.id}::uuid, 'release') AS "r"`;
+      } else {
+        await settleRefused(o.id, "int_probe");
+      }
+    }
+  }
+
+  beforeAll(async () => {
+    const pw = (await dbo.user.findUniqueOrThrow({ where: { id: root.userId } })).passwordHash!;
+    owner = new Staff("root-307", root.userId, await session(root.userId));
+    admin = await staff("ai-admin-307", pw, [], root.userId);
+    expect((await owner.call("POST", AI, { enabled: true, reason: "DP-307 test" })).status).toBe(
+      200,
+    );
+    expect(
+      (await owner.call("POST", `/staff/${admin.userId}/roles`, { roleKey: "ai_administrator" }))
+        .status,
+    ).toBe(201);
+    const cur = await admin.call("GET", "/ai/settings");
+    expect(
+      (await admin.call("POST", "/ai/settings", { ...cur.body, maxConcurrency: 20 })).status,
+    ).toBe(200);
+    await clearActive();
+  }, 60_000);
+
+  afterAll(async () => {
+    await clearActive();
+    await owner.call("POST", AI, { enabled: false, reason: "DP-307 done" });
+  }, 30_000);
+
+  it("migration 50 follows migration 49: the operation names its terms record, both or neither", async () => {
+    const applied = await dbo.$queryRaw<{ name: string }[]>`
+      SELECT migration_name AS "name" FROM "_prisma_migrations"
+       WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name`;
+    const names = applied.map((m) => m.name);
+    const i49 = names.indexOf("20261222090000_dp_298_legal_texts_consents");
+    const i50 = names.indexOf("20261223090000_dp_307_dispatch_terms_recheck");
+    expect(i49).toBeGreaterThanOrEqual(0);
+    expect(i50).toBe(i49 + 1);
+    expect(names.at(-1)).toBe("20261223090000_dp_307_dispatch_terms_recheck");
+    const id = await reserved(null);
+    expect(await row(id)).toMatchObject({ personalData: false, dataTermsId: null });
+    await rejectsDb(
+      dbo.$executeRaw`UPDATE "AiOperation" SET "personalData" = true WHERE "id" = ${id}::uuid`,
+      /AiOperation_personal_terms/,
+    );
+    await asApp.$queryRaw`SELECT ai_release(${id}::uuid, 'release') AS "r"`;
+  });
+
+  it("refuses a personal-data reservation without valid terms of the task's provider", async () => {
+    const before = await reservedNow();
+    expect((await reserve(true, null)).outcome).toBe("provider_terms_missing");
+    // Terms without personal data are a contradiction of the caller.
+    const anthropic = await record("ANTHROPIC");
+    expect((await reserve(false, anthropic)).outcome).toBe("invalid");
+    // Another provider's terms do not cover the task's model (OpenAI).
+    expect((await reserve(true, anthropic)).outcome).toBe("provider_terms_missing");
+    // Unknown record.
+    expect((await reserve(true, "0190c0de-0000-7000-8000-0000000003a7")).outcome).toBe(
+      "provider_terms_missing",
+    );
+    const t1 = await record();
+    expect((await revoke()).status).toBe(200);
+    expect((await reserve(true, t1)).outcome).toBe("provider_terms_revoked");
+    expect(await reservedNow()).toBe(before);
+    // With valid terms: reserved, the record is stored on the operation.
+    const t2 = await record();
+    const k = key();
+    const ok = await reserve(true, t2, { key: k });
+    expect(ok.outcome).toBe("reserved");
+    expect(await row(ok.operation_id!)).toMatchObject({ personalData: true, dataTermsId: t2 });
+    // An idempotent replay must name the same flag and record.
+    expect((await reserve(true, t2, { key: k })).outcome).toBe("existing");
+    expect((await reserve(false, null, { key: k })).outcome).toBe("idempotency_conflict");
+    await clearActive();
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("terms revoked before the dispatch: provider_terms_revoked, no dispatch, FAILED with cost 0", async () => {
+    const t = await record();
+    const before = await reservedNow();
+    const id = await reserved(t);
+    const claimed = await claim(4);
+    expect(claimed).toEqual([{ op_id: id, op_terms: t }]);
+    expect((await revoke()).status).toBe(200);
+    // The running call is told to stop, has no call plan, and gets no dispatch.
+    const stops = await asApp.$queryRaw<{ op_id: string; reason: string }[]>`
+      SELECT op_id, reason FROM ai_stop_signals(ARRAY[${id}]::uuid[])`;
+    expect(stops).toEqual([{ op_id: id, reason: "provider_terms_revoked" }]);
+    expect(await asApp.$queryRaw`SELECT * FROM ai_call_plan(${id}::uuid)`).toEqual([]);
+    expect(await dispatch(id)).toBe("provider_terms_revoked");
+    expect(await row(id)).toMatchObject({ dispatchedAt: null, dispatchSwitchVersion: null });
+    expect(await settleRefused(id, "provider_terms_revoked")).toBe("settled");
+    const done = await row(id);
+    expect(done).toMatchObject({ status: "FAILED", errorCode: "provider_terms_revoked" });
+    expect(done.actualMicros).toBe(0n);
+    expect(await reservedNow()).toBe(before);
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("a renewal of the terms refuses the operations queued under the old record", async () => {
+    const old = await record();
+    const queued = await reserved(old);
+    const renewed = await record(); // revokes `old` in the same transaction
+    expect(renewed).not.toBe(old);
+    expect(
+      (await dbo.aiProviderDataTerms.findUniqueOrThrow({ where: { id: old } })).revokedAt,
+    ).not.toBeNull();
+    const fresh = await reserved(renewed);
+    const claimed = await claim(4);
+    expect(claimed.map((c) => c.op_id).sort()).toEqual([queued, fresh].sort());
+    expect(await dispatch(queued)).toBe("provider_terms_revoked");
+    expect(await dispatch(fresh)).toBe("dispatch");
+    expect((await row(fresh)).dataTermsId).toBe(renewed);
+    await settleRefused(queued, "provider_terms_revoked");
+    await asApp.$queryRaw`SELECT ai_mark_unknown(${fresh}::uuid, 'int_probe') AS "r"`;
+    expect((await row(queued)).actualMicros).toBe(0n);
+    expect(await mismatches()).toBe(0);
+  });
+
+  it("two connections: a revocation waits for the dispatch that holds the gate; after its COMMIT none is permitted", async () => {
+    const t = await record();
+    const first = await reserved(t);
+    const second = await reserved(t);
+    expect((await claim(4)).map((c) => c.op_id).sort()).toEqual([first, second].sort());
+    let revokedAt = 0;
+    let committedAt = 0;
+    let revoking: Promise<Res> | null = null;
+    await asApp.$transaction(
+      async (tx) => {
+        const r = await tx.$queryRaw<{ r: string }[]>`SELECT ai_dispatch(${first}::uuid) AS "r"`;
+        expect(r[0]!.r).toBe("dispatch");
+        // The provider request would be handed to the transport here. The owner revokes meanwhile.
+        revoking = revoke();
+        void revoking.then(() => (revokedAt = Date.now()));
+        await sleep(1_500);
+        expect(revokedAt, "the revocation must wait for the dispatching transaction").toBe(0);
+        committedAt = Date.now();
+      },
+      { timeout: 15_000, maxWait: 5_000 },
+    );
+    expect((await revoking!).status).toBe(200);
+    expect(revokedAt).toBeGreaterThanOrEqual(committedAt);
+    expect((await row(first)).dispatchedAt).not.toBeNull();
+    expect(await dispatch(second)).toBe("provider_terms_revoked");
+    expect(await row(second)).toMatchObject({ dispatchedAt: null });
+    await asApp.$queryRaw`SELECT ai_mark_unknown(${first}::uuid, 'int_probe') AS "r"`;
+    await settleRefused(second, "provider_terms_revoked");
+    expect(await mismatches()).toBe(0);
+  }, 30_000);
+
+  it("two connections: a dispatch waits for a revocation that holds the gate, then is refused", async () => {
+    const t = await record();
+    const id = await reserved(t);
+    expect((await claim(4)).map((c) => c.op_id)).toEqual([id]);
+    let answeredAt = 0;
+    let committedAt = 0;
+    let dispatching: Promise<string> | null = null;
+    await dbo.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT ai_provider_terms_lock('OPENAI'::"AiProvider") AS "locked"`;
+        await tx.aiProviderDataTerms.update({
+          where: { id: t },
+          data: { revokedAt: new Date(), revokedById: root.userId },
+        });
+        dispatching = dispatch(id);
+        void dispatching.then(() => (answeredAt = Date.now()));
+        await sleep(1_000);
+        expect(answeredAt, "the dispatch must wait for the revoking transaction").toBe(0);
+        committedAt = Date.now();
+      },
+      { timeout: 15_000, maxWait: 5_000 },
+    );
+    expect(await dispatching!).toBe("provider_terms_revoked");
+    expect(answeredAt).toBeGreaterThanOrEqual(committedAt);
+    await settleRefused(id, "provider_terms_revoked");
+    // No path revokes without the gate (it could overtake a running dispatch).
+    const t2 = await record();
+    await rejectsDb(
+      dbo.aiProviderDataTerms.update({
+        where: { id: t2 },
+        data: { revokedAt: new Date(), revokedById: root.userId },
+      }),
+      /requires ai_provider_terms_lock/,
+    );
+    expect(await mismatches()).toBe(0);
+  }, 30_000);
+
+  it("a revocation gives up after its lock bound while a dispatch holds the gate (409, nothing changed)", async () => {
+    const t = await record();
+    const id = await reserved(t);
+    await claim(4);
+    let res: Res | null = null;
+    await asApp.$transaction(
+      async (tx) => {
+        expect(
+          (await tx.$queryRaw<{ r: string }[]>`SELECT ai_dispatch(${id}::uuid) AS "r"`)[0]!.r,
+        ).toBe("dispatch");
+        res = await revoke(); // waits TERMS_LOCK_TIMEOUT_MS (4 s), then 55P03
+      },
+      { timeout: 20_000, maxWait: 5_000 },
+    );
+    expectError(res!, 409, "CONFLICT_STATE");
+    expect(JSON.stringify(res!.body)).toContain("terms_busy");
+    expect((await dbo.aiProviderDataTerms.findUniqueOrThrow({ where: { id: t } })).revokedAt).toBe(
+      null,
+    );
+    expect((await revoke()).status).toBe(200);
+    await asApp.$queryRaw`SELECT ai_mark_unknown(${id}::uuid, 'int_probe') AS "r"`;
+    expect(await mismatches()).toBe(0);
+  }, 30_000);
+
+  it("the settlement holds the gate: an answer under terms revoked meanwhile is never stored", async () => {
+    const t = await record();
+    const id = await reserved(t);
+    await claim(4);
+    expect(await dispatch(id)).toBe("dispatch");
+    expect(await fn1(asApp.$queryRaw`SELECT ai_terms_hold(${id}::uuid) AS "r"`)).toBe("ok");
+    expect((await revoke()).status).toBe(200);
+    expect(await fn1(asApp.$queryRaw`SELECT ai_terms_hold(${id}::uuid) AS "r"`)).toBe(
+      "provider_terms_revoked",
+    );
+    // Even a SUCCEEDED settlement stores no draft under revoked terms.
+    await fn1(
+      asApp.$queryRaw<{ r: string }[]>`
+        SELECT ai_settle(${id}::uuid, 'SUCCEEDED'::"AiOperationStatus", 10, 0, 0, 2, 0, NULL, NULL) AS "r"`,
+    );
+    expect(
+      await fn1(asApp.$queryRaw`SELECT ai_store_result(${id}::uuid, ${"sealed-307"}) AS "r"`),
+    ).toBe("refused");
+    expect(await mismatches()).toBe(0);
+  });
 });

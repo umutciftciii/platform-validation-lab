@@ -13,9 +13,12 @@
  *    when all of these hold:
  *      1. every purpose is approved for AI (`aiPurposeReady`: active, approved, AI allowed);
  *      2. the caller holds the permission that opens the data (e.g. `lead:read` on the site);
- *      3. the transport is `fake` (nothing leaves the process), or the provider's data-processing
- *         terms are recorded by the system owner (DPA, GDPR and KVKK transfer mechanisms, region,
- *         retention, no training). Without them no live call is ever made with personal data.
+ *      3. the transport is `fake` or `live`, AND the provider's data-processing terms are recorded
+ *         by the system owner (DPA, GDPR and KVKK transfer mechanisms, region, retention, no
+ *         training). DP-307: the fake transport needs them too (the same path as production), and
+ *         the operation stores the exact record (`dataTermsId`): the database checks it at the
+ *         reservation (ai_reserve) and again when the request is sent (ai_dispatch); a revoked or
+ *         renewed record ends it with `provider_terms_revoked`, no request and cost 0.
  *    The regex filter does not apply (the data is expected); the audit names the purposes and the
  *    field NAMES, never values.
  *
@@ -109,7 +112,7 @@ export interface GateFacts {
   transport: AiTransport;
   /** The caller holds `policy.permission` on the operation's site. */
   hasPermission: boolean;
-  /** The owner recorded unrevoked data-processing terms for the plan's provider. */
+  /** The owner recorded unrevoked data-processing terms for the plan's provider (any transport). */
   providerTermsRecorded: boolean;
 }
 
@@ -121,8 +124,8 @@ export function personalDataRefusal(
   if (policy.kind === "none") return null;
   if (!policy.purposes.every((id) => aiPurposeReady(id))) return "purpose_not_approved";
   if (!facts.hasPermission) return "permission_missing";
-  if (facts.transport === "fake") return null;
-  if (facts.transport !== "live") return "transport_not_allowed";
+  if (facts.transport !== "live" && facts.transport !== "fake") return "transport_not_allowed";
+  // DP-307: terms are required with every transport, the fake one included.
   if (!facts.providerTermsRecorded) return "provider_terms_missing";
   return null;
 }

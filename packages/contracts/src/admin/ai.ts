@@ -789,6 +789,8 @@ export type AiProviderDataTermsRequest = z.infer<typeof AiProviderDataTermsReque
 export const AI_PERSONAL_DATA_REFUSALS = [
   "purpose_not_approved",
   "provider_terms_missing",
+  // DP-307: the terms record was revoked or renewed between the check and the reservation/send.
+  "provider_terms_revoked",
   "transport_not_allowed",
   "field_not_allowed",
   "permission_missing",
