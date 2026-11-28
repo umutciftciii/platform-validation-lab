@@ -537,14 +537,17 @@ describe("God Mode through decide (condition 5)", () => {
     const overview = OwnerOverviewResponseSchema.parse(res.body);
     expect(overview.owner.id).toBe(root.userId);
     expect(overview.chain.intact).toBe(true);
-    expect(overview.modules.find((m) => m.key === "crm")?.sites.every((s) => !s.enabled)).toBe(
-      true,
-    );
+    expect(
+      overview.modules.find((m) => m.key === "automation")?.sites.every((s) => !s.enabled),
+    ).toBe(true);
     for (const who of [admin2, editor]) {
       expectError(await who.call("GET", "/owner/overview"), 404, "NOT_FOUND");
       expectError(await who.call("GET", "/owner/audit"), 404, "NOT_FOUND");
       expectError(
-        await who.call("POST", `/owner/modules/crm/sites/${BV}`, { enabled: true, reason: "try" }),
+        await who.call("POST", `/owner/modules/automation/sites/${BV}`, {
+          enabled: true,
+          reason: "try",
+        }),
         404,
         "NOT_FOUND",
       );
@@ -554,14 +557,14 @@ describe("God Mode through decide (condition 5)", () => {
   it("switches optional modules with a reason and the step-up; core modules stay on (K1, condition 4)", async () => {
     const stale = new Staff("root-stale2", root.userId, await session(root.userId, null));
     expectError(
-      await stale.call("POST", `/owner/modules/crm/sites/${BV}`, {
+      await stale.call("POST", `/owner/modules/automation/sites/${BV}`, {
         enabled: true,
         reason: "pilot",
       }),
       403,
       "AUTH_STEP_UP_REQUIRED",
     );
-    const on = await root.call("POST", `/owner/modules/crm/sites/${BV}`, {
+    const on = await root.call("POST", `/owner/modules/automation/sites/${BV}`, {
       enabled: true,
       reason: "CRM pilot on BV",
     });
@@ -574,14 +577,14 @@ describe("God Mode through decide (condition 5)", () => {
     });
     const same = OwnerModuleChangeResponseSchema.parse(
       (
-        await root.call("POST", `/owner/modules/crm/sites/${BV}`, {
+        await root.call("POST", `/owner/modules/automation/sites/${BV}`, {
           enabled: true,
           reason: "again",
         })
       ).body,
     );
     expect(same.changed).toBe(false);
-    const off = await root.call("POST", `/owner/modules/crm/sites/${BV}`, {
+    const off = await root.call("POST", `/owner/modules/automation/sites/${BV}`, {
       enabled: false,
       reason: "Pilot finished",
     });
@@ -737,7 +740,7 @@ describe("DP-287: the global AI switch", () => {
     });
     expect(flipped).toEqual({ seen: 0, count: 0 });
     await rejectsDb(
-      asApp.$executeRaw`INSERT INTO "PlatformModuleState" ("moduleKey", "reason") VALUES ('crm', 'forged state')`,
+      asApp.$executeRaw`INSERT INTO "PlatformModuleState" ("moduleKey", "reason") VALUES ('automation', 'forged state')`,
       /permission denied/,
     );
     await rejectsDb(
@@ -802,7 +805,7 @@ describe("DP-287: the global AI switch", () => {
       stream: "PROTECTED",
     });
     expectError(
-      await ownerNow.call("POST", "/owner/modules/crm/platform", {
+      await ownerNow.call("POST", "/owner/modules/automation/platform", {
         enabled: true,
         reason: "platform CRM",
       }),
@@ -1561,11 +1564,11 @@ describe("DP-125: row-level security on the IAM tables", () => {
       tok.set(s.userId, await session(s.userId));
     }
     // One optional-module state per site and one STANDARD event per site.
-    const crm = await dbo.featureModule.findUniqueOrThrow({ where: { key: "crm" } });
+    const optional = await dbo.featureModule.findUniqueOrThrow({ where: { key: "automation" } });
     for (const siteId of [BV, COM]) {
       await dbo.moduleConfiguration.upsert({
-        where: { moduleId_siteId: { moduleId: crm.id, siteId } },
-        create: { moduleId: crm.id, siteId, enabled: false, reason: "DP-125 fixture state" },
+        where: { moduleId_siteId: { moduleId: optional.id, siteId } },
+        create: { moduleId: optional.id, siteId, enabled: false, reason: "DP-125 fixture state" },
         update: {},
       });
       await dbo.auditEvent.create({
@@ -1790,10 +1793,10 @@ describe("DP-125: row-level security on the IAM tables", () => {
   });
 
   it("keeps module switches with the system owner in the database (K4)", async () => {
-    const crm = await dbo.featureModule.findUniqueOrThrow({ where: { key: "crm" } });
+    const optional = await dbo.featureModule.findUniqueOrThrow({ where: { key: "automation" } });
     const flip = (tx: Tx) =>
       tx.moduleConfiguration.updateMany({
-        where: { moduleId: crm.id, siteId: BV },
+        where: { moduleId: optional.id, siteId: BV },
         data: { enabled: true, reason: "DP-125 probe flip" },
       });
     expect((await tryInCtx(t(admin2), flip)).count).toBe(0);
@@ -1809,7 +1812,9 @@ describe("DP-125: row-level security on the IAM tables", () => {
     );
     expect((await tryInCtx(t(root), flip)).count).toBe(1);
     expect(
-      await dbo.moduleConfiguration.findFirstOrThrow({ where: { moduleId: crm.id, siteId: BV } }),
+      await dbo.moduleConfiguration.findFirstOrThrow({
+        where: { moduleId: optional.id, siteId: BV },
+      }),
     ).toMatchObject({ enabled: false });
   });
 
@@ -2116,10 +2121,10 @@ describe("DP-125: row-level security on the IAM tables", () => {
     const god = new Staff("root", root.userId, t(root));
     const overview = await god.call("GET", "/owner/overview");
     expect(overview.status, JSON.stringify(overview.body)).toBe(200);
-    const crmStates = OwnerOverviewResponseSchema.parse(overview.body).modules.find(
-      (m) => m.key === "crm",
+    const optionalStates = OwnerOverviewResponseSchema.parse(overview.body).modules.find(
+      (m) => m.key === "automation",
     );
-    expect(crmStates?.sites.map((s) => s.siteId).sort()).toEqual([BV, COM].sort());
+    expect(optionalStates?.sites.map((s) => s.siteId).sort()).toEqual([BV, COM].sort());
     const verify = await god.call("GET", "/owner/audit/verify");
     expect(verify.status, JSON.stringify(verify.body)).toBe(200);
     // The owner's check sees the whole stream (the event tampered with earlier in this file too).
@@ -5197,7 +5202,6 @@ describe("DP-307: provider terms checked again at dispatch", () => {
     const i50 = names.indexOf("20261223090000_dp_307_dispatch_terms_recheck");
     expect(i49).toBeGreaterThanOrEqual(0);
     expect(i50).toBe(i49 + 1);
-    expect(names.at(-1)).toBe("20261223090000_dp_307_dispatch_terms_recheck");
     const id = await reserved(null);
     expect(await row(id)).toMatchObject({ personalData: false, dataTermsId: null });
     await rejectsDb(

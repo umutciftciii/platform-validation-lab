@@ -54,7 +54,10 @@ export const owner: Messages["owner"] = {
       name: "Üyelik",
       description: "Üye hesapları ve yalnız üyelere açık teknik veriler",
     },
-    crm: { name: "CRM", description: "Taleplerin üzerinde satış süreci (isteğe bağlı)" },
+    crm: {
+      name: "CRM 360°",
+      description: "Firmalar, kişiler, müşteri sorumluları ve iletişim geçmişi",
+    },
     automation: {
       name: "Otomasyon",
       description: "Kurala dayalı takipler ve bildirimler (isteğe bağlı)",

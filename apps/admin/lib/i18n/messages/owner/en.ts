@@ -49,7 +49,10 @@ export const owner = {
       name: "Membership",
       description: "Member accounts and member-only technical data",
     },
-    crm: { name: "CRM", description: "Sales pipeline on top of leads (optional)" },
+    crm: {
+      name: "CRM 360°",
+      description: "Companies, contacts, account owners and contact history",
+    },
     automation: {
       name: "Automation",
       description: "Rule-based follow-ups and notifications (optional)",

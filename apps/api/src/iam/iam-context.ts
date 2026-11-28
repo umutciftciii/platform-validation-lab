@@ -168,6 +168,19 @@ export function assignableStaff(
 }
 
 /**
+ * CRM-1 (ADR-032 D4): (site, user) pairs of staff who may own the companies of the given sites
+ * (crm:manage there), for sites whose companies the session reads (crm:read). Ids only.
+ */
+export function crmAssignableOwners(
+  tx: Db,
+  siteIds: readonly string[],
+): Promise<{ site_id: string; user_id: string }[]> {
+  return tx.$queryRaw<{ site_id: string; user_id: string }[]>`
+    SELECT site_id::text AS site_id, user_id::text AS user_id
+    FROM crm_rls_assignable_owners(${[...siteIds]}::uuid[])`;
+}
+
+/**
  * DP-221 (ADR-026 D3): staff who may be put on the contact-form notification list of the given
  * sites (lead:read there), answered only for the sites where the session's user holds
  * lead:manage. Run in the caller's staff context (`inStaffContext`). Ids only.

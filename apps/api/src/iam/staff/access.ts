@@ -15,6 +15,8 @@
  *     DP-041 sales workflow writes through it too (status, assignment, activity).
  *  7. `leadAssignees` / `staffNames` (DP-041, lead-assignees.ts): staff who may work a site's
  *     leads, and display names for the lead history.
+ *  8. `crmData` / `crmOwners` (CRM-1, ADR-032): CRM-table reads and writes in the same session
+ *     context (row-level security), and the staff who may own a site's companies.
  */
 import { Inject, Injectable } from "@nestjs/common";
 import { ADMIN_SESSION_COOKIE } from "@dream/contracts";
@@ -30,7 +32,7 @@ import { PERMISSION_BY_KEY, ROLE_BY_KEY } from "../catalog.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import type { Db } from "../db.js";
 import { leadAssigneesBySite, staffNames, type LeadStaffUser } from "../lead-assignees.js";
-import { inStaffContext, notificationCandidates } from "../iam-context.js";
+import { crmAssignableOwners, inStaffContext, notificationCandidates } from "../iam-context.js";
 import { inLeadContext } from "../lead-data.js";
 import { boundedTransaction, type TransactionLimits } from "../bounded-transaction.js";
 import { ApiError } from "../http/api-error.js";
@@ -203,6 +205,26 @@ export class StaffAccess {
    */
   staffData<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
     return inStaffContext(this.prisma, this.sessionToken, fn);
+  }
+
+  /**
+   * CRM-1 (ADR-032 D3): CRM-table reads and writes in this admin session's database context (the
+   * DP-103 context; the database opens the sites where it finds crm:read / crm:manage).
+   */
+  crmData<T>(scope: SiteScope, fn: (db: SiteScopedClient) => Promise<T>): Promise<T> {
+    return inLeadContext(
+      this.prisma,
+      scope,
+      { kind: "staff", sessionToken: this.sessionToken },
+      fn,
+    );
+  }
+
+  /** CRM-1: staff who may own the companies of each site (crm:manage there), sorted by name. */
+  crmOwners(siteIds: readonly string[]): Promise<Map<string, LeadStaffUser[]>> {
+    return inStaffContext(this.prisma, this.sessionToken, (tx) =>
+      leadAssigneesBySite(tx, siteIds, crmAssignableOwners),
+    );
   }
 
   /** DP-041: staff who may be assigned the leads of each site (lead:manage there). */

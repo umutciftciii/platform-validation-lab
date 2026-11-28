@@ -24,6 +24,10 @@ import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import {
   AssignRoleResponseSchema,
+  CrmCompanyDetailResponseSchema,
+  CrmCompanyListResponseSchema,
+  CrmCompanyResponseSchema,
+  CrmOwnersResponseSchema,
   ErrorBodySchema,
   LEAD_CONTACT_NOTICE,
   LEAD_MARKETING_CONSENT,
@@ -5405,5 +5409,375 @@ describe("COM-4 corporate contact form → CRM lead", () => {
     const sixth = await sendCom(contact({ email: "limit5@engines.example" }), { ip });
     expectError(sixth, 429, "RATE_LIMITED");
     expect(await owner.lead.count({ where: { email: "limit5@engines.example" } })).toBe(0);
+  });
+});
+
+describe("CRM-1 companies and account owners (ADR-032)", () => {
+  let crmBv: Staff; // sales_crm_user @ BV: crm:read + crm:manage there
+  let crmCom: Staff; // sales_crm_user @ CORPORATE
+  let officer: Staff; // platform_customer_data_officer: crm:read everywhere, no crm:manage
+  let siteAdminBv: Staff; // site_admin @ BV: no customer data
+  let crmBvAssignment: string;
+  let acme: string; // BV company created by crmBv
+
+  /** Any route under /api/v1/admin/crm. */
+  const crm = (who: Staff, method: "GET" | "POST", p: string, body?: unknown) =>
+    who.admin(method, `/crm${p}`, body);
+
+  beforeAll(async () => {
+    crmBv = await staff("crm1-bv", [], root.userId, undefined, { memberships: [BV] });
+    crmCom = await staff("crm1-com", [], root.userId, undefined, { memberships: [COM] });
+    officer = await staff("crm1-officer", [], root.userId);
+    siteAdminBv = await staff("crm1-site-admin", [{ role: "site_admin", site: BV }], root.userId);
+    crmBvAssignment = (await assignRole(crmBv, "sales_crm_user", BV)).assignmentId;
+    await assignRole(crmCom, "sales_crm_user", COM);
+    await assignRole(officer, "platform_customer_data_officer", null);
+  });
+
+  it("makes the crm module core (CRM 360° is standard scope, D1)", async () => {
+    const mod = await owner.featureModule.findUniqueOrThrow({ where: { key: "crm" } });
+    expect(mod).toMatchObject({ isCore: true, name: "CRM 360°" });
+    await expect(
+      owner.featureModule.update({ where: { key: "crm" }, data: { isCore: false } }),
+    ).rejects.toThrow(/core modules cannot be removed or downgraded/);
+  });
+
+  it("refuses staff without crm:read (403, audited) and answers nothing without a context", async () => {
+    expectError(await crm(siteAdminBv, "GET", "/companies"), 403, "FORBIDDEN");
+    expect(await lastAudit("crm.access_denied")).toMatchObject({
+      actorUserId: siteAdminBv.userId,
+      outcome: "DENIED",
+    });
+    expectError(
+      await crm(siteAdminBv, "POST", "/companies", { siteId: BV, name: "Nope B.V." }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(
+      await crm(officer, "POST", "/companies", { siteId: BV, name: "Nope" }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(await crm(officer, "GET", "/owners"), 403, "FORBIDDEN");
+  });
+
+  it("creates a company on the manager's site; the database stamps creator, version and key", async () => {
+    const res = await crm(crmBv, "POST", "/companies", {
+      siteId: BV,
+      name: "  Acme   Lubricants B.V. ",
+      country: "NL",
+      city: " Rotterdam ",
+      address: "Haven 1\r\n3011 Rotterdam",
+      website: "https://acme.example",
+      phone: "+31 (0)10 123 4567",
+      email: "Info@ACME.example",
+      description: "",
+      internalNotes: null,
+      ownerUserId: crmBv.userId,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const company = CrmCompanyResponseSchema.parse(res.body).company;
+    acme = company.id;
+    expect(company).toMatchObject({
+      siteId: BV,
+      siteKey: "BV",
+      name: "Acme   Lubricants B.V.",
+      country: "NL",
+      city: "Rotterdam",
+      address: "Haven 1\n3011 Rotterdam",
+      email: "info@acme.example",
+      description: null,
+      internalNotes: null,
+      version: 0,
+      owner: { id: crmBv.userId, displayName: "crm1-bv", active: true },
+      createdBy: { id: crmBv.userId },
+      updatedBy: { id: crmBv.userId },
+    });
+    const row = await owner.crmCompany.findUniqueOrThrow({ where: { id: acme } });
+    expect(row.normalizedName).toBe("acme lubricants b.v.");
+    const audit = await lastAudit("crm.company_created");
+    expect(audit).toMatchObject({ resourceId: acme, siteId: BV, actorUserId: crmBv.userId });
+    // Field names only: no value of the company in the audit trail.
+    const meta = JSON.stringify(audit?.metadata);
+    expect(meta).toContain('"fields"');
+    for (const value of ["Acme", "Rotterdam", "acme.example", "4567"]) {
+      expect(meta).not.toContain(value);
+    }
+  });
+
+  it("keeps names unique per site after normalisation, and sites apart", async () => {
+    expectError(
+      await crm(crmBv, "POST", "/companies", { siteId: BV, name: "ACME lubricants  b.v." }),
+      409,
+      "CONFLICT_STATE",
+      { path: "name", rule: "duplicate_name" },
+    );
+    const com = await crm(crmCom, "POST", "/companies", {
+      siteId: COM,
+      name: "Acme Lubricants B.V.",
+    });
+    expect(com.status, JSON.stringify(com.body)).toBe(201);
+    // A manager of one site cannot write on another.
+    expectError(
+      await crm(crmBv, "POST", "/companies", { siteId: COM, name: "Other" }),
+      403,
+      "FORBIDDEN",
+    );
+  });
+
+  it("validates the fields (strict body, URL, phone, e-mail, country)", async () => {
+    const bad = async (patch: Record<string, unknown>, path: string) => {
+      const res = await crm(crmBv, "POST", "/companies", { siteId: BV, name: "Valid", ...patch });
+      expectError(res, 400, "VALIDATION_FAILED");
+      expect(JSON.stringify(res.body)).toContain(path);
+    };
+    await bad({ name: "   " }, "name");
+    await bad({ website: "ftp://acme.example" }, "website");
+    await bad({ website: "acme.example" }, "website");
+    await bad({ phone: "call me" }, "phone");
+    await bad({ email: "info@acme" }, "email");
+    await bad({ country: "XX" }, "country");
+    await bad({ name: "Tab\there" }, "name");
+    // Strict body: an unknown key is refused at the root.
+    await bad({ unknown: true }, "unrecognized_keys");
+  });
+
+  it("accepts only staff with crm:manage on the site as account owner", async () => {
+    for (const candidate of [siteAdminBv, crmCom, officer]) {
+      expectError(
+        await crm(crmBv, "POST", "/companies", {
+          siteId: BV,
+          name: `Owner test ${candidate.name}`,
+          ownerUserId: candidate.userId,
+        }),
+        400,
+        "VALIDATION_FAILED",
+        { path: "ownerUserId", rule: "owner_not_eligible" },
+      );
+    }
+    const owners = await crm(crmBv, "GET", "/owners");
+    expect(owners.status, JSON.stringify(owners.body)).toBe(200);
+    const bv = CrmOwnersResponseSchema.parse(owners.body).sites;
+    expect(bv.map((s) => s.site.id)).toEqual([BV]);
+    const ids = bv[0]!.owners.map((o) => o.id);
+    expect(ids).toContain(crmBv.userId);
+    expect(ids).toContain(root.userId);
+    expect(ids).not.toContain(crmCom.userId);
+    expect(ids).not.toContain(siteAdminBv.userId);
+  });
+
+  it("lists by site, search, owner and country; the officer reads every site but manages none", async () => {
+    const second = await crm(crmBv, "POST", "/companies", {
+      siteId: BV,
+      name: "Baltic Oils",
+      country: "DE",
+      city: "Hamburg",
+    });
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+    const list = async (who: Staff, q = "") => {
+      const res = await crm(who, "GET", `/companies${q}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      return CrmCompanyListResponseSchema.parse(res.body);
+    };
+    const mine = await list(crmBv);
+    expect(mine.items.map((c) => c.name)).toEqual(["Acme   Lubricants B.V.", "Baltic Oils"]);
+    expect(mine.items.every((c) => c.siteId === BV)).toBe(true);
+    expect(mine.sites.map((s) => s.id)).toEqual([BV]);
+    expect(mine.manageableSiteIds).toEqual([BV]);
+    expect((await list(crmBv, "?q=hamburg")).items.map((c) => c.name)).toEqual(["Baltic Oils"]);
+    expect((await list(crmBv, "?q=ACME.EXAMPLE")).items.map((c) => c.name)).toEqual([
+      "Acme   Lubricants B.V.",
+    ]);
+    expect((await list(crmBv, "?owner=me")).items.map((c) => c.id)).toEqual([acme]);
+    expect((await list(crmBv, "?owner=none")).items.map((c) => c.name)).toEqual(["Baltic Oils"]);
+    expect((await list(crmBv, "?country=de")).items.map((c) => c.name)).toEqual(["Baltic Oils"]);
+    expectError(await crm(crmBv, "GET", "/companies?owner=someone"), 400, "VALIDATION_FAILED");
+    expectError(await crm(crmBv, "GET", "/companies?cursor=bad"), 400, "VALIDATION_FAILED");
+    expectError(await crm(crmBv, "GET", `/companies?siteId=${COM}`), 403, "FORBIDDEN");
+    const all = await list(officer);
+    expect(new Set(all.items.map((c) => c.siteId))).toEqual(new Set([BV, COM]));
+    expect(all.manageableSiteIds).toEqual([]);
+    const audit = await lastAudit("crm.companies_listed");
+    expect(audit).toMatchObject({ actorUserId: officer.userId, siteId: null });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("hamburg");
+  });
+
+  it("opens a company only on a readable site (404 otherwise, audited)", async () => {
+    const own = await crm(crmBv, "GET", `/companies/${acme}`);
+    expect(own.status, JSON.stringify(own.body)).toBe(200);
+    const detail = CrmCompanyDetailResponseSchema.parse(own.body);
+    expect(detail.canManage).toBe(true);
+    expect(detail.owners.map((o) => o.id)).toContain(crmBv.userId);
+    expect(await lastAudit("crm.company_viewed")).toMatchObject({
+      resourceId: acme,
+      actorUserId: crmBv.userId,
+    });
+    expectError(await crm(crmCom, "GET", `/companies/${acme}`), 404, "NOT_FOUND");
+    expect(await lastAudit("crm.access_denied")).toMatchObject({
+      actorUserId: crmCom.userId,
+      reason: "not_found_or_other_site",
+    });
+    expectError(await crm(crmBv, "GET", "/companies/not-a-uuid"), 404, "NOT_FOUND");
+    const read = CrmCompanyDetailResponseSchema.parse(
+      (await crm(officer, "GET", `/companies/${acme}`)).body,
+    );
+    expect(read).toMatchObject({ canManage: false, owners: [] });
+    expectError(
+      await crm(officer, "POST", `/companies/${acme}`, { version: 0, name: "Officer edit" }),
+      403,
+      "FORBIDDEN",
+    );
+  });
+
+  it("saves changes with optimistic concurrency and audits the changed field names only", async () => {
+    const base = CrmCompanyDetailResponseSchema.parse(
+      (await crm(crmBv, "GET", `/companies/${acme}`)).body,
+    ).company;
+    const fields = {
+      name: base.name,
+      country: base.country,
+      city: base.city,
+      address: base.address,
+      website: base.website,
+      phone: base.phone,
+      email: base.email,
+      description: base.description,
+      internalNotes: base.internalNotes,
+      ownerUserId: base.owner?.id ?? null,
+    };
+    expectError(
+      await crm(crmBv, "POST", `/companies/${acme}`, { ...fields, version: base.version }),
+      409,
+      "CONFLICT_STATE",
+      { path: "company", rule: "unchanged" },
+    );
+    const saved = await crm(crmBv, "POST", `/companies/${acme}`, {
+      ...fields,
+      version: base.version,
+      internalNotes: "Prefers quarterly calls.",
+      ownerUserId: root.userId,
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const after = CrmCompanyResponseSchema.parse(saved.body).company;
+    expect(after).toMatchObject({
+      version: base.version + 1,
+      internalNotes: "Prefers quarterly calls.",
+      owner: { id: root.userId, active: true },
+      createdBy: { id: crmBv.userId },
+      updatedBy: { id: crmBv.userId },
+    });
+    const audit = await lastAudit("crm.company_updated");
+    expect(audit?.metadata).toMatchObject({
+      fields: ["internalNotes", "ownerUserId"],
+      fromOwnerUserId: crmBv.userId,
+      toOwnerUserId: root.userId,
+    });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("quarterly");
+    expectError(
+      await crm(crmBv, "POST", `/companies/${acme}`, { ...fields, version: base.version }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    // Renaming onto another company's name is refused like a create.
+    expectError(
+      await crm(crmBv, "POST", `/companies/${acme}`, {
+        ...fields,
+        version: after.version,
+        name: "baltic oils",
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "name", rule: "duplicate_name" },
+    );
+    expectError(
+      await crm(crmCom, "POST", `/companies/${acme}`, { ...fields, version: after.version }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("enforces the rules in the database too (row-level security, guard, no delete)", async () => {
+    // A context without crm:read sees nothing; no context at all sees nothing.
+    expect(await appIn({ staff: siteAdminBv.token }, (tx) => tx.crmCompany.count())).toBe(0);
+    expect(await asApp.crmCompany.count()).toBe(0);
+    expect(await appIn({ staff: crmCom.token }, (tx) => tx.crmCompany.count())).toBe(1);
+    // Insert without crm:manage on the site: refused.
+    await rejectsDb(
+      appIn({ staff: crmCom.token }, (tx) =>
+        tx.crmCompany.create({
+          data: {
+            siteId: BV,
+            name: "Forged",
+            createdById: crmCom.userId,
+            updatedById: crmCom.userId,
+          },
+        }),
+      ),
+      /row-level security|crm: /,
+    );
+    // The creator and the version are the database's: a forged value is replaced.
+    const made = await appIn({ staff: crmBv.token }, (tx) =>
+      tx.crmCompany.create({
+        data: {
+          siteId: BV,
+          name: "Stamped GmbH",
+          createdById: root.userId,
+          updatedById: root.userId,
+          version: 41,
+        },
+      }),
+    );
+    expect(made).toMatchObject({
+      createdById: crmBv.userId,
+      updatedById: crmBv.userId,
+      version: 0,
+      normalizedName: "stamped gmbh",
+    });
+    await rejectsDb(
+      appIn({ staff: crmBv.token }, (tx) =>
+        tx.crmCompany.update({ where: { id: made.id }, data: { createdById: root.userId } }),
+      ),
+      /crm: a company keeps its id, site and creator/,
+    );
+    await rejectsDb(
+      appIn({ staff: crmBv.token }, (tx) =>
+        tx.crmCompany.update({ where: { id: made.id }, data: { ownerUserId: crmCom.userId } }),
+      ),
+      /crm: the account owner needs crm:manage/,
+    );
+    await rejectsDb(
+      appIn({ staff: crmBv.token }, (tx) => tx.crmCompany.delete({ where: { id: made.id } })),
+      /permission denied/i,
+    );
+    await rejectsDb(
+      owner.crmCompany.delete({ where: { id: made.id } }),
+      /crm: a company is never deleted/,
+    );
+    await rejectsDb(
+      appIn({ staff: crmBv.token }, (tx) =>
+        tx.crmCompany.update({ where: { id: made.id }, data: { website: "javascript:alert(1)" } }),
+      ),
+      /CrmCompany_website/,
+    );
+  });
+
+  it("marks an account owner who lost crm:manage as no longer active", async () => {
+    // Hand "Stamped GmbH" to crmBv, then revoke crmBv's role.
+    const stamped = await owner.crmCompany.findFirstOrThrow({ where: { name: "Stamped GmbH" } });
+    const set = await crm(root, "POST", `/companies/${stamped.id}`, {
+      version: stamped.version,
+      name: stamped.name,
+      ownerUserId: crmBv.userId,
+    });
+    expect(set.status, JSON.stringify(set.body)).toBe(200);
+    const res = await root.admin("POST", `/role-assignments/${crmBvAssignment}/revoke`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(204);
+    const detail = CrmCompanyDetailResponseSchema.parse(
+      (await crm(root, "GET", `/companies/${stamped.id}`)).body,
+    );
+    expect(detail.company.owner).toMatchObject({ id: crmBv.userId, active: false });
+    expect(detail.owners.map((o) => o.id)).not.toContain(crmBv.userId);
+    expectError(await crm(crmBv, "GET", "/companies"), 403, "FORBIDDEN");
   });
 });

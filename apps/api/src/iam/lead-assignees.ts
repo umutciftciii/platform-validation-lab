@@ -33,10 +33,15 @@ function label(u: { displayName: string | null; email: string }): string {
 export async function leadAssigneesBySite(
   tx: Db,
   siteIds: readonly string[],
+  /** CRM-1: the database's (site, user) rule; lead assignees by default. */
+  pairsOf: (
+    tx: Db,
+    siteIds: readonly string[],
+  ) => Promise<{ site_id: string; user_id: string }[]> = assignableStaff,
 ): Promise<Map<string, LeadStaffUser[]>> {
   const out = new Map<string, LeadStaffUser[]>(siteIds.map((id) => [id, []]));
   if (siteIds.length === 0) return out;
-  const pairs = await assignableStaff(tx, siteIds);
+  const pairs = await pairsOf(tx, siteIds);
   const users = await tx.user.findMany({
     where: { id: { in: [...new Set(pairs.map((p) => p.user_id))] } },
     select: { id: true, email: true, displayName: true },

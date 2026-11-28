@@ -525,6 +525,12 @@ describe("DP-103: what can step around row-level security", () => {
       { f: "catalog_direct_publish_allowed", owner: "dp_owner", lead: false },
       // DP-173: one boolean about one preview link's session (live, ACTIVE user, review role).
       { f: "catalog_preview_session_allowed", owner: "dp_owner", lead: false },
+      // CRM-1 (ADR-032): the session's CRM sites, one staff user's owner eligibility and the
+      // (site, user) ids of possible account owners.
+      { f: "crm_rls_assignable_owners", owner: "dp_owner", lead: false },
+      { f: "crm_rls_owner_ok", owner: "dp_owner", lead: false },
+      { f: "crm_rls_staff_manage_site_ids", owner: "dp_owner", lead: false },
+      { f: "crm_rls_staff_read_site_ids", owner: "dp_owner", lead: false },
       { f: "iam_audit_event_protected_stream", owner: "dp_owner", lead: false },
       // DP-125 (ADR-012B part 2): the legacy sweep (K3), /enrol by raw token, the guards that
       // need every assignment (B1), the operator CLI (K1), the session-bound IAM readers.
@@ -704,6 +710,52 @@ describe("DP-103: what can step around row-level security", () => {
     // Rows come from migrations only; the owner changes them (row-level security); nobody
     // inserts, deletes or truncates.
     expect(privileges.map((r) => r.p)).toEqual(["SELECT", "UPDATE"]);
+  });
+
+  it("CRM-1: keeps CrmCompany behind row-level security, without DELETE, its functions for dp_app only", async () => {
+    const rls = await su.$queryRawUnsafe<{ rls: boolean; force: boolean }[]>(
+      `SELECT relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relname = 'CrmCompany'`,
+    );
+    expect(rls).toEqual([{ rls: true, force: false }]);
+    const privileges = await su.$queryRawUnsafe<{ who: string; p: string }[]>(
+      `SELECT grantee::text AS who, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
+       FROM information_schema.role_table_grants
+       WHERE table_name = 'CrmCompany' AND grantee IN ('dp_app', 'dp_iam_bootstrap',
+             'dp_iam_system', 'dp_lead_retention', 'dp_migrator')
+       GROUP BY grantee ORDER BY 1`,
+    );
+    // A company is never deleted; retention and the IAM roles do not touch it.
+    expect(privileges).toEqual([{ who: "dp_app", p: "INSERT,SELECT,UPDATE" }]);
+    const policies = await su.$queryRawUnsafe<{ name: string; cmd: string; roles: string }[]>(
+      `SELECT policyname::text AS name, cmd::text AS cmd, array_to_string(roles, ',') AS roles
+       FROM pg_policies WHERE tablename = 'CrmCompany' ORDER BY 1`,
+    );
+    expect(policies).toEqual([
+      { name: "crm_company_staff_insert", cmd: "INSERT", roles: "dp_app" },
+      { name: "crm_company_staff_read", cmd: "SELECT", roles: "dp_app" },
+      { name: "crm_company_staff_update", cmd: "UPDATE", roles: "dp_app" },
+    ]);
+    const exec = await su.$queryRawUnsafe<{ f: string; who: string | null }[]>(
+      `SELECT p.proname::text AS f,
+              string_agg(r.rolname, ',' ORDER BY r.rolname) FILTER (
+                WHERE has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS who
+       FROM pg_proc p CROSS JOIN pg_roles r
+       WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^crm_rls_'
+         AND r.rolname IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention',
+                           'dp_migrator')
+       GROUP BY p.proname ORDER BY 1`,
+    );
+    expect(exec).toEqual([
+      { f: "crm_rls_assignable_owners", who: "dp_app" },
+      { f: "crm_rls_owner_ok", who: "dp_app" },
+      { f: "crm_rls_staff_manage_site_ids", who: "dp_app" },
+      { f: "crm_rls_staff_read_site_ids", who: "dp_app" },
+    ]);
+    // Without a session context dp_app sees no company and cannot create one (fail closed).
+    await expect(
+      app.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "CrmCompany"`),
+    ).resolves.toEqual([{ n: 0 }]);
   });
 
   it("DP-288: keeps the AI tables behind row-level security, without DELETE, the key column unselectable", async () => {
