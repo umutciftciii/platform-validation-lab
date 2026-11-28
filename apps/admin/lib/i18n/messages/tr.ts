@@ -25,6 +25,7 @@ import { editor as contentEditor } from "./content/tr/editor";
 import { menus as contentMenus } from "./content/tr/menus";
 import { seo } from "./seo/tr";
 import { leads } from "./leads/tr";
+import { crm } from "./crm/tr";
 import { staff } from "./staff/tr";
 import { owner } from "./owner/tr";
 import { dashboard } from "./dashboard/tr";
@@ -115,6 +116,10 @@ export const tr: Messages = {
         label: "Talepler",
         summary:
           "Herkese açık sitelerden gelen iletişim formu mesajları ve belge talepleri (müşteri verisi, denetim kaydı tutulur).",
+      },
+      crm: {
+        label: "CRM",
+        summary: "Firmalar ve müşteri sorumluları (müşteri verisi, denetim kaydı tutulur).",
       },
       sites: {
         label: "Siteler",
@@ -406,6 +411,7 @@ export const tr: Messages = {
   },
   seo,
   leads,
+  crm,
   staff,
   owner,
   dashboard,

@@ -33,7 +33,7 @@ describe("navigation", () => {
     expect(new Set(NAV_ITEMS.map((i) => i.slug)).size).toBe(NAV_ITEMS.length);
   });
 
-  it("marks the overview, content (CMS S1), legal texts (DP-298), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), staff (DP-107), the AI Center (DP-287) and the owner console (DP-110) as ready", () => {
+  it("marks the overview, content (CMS S1), legal texts (DP-298), products (PM-1), translations (ML-13b), SEO (DP-209), company review (DP-172), leads (DP-042), CRM (CRM-1), staff (DP-107), the AI Center (DP-287) and the owner console (DP-110) as ready", () => {
     expect(NAV_ITEMS.filter((i) => i.ready).map((i) => i.href)).toEqual([
       "/",
       "/content",
@@ -43,6 +43,7 @@ describe("navigation", () => {
       "/seo",
       "/company-review",
       "/leads",
+      "/crm",
       "/staff",
       "/ai",
       "/owner",

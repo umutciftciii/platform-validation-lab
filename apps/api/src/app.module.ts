@@ -3,6 +3,7 @@ import { APP_FILTER } from "@nestjs/core";
 import { AiModule } from "./ai/ai.module.js";
 import { CatalogModule } from "./catalog/catalog.module.js";
 import { CmsModule } from "./cms/cms.module.js";
+import { CrmModule } from "./crm/crm.module.js";
 import { HealthController } from "./health/health.controller.js";
 import { ApiExceptionFilter } from "./iam/http/api-error.js";
 import { IamModule } from "./iam/iam.module.js";
@@ -22,6 +23,7 @@ import { TranslationPackagesModule } from "./translation-packages/translation-pa
     MediaModule,
     CatalogModule,
     CmsModule,
+    CrmModule,
     SeoModule,
     TranslationPackagesModule,
     AiModule,

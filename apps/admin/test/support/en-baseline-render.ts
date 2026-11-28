@@ -51,6 +51,9 @@
 // call to action's pictures and the latest news heading; content-en is recorded again with
 // COM7_RECORD_EN=1. The recording it replaces is kept in fixtures/com7-en, and
 // test/com7-en-texts.test.ts allows only the approved changes against it.
+// CRM-1 (ADR-032 D1): the Owner Console names the CRM module "CRM 360°" with its new description;
+// owner-en is recorded again with CRM1_RECORD_EN=1. The recording it replaces is kept in
+// fixtures/crm1-en, and test/crm1-en-texts.test.ts allows only that change against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -79,7 +82,8 @@ const RECORD =
   process.env["COM3_RECORD_EN"] === "1" ||
   process.env["COM4_RECORD_EN"] === "1" ||
   process.env["COM5_RECORD_EN"] === "1" ||
-  process.env["COM7_RECORD_EN"] === "1";
+  process.env["COM7_RECORD_EN"] === "1" ||
+  process.env["CRM1_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

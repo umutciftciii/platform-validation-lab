@@ -93,7 +93,6 @@ describe("DP-307: migration 50", () => {
       .filter((n) => /^\d{14}_/.test(n))
       .sort();
     expect(names.indexOf(M50)).toBe(names.indexOf(M49) + 1);
-    expect(names.at(-1)).toBe(M50);
     expect(SQL).toMatch(/RAISE EXCEPTION 'DP-307: migrations [^']*dp_298_legal_texts_consents/);
   });
 

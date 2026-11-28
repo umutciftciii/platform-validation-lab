@@ -237,6 +237,8 @@ const RETRY = async () => undefined;
 /** Names, codes and technical terms that are the same in English and Turkish on purpose. */
 const SAME_IN_BOTH = new Set([
   "CRM",
+  // CRM-1: the module's name (a product name, the same in both languages).
+  "CRM 360°",
   "SHA-256",
   "God Mode",
   "RBAC",
@@ -442,7 +444,7 @@ describe("Owner area in Turkish: terms, data and formats", () => {
 
   it("names the switch with the translated module and the site's own name", async () => {
     const tr = await render(sw(true), "tr");
-    expect(tr).toContain('aria-label="CRM modülünü Dream Petroleum BV sitesinde kapat"');
+    expect(tr).toContain('aria-label="CRM 360° modülünü Dream Petroleum BV sitesinde kapat"');
     const form = await render(
       sw(
         false,
