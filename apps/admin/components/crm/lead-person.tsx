@@ -59,6 +59,18 @@ export function LeadPerson({
     <div className="space-y-5 text-sm">
       {person ? (
         <dl key="person" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="min-w-0 sm:col-span-2">
+            <dt className="text-ink-3">{t("crm.leadPanel.person")}</dt>
+            <dd className="mt-0.5 break-words text-ink">
+              <Link
+                href={`/crm/people/${person.id}`}
+                className="font-medium text-petrol-strong underline-offset-2 hover:underline"
+              >
+                {person.displayName ?? t("crm.people.anonymisedPerson")}
+              </Link>
+              <span className="text-ink-3"> · {t("crm.leadPanel.openProfile")}</span>
+            </dd>
+          </div>
           <div className="min-w-0">
             <dt className="text-ink-3">{t("crm.leadPanel.company")}</dt>
             <dd className="mt-0.5 break-words text-ink">

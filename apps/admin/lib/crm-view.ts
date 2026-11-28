@@ -3,7 +3,12 @@
  * from the address bar and the labels the screens show. Plain module (server and client).
  * Companies are customer data; the API decides who may read them (crm:read on the site).
  */
-import { COUNTRY_CODES, type CrmCompanyField, type CrmCompanySummary } from "@dream/contracts";
+import {
+  COUNTRY_CODES,
+  LEAD_STATUSES,
+  type CrmCompanyField,
+  type CrmCompanySummary,
+} from "@dream/contracts";
 import type { AdminLocale } from "./i18n/config";
 import type { Translate } from "./i18n/types";
 import { countryName } from "./leads-view";
@@ -83,4 +88,68 @@ export function fieldLabel(field: CrmCompanyField | "siteId", t: Translate): str
     default:
       return t(`crm.form.${field}`);
   }
+}
+
+// --- CRM-3: the people list (ADR-032 D11) ------------------------------------------------------
+
+export interface PeopleListFilters {
+  q: string;
+  site: string;
+  /** "any" (with a company), "none" (without one) or a company id. */
+  company: string;
+  /** "me" or "none": the account owner of the person's company. */
+  owner: string;
+  /** A lead status: at least one lead of the person has it. */
+  status: string;
+  cursor: string;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CURSOR = /^[A-Za-z0-9_-]{1,200}$/;
+
+/** Filters from the address bar; a value the API would refuse is dropped (no error page). */
+export function readPeopleFilters(
+  params: Record<string, string | string[] | undefined>,
+): PeopleListFilters {
+  const site = one(params["site"]);
+  const company = one(params["company"]).toLowerCase();
+  const owner = one(params["owner"]).toLowerCase();
+  const status = one(params["status"]).toUpperCase();
+  const cursor = one(params["cursor"]);
+  return {
+    q: one(params["q"]).slice(0, 100),
+    site: UUID.test(site) ? site : "",
+    company: company === "any" || company === "none" || UUID.test(company) ? company : "",
+    owner: owner === "me" || owner === "none" ? owner : "",
+    status: (LEAD_STATUSES as readonly string[]).includes(status) ? status : "",
+    cursor: CURSOR.test(cursor) ? cursor : "",
+  };
+}
+
+export function hasPeopleFilters(f: PeopleListFilters): boolean {
+  return Boolean(f.q || f.company || f.owner || f.status);
+}
+
+const PEOPLE_KEYS = ["q", "site", "company", "owner", "status", "cursor"] as const;
+
+/** The API query of the people list. */
+export function peopleListQuery(f: PeopleListFilters): string {
+  const p = new URLSearchParams();
+  for (const key of PEOPLE_KEYS) {
+    const v = f[key];
+    if (v) p.set(key === "site" ? "siteId" : key, v);
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+/** The console address of the people list with these filters. */
+export function peopleListHref(f: Partial<PeopleListFilters>): string {
+  const p = new URLSearchParams();
+  for (const key of PEOPLE_KEYS) {
+    const v = f[key];
+    if (v) p.set(key, v);
+  }
+  const s = p.toString();
+  return s ? `/crm/people?${s}` : "/crm/people";
 }

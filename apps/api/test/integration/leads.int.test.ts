@@ -25,6 +25,11 @@ import sharp from "sharp";
 import {
   AssignRoleResponseSchema,
   CrmCompanyDetailResponseSchema,
+  CrmCompanyLeadsResponseSchema,
+  CrmContactHistoryResponseSchema,
+  CrmOverviewResponseSchema,
+  CrmPeopleListResponseSchema,
+  CrmPersonProfileResponseSchema,
   CrmCompanyListResponseSchema,
   CrmActivityListResponseSchema,
   CrmCompanyPeopleResponseSchema,
@@ -6301,5 +6306,255 @@ describe("CRM-2 people, leads and companies, history, same-named companies (ADR-
       appIn({ staff: mgr.token }, (tx) => tx.crmActivity.deleteMany({ where: { siteId: BV } })),
       /permission denied/i,
     );
+  });
+});
+
+describe("CRM-3 360° views: overview, people, a person, a company's leads and contacts (ADR-032 D11)", () => {
+  let mgr: Staff; // sales_crm_user @ BV
+  let mgrCom: Staff; // sales_crm_user @ CORPORATE
+  let officer: Staff; // platform_customer_data_officer: reads every site, links nothing
+  let editor: Staff; // site_admin @ BV: no customer data
+  let westwind: string;
+  let personId: string;
+  const lead: Record<string, string> = {};
+
+  const crm = (who: Staff, p: string) => who.admin("GET", `/crm${p}`);
+  const ok = async <T>(res: Promise<Res>, schema: { parse(v: unknown): T }): Promise<T> => {
+    const r = await res;
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return schema.parse(r.body);
+  };
+
+  beforeAll(async () => {
+    mgr = await staff("crm3-mgr", [], root.userId, undefined, { memberships: [BV] });
+    mgrCom = await staff("crm3-com", [], root.userId, undefined, { memberships: [COM] });
+    officer = await staff("crm3-officer", [], root.userId);
+    editor = await staff("crm3-editor", [{ role: "site_admin", site: BV }], root.userId);
+    await assignRole(mgr, "sales_crm_user", BV);
+    await assignRole(mgrCom, "sales_crm_user", COM);
+    await assignRole(officer, "platform_customer_data_officer", null);
+    const created = await mgr.admin("POST", "/crm/companies", {
+      siteId: BV,
+      name: "Westwind Blending",
+      city: "Delft",
+      country: "NL",
+      ownerUserId: mgr.userId,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    westwind = CrmCompanyResponseSchema.parse(created.body).company.id;
+    for (const [key, email] of [
+      ["w1", "wendy@westwind.example"],
+      ["w2", "wendy.private@mail.example"],
+      ["loose", "loose@nowhere.example"],
+    ] as const) {
+      const row = await owner.lead.create({
+        data: {
+          siteId: BV,
+          email,
+          fullName: key === "loose" ? "Loose Lead" : "Wendy Westwind",
+          company: key === "loose" ? "Nowhere" : "Westwind",
+          country: "NL",
+          source: "CONTACT_FORM",
+        },
+      });
+      lead[key] = row.id;
+    }
+    await owner.leadContactMessage.create({
+      data: {
+        leadId: lead["w1"]!,
+        siteId: BV,
+        fullName: "Wendy Westwind",
+        company: "Westwind",
+        country: "NL",
+        phone: "+31 15 000 1111",
+        subject: "Quote for gear oil",
+        message: "Please quote 40 drums of gear oil.",
+        privacyNoticeVersion: LEAD_CONTACT_NOTICE.version,
+        privacyNoticeSha256: createHash("sha256").update(LEAD_CONTACT_NOTICE.text).digest("hex"),
+      },
+    });
+    const add = await mgr.admin("POST", `/crm/companies/${westwind}/people`, {
+      leadId: lead["w1"],
+    });
+    expect(add.status, JSON.stringify(add.body)).toBe(200);
+    personId = CrmPersonResponseSchema.parse(add.body).person!.id;
+    const join = await mgr.admin("POST", `/crm/leads/${lead["w2"]}/person`, {
+      samePersonAsLeadId: lead["w1"],
+    });
+    expect(join.status, JSON.stringify(join.body)).toBe(200);
+    const when = new Date(Date.now() - 3_600_000).toISOString();
+    for (const body of [
+      { kind: "CONTACT", channel: "PHONE", contactedAt: when, body: "Called about delivery." },
+      { kind: "NOTE", body: "Wants samples first." },
+    ]) {
+      const res = await mgr.admin("POST", `/leads/${lead["w2"]}/activities`, body);
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    }
+    const note = await mgr.admin("POST", `/crm/companies/${westwind}/notes`, {
+      body: "Annual contract talks in March.",
+    });
+    expect(note.status, JSON.stringify(note.body)).toBe(201);
+  });
+
+  it("shows real counts on the overview, per readable site, and refuses staff without CRM", async () => {
+    const mine = await ok(crm(mgr, "/overview"), CrmOverviewResponseSchema);
+    expect(mine.sites.map((s) => s.id)).toEqual([BV]);
+    expect(mine.counts.myCompanies).toBe(
+      await owner.crmCompany.count({ where: { siteId: BV, ownerUserId: mgr.userId } }),
+    );
+    expect(mine.counts.companies).toBe(await owner.crmCompany.count({ where: { siteId: BV } }));
+    expect(mine.counts.people).toBe(
+      await owner.crmPerson.count({ where: { siteId: BV, leads: { some: {} } } }),
+    );
+    expect(mine.recentCompanies[0]?.id).toBe(westwind);
+    const com = await ok(crm(mgrCom, "/overview"), CrmOverviewResponseSchema);
+    expect(com.sites.map((s) => s.id)).toEqual([COM]);
+    expect(com.recentCompanies.map((c) => c.siteId)).not.toContain(BV);
+    expectError(await crm(editor, "/overview"), 403, "FORBIDDEN");
+    // The company list shows the people count and the last CRM activity of each company.
+    const list = await ok(crm(mgr, "/companies?q=westwind"), CrmCompanyListResponseSchema);
+    expect(list.items.find((c) => c.id === westwind)).toMatchObject({
+      peopleCount: 1,
+      lastActivityAt: expect.any(String),
+    });
+    const audit = await lastAudit("crm.overview_viewed");
+    expect(audit?.metadata).toMatchObject({ people: true });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("Westwind");
+  });
+
+  it("lists people with search and filters, only of readable sites, audited without the search text", async () => {
+    const all = await ok(crm(mgr, "/people"), CrmPeopleListResponseSchema);
+    const wendy = all.items.find((p) => p.id === personId);
+    expect(wendy).toMatchObject({
+      displayName: "Wendy Westwind",
+      siteKey: "BV",
+      company: { id: westwind, name: "Westwind Blending" },
+      companyOwner: { id: mgr.userId, active: true },
+    });
+    expect(wendy?.leads.map((l) => l.id).sort()).toEqual([lead["w1"], lead["w2"]].sort());
+    // A lead without a person is not a person.
+    expect(all.items.flatMap((p) => p.leads.map((l) => l.id))).not.toContain(lead["loose"]);
+    const ids = async (q: string) =>
+      (await ok(crm(mgr, `/people${q}`), CrmPeopleListResponseSchema)).items.map((p) => p.id);
+    expect(await ids("?q=wendy.private")).toContain(personId);
+    expect(await ids("?q=westwind%20blending")).toContain(personId);
+    expect(await ids("?q=nobody-matches-this")).toEqual([]);
+    expect(await ids(`?company=${westwind}`)).toEqual([personId]);
+    expect(await ids("?company=none")).not.toContain(personId);
+    expect(await ids("?owner=me&status=NEW")).toContain(personId);
+    expect(await ids("?status=CONVERTED")).not.toContain(personId);
+    const audit = await lastAudit("crm.people_listed");
+    expect(audit?.metadata).toMatchObject({ status: "CONVERTED", search: false });
+    await ids("?q=wendy.private");
+    expect(JSON.stringify((await lastAudit("crm.people_listed"))?.metadata)).not.toContain("wendy");
+    // Another site sees nothing of BV; naming BV is refused; bad filters are 400.
+    expect(
+      (await ok(crm(mgrCom, "/people"), CrmPeopleListResponseSchema)).items.map((p) => p.id),
+    ).not.toContain(personId);
+    expectError(await crm(mgrCom, `/people?siteId=${BV}`), 403, "FORBIDDEN");
+    expectError(await crm(mgr, "/people?status=LOST"), 400, "VALIDATION_FAILED");
+    expectError(await crm(mgr, "/people?company=some"), 400, "VALIDATION_FAILED");
+    expectError(await crm(editor, "/people"), 403, "FORBIDDEN");
+    // Paging: the cursor continues after the last person shown.
+    const page = await ok(crm(officer, "/people"), CrmPeopleListResponseSchema);
+    expect(page.items.length).toBeGreaterThan(0);
+  });
+
+  it("builds a person's profile from the leads: e-mail, phone, requests, contacts, notes, history", async () => {
+    const p = await ok(crm(mgr, `/people/${personId}`), CrmPersonProfileResponseSchema);
+    expect(p).toMatchObject({
+      siteKey: "BV",
+      phone: "+31 15 000 1111",
+      canManage: true,
+      company: { id: westwind, owner: { id: mgr.userId } },
+    });
+    expect(["wendy@westwind.example", "wendy.private@mail.example"]).toContain(p.email);
+    expect(p.leads.map((l) => l.id).sort()).toEqual([lead["w1"], lead["w2"]].sort());
+    const w1 = p.leads.find((l) => l.id === lead["w1"]);
+    expect(w1?.contactMessages).toMatchObject([{ subject: "Quote for gear oil" }]);
+    expect(p.contacts.map((c) => [c.kind, c.body])).toEqual(
+      expect.arrayContaining([
+        ["FORM_MESSAGE", "Please quote 40 drums of gear oil."],
+        ["LOGGED_CONTACT", "Called about delivery."],
+      ]),
+    );
+    expect(p.contacts.find((c) => c.kind === "LOGGED_CONTACT")).toMatchObject({
+      channel: "PHONE",
+      actor: { id: mgr.userId },
+      person: { id: personId },
+    });
+    expect(p.notes).toMatchObject([{ body: "Wants samples first.", lead: { id: lead["w2"] } }]);
+    expect(p.activities.map((a) => a.kind)).toEqual(
+      expect.arrayContaining(["PERSON_COMPANY_CHANGED", "LEAD_PERSON_CHANGED"]),
+    );
+    // Readers read, managers of other sites see nothing (looks unknown), staff without customer
+    // data are refused.
+    expect(
+      (await ok(crm(officer, `/people/${personId}`), CrmPersonProfileResponseSchema)).canManage,
+    ).toBe(false);
+    expectError(await crm(mgrCom, `/people/${personId}`), 404, "NOT_FOUND");
+    expectError(await crm(editor, `/people/${personId}`), 403, "FORBIDDEN");
+    expectError(await crm(mgr, "/people/not-a-uuid"), 404, "NOT_FOUND");
+    const audit = await lastAudit("crm.person_viewed");
+    expect(audit).toMatchObject({ resourceId: personId, siteId: BV });
+    expect(audit?.metadata).toMatchObject({ leads: 2, notes: 1 });
+    expect(JSON.stringify(audit?.metadata)).not.toMatch(/Wendy|gear|samples|\+31/);
+  });
+
+  it("shows a company's leads with requests, its contact history and its notes only", async () => {
+    const leads = await ok(crm(mgr, `/companies/${westwind}/leads`), CrmCompanyLeadsResponseSchema);
+    expect(leads.truncated).toBe(false);
+    expect(leads.leads.map((l) => [l.id, l.person?.id]).sort()).toEqual(
+      [
+        [lead["w1"], personId],
+        [lead["w2"], personId],
+      ].sort(),
+    );
+    const contacts = await ok(
+      crm(officer, `/companies/${westwind}/contacts`),
+      CrmContactHistoryResponseSchema,
+    );
+    expect(contacts.items.map((c) => c.kind).sort()).toEqual(["FORM_MESSAGE", "LOGGED_CONTACT"]);
+    const notes = await ok(
+      crm(mgr, `/companies/${westwind}/activities?kind=NOTE`),
+      CrmActivityListResponseSchema,
+    );
+    expect(notes.items.map((a) => [a.kind, a.body])).toEqual([
+      ["NOTE", "Annual contract talks in March."],
+    ]);
+    expectError(
+      await crm(mgr, `/companies/${westwind}/activities?kind=OTHER`),
+      400,
+      "VALIDATION_FAILED",
+    );
+    for (const p of ["leads", "contacts"]) {
+      expectError(await crm(mgrCom, `/companies/${westwind}/${p}`), 404, "NOT_FOUND");
+      expectError(await crm(editor, `/companies/${westwind}/${p}`), 403, "FORBIDDEN");
+    }
+    for (const action of ["crm.company_leads_viewed", "crm.company_contacts_viewed"]) {
+      const audit = await lastAudit(action);
+      expect(audit).toMatchObject({ resourceId: westwind, siteId: BV });
+      expect(JSON.stringify(audit?.metadata)).not.toMatch(/Wendy|gear|delivery/);
+    }
+  });
+
+  it("hides an anonymised lead's identity and phone in the views", async () => {
+    await owner.$transaction([
+      owner.$executeRawUnsafe('ALTER TABLE "Lead" DISABLE TRIGGER "Lead_guard"'),
+      owner.$executeRaw`UPDATE "Lead" SET "anonymisedAt" = now(), "fullName" = '', "company" = '',
+        "marketingConsentAt" = NULL, "email" = 'anonymised+' || "id"::text || '@anonymised.invalid'
+        WHERE "id" = ${lead["w1"]!}::uuid`,
+      owner.$executeRawUnsafe('ALTER TABLE "Lead" ENABLE TRIGGER "Lead_guard"'),
+    ]);
+    const p = await ok(crm(mgr, `/people/${personId}`), CrmPersonProfileResponseSchema);
+    expect(p.email).toBe("wendy.private@mail.example");
+    expect(p.phone).toBeNull();
+    expect(p.leads.find((l) => l.id === lead["w1"])).toMatchObject({
+      anonymised: true,
+      fullName: null,
+      email: null,
+      company: null,
+    });
+    expect(p.contacts.find((c) => c.kind === "FORM_MESSAGE")?.lead.label).toBeNull();
   });
 });

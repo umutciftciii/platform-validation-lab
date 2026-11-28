@@ -11,8 +11,14 @@ import {
   ADMIN_CRM_COMPANIES_API,
   ADMIN_CRM_LEADS_API,
   ADMIN_CRM_OWNERS_API,
+  ADMIN_CRM_OVERVIEW_API,
   ADMIN_CRM_PEOPLE_API,
   type CrmActivityListResponse,
+  type CrmCompanyLeadsResponse,
+  type CrmContactHistoryResponse,
+  type CrmOverviewResponse,
+  type CrmPeopleListResponse,
+  type CrmPersonProfileResponse,
   type CrmCompanyPeopleResponse,
   type CrmCompany,
   type CrmCompanyDetailResponse,
@@ -24,7 +30,7 @@ import type { AdminLocale } from "../lib/i18n/config";
 import { createTranslator } from "../lib/i18n/translate";
 import { listFiles, scanFiles } from "./support/ui-literals";
 
-const ui = vi.hoisted(() => ({ locale: "en" as AdminLocale }));
+const ui = vi.hoisted(() => ({ locale: "en" as AdminLocale, pathname: "/crm" }));
 const reads = new Map<string, unknown>();
 const FORBIDDEN = Symbol("forbidden");
 vi.mock("next/headers", () => ({
@@ -47,6 +53,7 @@ vi.mock("../lib/server-session", () => ({
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: () => undefined, refresh: () => undefined }),
+  usePathname: () => ui.pathname,
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
   },
@@ -109,7 +116,10 @@ const LIST: CrmCompanyListResponse = {
       owner: null,
     },
   ].map(
-    ({ id, siteId, siteKey, name, registrationId, country, city, website, owner, updatedAt }) => ({
+    (
+      { id, siteId, siteKey, name, registrationId, country, city, website, owner, updatedAt },
+      i,
+    ) => ({
       id,
       siteId,
       siteKey,
@@ -120,6 +130,9 @@ const LIST: CrmCompanyListResponse = {
       website,
       owner,
       updatedAt,
+      // CRM-3: people (null without lead:read on the site) and the last CRM activity.
+      peopleCount: i === 0 ? 3 : null,
+      lastActivityAt: i === 0 ? AT : null,
     }),
   ),
   nextCursor: null,
@@ -262,7 +275,153 @@ const DETAIL = (over: Partial<CrmCompanyDetailResponse> = {}): CrmCompanyDetailR
   ...over,
 });
 
+// --- CRM-3 fixtures (360° views) ------------------------------------------------------------------
+const DOC = "0190f3a0-0000-7000-8000-00000000e001";
+const MSG = "0190f3a0-0000-7000-8000-00000000e002";
+const CALL = "0190f3a0-0000-7000-8000-00000000e003";
+const NOTE = "0190f3a0-0000-7000-8000-00000000e004";
+const STEP = "0190f3a0-0000-7000-8000-00000000e005";
+const PRODUCT = "0190f3a0-0000-7000-8000-00000000f001";
+const LATER = "2026-11-25T10:30:00.000Z";
+const personRef = { id: PERSON, displayName: "Ann Jansen" };
+/** A list row without the list-only fields (the summary other answers carry). */
+function summaryOf(item: CrmCompanyListResponse["items"][number]) {
+  const copy: Partial<typeof item> = { ...item };
+  delete copy.peopleCount;
+  delete copy.lastActivityAt;
+  return copy as Omit<typeof item, "peopleCount" | "lastActivityAt">;
+}
+const leadRef = { id: LEAD_A, label: "Ann Jansen <ann@acme.example>" };
+const RECORDS: CrmCompanyLeadsResponse = {
+  leads: [
+    {
+      id: LEAD_A,
+      person: personRef,
+      fullName: "Ann Jansen",
+      email: "ann@acme.example",
+      company: "Acme",
+      country: "NL",
+      source: "DOCUMENT_REQUEST",
+      status: "CONTACTED",
+      assignedTo: { id: VIEWER, displayName: "Sanne Visser", active: true },
+      requestCount: 2,
+      firstRequestAt: AT,
+      lastRequestAt: LATER,
+      anonymised: false,
+      documentRequests: [
+        {
+          id: DOC,
+          createdAt: AT,
+          product: { id: PRODUCT, code: "DP-4T-10W40", name: "Dream Moto 4T 10W-40" },
+          document: { id: PRODUCT, title: "Technical data sheet", type: "TDS" },
+        },
+      ],
+      contactMessages: [{ id: MSG, createdAt: LATER, subject: "Price for 200 drums" }],
+    },
+    {
+      id: LEAD_B,
+      person: personRef,
+      fullName: null,
+      email: null,
+      company: null,
+      country: null,
+      source: "CONTACT_FORM",
+      status: "NEW",
+      assignedTo: null,
+      requestCount: 1,
+      firstRequestAt: AT,
+      lastRequestAt: AT,
+      anonymised: true,
+      documentRequests: [],
+      contactMessages: [],
+    },
+  ],
+  truncated: false,
+};
+const CONTACTS: CrmContactHistoryResponse = {
+  items: [
+    {
+      id: MSG,
+      kind: "FORM_MESSAGE",
+      at: LATER,
+      lead: leadRef,
+      person: personRef,
+      actor: null,
+      channel: "CONTACT_FORM",
+      subject: "Price for 200 drums",
+      body: "Please send a quote for 200 drums.",
+      phone: "+31 6 1234 5678",
+    },
+    {
+      id: CALL,
+      kind: "LOGGED_CONTACT",
+      at: AT,
+      lead: leadRef,
+      person: personRef,
+      actor: staffRef(VIEWER, "Sanne Visser"),
+      channel: "PHONE",
+      subject: null,
+      body: "Called about delivery dates.",
+      phone: null,
+    },
+  ],
+  truncated: false,
+};
+const OVERVIEW: CrmOverviewResponse = {
+  sites: [BV, COM],
+  counts: {
+    companies: 12,
+    myCompanies: 4,
+    companiesWithoutOwner: 3,
+    people: 27,
+    peopleWithoutCompany: 9,
+  },
+  recentCompanies: LIST.items.slice(0, 1).map(summaryOf),
+};
+const PEOPLE_LIST: CrmPeopleListResponse = {
+  items: [{ ...PEOPLE.people[0]!, siteKey: "BV", companyOwner: company().owner }],
+  nextCursor: "bmV4dA",
+  sites: [BV],
+};
+const PROFILE = (over: Partial<CrmPersonProfileResponse> = {}): CrmPersonProfileResponse => ({
+  person: PEOPLE.people[0]!,
+  siteKey: "BV",
+  company: summaryOf(LIST.items[0]!),
+  email: "ann@acme.example",
+  phone: "+31 6 1234 5678",
+  leads: RECORDS.leads,
+  contacts: CONTACTS.items,
+  notes: [
+    {
+      id: NOTE,
+      createdAt: AT,
+      lead: leadRef,
+      actor: staffRef(OTHER, "Jan de Vries"),
+      body: "Wants samples before ordering.",
+    },
+  ],
+  leadEvents: [
+    {
+      id: STEP,
+      kind: "STATUS_CHANGED",
+      createdAt: AT,
+      lead: leadRef,
+      actor: staffRef(VIEWER, "Sanne Visser"),
+      fromStatus: "NEW",
+      toStatus: "CONTACTED",
+      fromAssignee: null,
+      toAssignee: null,
+    },
+  ],
+  activities: HISTORY.items.slice(1, 3),
+  canManage: true,
+  ...over,
+});
+
 const listPage = await import("../app/(console)/crm/companies/page");
+const peoplePage = await import("../app/(console)/crm/people/page");
+const personPage = await import("../app/(console)/crm/people/[id]/page");
+const { CrmNav } = await import("../components/crm/crm-nav");
 const newPage = await import("../app/(console)/crm/companies/new/page");
 const companyPage = await import("../app/(console)/crm/companies/[id]/page");
 const crmRoot = await import("../app/(console)/crm/page");
@@ -307,12 +466,18 @@ function isData(text: string): boolean {
     if (typeof v === "string") data.push(v.replace(/\s+/g, " "));
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
   };
-  walk([LIST, OWNERS, DETAIL(), PEOPLE, HISTORY]);
+  walk([LIST, OWNERS, DETAIL(), PEOPLE, HISTORY, RECORDS, CONTACTS, PEOPLE_LIST, PROFILE()]);
   // Country names that Intl writes the same in both languages (e.g. "Malta").
   const trNames = new Set(view.countryOptions("tr").map((c) => c.name));
   const same = (p: string) =>
     FIXED.has(p) || trNames.has(p) || data.some((d) => d === p || (p.length > 3 && d.includes(p)));
-  return same(text) || text.split(/\s*·\s*/).every(same);
+  return (
+    same(text) ||
+    text
+      .split(/\s*·\s*/)
+      .filter(Boolean)
+      .every(same)
+  );
 }
 
 const page = {
@@ -328,6 +493,18 @@ const page = {
         searchParams: Promise.resolve(q),
       } as never),
   create: () => () => newPage.default(),
+  overview: () => () => crmRoot.default(),
+  people:
+    (q: Record<string, string> = {}) =>
+    () =>
+      peoplePage.default({ searchParams: Promise.resolve(q) } as never),
+  person:
+    (q: Record<string, string> = {}) =>
+    () =>
+      personPage.default({
+        params: Promise.resolve({ id: PERSON }),
+        searchParams: Promise.resolve(q),
+      } as never),
 };
 
 describe("CRM-1 company list", () => {
@@ -341,6 +518,10 @@ describe("CRM-1 company list", () => {
     expect(html).toContain('href="/crm/companies/new"');
     expect(html).toContain(`href="/crm/companies/${ACME}"`);
     expect(html).toContain("2 shown");
+    // CRM-3: people and last activity; no people count without lead:read on the site.
+    expect(html).toContain("People: 3");
+    expect(html).toContain("Last activity");
+    expect(html.match(/People: /g)).toHaveLength(1);
     const tr = await render(page.list(), "tr");
     expect(tr).toContain("Yeni firma");
     expect(tr).toContain("Müşteri sorumlusu yok");
@@ -366,10 +547,6 @@ describe("CRM-1 company list", () => {
     expect(await render(page.list(), "tr")).toContain("CRM&#x27;e erişiminiz yok");
     reads.set(ADMIN_CRM_COMPANIES_API, { ...LIST, items: [] });
     expect(await render(page.list(), "en")).toContain("No companies yet");
-  });
-
-  it("starts the CRM at the companies", () => {
-    expect(() => crmRoot.default()).toThrow("NEXT_REDIRECT /crm/companies");
   });
 });
 
@@ -439,11 +616,15 @@ describe("CRM-2 people and history of a company", () => {
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, PEOPLE);
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities`, HISTORY);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities?kind=NOTE`, {
+      items: HISTORY.items.slice(0, 1),
+      nextCursor: null,
+    });
   };
 
   it("shows the people with their leads, the history and the note form for managers", async () => {
     withPeople();
-    const html = await render(page.detail(), "en");
+    const people = await render(page.detail({ tab: "people" }), "en");
     for (const text of [
       "People",
       "Ann Jansen",
@@ -453,6 +634,16 @@ describe("CRM-2 people and history of a company", () => {
       "Last request",
       "Remove from company",
       "Add a person",
+    ]) {
+      expect(people, text).toContain(text);
+    }
+    expect(people).toContain(`href="/leads/${LEAD_A}"`);
+    expect(people).not.toContain(`href="/leads/${LEAD_B}"`);
+    // CRM-3: each person opens its profile; the people list filters by the company.
+    expect(people).toContain(`href="/crm/people/${PERSON}"`);
+    expect(people).toContain(`href="/crm/people?company=${ACME}"`);
+    const history = await render(page.detail({ tab: "activity" }), "en");
+    for (const text of [
       "History",
       "Sanne Visser added a note",
       "Visited the plant.\nFollow up in Q1.",
@@ -460,25 +651,22 @@ describe("CRM-2 people and history of a company", () => {
       "Jan de Vries added Ann Jansen to the company",
       "Jan de Vries made Sanne Visser the account owner",
       "Jan de Vries created the company",
-      "Add note",
       "Older entries",
-      "NL851234567B01",
     ]) {
-      expect(html, text).toContain(text);
+      expect(history, text).toContain(text);
     }
-    expect(html).toContain(`href="/leads/${LEAD_A}"`);
-    expect(html).not.toContain(`href="/leads/${LEAD_B}"`);
-    expect(html).toContain(`href="/crm/companies/${ACME}?history=MTIz#history"`);
-    const tr = await render(page.detail(), "tr");
-    for (const text of [
-      "Kişiler",
-      "Anonimleştirilmiş talep",
-      "Firmadan çıkar",
-      "Geçmiş",
-      "not ekledi",
-    ]) {
+    expect(history).toContain(`href="/crm/companies/${ACME}?tab=activity&amp;history=MTIz"`);
+    const notes = await render(page.detail({ tab: "notes" }), "en");
+    for (const text of ["Add note", "Visited the plant.", "Prefers quarterly calls."]) {
+      expect(notes, text).toContain(text);
+    }
+    expect(notes).not.toContain("Jan de Vries created the company");
+    const tr = await render(page.detail({ tab: "people" }), "tr");
+    for (const text of ["Kişiler", "Anonimleştirilmiş talep", "Firmadan çıkar"]) {
       expect(tr, text).toContain(text);
     }
+    const trHistory = await render(page.detail({ tab: "activity" }), "tr");
+    for (const text of ["Geçmiş", "not ekledi"]) expect(trHistory, text).toContain(text);
   });
 
   it("pages the history and is read-only without crm:manage", async () => {
@@ -488,20 +676,192 @@ describe("CRM-2 people and history of a company", () => {
       ...HISTORY,
       nextCursor: null,
     });
-    const html = await render(page.detail({ history: "MTIz" }), "en");
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities?kind=NOTE`, {
+      items: [],
+      nextCursor: null,
+    });
+    const html = await render(page.detail({ tab: "activity", history: "MTIz" }), "en");
     expect(html).toContain("Newest entries");
     expect(html).not.toContain("Older entries");
-    expect(html).not.toContain("Remove from company");
-    expect(html).not.toContain("Add a person");
-    expect(html).not.toContain("Add note");
+    const people = await render(page.detail({ tab: "people" }), "en");
+    expect(people).not.toContain("Remove from company");
+    expect(people).not.toContain("Add a person");
+    const notes = await render(page.detail({ tab: "notes" }), "en");
+    expect(notes).not.toContain("Add note");
   });
 
   it("leaves the panels out when the CRM side cannot be read", async () => {
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, FORBIDDEN);
+    const html = await render(page.detail({ tab: "people" }), "en");
+    expect(html).not.toContain("Ann Jansen");
+    expect(html).not.toContain('role="alert"');
+    // The overview tab reads the company only.
+    const overview = await render(page.detail(), "en");
+    expect(overview).toContain("NL851234567B01");
+    expect(overview).not.toContain(">History<");
+  });
+});
+
+describe("CRM-3 the company's 360° tabs", () => {
+  beforeEach(() => {
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/leads`, RECORDS);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/contacts`, CONTACTS);
+  });
+
+  it("has one tab per section, each with its own address", async () => {
     const html = await render(page.detail(), "en");
-    expect(html).not.toContain(">People<");
-    expect(html).not.toContain(">History<");
+    for (const [key, label] of [
+      ["people", "People"],
+      ["leads", "Leads and requests"],
+      ["notes", "Notes"],
+      ["contacts", "Contact history"],
+      ["activity", "Recent activity"],
+    ] as const) {
+      expect(html).toContain(`href="/crm/companies/${ACME}?tab=${key}"`);
+      expect(html).toContain(label);
+    }
+    expect(html).toMatch(/aria-current="page"[^>]*>Overview/);
+    expect(html).toContain("Account owner: Sanne Visser");
+  });
+
+  it("lists the people's leads with their document requests and messages", async () => {
+    const html = await render(page.detail({ tab: "leads" }), "en");
+    for (const text of [
+      "Ann Jansen",
+      "Person: Ann Jansen",
+      "Typed company: Acme",
+      "Document request",
+      "DP-4T-10W40 · Dream Moto 4T 10W-40",
+      "Technical data sheet",
+      "Price for 200 drums",
+      "Assigned to Sanne Visser",
+      "Anonymised lead",
+      "Not assigned",
+      "No requests.",
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    expect(html).toContain(`href="/leads/${LEAD_A}"`);
+    expect(html).not.toContain(`href="/leads/${LEAD_B}"`);
+    expect(html).toContain(`href="/crm/people/${PERSON}"`);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/leads`, { leads: [], truncated: false });
+    expect(await render(page.detail({ tab: "leads" }), "en")).toContain("No leads yet");
+  });
+
+  it("shows the contact history: form messages and logged contacts", async () => {
+    const html = await render(page.detail({ tab: "contacts" }), "en");
+    for (const text of [
+      "Contact form",
+      "Message from Ann Jansen &lt;ann@acme.example&gt;",
+      "Please send a quote for 200 drums.",
+      "Phone: +31 6 1234 5678",
+      "Sanne Visser logged a contact with Ann Jansen &lt;ann@acme.example&gt;",
+      "Called about delivery dates.",
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/contacts`, { items: [], truncated: true });
+    const empty = await render(page.detail({ tab: "contacts" }), "en");
+    expect(empty).toContain("No contacts yet");
+    expect(empty).toContain("Only the newest 100 are shown.");
+  });
+});
+
+describe("CRM-3 overview, people and a person", () => {
+  it("shows real counts that open the filtered lists, and the recent companies", async () => {
+    reads.set(ADMIN_CRM_OVERVIEW_API, OVERVIEW);
+    const html = await render(page.overview(), "en");
+    for (const text of ["CRM overview", "Companies I own", "People without a company"]) {
+      expect(html, text).toContain(text);
+    }
+    expect(html).toContain('href="/crm/companies?owner=me"');
+    expect(html).toContain('href="/crm/companies?owner=none"');
+    expect(html).toContain('href="/crm/people?company=none"');
+    expect(html).toContain(`href="/crm/companies/${ACME}"`);
+    expect(html).toMatch(/>27<\/span>/);
+    // Without lead:read the people counts are left out (null), never shown as 0.
+    reads.set(ADMIN_CRM_OVERVIEW_API, {
+      ...OVERVIEW,
+      counts: { ...OVERVIEW.counts, people: null, peopleWithoutCompany: null },
+    });
+    const noPeople = await render(page.overview(), "en");
+    expect(noPeople).not.toContain("People without a company");
+    reads.set(ADMIN_CRM_OVERVIEW_API, FORBIDDEN);
+    expect(await render(page.overview(), "en")).toContain("No access to the CRM");
+  });
+
+  it("marks the open CRM section", () => {
+    ui.pathname = "/crm/people/x";
+    const html = renderToStaticMarkup(
+      <LocaleProvider locale="en">
+        <CrmNav />
+      </LocaleProvider>,
+    );
+    const current = [...html.matchAll(/<a [^>]*aria-current="page"[^>]*>/g)].map((m) => m[0]);
+    expect(current).toHaveLength(1);
+    expect(current[0]).toContain('href="/crm/people"');
+    ui.pathname = "/crm";
+  });
+
+  it("lists people with company, owner and lead status, and sends safe filters", async () => {
+    reads.set(`${ADMIN_CRM_PEOPLE_API}?company=none&status=NEW`, PEOPLE_LIST);
+    const html = await render(page.people({ company: "none", status: "new", owner: "x" }), "en");
+    for (const text of [
+      "Ann Jansen",
+      "ann@acme.example · Leads: 2",
+      "Acme Lubricants B.V.",
+      "Account owner: Sanne Visser",
+      "Contacted",
+      "Next page",
+      "Clear filters",
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    expect(html).toContain(`href="/crm/people/${PERSON}"`);
+    expect(html).toContain('href="/crm/people?company=none&amp;status=NEW&amp;cursor=bmV4dA"');
+    reads.set(ADMIN_CRM_PEOPLE_API, { items: [], nextCursor: null, sites: [BV] });
+    expect(await render(page.people(), "en")).toContain("No people yet");
+    reads.set(ADMIN_CRM_PEOPLE_API, FORBIDDEN);
+    expect(await render(page.people(), "en")).toContain("No access to the CRM");
+  });
+
+  it("shows a person's profile: contact, company, leads, contacts, notes, activity", async () => {
+    reads.set(`${ADMIN_CRM_PEOPLE_API}/${PERSON}`, PROFILE());
+    const overview = await render(page.person(), "en");
+    for (const text of [
+      "Ann Jansen",
+      "Contact details",
+      "ann@acme.example",
+      "+31 6 1234 5678",
+      "Acme Lubricants B.V.",
+      "Sanne Visser",
+    ]) {
+      expect(overview, text).toContain(text);
+    }
+    expect(overview).toContain('href="mailto:ann@acme.example"');
+    expect(overview).toContain('href="tel:+31612345678"');
+    expect(overview).toContain(`href="/crm/companies/${ACME}"`);
+    const leads = await render(page.person({ tab: "leads" }), "en");
+    expect(leads).toContain("Technical data sheet");
+    expect(leads).not.toContain("Person: Ann Jansen");
+    const contacts = await render(page.person({ tab: "contacts" }), "en");
+    expect(contacts).toContain("Called about delivery dates.");
+    const notes = await render(page.person({ tab: "notes" }), "en");
+    expect(notes).toContain("Wants samples before ordering.");
+    expect(notes).toContain("Jan de Vries on Ann Jansen &lt;ann@acme.example&gt;");
+    const activity = await render(page.person({ tab: "activity" }), "en");
+    expect(activity).toContain("Sanne Visser set Ann Jansen &lt;ann@acme.example&gt; to Contacted");
+    expect(activity).toContain("Jan de Vries added Ann Jansen to Acme Lubricants B.V.");
+    reads.set(
+      `${ADMIN_CRM_PEOPLE_API}/${PERSON}`,
+      PROFILE({ company: null, phone: null, notes: [] }),
+    );
+    expect(await render(page.person(), "en")).toContain("Not linked to a company.");
+    expect(await render(page.person({ tab: "notes" }), "en")).toContain("No notes yet.");
+    reads.delete(`${ADMIN_CRM_PEOPLE_API}/${PERSON}`);
+    expect(await render(page.person(), "en")).toContain("Person not found");
   });
 });
 
@@ -622,7 +982,24 @@ describe("CRM-1 Turkish", () => {
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, PEOPLE);
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities`, HISTORY);
     reads.set(ADMIN_CRM_OWNERS_API, OWNERS);
-    for (const make of [page.list(), page.detail(), page.create()]) {
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities?kind=NOTE`, HISTORY);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/leads`, RECORDS);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/contacts`, CONTACTS);
+    reads.set(ADMIN_CRM_OVERVIEW_API, OVERVIEW);
+    reads.set(ADMIN_CRM_PEOPLE_API, PEOPLE_LIST);
+    reads.set(`${ADMIN_CRM_PEOPLE_API}/${PERSON}`, PROFILE());
+    const tabs = ["people", "leads", "notes", "contacts", "activity"];
+    const personTabs = ["leads", "contacts", "notes", "activity"];
+    for (const make of [
+      page.list(),
+      page.detail(),
+      ...tabs.map((tab) => page.detail({ tab })),
+      page.create(),
+      page.overview(),
+      page.people(),
+      page.person(),
+      ...personTabs.map((tab) => page.person({ tab })),
+    ]) {
       const en = new Set(texts(await render(make, "en")));
       const tr = texts(await render(make, "tr"));
       const left = [...new Set(tr)].filter((t) => en.has(t) && !isData(t));
@@ -700,8 +1077,9 @@ describe("CRM-1 static rules", () => {
       "lib/crm-view.ts",
       "lib/crm-client.ts",
     ]);
-    // CRM-2 adds the people, history, note and lead panels (4 components).
-    expect(files.length).toBe(11);
+    // CRM-2 adds the people, history, note and lead panels (4 components); CRM-3 the layout,
+    // the people list and profile, the section bar, tabs, lead records and contact history (7).
+    expect(files.length).toBe(18);
     expect(scanFiles(ROOT, files)).toEqual([]);
   });
 });
