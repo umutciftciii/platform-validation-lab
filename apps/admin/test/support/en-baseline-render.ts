@@ -47,6 +47,10 @@
 // editor has the original date field (DP-327); content-en is recorded again with
 // COM5_RECORD_EN=1. The recording it replaces is kept in fixtures/com5-en, and
 // test/com5-en-texts.test.ts allows only the approved changes against it.
+// COM-7: the corporate home page's editor gains the activity areas, the service cards' and the
+// call to action's pictures and the latest news heading; content-en is recorded again with
+// COM7_RECORD_EN=1. The recording it replaces is kept in fixtures/com7-en, and
+// test/com7-en-texts.test.ts allows only the approved changes against it.
 //
 // The only difference removed before comparing is React's `<!-- -->` separator between adjacent
 // text nodes: a sentence that was "text {value}" in JSX is one translated string now.
@@ -74,7 +78,8 @@ const RECORD =
   process.env["COM2B_RECORD_EN"] === "1" ||
   process.env["COM3_RECORD_EN"] === "1" ||
   process.env["COM4_RECORD_EN"] === "1" ||
-  process.env["COM5_RECORD_EN"] === "1";
+  process.env["COM5_RECORD_EN"] === "1" ||
+  process.env["COM7_RECORD_EN"] === "1";
 
 export function normalizeEn(html: string): string {
   return html.replaceAll("<!-- -->", "");

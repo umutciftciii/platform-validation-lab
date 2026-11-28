@@ -101,6 +101,8 @@ export interface SiteDictionary {
   contactForm: ContactFormLabels;
   unavailable: string;
   cookies: CookieLabels;
+  /** COM-7: the home page's activity area switcher and lists (interface labels only). */
+  home: { areas: string; areaOf: string; latest: string };
 }
 
 const EN: SiteDictionary = {
@@ -201,6 +203,7 @@ const EN: SiteDictionary = {
     saved: "Your cookie preferences were saved.",
     settings: "Cookie settings",
   },
+  home: { areas: "Activity areas", areaOf: "{n} of {total}", latest: "Latest articles" },
 };
 
 const TR: SiteDictionary = {
@@ -304,6 +307,7 @@ const TR: SiteDictionary = {
     saved: "Çerez tercihleriniz kaydedildi.",
     settings: "Çerez ayarları",
   },
+  home: { areas: "Faaliyet alanları", areaOf: "{n} / {total}", latest: "Son yazılar" },
 };
 
 const DICTIONARIES: Record<RouteLocale, SiteDictionary> = { en: EN, tr: TR };

@@ -113,6 +113,8 @@ export type CmsField =
        * text); the schema of the whole object checks it, the admin labels it accordingly.
        */
       requiredWith?: string;
+      /** COM-7: the field exists only on these sites (elsewhere it is not part of the content). */
+      sites?: readonly CmsSiteKey[];
       hint?: string;
     }
   | { type: "link"; key: string; label: string; required?: boolean; hint?: string }
@@ -126,10 +128,23 @@ export type CmsField =
       fields: readonly CmsField[];
       /** A field whose value must differ between the items (e.g. the anchor). */
       unique?: string;
+      /**
+       * COM-7: added to a page after content was stored without it: a stored content without the
+       * key reads as an empty list (saved again, the list is stored).
+       */
+      optional?: boolean;
       hint?: string;
     }
   /** A fixed group of fields (one card, one block of a designed page). */
-  | { type: "group"; key: string; label: string; fields: readonly CmsField[]; hint?: string }
+  | {
+      type: "group";
+      key: string;
+      label: string;
+      fields: readonly CmsField[];
+      /** COM-7: as for a list; a stored content without the key reads as null. */
+      optional?: boolean;
+      hint?: string;
+    }
   /** A registered static asset of the site (CMS_STATIC_ASSETS); uploads come with S5. */
   | {
       type: "asset";
@@ -144,6 +159,8 @@ export type CmsField =
        * them, so a split section there may have none. Other sites keep the field required.
        */
       optionalOn?: readonly CmsSiteKey[];
+      /** COM-7: the field exists only on these sites (elsewhere it is not part of the content). */
+      sites?: readonly CmsSiteKey[];
       hint?: string;
     };
 
@@ -161,6 +178,8 @@ export interface CmsStaticAsset {
 
 const bv = (src: string, width: number, height: number, kind: CmsAssetKind = "image") =>
   ({ site: "BV", src, kind, width, height }) as const;
+const corporate = (src: string, width: number, height: number) =>
+  ({ site: "CORPORATE", src, kind: "image", width, height }) as const;
 
 /**
  * Files in the web apps' public folders that pages may use (S2). An asset field accepts only these,
@@ -206,6 +225,12 @@ export const CMS_STATIC_ASSETS: readonly CmsStaticAsset[] = [
   bv("/media/services-showcase/logistics-mobile.webp", 815, 1086),
   bv("/media/services-showcase/storage-distribution-desktop.webp", 1448, 1086),
   bv("/media/services-showcase/storage-distribution-mobile.webp", 815, 1086),
+  // COM-7: the corporate visual pack v1 (generated, representative industrial scenes: never shown
+  // as Dream Petroleum's own terminal, fleet or plant; apps/web-corporate/public/media).
+  corporate("/media/visual-pack-v1/hero-energy-trading.webp", 1672, 941),
+  corporate("/media/visual-pack-v1/hero-logistics-supply.webp", 1672, 941),
+  corporate("/media/visual-pack-v1/hero-storage-terminal.webp", 1672, 941),
+  corporate("/media/visual-pack-v1/hero-petrochemicals.webp", 1672, 941),
 ];
 
 export function cmsAsset(src: string): CmsStaticAsset | undefined {
@@ -329,14 +354,18 @@ function fieldSchema(field: CmsField, site?: CmsSiteKey): z.ZodType {
     case "list": {
       const list = z.array(cmsFieldsSchema(field.fields, site)).min(field.min).max(field.max);
       const key = field.unique;
-      if (!key) return list;
-      return list.refine((items) => new Set(items.map((i) => i[key])).size === items.length, {
-        message: "duplicate",
-        path: [],
-      });
+      const checked = key
+        ? list.refine((items) => new Set(items.map((i) => i[key])).size === items.length, {
+            message: "duplicate",
+            path: [],
+          })
+        : list;
+      return field.optional ? checked.optional().transform((v) => v ?? []) : checked;
     }
-    case "group":
-      return cmsFieldsSchema(field.fields, site);
+    case "group": {
+      const group = cmsFieldsSchema(field.fields, site);
+      return field.optional ? group.nullish().transform((v) => v ?? null) : group;
+    }
     case "asset": {
       const asset = z.string().refine(
         (src) => {
@@ -354,16 +383,33 @@ function fieldSchema(field: CmsField, site?: CmsSiteKey): z.ZodType {
   }
 }
 
+/**
+ * COM-7: the fields that exist on a site (a field with `sites` only there). Without a site (the
+ * shape of a request, before the API knows the page's site) every field.
+ */
+export function cmsFieldsOn(fields: readonly CmsField[], site?: CmsSiteKey): readonly CmsField[] {
+  if (!site) return fields;
+  return fields.filter((f) => !("sites" in f) || !f.sites || f.sites.includes(site));
+}
+
 /** The strict object schema of a set of fields (`site`: see `fieldSchema`). */
 export function cmsFieldsSchema(
   fields: readonly CmsField[],
   site?: CmsSiteKey,
 ): z.ZodType<Record<string, unknown>> {
+  const own = cmsFieldsOn(fields, site);
+  // COM-7: a field of some sites only may be absent (content of another site, or stored before
+  // it existed): it stays absent instead of becoming null.
   const object = z.strictObject(
-    Object.fromEntries(fields.map((f) => [f.key, fieldSchema(f, site)])),
+    Object.fromEntries(
+      own.map((f) => {
+        const schema = fieldSchema(f, site);
+        return [f.key, "sites" in f && f.sites ? schema.optional() : schema];
+      }),
+    ),
   );
   // A text required together with a sibling (an image's alt text) while the sibling has a value.
-  const together = fields.filter(
+  const together = own.filter(
     (f): f is Extract<CmsField, { type: "text" }> => f.type === "text" && Boolean(f.requiredWith),
   );
   if (!together.length) return object as never;
@@ -396,6 +442,25 @@ export const CMS_SECTION_TYPES: readonly CmsSectionType[] = [
       { type: "text", key: "title", label: "Heading", max: 120, required: true },
       { type: "text", key: "intro", label: "Intro", max: 400, multiline: true },
       { type: "link", key: "cta", label: "Button" },
+      // COM-7: a full-width picture behind the corporate page opening (none: a plain heading).
+      {
+        type: "asset",
+        key: "image",
+        label: "Background image",
+        kinds: ["image"],
+        required: false,
+        sites: ["CORPORATE"],
+        hint: "A representative scene; never presented as the company's own site or fleet.",
+      },
+      {
+        type: "text",
+        key: "imageAlt",
+        label: "Alt text",
+        max: 300,
+        requiredWith: "image",
+        multiline: true,
+        sites: ["CORPORATE"],
+      },
     ],
   },
   {

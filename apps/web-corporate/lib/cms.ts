@@ -80,6 +80,9 @@ export type TemplateSection =
       title: string;
       intro: string | null;
       cta: CmsLink | null;
+      /** COM-7: a registered corporate image behind the heading (absent before COM-7). */
+      image?: string | null;
+      imageAlt?: string | null;
     }
   | { id: string; type: "text"; title: string | null; body: string }
   | {

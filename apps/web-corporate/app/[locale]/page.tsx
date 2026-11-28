@@ -5,7 +5,7 @@ import { cache } from "react";
 
 import { HomePage } from "@/components/home-page";
 import { SiteFrame } from "@/components/site-frame";
-import { getPublishedHome } from "@/lib/cms";
+import { getNews, getPublishedHome } from "@/lib/cms";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE, isRouteLocale, type RouteLocale } from "@/lib/locale-routing";
 import { privacyLink } from "@/lib/privacy";
@@ -68,6 +68,8 @@ export default async function Home({ params }: PageProps<"/[locale]">) {
     );
   }
   const view = res.data;
+  // COM-7: the newest articles of the language for the news block (none: the block is left out).
+  const news = await getNews(locale);
   return (
     <SiteFrame
       locale={locale}
@@ -75,8 +77,13 @@ export default async function Home({ params }: PageProps<"/[locale]">) {
       footer={view.footer}
       languages={view.nav?.languages ?? []}
       privacyHref={privacyHref}
+      overlay
     >
-      <HomePage content={view.content} />
+      <HomePage
+        content={view.content}
+        articles={news.ok ? news.data.articles : []}
+        locale={locale}
+      />
     </SiteFrame>
   );
 }

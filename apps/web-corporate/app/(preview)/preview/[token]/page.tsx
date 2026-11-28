@@ -5,6 +5,7 @@ import { ArticlePage, NewsList } from "@/components/news-pages";
 import { ProductsPage } from "@/components/products-page";
 import { SiteFrame } from "@/components/site-frame";
 import { TemplateSections } from "@/components/template-sections";
+import { getNews } from "@/lib/cms";
 import { contactSectionForm } from "@/lib/contact-section";
 import { dictionary } from "@/lib/i18n";
 import { DEFAULT_LOCALE } from "@/lib/locale-routing";
@@ -94,6 +95,8 @@ export default async function PreviewPage({ params }: PageProps<"/preview/[token
     );
   }
   const page = view.page;
+  // COM-7: the home page's news block lists the published articles, as on the site.
+  const news = view.kind === "home" ? await getNews(view.locale) : null;
   return (
     <SiteFrame
       locale={view.locale}
@@ -104,7 +107,11 @@ export default async function PreviewPage({ params }: PageProps<"/preview/[token
       preview
     >
       {view.kind === "home" ? (
-        <HomePage content={view.page.content} />
+        <HomePage
+          content={view.page.content}
+          articles={news?.ok ? news.data.articles : []}
+          locale={view.locale}
+        />
       ) : (
         <ProductsPage content={view.page.content} locale={view.locale} />
       )}

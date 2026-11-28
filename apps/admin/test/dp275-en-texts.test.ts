@@ -104,8 +104,9 @@ describe("COM-2b: the corporate designed pages' contract texts", () => {
     }
     const added = Object.keys(now).filter((k) => !(k in before) && com2b(k));
     // COM-3: +1, the corporate news list heading's registry note. COM-4: +1, the contact page's.
-    // COM-5: +4 (two registry notes, the original date's label and hint).
-    expect(added).toHaveLength(37);
+    // COM-5: +4 (two registry notes, the original date's label and hint). COM-7: +8 (a hero's
+    // background image, the pictures' hint, the activity areas and the latest news heading).
+    expect(added).toHaveLength(45);
     expect(now["content.contract.registry.corporateContact"]).toBe(
       "Contact details from the published footer and the contact form; messages become CORPORATE leads in the CRM (COM-4).",
     );

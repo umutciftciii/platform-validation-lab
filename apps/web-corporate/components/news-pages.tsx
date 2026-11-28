@@ -5,6 +5,9 @@
  * when it is a registered file of this site, DP-320 — none today); the article page its date,
  * title, summary, cover and body sections. Every word of the content comes from the CMS; only the
  * interface labels (dates, pages, back link) come from lib/i18n.
+ * COM-7: the list opens with a navy heading; the newest article of the first page is a wide card,
+ * the others a grid of dated cards (no pictures: the articles have none yet, DP-326); the article
+ * page is a reading column under its date, title and summary.
  */
 import type { CmsPublicArticle } from "@dream/contracts";
 
@@ -43,27 +46,40 @@ function Cover({
   );
 }
 
-function ArticleCard({ article, locale }: { article: CmsPublicArticle; locale: RouteLocale }) {
+function ArticleCard({
+  article,
+  locale,
+  featured = false,
+}: {
+  article: CmsPublicArticle;
+  locale: RouteLocale;
+  featured?: boolean;
+}) {
   const t = dictionary(locale).news;
   const titleId = `news-${article.slug}`;
   const hasCover = Boolean(corporateImage(article.coverImage));
   return (
-    <li>
-      <article className="card news-card" data-link="true" aria-labelledby={titleId}>
+    <li data-featured={featured}>
+      <article
+        className="post-card news-card"
+        data-featured={featured}
+        data-link="true"
+        aria-labelledby={titleId}
+      >
         {hasCover ? (
           <Cover src={article.coverImage} alt={article.coverAlt} className="news-card-image" />
         ) : null}
-        <time className="news-date" dateTime={article.firstPublishedAt}>
+        <time className="post-date" dateTime={article.firstPublishedAt}>
           {formatNewsDate(locale, article.firstPublishedAt)}
         </time>
-        <h2 id={titleId} className="news-card-title">
+        <h2 id={titleId} className="post-title">
           <a className="card-link" href={article.path}>
             {article.title}
           </a>
         </h2>
-        <p>{article.excerpt}</p>
-        <span className="news-more" aria-hidden="true">
-          {t.readMore}
+        <p className="post-excerpt">{article.excerpt}</p>
+        <span className="post-more" aria-hidden="true">
+          {t.readMore} →
         </span>
       </article>
     </li>
@@ -120,28 +136,33 @@ export function NewsList({
   const t = dictionary(locale).news;
   return (
     <article>
-      <header className="hero hero-compact on-dark news-hero">
-        <div className="container-site">
+      <header className="page-hero page-hero-plain on-dark">
+        <div className="container-site page-hero-inner">
           <p className="eyebrow">{copy.eyebrow}</p>
-          <h1>{copy.title}</h1>
-          <div className="rich hero-intro">
+          <h1 className="page-hero-title">{copy.title}</h1>
+          <div className="rich page-hero-intro">
             {paragraphsOf(copy.intro).map((p, i) => (
               <p key={i}>{p}</p>
             ))}
           </div>
         </div>
       </header>
-      <section className="section section-plain" aria-label={t.listLabel}>
+      <section className="band" aria-label={t.listLabel}>
         <div className="container-site">
           {list.items.length === 0 ? (
             <div className="news-empty" role="status">
-              <h2 className="section-title">{copy.empty.title}</h2>
-              <p className="section-lead">{copy.empty.text}</p>
+              <h2 className="block-title">{copy.empty.title}</h2>
+              <p className="block-lead">{copy.empty.text}</p>
             </div>
           ) : (
-            <ol className="card-grid news-grid" data-columns="3">
-              {list.items.map((a) => (
-                <ArticleCard key={a.path} article={a} locale={locale} />
+            <ol className="post-grid news-grid">
+              {list.items.map((a, i) => (
+                <ArticleCard
+                  key={a.path}
+                  article={a}
+                  locale={locale}
+                  featured={i === 0 && list.page === 1}
+                />
               ))}
             </ol>
           )}
@@ -162,13 +183,13 @@ export function ArticlePage({ view }: { view: ArticleView }) {
   const t = dictionary(view.locale).news;
   return (
     <article className="news-article">
-      <header className="page-title news-article-head">
+      <header className="news-article-head">
         <div className="container-site">
-          <div className="prose-width">
+          <div className="reading-width">
             <a className="news-back text-link" href={localePath(view.locale, "/news")}>
               ← {t.back}
             </a>
-            <p className="news-date">
+            <p className="post-date">
               {view.firstPublishedAt ? (
                 <time dateTime={view.firstPublishedAt}>
                   {formatNewsDate(view.locale, view.firstPublishedAt)}
@@ -178,7 +199,7 @@ export function ArticlePage({ view }: { view: ArticleView }) {
               )}
             </p>
             <h1>{view.title}</h1>
-            <p className="section-lead news-excerpt">{view.excerpt}</p>
+            <p className="news-excerpt">{view.excerpt}</p>
           </div>
         </div>
       </header>
@@ -198,10 +219,10 @@ export function ArticlePage({ view }: { view: ArticleView }) {
 export function ArticleRemoved({ locale }: { locale: RouteLocale }) {
   const t = dictionary(locale).news;
   return (
-    <div className="container-site section" role="status">
-      <div className="prose-width">
-        <h1 className="section-title">{t.removedTitle}</h1>
-        <p className="section-lead mt-6">{t.removedText}</p>
+    <div className="container-site band" role="status">
+      <div className="reading-width">
+        <h1 className="block-title">{t.removedTitle}</h1>
+        <p className="block-lead mt-6">{t.removedText}</p>
         <p className="mt-8">
           <a className="btn btn-accent btn-arrow" href={localePath(locale, "/news")}>
             {t.back}

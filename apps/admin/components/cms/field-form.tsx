@@ -6,7 +6,7 @@
  * designed pages and fragments. A form description, not a page builder: no drag and drop, no
  * layout; lists reorder with buttons.
  */
-import { cmsAssetRequired, cmsSiteAssets, type CmsField } from "@dream/contracts";
+import { cmsAssetRequired, cmsFieldsOn, cmsSiteAssets, type CmsField } from "@dream/contracts";
 import type { ReactNode } from "react";
 import { cmsText } from "../../lib/cms-text";
 import { INTL_LOCALE } from "../../lib/i18n/config";
@@ -59,7 +59,8 @@ export function toContent(
   site?: "BV" | "CORPORATE",
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const f of fields) {
+  // COM-7: a field of another site only (`sites`) is not part of this page's content.
+  for (const f of cmsFieldsOn(fields, site)) {
     const v = values[f.key];
     switch (f.type) {
       case "text":
@@ -123,7 +124,7 @@ export function Fields({
   const set = (key: string, v: Value) => onChange({ ...values, [key]: v });
   return (
     <>
-      {fields.map((f) => {
+      {cmsFieldsOn(fields, site).map((f) => {
         const id = `${idPrefix}-${f.key}`;
         const fieldPath = `${path}.${f.key}`;
         // ML-12c: labels and hints come from @dream/contracts (content.contract).
