@@ -119,7 +119,8 @@ export const tr: Messages = {
       },
       crm: {
         label: "CRM",
-        summary: "Firmalar ve müşteri sorumluları (müşteri verisi, denetim kaydı tutulur).",
+        summary:
+          "Firmalar, kişiler ve lead'leri tek yerde (müşteri verisi, denetim kaydı tutulur).",
       },
       sites: {
         label: "Siteler",

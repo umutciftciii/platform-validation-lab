@@ -40,6 +40,7 @@ const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
 /**
  * CRM-1 (ADR-032): the companies of the sites the caller reads (crm:read), sorted by name, with
  * search, site, account-owner and country filters. Customer data: the API audits every read.
+ * CRM-3: each row shows its number of people and its last CRM activity.
  */
 export default async function CrmCompaniesPage({ searchParams }: PageProps<"/crm/companies">) {
   await requireStaffSession();
@@ -201,8 +202,17 @@ export default async function CrmCompaniesPage({ searchParams }: PageProps<"/crm
                   </span>
                   <span className="flex flex-wrap items-center gap-2 text-sm text-ink-3 sm:justify-end">
                     <StatusPill tone="neutral">{SITE_SHORT[c.siteKey]}</StatusPill>
+                    {c.peopleCount !== null ? (
+                      <span key="people" className="tabular-nums">
+                        {t("crm.list.people", { n: c.peopleCount })}
+                      </span>
+                    ) : null}
                     <span className="tabular-nums">
-                      {t("crm.list.updated", { date: DATE.format(new Date(c.updatedAt)) })}
+                      {c.lastActivityAt
+                        ? t("crm.list.lastActivity", {
+                            date: DATE.format(new Date(c.lastActivityAt)),
+                          })
+                        : t("crm.list.updated", { date: DATE.format(new Date(c.updatedAt)) })}
                     </span>
                   </span>
                 </Link>
