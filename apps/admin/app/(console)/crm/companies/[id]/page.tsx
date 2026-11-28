@@ -1,19 +1,26 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import {
   ADMIN_CRM_COMPANIES_API,
+  CrmActivityListResponseSchema,
   CrmCompanyDetailResponseSchema,
+  CrmCompanyPeopleResponseSchema,
+  LEAD_STATUSES,
   type CrmCompany,
 } from "@dream/contracts";
 import { PageHeader, SITE_SHORT } from "../../../../../components/catalog/parts";
 import { CompanyForm } from "../../../../../components/crm/company-form";
+import { CompanyHistory } from "../../../../../components/crm/company-history";
+import { CompanyNoteForm } from "../../../../../components/crm/company-note-form";
+import { CompanyPeople } from "../../../../../components/crm/company-people";
 import { EmptyState, ErrorState, Panel, StatusPill } from "../../../../../components/ui";
 import { companyPlace, countryOptions } from "../../../../../lib/crm-view";
 import { ADMIN_TIME_ZONE } from "../../../../../lib/i18n/config";
 import { dateTimeFormat } from "../../../../../lib/i18n/format";
 import { getAdminLocale, getTranslator } from "../../../../../lib/i18n/server";
 import type { Translate } from "../../../../../lib/i18n/types";
-import { countryName } from "../../../../../lib/leads-view";
+import { countryName, statusLabel } from "../../../../../lib/leads-view";
 import { serverRead } from "../../../../../lib/server-api";
 import { requireStaffSession } from "../../../../../lib/server-session";
 
@@ -85,19 +92,29 @@ function OwnerName({ company, t }: { company: CrmCompany; t: Translate }) {
 
 /**
  * CRM-1 (ADR-032): a company's profile, contact details, notes and account owner; the editor for
- * staff with crm:manage on its site. CRM-3 turns this into the 360° view (people, history,
- * requests in tabs).
+ * staff with crm:manage on its site. CRM-2 adds its people (from their leads) and its history with
+ * staff notes. CRM-3 turns this into the 360° view (people, history, requests in tabs).
  */
-export default async function CompanyPage({ params }: PageProps<"/crm/companies/[id]">) {
+export default async function CompanyPage({
+  params,
+  searchParams,
+}: PageProps<"/crm/companies/[id]">) {
   await requireStaffSession();
   const t = await getTranslator();
   const locale = await getAdminLocale();
   const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const { id } = await params;
-  const res = await serverRead(
-    `${ADMIN_CRM_COMPANIES_API}/${encodeURIComponent(id)}`,
-    CrmCompanyDetailResponseSchema,
-  );
+  const historyParam = (await searchParams)["history"];
+  const historyCursor = typeof historyParam === "string" ? historyParam.slice(0, 40) : "";
+  const base = `${ADMIN_CRM_COMPANIES_API}/${encodeURIComponent(id)}`;
+  const [res, peopleRes, historyRes] = await Promise.all([
+    serverRead(base, CrmCompanyDetailResponseSchema),
+    serverRead(`${base}/people`, CrmCompanyPeopleResponseSchema),
+    serverRead(
+      `${base}/activities${historyCursor ? `?cursor=${encodeURIComponent(historyCursor)}` : ""}`,
+      CrmActivityListResponseSchema,
+    ),
+  ]);
   const back = { href: "/crm/companies", label: t("crm.detail.back") };
   if (!res.ok) {
     return (
@@ -141,6 +158,9 @@ export default async function CompanyPage({ params }: PageProps<"/crm/companies/
             <dl className="divide-y divide-line">
               <Row label={t("crm.form.name")} t={t}>
                 {company.name}
+              </Row>
+              <Row label={t("crm.form.registrationId")} t={t}>
+                {company.registrationId}
               </Row>
               <Row label={t("crm.form.country")} t={t}>
                 {company.country ? countryName(company.country, locale) : null}
@@ -213,6 +233,87 @@ export default async function CompanyPage({ params }: PageProps<"/crm/companies/
           </Panel>
         </div>
       </div>
+      {peopleRes.ok ? (
+        <Panel
+          key="people"
+          id="people"
+          title={t("crm.people.title")}
+          description={t("crm.people.description")}
+        >
+          <CompanyPeople
+            companyId={company.id}
+            people={peopleRes.data.people}
+            canManage={peopleRes.data.canManage}
+            dates={Object.fromEntries(
+              peopleRes.data.people.flatMap((p) =>
+                p.leads.map((l) => [
+                  l.id,
+                  t("crm.people.lastRequest", { date: DATE.format(new Date(l.lastRequestAt)) }),
+                ]),
+              ),
+            )}
+            statusLabels={Object.fromEntries(LEAD_STATUSES.map((s) => [s, statusLabel(s, t)]))}
+          />
+        </Panel>
+      ) : peopleRes.status !== 403 && peopleRes.status !== 404 ? (
+        <Panel key="people-failed" id="people" title={t("crm.people.title")}>
+          <p role="alert" className="text-sm text-danger">
+            {t("crm.people.loadError")}
+          </p>
+        </Panel>
+      ) : null}
+      {historyRes.ok ? (
+        <Panel
+          key="history"
+          id="history"
+          title={t("crm.history.title")}
+          description={t("crm.history.description")}
+        >
+          <div className="space-y-6">
+            {canManage ? (
+              <div key="note" className="rounded-xl border border-line bg-surface-2/50 p-4">
+                <CompanyNoteForm companyId={company.id} />
+              </div>
+            ) : null}
+            <CompanyHistory
+              items={historyRes.data.items}
+              companyId={company.id}
+              t={t}
+              date={DATE}
+            />
+            {historyCursor || historyRes.data.nextCursor ? (
+              <div key="pages" className="flex flex-wrap gap-2">
+                {historyCursor ? (
+                  <Link
+                    key="newest"
+                    href={`/crm/companies/${company.id}#history`}
+                    className="text-sm text-petrol-strong underline-offset-2 hover:underline"
+                  >
+                    {t("crm.history.newest")}
+                  </Link>
+                ) : null}
+                {historyRes.data.nextCursor ? (
+                  <Link
+                    key="older"
+                    href={`/crm/companies/${company.id}?history=${encodeURIComponent(
+                      historyRes.data.nextCursor,
+                    )}#history`}
+                    className="text-sm text-petrol-strong underline-offset-2 hover:underline"
+                  >
+                    {t("crm.history.older")}
+                  </Link>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </Panel>
+      ) : historyRes.status !== 403 && historyRes.status !== 404 ? (
+        <Panel key="history-failed" id="history" title={t("crm.history.title")}>
+          <p role="alert" className="text-sm text-danger">
+            {t("crm.history.loadError")}
+          </p>
+        </Panel>
+      ) : null}
       {canManage ? (
         <Panel
           key="edit"

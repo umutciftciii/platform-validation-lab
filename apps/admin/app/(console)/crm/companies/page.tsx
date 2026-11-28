@@ -179,7 +179,9 @@ export default async function CrmCompaniesPage({ searchParams }: PageProps<"/crm
                   <span className="min-w-0">
                     <span className="block truncate font-medium text-ink">{c.name}</span>
                     <span className="block truncate text-sm text-ink-3">
-                      {companyPlace(c, locale) || c.website || t("crm.common.notSet")}
+                      {[companyPlace(c, locale), c.registrationId].filter(Boolean).join(" · ") ||
+                        c.website ||
+                        t("crm.common.notSet")}
                     </span>
                   </span>
                   <span className="min-w-0 truncate text-sm text-ink-2">

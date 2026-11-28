@@ -26,8 +26,13 @@ import {
   AssignRoleResponseSchema,
   CrmCompanyDetailResponseSchema,
   CrmCompanyListResponseSchema,
+  CrmActivityListResponseSchema,
+  CrmCompanyPeopleResponseSchema,
   CrmCompanyResponseSchema,
+  CrmLeadCandidatesResponseSchema,
+  CrmLeadResponseSchema,
   CrmOwnersResponseSchema,
+  CrmPersonResponseSchema,
   ErrorBodySchema,
   LEAD_CONTACT_NOTICE,
   LEAD_MARKETING_CONSENT,
@@ -5505,12 +5510,14 @@ describe("CRM-1 companies and account owners (ADR-032)", () => {
     }
   });
 
-  it("keeps names unique per site after normalisation, and sites apart", async () => {
+  it("asks before a second company with the same name, and keeps sites apart", async () => {
+    // CRM-2 (DP-339): the same normalised name is not refused outright any more; the caller is
+    // asked to confirm a different legal entity first (covered in the CRM-2 block).
     expectError(
       await crm(crmBv, "POST", "/companies", { siteId: BV, name: "ACME lubricants  b.v." }),
       409,
       "CONFLICT_STATE",
-      { path: "name", rule: "duplicate_name" },
+      { path: "name", rule: "possible_duplicate" },
     );
     const com = await crm(crmCom, "POST", "/companies", {
       siteId: COM,
@@ -5679,7 +5686,7 @@ describe("CRM-1 companies and account owners (ADR-032)", () => {
       "CONFLICT_STATE",
       { path: "version", rule: "stale" },
     );
-    // Renaming onto another company's name is refused like a create.
+    // Renaming onto another company's name asks first, like a create (DP-339).
     expectError(
       await crm(crmBv, "POST", `/companies/${acme}`, {
         ...fields,
@@ -5688,7 +5695,7 @@ describe("CRM-1 companies and account owners (ADR-032)", () => {
       }),
       409,
       "CONFLICT_STATE",
-      { path: "name", rule: "duplicate_name" },
+      { path: "name", rule: "possible_duplicate" },
     );
     expectError(
       await crm(crmCom, "POST", `/companies/${acme}`, { ...fields, version: after.version }),
@@ -5779,5 +5786,520 @@ describe("CRM-1 companies and account owners (ADR-032)", () => {
     expect(detail.company.owner).toMatchObject({ id: crmBv.userId, active: false });
     expect(detail.owners.map((o) => o.id)).not.toContain(crmBv.userId);
     expectError(await crm(crmBv, "GET", "/companies"), 403, "FORBIDDEN");
+  });
+});
+
+describe("CRM-2 people, leads and companies, history, same-named companies (ADR-032 D6/D7)", () => {
+  let mgr: Staff; // sales_crm_user @ BV
+  let mgrCom: Staff; // sales_crm_user @ CORPORATE
+  let officer: Staff; // platform_customer_data_officer: reads, never links
+  let editor: Staff; // site_admin @ BV: no customer data
+  let northwind: string; // BV company
+  let southwind: string; // BV company
+  let comCompany: string; // CORPORATE company
+  const lead: Record<string, string> = {};
+
+  const crm = (who: Staff, method: "GET" | "POST", p: string, body?: unknown) =>
+    who.admin(method, `/crm${p}`, body);
+
+  async function newLead(key: string, siteId: string, email: string, company: string) {
+    const row = await owner.lead.create({
+      data: {
+        siteId,
+        email,
+        fullName: `Person ${key}`,
+        company,
+        country: "NL",
+        source: "CONTACT_FORM",
+        freeMailDomain: /@gmail\./.test(email),
+      },
+    });
+    lead[key] = row.id;
+    return row.id;
+  }
+
+  async function anonymise(leadId: string) {
+    await owner.$transaction([
+      owner.$executeRawUnsafe('ALTER TABLE "Lead" DISABLE TRIGGER "Lead_guard"'),
+      // The values the retention job writes (Lead_anonymised CHECK).
+      owner.$executeRaw`UPDATE "Lead" SET "anonymisedAt" = now(), "fullName" = '', "company" = '',
+        "marketingConsentAt" = NULL, "email" = 'anonymised+' || "id"::text || '@anonymised.invalid'
+        WHERE "id" = ${leadId}::uuid`,
+      owner.$executeRawUnsafe('ALTER TABLE "Lead" ENABLE TRIGGER "Lead_guard"'),
+    ]);
+  }
+
+  const company = async (who: Staff, body: Record<string, unknown>) => {
+    const res = await crm(who, "POST", "/companies", body);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return CrmCompanyResponseSchema.parse(res.body).company;
+  };
+
+  beforeAll(async () => {
+    mgr = await staff("crm2-mgr", [], root.userId, undefined, { memberships: [BV] });
+    mgrCom = await staff("crm2-com", [], root.userId, undefined, { memberships: [COM] });
+    officer = await staff("crm2-officer", [], root.userId);
+    editor = await staff("crm2-editor", [{ role: "site_admin", site: BV }], root.userId);
+    await assignRole(mgr, "sales_crm_user", BV);
+    await assignRole(mgrCom, "sales_crm_user", COM);
+    await assignRole(officer, "platform_customer_data_officer", null);
+    northwind = (
+      await company(mgr, {
+        siteId: BV,
+        name: "Northwind Traders",
+        website: "https://www.northwind.example",
+      })
+    ).id;
+    southwind = (await company(mgr, { siteId: BV, name: "Southwind Oils" })).id;
+    comCompany = (await company(mgrCom, { siteId: COM, name: "Corporate Buyer" })).id;
+    await newLead("ann", BV, "ann@northwind.example", "Northwind Traders");
+    await newLead("ann2", BV, "ann.private@gmail.example", "Private");
+    await newLead("bob", BV, "bob@other.example", "northwind traders");
+    await newLead("free", BV, "carl@gmail.com", "Someone");
+    await newLead("com", COM, "dina@corporate.example", "Corporate Buyer");
+  });
+
+  it("suggests leads by typed company name and website domain, never free mail", async () => {
+    const res = await crm(mgr, "GET", `/companies/${northwind}/candidates`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const items = CrmLeadCandidatesResponseSchema.parse(res.body).items;
+    const byId = new Map(items.map((i) => [i.id, i]));
+    expect(byId.get(lead["ann"]!)?.reason).toBe("email_domain");
+    expect(byId.get(lead["bob"]!)?.reason).toBe("company_name");
+    expect(byId.has(lead["free"]!)).toBe(false);
+    expect(byId.has(lead["com"]!)).toBe(false);
+    // A search finds any live lead of the site, nothing of another site.
+    const found = CrmLeadCandidatesResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${northwind}/candidates?q=dina`)).body,
+    ).items;
+    expect(found).toEqual([]);
+    expect(JSON.stringify((await lastAudit("crm.lead_candidates_listed"))?.metadata)).not.toContain(
+      "dina",
+    );
+    // Read-only staff and staff without customer data cannot list candidates.
+    expectError(await crm(officer, "GET", `/companies/${northwind}/candidates`), 403, "FORBIDDEN");
+    expectError(await crm(editor, "GET", `/companies/${northwind}/candidates`), 403, "FORBIDDEN");
+  });
+
+  it("adds a lead's person to a company; a company has several people", async () => {
+    const add = async (leadKey: string, extra: Record<string, unknown> = {}) =>
+      crm(mgr, "POST", `/companies/${northwind}/people`, { leadId: lead[leadKey], ...extra });
+    const first = await add("ann");
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const ann = CrmPersonResponseSchema.parse(first.body).person!;
+    expect(ann).toMatchObject({
+      siteId: BV,
+      displayName: "Person ann",
+      company: { id: northwind, name: "Northwind Traders" },
+      leads: [{ id: lead["ann"], email: "ann@northwind.example", anonymised: false }],
+    });
+    expectError(await add("ann"), 409, "CONFLICT_STATE", {
+      path: "leadId",
+      rule: "already_linked",
+    });
+    expect((await add("bob")).status).toBe(200);
+    const people = CrmCompanyPeopleResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${northwind}/people`)).body,
+    );
+    expect(people.canManage).toBe(true);
+    expect(people.people.map((p) => p.displayName).sort()).toEqual(["Person ann", "Person bob"]);
+    // Already linked leads are not suggested again.
+    const again = CrmLeadCandidatesResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${northwind}/candidates`)).body,
+    ).items.map((i) => i.id);
+    expect(again).not.toContain(lead["ann"]);
+    // The officer reads people but changes nothing; another site sees nothing (404).
+    const read = CrmCompanyPeopleResponseSchema.parse(
+      (await crm(officer, "GET", `/companies/${northwind}/people`)).body,
+    );
+    expect(read).toMatchObject({ canManage: false });
+    expect(read.people).toHaveLength(2);
+    expectError(
+      await crm(officer, "POST", `/companies/${northwind}/people`, { leadId: lead["bob"] }),
+      403,
+      "FORBIDDEN",
+    );
+    expectError(await crm(mgrCom, "GET", `/companies/${northwind}/people`), 404, "NOT_FOUND");
+    // A lead of another site never joins (looks unknown).
+    expectError(
+      await crm(mgr, "POST", `/companies/${northwind}/people`, { leadId: lead["com"] }),
+      404,
+      "NOT_FOUND",
+    );
+    const audit = await lastAudit("crm.person_linked");
+    expect(audit?.metadata).toMatchObject({ companyId: northwind, leadId: lead["bob"] });
+    expect(JSON.stringify(audit?.metadata)).not.toContain("bob@");
+  });
+
+  it("asks before moving a person to another company, and moves with optimistic concurrency", async () => {
+    expectError(
+      await crm(mgr, "POST", `/companies/${southwind}/people`, { leadId: lead["bob"] }),
+      409,
+      "CONFLICT_STATE",
+      { path: "leadId", rule: "other_company" },
+    );
+    const moved = await crm(mgr, "POST", `/companies/${southwind}/people`, {
+      leadId: lead["bob"],
+      confirmMove: true,
+    });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+    const bob = CrmPersonResponseSchema.parse(moved.body).person!;
+    expect(bob.company?.id).toBe(southwind);
+    expectError(
+      await crm(mgr, "POST", `/people/${bob.id}/company`, {
+        companyId: null,
+        version: bob.version + 7,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "version", rule: "stale" },
+    );
+    // Only a company of the person's site.
+    expectError(
+      await crm(mgr, "POST", `/people/${bob.id}/company`, {
+        companyId: comCompany,
+        version: bob.version,
+      }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    const off = await crm(mgr, "POST", `/people/${bob.id}/company`, {
+      companyId: null,
+      version: bob.version,
+    });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect(CrmPersonResponseSchema.parse(off.body).person?.company).toBeNull();
+    expectError(
+      await crm(mgrCom, "POST", `/people/${bob.id}/company`, { companyId: null, version: 0 }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("joins several leads into one person and separates them again; lead rows never change", async () => {
+    const before = await owner.lead.findUniqueOrThrow({ where: { id: lead["ann2"]! } });
+    const search = CrmLeadCandidatesResponseSchema.parse(
+      (await crm(mgr, "GET", `/leads/${lead["ann2"]}/candidates?q=northwind.example`)).body,
+    ).items;
+    expect(search.map((i) => i.id)).toContain(lead["ann"]);
+    expect(search.find((i) => i.id === lead["ann"])?.person?.company?.id).toBe(northwind);
+    const join = await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, {
+      samePersonAsLeadId: lead["ann"],
+    });
+    expect(join.status, JSON.stringify(join.body)).toBe(200);
+    const person = CrmLeadResponseSchema.parse(join.body).person!;
+    expect(person.company?.id).toBe(northwind);
+    expect(person.leads.map((l) => l.id).sort()).toEqual([lead["ann"], lead["ann2"]].sort());
+    // The lead's CRM side shows the same person, for readers too.
+    const view = CrmLeadResponseSchema.parse(
+      (await crm(officer, "GET", `/leads/${lead["ann2"]}`)).body,
+    );
+    expect(view).toMatchObject({ canManage: false, anonymised: false, person: { id: person.id } });
+    // The company still has one person for Ann (two leads), not two.
+    const people = CrmCompanyPeopleResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${northwind}/people`)).body,
+    ).people;
+    expect(people.filter((p) => p.leads.some((l) => l.id === lead["ann"]))).toHaveLength(1);
+    expectError(
+      await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, { samePersonAsLeadId: lead["ann"] }),
+      409,
+      "CONFLICT_STATE",
+      { path: "samePersonAsLeadId", rule: "unchanged" },
+    );
+    expectError(
+      await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, { samePersonAsLeadId: lead["ann2"] }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, { samePersonAsLeadId: lead["com"] }),
+      404,
+      "NOT_FOUND",
+    );
+    // Separate again: the lead is a person of its own (no person row, no company).
+    const apart = await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, {
+      samePersonAsLeadId: null,
+    });
+    expect(apart.status, JSON.stringify(apart.body)).toBe(200);
+    expect(CrmLeadResponseSchema.parse(apart.body).person).toBeNull();
+    expect((await crm(mgr, "GET", `/leads/${lead["ann2"]}`)).body).toMatchObject({ person: null });
+    // Join again for the history test below.
+    expect(
+      (await crm(mgr, "POST", `/leads/${lead["ann2"]}/person`, { samePersonAsLeadId: lead["ann"] }))
+        .status,
+    ).toBe(200);
+    const after = await owner.lead.findUniqueOrThrow({ where: { id: lead["ann2"]! } });
+    expect(after).toEqual(before);
+    expect(await owner.leadActivity.count({ where: { leadId: lead["ann2"]! } })).toBe(0);
+  });
+
+  it("keeps anonymised leads out of new links and hides their identity", async () => {
+    const gone = await newLead("gone", BV, "gone@northwind.example", "Northwind Traders");
+    expect(
+      (await crm(mgr, "POST", `/companies/${northwind}/people`, { leadId: gone })).status,
+    ).toBe(200);
+    await anonymise(gone);
+    const people = CrmCompanyPeopleResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${northwind}/people`)).body,
+    ).people;
+    const ghost = people.find((p) => p.leads.some((l) => l.id === gone))!;
+    expect(ghost).toMatchObject({
+      displayName: null,
+      leads: [{ id: gone, fullName: null, email: null, company: null, anonymised: true }],
+    });
+    expect(JSON.stringify(people)).not.toContain("anonymised.invalid");
+    expectError(
+      await crm(mgr, "POST", `/leads/${gone}/person`, { samePersonAsLeadId: lead["ann"] }),
+      409,
+      "CONFLICT_STATE",
+      { path: "lead", rule: "lead_anonymised" },
+    );
+    expectError(
+      await crm(mgr, "POST", `/companies/${southwind}/people`, { leadId: gone, confirmMove: true }),
+      409,
+      "CONFLICT_STATE",
+      { path: "leadId", rule: "lead_anonymised" },
+    );
+    expect(
+      CrmLeadResponseSchema.parse((await crm(mgr, "GET", `/leads/${gone}`)).body),
+    ).toMatchObject({
+      anonymised: true,
+    });
+  });
+
+  it("writes the company history in the database and keeps staff notes", async () => {
+    const note = await crm(mgr, "POST", `/companies/${northwind}/notes`, {
+      body: "  Visited the Rotterdam site.\r\nFollow up in Q1. ",
+    });
+    expect(note.status, JSON.stringify(note.body)).toBe(201);
+    expectError(
+      await crm(mgr, "POST", `/companies/${northwind}/notes`, { body: "   " }),
+      400,
+      "VALIDATION_FAILED",
+    );
+    expectError(
+      await crm(officer, "POST", `/companies/${northwind}/notes`, { body: "x" }),
+      403,
+      "FORBIDDEN",
+    );
+    expect(JSON.stringify((await lastAudit("crm.note_added"))?.metadata)).not.toContain(
+      "Rotterdam",
+    );
+    const res = await crm(officer, "GET", `/companies/${northwind}/activities`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const items = CrmActivityListResponseSchema.parse(res.body).items;
+    const kinds = items.map((i) => i.kind);
+    expect(kinds[0]).toBe("NOTE");
+    expect(items[0]).toMatchObject({
+      body: "Visited the Rotterdam site.\nFollow up in Q1.",
+      actor: { id: mgr.userId, displayName: "crm2-mgr" },
+    });
+    expect(kinds).toContain("COMPANY_CREATED");
+    expect(kinds).toContain("PERSON_COMPANY_CHANGED");
+    expect(kinds).toContain("LEAD_PERSON_CHANGED");
+    // Bob joined and later left Northwind: both rows are in its history.
+    const changes = items.filter((i) => i.kind === "PERSON_COMPANY_CHANGED");
+    expect(changes.some((i) => i.fromCompany === null && i.toCompany?.id === northwind)).toBe(true);
+    expect(
+      changes.some((i) => i.fromCompany?.id === northwind && i.toCompany?.id === southwind),
+    ).toBe(true);
+    expect(items.every((i) => i.actor.id === mgr.userId)).toBe(true);
+    // Paging by cursor.
+    expectError(
+      await crm(mgr, "GET", `/companies/${northwind}/activities?cursor=bad`),
+      400,
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("logs owner changes in the history (CRM-1 gap)", async () => {
+    const base = CrmCompanyDetailResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${southwind}`)).body,
+    ).company;
+    const saved = await crm(mgr, "POST", `/companies/${southwind}`, {
+      version: base.version,
+      name: base.name,
+      ownerUserId: mgr.userId,
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const items = CrmActivityListResponseSchema.parse(
+      (await crm(mgr, "GET", `/companies/${southwind}/activities`)).body,
+    ).items;
+    expect(items[0]).toMatchObject({
+      kind: "COMPANY_OWNER_CHANGED",
+      fromOwner: null,
+      toOwner: { id: mgr.userId },
+    });
+  });
+
+  it("DP-339: same-named legal entities are told apart by country, city or registration number", async () => {
+    const ask = await crm(mgr, "POST", "/companies", { siteId: BV, name: "Northwind  TRADERS" });
+    expectError(ask, 409, "CONFLICT_STATE", { path: "name", rule: "possible_duplicate" });
+    // Confirmed, but nothing tells them apart: refused by the identity key.
+    expectError(
+      await crm(mgr, "POST", "/companies", {
+        siteId: BV,
+        name: "Northwind  TRADERS",
+        confirmDistinct: true,
+      }),
+      409,
+      "CONFLICT_STATE",
+      { path: "name", rule: "duplicate_identity" },
+    );
+    const belgian = await company(mgr, {
+      siteId: BV,
+      name: "Northwind Traders",
+      country: "BE",
+      registrationId: "be 0123.456.789",
+      confirmDistinct: true,
+    });
+    expect(belgian).toMatchObject({ registrationId: "BE0123456789", country: "BE" });
+    const sameReg = await crm(mgr, "POST", "/companies", {
+      siteId: BV,
+      name: "Other Name NV",
+      registrationId: "BE-0123-456-789",
+    });
+    expectError(sameReg, 409, "CONFLICT_STATE", {
+      path: "registrationId",
+      rule: "duplicate_registration",
+    });
+    // Another site may hold the same registration number (sites stay apart).
+    expect(
+      (
+        await crm(mgrCom, "POST", "/companies", {
+          siteId: COM,
+          name: "Northwind",
+          registrationId: "BE0123456789",
+        })
+      ).status,
+    ).toBe(201);
+    // The list tells the two Northwinds apart.
+    const list = CrmCompanyListResponseSchema.parse(
+      (await crm(mgr, "GET", "/companies?q=northwind")).body,
+    ).items.filter((c) => c.name.startsWith("Northwind"));
+    expect(list.map((c) => `${c.country ?? "-"}/${c.registrationId ?? "-"}`).sort()).toEqual([
+      "-/-",
+      "BE/BE0123456789",
+    ]);
+    expect((await crm(mgr, "GET", "/companies?q=BE0123")).body).toMatchObject({
+      items: [{ id: belgian.id }],
+    });
+    // The database keeps the identity unique even without the API.
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmCompany.create({
+          data: {
+            siteId: BV,
+            name: "northwind traders",
+            country: "BE",
+            registrationId: "BE0123456789",
+            createdById: mgr.userId,
+            updatedById: mgr.userId,
+          },
+        }),
+      ),
+      /CrmCompany_siteId_(identityKey|registrationId)_key|unique/i,
+    );
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmCompany.update({ where: { id: belgian.id }, data: { registrationId: "be 01" } }),
+      ),
+      /CrmCompany_registration_id/,
+    );
+  });
+
+  it("enforces people, links and history in the database (RLS, guards, same site, append-only)", async () => {
+    // Without crm:read: nothing visible.
+    expect(await appIn({ staff: editor.token }, (tx) => tx.crmPerson.count())).toBe(0);
+    expect(await appIn({ staff: editor.token }, (tx) => tx.crmActivity.count())).toBe(0);
+    expect(await asApp.crmPersonLead.count()).toBe(0);
+    // No person and no link on a site without crm:manage.
+    await rejectsDb(
+      appIn({ staff: mgrCom.token }, (tx) =>
+        tx.crmPerson.create({
+          data: { siteId: BV, createdById: mgrCom.userId, updatedById: mgrCom.userId },
+        }),
+      ),
+      /row-level security|crm: /,
+    );
+    // A person and a company of different sites cannot be joined (composite foreign key).
+    await rejectsDb(
+      owner.crmPerson.create({
+        data: {
+          siteId: COM,
+          companyId: northwind,
+          createdById: root.userId,
+          updatedById: root.userId,
+        },
+      }),
+      /CrmPerson_companyId_siteId_fkey|foreign key/i,
+    );
+    const p = await appIn({ staff: mgr.token }, (tx) =>
+      tx.crmPerson.create({
+        data: { siteId: BV, createdById: root.userId, updatedById: root.userId, version: 9 },
+      }),
+    );
+    expect(p).toMatchObject({ createdById: mgr.userId, version: 0 });
+    // A lead of another site cannot be linked; neither can an anonymised lead.
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmPersonLead.create({
+          data: { leadId: lead["com"]!, siteId: BV, personId: p.id, linkedById: mgr.userId },
+        }),
+      ),
+      // The guard refuses first (the composite foreign key would refuse it too).
+      /crm: only a live lead of the site|foreign key|CrmPersonLead_leadId_siteId_fkey/i,
+    );
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmPersonLead.update({ where: { leadId: lead["gone"]! }, data: { personId: p.id } }),
+      ),
+      /crm: only a live lead/,
+    );
+    // People are never deleted; history is append-only and only notes are written directly.
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) => tx.crmPerson.delete({ where: { id: p.id } })),
+      /permission denied/i,
+    );
+    await rejectsDb(
+      owner.crmPerson.delete({ where: { id: p.id } }),
+      /crm: a person is never deleted/,
+    );
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmActivity.create({
+          data: {
+            siteId: BV,
+            kind: "COMPANY_CREATED",
+            companyId: northwind,
+            actorUserId: mgr.userId,
+          },
+        }),
+      ),
+      /crm: only notes are written directly/,
+    );
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) =>
+        tx.crmActivity.create({
+          data: {
+            siteId: BV,
+            kind: "NOTE",
+            companyId: northwind,
+            actorUserId: root.userId,
+            body: "Forged",
+          },
+        }),
+      ),
+      /row-level security/,
+    );
+    const row = await owner.crmActivity.findFirstOrThrow({ where: { siteId: BV } });
+    await rejectsDb(
+      owner.crmActivity.update({ where: { id: row.id }, data: { body: "changed" } }),
+      /crm: history is a record and cannot change/,
+    );
+    await rejectsDb(
+      appIn({ staff: mgr.token }, (tx) => tx.crmActivity.deleteMany({ where: { siteId: BV } })),
+      /permission denied/i,
+    );
   });
 });

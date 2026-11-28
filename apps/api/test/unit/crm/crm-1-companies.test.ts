@@ -45,6 +45,8 @@ describe("CRM-1 contracts: company input", () => {
       siteId: SITE,
       // NFC (one code point for é), trimmed; inner spaces stay (the database key collapses them).
       name: "Caf\u00e9   B.V.",
+      // CRM-2 (DP-339): not sent, so not set.
+      registrationId: null,
       country: null,
       city: null,
       address: "Haven 1\n3011 Rotterdam",
