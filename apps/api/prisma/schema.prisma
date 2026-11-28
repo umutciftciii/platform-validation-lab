@@ -172,6 +172,12 @@ model User {
   crmCompaniesOwned           CrmCompany[]                  @relation("CrmCompanyOwner")
   crmCompaniesCreated         CrmCompany[]                  @relation("CrmCompanyCreatedBy")
   crmCompaniesUpdated         CrmCompany[]                  @relation("CrmCompanyUpdatedBy")
+  crmPeopleCreated            CrmPerson[]                   @relation("CrmPersonCreatedBy")
+  crmPeopleUpdated            CrmPerson[]                   @relation("CrmPersonUpdatedBy")
+  crmPersonLeadsLinked        CrmPersonLead[]
+  crmActivities               CrmActivity[]                 @relation("CrmActivityActor")
+  crmActivitiesFromOwner      CrmActivity[]                 @relation("CrmActivityFromOwner")
+  crmActivitiesToOwner        CrmActivity[]                 @relation("CrmActivityToOwner")
 
   @@index([kind, status])
 }
@@ -237,6 +243,9 @@ model Site {
   consentRecords               ConsentRecord[]
   // CRM-1 (ADR-032): the site's CRM companies.
   crmCompanies                 CrmCompany[]
+  crmPeople                    CrmPerson[]
+  crmPersonLeads               CrmPersonLead[]
+  crmActivities                CrmActivity[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -1492,8 +1501,12 @@ model Lead {
   notifications   LeadNotification[]
   /// DP-298 (ADR-031 D4): consent grants and withdrawals (the latest per purpose is the state).
   consents        ConsentRecord[]
+  /// CRM-2 (ADR-032 D6): the person this lead belongs to (several leads may be one person).
+  crmPerson       CrmPersonLead?
+  crmActivities   CrmActivity[]
 
   @@unique([siteId, email])
+  @@unique([id, siteId])
   @@index([siteId, lastRequestAt])
   @@index([siteId, status, lastRequestAt])
   @@index([assignedToId])
@@ -2602,41 +2615,164 @@ model AiProviderDataTerms {
 /// database stamps the actor, the version and the times, and checks the account owner
 /// (migration 20261224090000_crm_1_companies). Never deleted by the API.
 model CrmCompany {
-  id             String    @id @default(uuid(7)) @db.Uuid
-  siteId         String    @db.Uuid
-  name           String    @db.VarChar(200)
-  /// Written by the database from `name` (trimmed, single spaces, lower case); unique per site.
-  normalizedName String    @default("") @db.VarChar(200)
+  id             String   @id @default(uuid(7)) @db.Uuid
+  siteId         String   @db.Uuid
+  name           String   @db.VarChar(200)
+  /// Written by the database from `name` (trimmed, single spaces, lower case).
+  normalizedName String   @default("") @db.VarChar(200)
+  /// CRM-2 (DP-339): the legal entity's registration or VAT number (KvK, VAT, trade register;
+  /// upper case letters and digits only). Unique per site when set.
+  registrationId String?  @db.VarChar(40)
+  /// CRM-2 (DP-339): written by the database from name, country, city and registration number;
+  /// unique per site. Same-named legal entities are told apart by one of the other three.
+  identityKey    String   @default("") @db.VarChar(400)
   /// ISO 3166-1 alpha-2.
-  country        String?   @db.Char(2)
-  city           String?   @db.VarChar(120)
-  address        String?   @db.VarChar(500)
+  country        String?  @db.Char(2)
+  city           String?  @db.VarChar(120)
+  address        String?  @db.VarChar(500)
   /// An http(s) URL.
-  website        String?   @db.VarChar(300)
+  website        String?  @db.VarChar(300)
   /// The company's general number (not a person's).
-  phone          String?   @db.VarChar(40)
+  phone          String?  @db.VarChar(40)
   /// The company's general address (lower case; not a person's).
-  email          String?   @db.VarChar(254)
-  description    String?   @db.VarChar(2000)
+  email          String?  @db.VarChar(254)
+  description    String?  @db.VarChar(2000)
   /// Staff-only notes.
-  internalNotes  String?   @db.VarChar(4000)
+  internalNotes  String?  @db.VarChar(4000)
   /// The account owner: a staff user with crm:manage on the site when set (checked by the database).
-  ownerUserId    String?   @db.Uuid
+  ownerUserId    String?  @db.Uuid
   /// Optimistic concurrency: +1 on every change (database).
-  version        Int       @default(0)
-  createdById    String    @db.Uuid
-  updatedById    String    @db.Uuid
-  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime  @default(now()) @db.Timestamptz(3)
+  version        Int      @default(0)
+  createdById    String   @db.Uuid
+  updatedById    String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @default(now()) @db.Timestamptz(3)
 
-  site      Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  owner     User? @relation("CrmCompanyOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
-  createdBy User  @relation("CrmCompanyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy User  @relation("CrmCompanyUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  site           Site          @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  owner          User?         @relation("CrmCompanyOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  createdBy      User          @relation("CrmCompanyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy      User          @relation("CrmCompanyUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  people         CrmPerson[]
+  activities     CrmActivity[] @relation("CrmActivityCompany")
+  activitiesFrom CrmActivity[] @relation("CrmActivityFromCompany")
+  activitiesTo   CrmActivity[] @relation("CrmActivityToCompany")
 
-  @@unique([siteId, normalizedName])
+  @@unique([id, siteId])
+  @@unique([siteId, identityKey])
+  @@unique([siteId, registrationId])
+  @@index([siteId, normalizedName])
   @@index([siteId, updatedAt])
   @@index([ownerUserId])
   @@index([createdById])
   @@index([updatedById])
+}
+
+/// CRM-2 (ADR-032 D6): a real person of one site. Holds no personal data itself: the name and
+/// e-mail come from the person's leads (one Lead per site and e-mail), so lead retention still
+/// clears them. A person works for at most one company of the same site at a time. Written only
+/// by staff with crm:manage on the site (database guard); never deleted.
+model CrmPerson {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  siteId      String   @db.Uuid
+  /// The current company (same site, composite foreign key); null when not linked.
+  companyId   String?  @db.Uuid
+  /// Optimistic concurrency: +1 on every change (database).
+  version     Int      @default(0)
+  createdById String   @db.Uuid
+  updatedById String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  site           Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company        CrmCompany?     @relation(fields: [companyId, siteId], references: [id, siteId], onDelete: Restrict)
+  createdBy      User            @relation("CrmPersonCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy      User            @relation("CrmPersonUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  leads          CrmPersonLead[]
+  activities     CrmActivity[]   @relation("CrmActivityPerson")
+  activitiesFrom CrmActivity[]   @relation("CrmActivityFromPerson")
+  activitiesTo   CrmActivity[]   @relation("CrmActivityToPerson")
+
+  @@unique([id, siteId])
+  @@index([siteId, companyId])
+  @@index([companyId, siteId])
+  @@index([createdById])
+  @@index([updatedById])
+}
+
+/// CRM-2 (ADR-032 D6): which person a lead belongs to (at most one). The lead rows themselves never
+/// change for this; a link is made, moved or removed only by staff with crm:manage on the site,
+/// and every change is written to the CRM history by the database.
+model CrmPersonLead {
+  leadId     String   @id @db.Uuid
+  siteId     String   @db.Uuid
+  personId   String   @db.Uuid
+  linkedById String   @db.Uuid
+  linkedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  lead     Lead      @relation(fields: [leadId, siteId], references: [id, siteId], onDelete: Restrict)
+  person   CrmPerson @relation(fields: [personId, siteId], references: [id, siteId], onDelete: Restrict)
+  linkedBy User      @relation(fields: [linkedById], references: [id], onDelete: Restrict)
+
+  @@unique([leadId, siteId])
+  @@index([personId, siteId])
+  @@index([siteId])
+  @@index([linkedById])
+}
+
+/// CRM-2 (ADR-032 D7): what happened to a site's companies and people, append-only. Notes come
+/// from staff with crm:manage; every other kind is written by the database itself when a company,
+/// person or link changes, with the session's user as the actor. CRM-4 reads lead history into
+/// the same timeline (nothing is copied).
+model CrmActivity {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  siteId          String          @db.Uuid
+  kind            CrmActivityKind
+  companyId       String?         @db.Uuid
+  personId        String?         @db.Uuid
+  leadId          String?         @db.Uuid
+  actorUserId     String          @db.Uuid
+  /// Note text (NOTE).
+  body            String?         @db.VarChar(4000)
+  fromCompanyId   String?         @db.Uuid
+  toCompanyId     String?         @db.Uuid
+  fromPersonId    String?         @db.Uuid
+  toPersonId      String?         @db.Uuid
+  fromOwnerUserId String?         @db.Uuid
+  toOwnerUserId   String?         @db.Uuid
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  /// Insertion order (one change may write several rows within the same millisecond).
+  seq             BigInt          @default(autoincrement())
+
+  site        Site        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company     CrmCompany? @relation("CrmActivityCompany", fields: [companyId, siteId], references: [id, siteId], onDelete: Restrict)
+  person      CrmPerson?  @relation("CrmActivityPerson", fields: [personId, siteId], references: [id, siteId], onDelete: Restrict)
+  lead        Lead?       @relation(fields: [leadId, siteId], references: [id, siteId], onDelete: Restrict)
+  actor       User        @relation("CrmActivityActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  fromCompany CrmCompany? @relation("CrmActivityFromCompany", fields: [fromCompanyId, siteId], references: [id, siteId], onDelete: Restrict)
+  toCompany   CrmCompany? @relation("CrmActivityToCompany", fields: [toCompanyId, siteId], references: [id, siteId], onDelete: Restrict)
+  fromPerson  CrmPerson?  @relation("CrmActivityFromPerson", fields: [fromPersonId, siteId], references: [id, siteId], onDelete: Restrict)
+  toPerson    CrmPerson?  @relation("CrmActivityToPerson", fields: [toPersonId, siteId], references: [id, siteId], onDelete: Restrict)
+  fromOwner   User?       @relation("CrmActivityFromOwner", fields: [fromOwnerUserId], references: [id], onDelete: Restrict)
+  toOwner     User?       @relation("CrmActivityToOwner", fields: [toOwnerUserId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, companyId, seq])
+  @@index([siteId, fromCompanyId])
+  @@index([siteId, toCompanyId])
+  @@index([siteId, personId, seq])
+  @@index([siteId, fromPersonId])
+  @@index([siteId, toPersonId])
+  @@index([leadId, siteId])
+  @@index([actorUserId])
+  @@index([fromOwnerUserId])
+  @@index([toOwnerUserId])
+}
+
+/// CRM-2: kinds of CRM history. NOTE comes from staff; the others only from the database.
+enum CrmActivityKind {
+  NOTE
+  COMPANY_CREATED
+  COMPANY_OWNER_CHANGED
+  PERSON_COMPANY_CHANGED
+  LEAD_PERSON_CHANGED
 }

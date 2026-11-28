@@ -9,7 +9,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ADMIN_CRM_COMPANIES_API,
+  ADMIN_CRM_LEADS_API,
   ADMIN_CRM_OWNERS_API,
+  ADMIN_CRM_PEOPLE_API,
+  type CrmActivityListResponse,
+  type CrmCompanyPeopleResponse,
   type CrmCompany,
   type CrmCompanyDetailResponse,
   type CrmCompanyListResponse,
@@ -71,6 +75,7 @@ const company = (over: Partial<CrmCompany> = {}): CrmCompany => ({
   siteId: BV.id,
   siteKey: "BV",
   name: "Acme Lubricants B.V.",
+  registrationId: "NL851234567B01",
   country: "NL",
   city: "Rotterdam",
   website: "https://acme.example",
@@ -97,22 +102,26 @@ const LIST: CrmCompanyListResponse = {
       siteId: COM.id,
       siteKey: "CORPORATE" as const,
       name: "Baltic Oils",
+      registrationId: null,
       country: null,
       city: null,
       website: null,
       owner: null,
     },
-  ].map(({ id, siteId, siteKey, name, country, city, website, owner, updatedAt }) => ({
-    id,
-    siteId,
-    siteKey,
-    name,
-    country,
-    city,
-    website,
-    owner,
-    updatedAt,
-  })),
+  ].map(
+    ({ id, siteId, siteKey, name, registrationId, country, city, website, owner, updatedAt }) => ({
+      id,
+      siteId,
+      siteKey,
+      name,
+      registrationId,
+      country,
+      city,
+      website,
+      owner,
+      updatedAt,
+    }),
+  ),
   nextCursor: null,
   sites: [BV, COM],
   manageableSiteIds: [BV.id],
@@ -123,6 +132,127 @@ const OWNERS: CrmOwnersResponse = {
     { site: BV, owners: [{ id: VIEWER, displayName: "Sanne Visser", email: "sanne@dp.test" }] },
     { site: COM, owners: [{ id: OTHER, displayName: "Jan de Vries", email: "jan@dp.test" }] },
   ],
+};
+
+// --- CRM-2 fixtures -----------------------------------------------------------------------------
+const PERSON = "0190f3a0-0000-7000-8000-00000000b001";
+const LEAD_A = "0190f3a0-0000-7000-8000-00000000c001";
+const LEAD_B = "0190f3a0-0000-7000-8000-00000000c002";
+const PEOPLE: CrmCompanyPeopleResponse = {
+  people: [
+    {
+      id: PERSON,
+      siteId: BV.id,
+      displayName: "Ann Jansen",
+      company: { id: ACME, name: "Acme Lubricants B.V." },
+      leads: [
+        {
+          id: LEAD_A,
+          fullName: "Ann Jansen",
+          email: "ann@acme.example",
+          company: "Acme",
+          status: "CONTACTED",
+          requestCount: 2,
+          lastRequestAt: AT,
+          anonymised: false,
+        },
+        {
+          id: LEAD_B,
+          fullName: null,
+          email: null,
+          company: null,
+          status: "NEW",
+          requestCount: 1,
+          lastRequestAt: AT,
+          anonymised: true,
+        },
+      ],
+      version: 1,
+      updatedAt: AT,
+    },
+  ],
+  canManage: true,
+};
+const staffRef = (id: string, displayName: string) => ({ id, displayName });
+const HISTORY: CrmActivityListResponse = {
+  items: [
+    {
+      id: "0190f3a0-0000-7000-8000-00000000d001",
+      kind: "NOTE",
+      createdAt: AT,
+      actor: staffRef(VIEWER, "Sanne Visser"),
+      body: "Visited the plant.\nFollow up in Q1.",
+      person: null,
+      lead: null,
+      fromCompany: null,
+      toCompany: null,
+      fromPerson: null,
+      toPerson: null,
+      fromOwner: null,
+      toOwner: null,
+    },
+    {
+      id: "0190f3a0-0000-7000-8000-00000000d002",
+      kind: "LEAD_PERSON_CHANGED",
+      createdAt: AT,
+      actor: staffRef(VIEWER, "Sanne Visser"),
+      body: null,
+      person: { id: PERSON, displayName: "Ann Jansen" },
+      lead: { id: LEAD_A, label: "Ann Jansen <ann@acme.example>" },
+      fromCompany: null,
+      toCompany: null,
+      fromPerson: null,
+      toPerson: { id: PERSON, displayName: "Ann Jansen" },
+      fromOwner: null,
+      toOwner: null,
+    },
+    {
+      id: "0190f3a0-0000-7000-8000-00000000d003",
+      kind: "PERSON_COMPANY_CHANGED",
+      createdAt: AT,
+      actor: staffRef(OTHER, "Jan de Vries"),
+      body: null,
+      person: { id: PERSON, displayName: "Ann Jansen" },
+      lead: null,
+      fromCompany: null,
+      toCompany: { id: ACME, name: "Acme Lubricants B.V." },
+      fromPerson: null,
+      toPerson: null,
+      fromOwner: null,
+      toOwner: null,
+    },
+    {
+      id: "0190f3a0-0000-7000-8000-00000000d004",
+      kind: "COMPANY_OWNER_CHANGED",
+      createdAt: AT,
+      actor: staffRef(OTHER, "Jan de Vries"),
+      body: null,
+      person: null,
+      lead: null,
+      fromCompany: null,
+      toCompany: null,
+      fromPerson: null,
+      toPerson: null,
+      fromOwner: null,
+      toOwner: staffRef(VIEWER, "Sanne Visser"),
+    },
+    {
+      id: "0190f3a0-0000-7000-8000-00000000d005",
+      kind: "COMPANY_CREATED",
+      createdAt: AT,
+      actor: staffRef(OTHER, "Jan de Vries"),
+      body: null,
+      person: null,
+      lead: null,
+      fromCompany: null,
+      toCompany: null,
+      fromPerson: null,
+      toPerson: null,
+      fromOwner: null,
+      toOwner: null,
+    },
+  ],
+  nextCursor: "MTIz",
 };
 
 const DETAIL = (over: Partial<CrmCompanyDetailResponse> = {}): CrmCompanyDetailResponse => ({
@@ -136,6 +266,7 @@ const listPage = await import("../app/(console)/crm/companies/page");
 const newPage = await import("../app/(console)/crm/companies/new/page");
 const companyPage = await import("../app/(console)/crm/companies/[id]/page");
 const crmRoot = await import("../app/(console)/crm/page");
+const { LeadPerson } = await import("../components/crm/lead-person");
 const view = await import("../lib/crm-view");
 const client = await import("../lib/crm-client");
 
@@ -176,7 +307,7 @@ function isData(text: string): boolean {
     if (typeof v === "string") data.push(v.replace(/\s+/g, " "));
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
   };
-  walk([LIST, OWNERS, DETAIL()]);
+  walk([LIST, OWNERS, DETAIL(), PEOPLE, HISTORY]);
   // Country names that Intl writes the same in both languages (e.g. "Malta").
   const trNames = new Set(view.countryOptions("tr").map((c) => c.name));
   const same = (p: string) =>
@@ -189,7 +320,13 @@ const page = {
     (q: Record<string, string> = {}) =>
     () =>
       listPage.default({ searchParams: Promise.resolve(q) } as never),
-  detail: () => () => companyPage.default({ params: Promise.resolve({ id: ACME }) } as never),
+  detail:
+    (q: Record<string, string> = {}) =>
+    () =>
+      companyPage.default({
+        params: Promise.resolve({ id: ACME }),
+        searchParams: Promise.resolve(q),
+      } as never),
   create: () => () => newPage.default(),
 };
 
@@ -198,7 +335,7 @@ describe("CRM-1 company list", () => {
     reads.set(ADMIN_CRM_COMPANIES_API, LIST);
     const html = await render(page.list(), "en");
     expect(html).toContain("Acme Lubricants B.V.");
-    expect(html).toContain("Rotterdam · Netherlands");
+    expect(html).toContain("Rotterdam · Netherlands · NL851234567B01");
     expect(html).toContain("Sanne Visser");
     expect(html).toContain("No account owner");
     expect(html).toContain('href="/crm/companies/new"');
@@ -207,7 +344,7 @@ describe("CRM-1 company list", () => {
     const tr = await render(page.list(), "tr");
     expect(tr).toContain("Yeni firma");
     expect(tr).toContain("Müşteri sorumlusu yok");
-    expect(tr).toContain("Rotterdam · Hollanda");
+    expect(tr).toContain("Rotterdam · Hollanda · NL851234567B01");
   });
 
   it("sends the filters to the API and hides the button without crm:manage", async () => {
@@ -297,10 +434,193 @@ describe("CRM-1 new company", () => {
   });
 });
 
+describe("CRM-2 people and history of a company", () => {
+  const withPeople = () => {
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, PEOPLE);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities`, HISTORY);
+  };
+
+  it("shows the people with their leads, the history and the note form for managers", async () => {
+    withPeople();
+    const html = await render(page.detail(), "en");
+    for (const text of [
+      "People",
+      "Ann Jansen",
+      "ann@acme.example",
+      "Anonymised lead",
+      "Contacted",
+      "Last request",
+      "Remove from company",
+      "Add a person",
+      "History",
+      "Sanne Visser added a note",
+      "Visited the plant.\nFollow up in Q1.",
+      "Sanne Visser linked Ann Jansen &lt;ann@acme.example&gt; to Ann Jansen",
+      "Jan de Vries added Ann Jansen to the company",
+      "Jan de Vries made Sanne Visser the account owner",
+      "Jan de Vries created the company",
+      "Add note",
+      "Older entries",
+      "NL851234567B01",
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    expect(html).toContain(`href="/leads/${LEAD_A}"`);
+    expect(html).not.toContain(`href="/leads/${LEAD_B}"`);
+    expect(html).toContain(`href="/crm/companies/${ACME}?history=MTIz#history"`);
+    const tr = await render(page.detail(), "tr");
+    for (const text of [
+      "Kişiler",
+      "Anonimleştirilmiş talep",
+      "Firmadan çıkar",
+      "Geçmiş",
+      "not ekledi",
+    ]) {
+      expect(tr, text).toContain(text);
+    }
+  });
+
+  it("pages the history and is read-only without crm:manage", async () => {
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL({ canManage: false, owners: [] }));
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, { ...PEOPLE, canManage: false });
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities?cursor=MTIz`, {
+      ...HISTORY,
+      nextCursor: null,
+    });
+    const html = await render(page.detail({ history: "MTIz" }), "en");
+    expect(html).toContain("Newest entries");
+    expect(html).not.toContain("Older entries");
+    expect(html).not.toContain("Remove from company");
+    expect(html).not.toContain("Add a person");
+    expect(html).not.toContain("Add note");
+  });
+
+  it("leaves the panels out when the CRM side cannot be read", async () => {
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, FORBIDDEN);
+    const html = await render(page.detail(), "en");
+    expect(html).not.toContain(">People<");
+    expect(html).not.toContain(">History<");
+  });
+});
+
+describe("CRM-2 the CRM panel of a lead", () => {
+  const panel = (over: Partial<Parameters<typeof LeadPerson>[0]> = {}) =>
+    function Panel() {
+      return (
+        <LeadPerson
+          leadId={LEAD_B}
+          siteId={BV.id}
+          person={PEOPLE.people[0]!}
+          canManage
+          anonymised={false}
+          {...over}
+        />
+      );
+    };
+
+  it("shows the company and the same person's other leads, with the link actions", async () => {
+    const html = await render(panel(), "en");
+    expect(html).toContain(`href="/crm/companies/${ACME}"`);
+    expect(html).toContain(`href="/leads/${LEAD_A}"`);
+    for (const text of [
+      "Remove from company",
+      "Separate this lead",
+      "Search companies",
+      "Find the same person",
+    ]) {
+      expect(html, text).toContain(text);
+    }
+    const tr = await render(panel(), "tr");
+    expect(tr).toContain("Bu talebi ayır");
+  });
+
+  it("is read-only without crm:manage and for an anonymised lead; explains a lead without a person", async () => {
+    expect(await render(panel({ canManage: false }), "en")).toContain("You can view this.");
+    expect(await render(panel({ anonymised: true }), "en")).toContain("This lead is anonymised");
+    const none = await render(panel({ person: null }), "en");
+    expect(none).toContain("This lead is not linked to a person or a company yet.");
+    expect(none).not.toContain("Separate this lead");
+  });
+});
+
+describe("CRM-2 browser client", () => {
+  it("calls the people, lead and note routes", async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({
+        url,
+        method: String(init.method),
+        body: init.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(JSON.stringify({ person: null, items: [] }), { status: 200 });
+    });
+    await client.companyCandidates(ACME, "");
+    await client.companyCandidates(ACME, "ann jansen");
+    await client.addPersonToCompany(ACME, { leadId: LEAD_A, confirmMove: true });
+    await client.setPersonCompany(PERSON, { companyId: null, version: 1 });
+    await client.leadCandidates(LEAD_B, "ann");
+    await client.setLeadPerson(LEAD_B, { samePersonAsLeadId: LEAD_A });
+    await client.searchCompanies(BV.id, "acme");
+    await client.addCompanyNote(ACME, "Called.");
+    expect(calls).toEqual([
+      { url: `${ADMIN_CRM_COMPANIES_API}/${ACME}/candidates`, method: "GET", body: null },
+      {
+        url: `${ADMIN_CRM_COMPANIES_API}/${ACME}/candidates?q=ann+jansen`,
+        method: "GET",
+        body: null,
+      },
+      {
+        url: `${ADMIN_CRM_COMPANIES_API}/${ACME}/people`,
+        method: "POST",
+        body: { leadId: LEAD_A, confirmMove: true },
+      },
+      {
+        url: `${ADMIN_CRM_PEOPLE_API}/${PERSON}/company`,
+        method: "POST",
+        body: { companyId: null, version: 1 },
+      },
+      { url: `${ADMIN_CRM_LEADS_API}/${LEAD_B}/candidates?q=ann`, method: "GET", body: null },
+      {
+        url: `${ADMIN_CRM_LEADS_API}/${LEAD_B}/person`,
+        method: "POST",
+        body: { samePersonAsLeadId: LEAD_A },
+      },
+      { url: `${ADMIN_CRM_COMPANIES_API}?siteId=${BV.id}&q=acme`, method: "GET", body: null },
+      {
+        url: `${ADMIN_CRM_COMPANIES_API}/${ACME}/notes`,
+        method: "POST",
+        body: { body: "Called." },
+      },
+    ]);
+  });
+
+  it("maps the link refusals to their messages", () => {
+    const t = createTranslator("tr");
+    const err = (rule: string, path = "leadId") => ({
+      error: { code: "CONFLICT_STATE", message: "x", requestId: "r", details: [{ path, rule }] },
+    });
+    expect(client.crmErrorMessage(err("other_company"), t, "linkFailed").message).toBe(
+      "Bu kişi başka bir firmada çalışıyor.",
+    );
+    expect(client.crmErrorMessage(err("lead_anonymised"), t).rule).toBe("lead_anonymised");
+    expect(
+      client.crmErrorMessage(err("duplicate_registration", "registrationId"), t),
+    ).toMatchObject({
+      field: "registrationId",
+      rule: "duplicate_registration",
+    });
+    expect(client.crmErrorMessage(null, t, "linkFailed").message).toBe("Değişiklik kaydedilemedi.");
+  });
+});
+
 describe("CRM-1 Turkish", () => {
   it("leaves no English UI text on any screen", async () => {
     reads.set(ADMIN_CRM_COMPANIES_API, LIST);
     reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}`, DETAIL());
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/people`, PEOPLE);
+    reads.set(`${ADMIN_CRM_COMPANIES_API}/${ACME}/activities`, HISTORY);
     reads.set(ADMIN_CRM_OWNERS_API, OWNERS);
     for (const make of [page.list(), page.detail(), page.create()]) {
       const en = new Set(texts(await render(make, "en")));
@@ -332,21 +652,32 @@ describe("CRM-1 browser client and view helpers", () => {
       error: { code, message: "x", requestId: "r", details },
     });
     expect(
-      client.crmErrorMessage(err("CONFLICT_STATE", [{ path: "name", rule: "duplicate_name" }]), t),
-    ).toEqual({ message: "Another company of this site already has this name.", field: "name" });
+      client.crmErrorMessage(
+        err("CONFLICT_STATE", [{ path: "name", rule: "possible_duplicate" }]),
+        t,
+      ),
+    ).toEqual({
+      message: expect.stringMatching(/^Another company of this site has this name\./),
+      field: "name",
+      rule: "possible_duplicate",
+    });
     expect(
       client.crmErrorMessage(err("CONFLICT_STATE", [{ path: "version", rule: "stale" }]), t)
         .message,
     ).toMatch(/Someone else changed this company/);
     expect(
       client.crmErrorMessage(err("VALIDATION_FAILED", [{ path: "website", rule: "invalid" }]), t),
-    ).toEqual({ message: "Check this field: Website.", field: "website" });
+    ).toEqual({ message: "Check this field: Website.", field: "website", rule: null });
     expect(
       client.crmErrorMessage(
         err("VALIDATION_FAILED", [{ path: "ownerUserId", rule: "owner_not_eligible" }]),
         createTranslator("tr"),
       ),
-    ).toEqual({ message: "Bu kişi bu sitenin firmalarına sorumlu olamaz.", field: "ownerUserId" });
+    ).toEqual({
+      message: "Bu kişi bu sitenin firmalarına sorumlu olamaz.",
+      field: "ownerUserId",
+      rule: "owner_not_eligible",
+    });
     expect(client.crmErrorMessage(null, t).message).toBe("The company could not be saved.");
   });
 
@@ -369,7 +700,8 @@ describe("CRM-1 static rules", () => {
       "lib/crm-view.ts",
       "lib/crm-client.ts",
     ]);
-    expect(files.length).toBe(7);
+    // CRM-2 adds the people, history, note and lead panels (4 components).
+    expect(files.length).toBe(11);
     expect(scanFiles(ROOT, files)).toEqual([]);
   });
 });

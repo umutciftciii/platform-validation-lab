@@ -9,6 +9,11 @@
  * runs in `access.crmData`, whose database context is the admin session itself. The database
  * opens only the sites where it finds the permission for that user, stamps creator, editor,
  * version and times, keeps names unique per site and checks the account owner again.
+ *
+ * CRM-2 (DP-339): a name may be shared by different legal entities of a site when country, city
+ * or registration number tells them apart (the database keeps that identity unique). Saving a
+ * name another company of the site already has is answered with 409 `possible_duplicate` first;
+ * the caller confirms with `confirmDistinct` (the form shows the existing companies).
  */
 import { Inject, Injectable } from "@nestjs/common";
 import {
@@ -65,17 +70,23 @@ function isDbRefusal(error: unknown): boolean {
   });
 }
 
-/** The (siteId, normalizedName) unique index: another company of the site has this name. */
-function isDuplicateName(error: unknown): boolean {
-  return causes(error).some((e) => {
+/** Which unique index of CrmCompany refused the write, if any (DP-339). */
+function duplicateKind(error: unknown): "identity" | "registration" | null {
+  for (const e of causes(error)) {
     const code = (e as { code?: unknown }).code;
     const msg = String((e as { message?: unknown }).message ?? "");
     const meta = JSON.stringify((e as { meta?: unknown }).meta ?? {});
-    return (
-      (code === "P2002" || /unique constraint/i.test(msg) || /23505/.test(meta + msg)) &&
-      /normalizedName|CrmCompany_siteId_normalizedName_key/.test(meta + msg)
-    );
-  });
+    if (!(code === "P2002" || /unique constraint/i.test(msg) || /23505/.test(meta + msg))) continue;
+    if (/registrationId|CrmCompany_siteId_registrationId_key/.test(meta + msg))
+      return "registration";
+    if (/identityKey|CrmCompany_siteId_identityKey_key/.test(meta + msg)) return "identity";
+  }
+  return null;
+}
+
+/** The database's comparison key of a name (crm_normalize_name): trimmed, single spaces, lower. */
+export function normalizeCompanyName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 const conflict = (rule: string, path = "company") =>
@@ -88,6 +99,7 @@ const COMPANY_SELECT = {
   siteId: true,
   name: true,
   normalizedName: true,
+  registrationId: true,
   country: true,
   city: true,
   address: true,
@@ -109,6 +121,7 @@ interface CompanyRow {
   siteId: string;
   name: string;
   normalizedName: string;
+  registrationId: string | null;
   country: string | null;
   city: string | null;
   address: string | null;
@@ -204,6 +217,7 @@ export class CrmCompaniesService {
       siteId: row.siteId,
       siteKey,
       name: row.name,
+      registrationId: row.registrationId,
       country: row.country,
       city: row.city,
       website: row.website,
@@ -280,6 +294,7 @@ export class CrmCompaniesService {
         ? {
             OR: [
               { name: { contains: q, mode: "insensitive" as const } },
+              { registrationId: { contains: q.replace(/[\s./-]+/g, "").toUpperCase() } },
               { city: { contains: q, mode: "insensitive" as const } },
               { website: { contains: q, mode: "insensitive" as const } },
               { email: { contains: q.toLowerCase() } },
@@ -404,7 +419,9 @@ export class CrmCompaniesService {
       return await access.crmData({ siteIds: [siteId], includePlatform: false }, fn);
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      if (isDuplicateName(error)) throw conflict("duplicate_name", "name");
+      const duplicate = duplicateKind(error);
+      if (duplicate === "registration") throw conflict("duplicate_registration", "registrationId");
+      if (duplicate === "identity") throw conflict("duplicate_identity", "name");
       if (!isDbRefusal(error)) throw error;
       await access.denied(CRM_MANAGE, { type: "crm_company", id: companyId }, "db_guard", {
         scope: "site",
@@ -430,14 +447,37 @@ export class CrmCompaniesService {
     throw invalid("ownerUserId", "owner_not_eligible");
   }
 
+  /**
+   * DP-339: another company of the site already has this name. Unless the caller confirmed a
+   * different legal entity, answer 409 `possible_duplicate` (no write; the form shows the others).
+   */
+  private async checkSameName(
+    access: StaffAccess,
+    siteId: string,
+    name: string,
+    exceptId: string | null,
+    confirmed: boolean,
+  ): Promise<void> {
+    if (confirmed) return;
+    const normalizedName = normalizeCompanyName(name);
+    const other = await access.crmData({ siteIds: [siteId], includePlatform: false }, (tx) =>
+      tx.crmCompany.findFirst({
+        where: { siteId, normalizedName, ...(exceptId ? { id: { not: exceptId } } : {}) },
+        select: { id: true },
+      }),
+    );
+    if (other) throw conflict("possible_duplicate", "name");
+  }
+
   async create(ctx: RequestContext, body: unknown): Promise<CrmCompanyResponse> {
     const access = await this.access.begin(ctx);
     await this.manageableSites(access);
     const input = parseBody(CrmCompanyCreateInputSchema, body);
-    const { siteId: requestedSite, ...fields } = input;
+    const { siteId: requestedSite, confirmDistinct, ...fields } = input;
     const siteId = requestedSite.toLowerCase();
     await access.require(CRM_MANAGE, { scope: "site", siteId }, { type: "crm_company", id: null });
     if (fields.ownerUserId) await this.checkOwner(access, fields.ownerUserId, siteId, null);
+    await this.checkSameName(access, siteId, fields.name, null, confirmDistinct === true);
     const row = await this.write(access, null, siteId, async (tx) => {
       const created: CompanyRow = await tx.crmCompany.create({
         data: {
@@ -484,11 +524,14 @@ export class CrmCompaniesService {
       throw new ApiError("NOT_FOUND");
     }
     if (current.version !== input.version) throw conflict("stale", "version");
-    const { version, ...fields } = input;
+    const { version, confirmDistinct, ...fields } = input;
     const changed: CrmCompanyField[] = CRM_COMPANY_FIELDS.filter(
       (f) => (fields[f] ?? null) !== current[f],
     );
     if (changed.length === 0) throw conflict("unchanged");
+    if (normalizeCompanyName(fields.name) !== current.normalizedName) {
+      await this.checkSameName(access, current.siteId, fields.name, id, confirmDistinct === true);
+    }
     if (changed.includes("ownerUserId") && fields.ownerUserId) {
       await this.checkOwner(access, fields.ownerUserId, current.siteId, id);
     }

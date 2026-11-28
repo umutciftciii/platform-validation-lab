@@ -528,6 +528,8 @@ describe("DP-103: what can step around row-level security", () => {
       // CRM-1 (ADR-032): the session's CRM sites, one staff user's owner eligibility and the
       // (site, user) ids of possible account owners.
       { f: "crm_rls_assignable_owners", owner: "dp_owner", lead: false },
+      // CRM-2: one boolean — is this lead of a site the session manages live (not anonymised).
+      { f: "crm_rls_lead_live", owner: "dp_owner", lead: true },
       { f: "crm_rls_owner_ok", owner: "dp_owner", lead: false },
       { f: "crm_rls_staff_manage_site_ids", owner: "dp_owner", lead: false },
       { f: "crm_rls_staff_read_site_ids", owner: "dp_owner", lead: false },
@@ -748,6 +750,7 @@ describe("DP-103: what can step around row-level security", () => {
     );
     expect(exec).toEqual([
       { f: "crm_rls_assignable_owners", who: "dp_app" },
+      { f: "crm_rls_lead_live", who: "dp_app" },
       { f: "crm_rls_owner_ok", who: "dp_app" },
       { f: "crm_rls_staff_manage_site_ids", who: "dp_app" },
       { f: "crm_rls_staff_read_site_ids", who: "dp_app" },
@@ -756,6 +759,53 @@ describe("DP-103: what can step around row-level security", () => {
     await expect(
       app.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "CrmCompany"`),
     ).resolves.toEqual([{ n: 0 }]);
+  });
+
+  it("CRM-2: keeps people, links and history behind row-level security; no delete of people, history append-only", async () => {
+    const rls = await su.$queryRawUnsafe<{ t: string; rls: boolean; force: boolean }[]>(
+      `SELECT relname::text AS t, relrowsecurity AS rls, relforcerowsecurity AS force FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'
+         AND relname IN ('CrmPerson', 'CrmPersonLead', 'CrmActivity') ORDER BY 1`,
+    );
+    expect(rls).toEqual([
+      { t: "CrmActivity", rls: true, force: false },
+      { t: "CrmPerson", rls: true, force: false },
+      { t: "CrmPersonLead", rls: true, force: false },
+    ]);
+    const privileges = await su.$queryRawUnsafe<{ t: string; who: string; p: string }[]>(
+      `SELECT table_name::text AS t, grantee::text AS who,
+              string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
+       FROM information_schema.role_table_grants
+       WHERE table_name IN ('CrmPerson', 'CrmPersonLead', 'CrmActivity')
+         AND grantee IN ('dp_app', 'dp_iam_bootstrap', 'dp_iam_system', 'dp_lead_retention',
+                         'dp_migrator')
+       GROUP BY table_name, grantee ORDER BY 1, 2`,
+    );
+    expect(privileges).toEqual([
+      { t: "CrmActivity", who: "dp_app", p: "INSERT,SELECT" },
+      { t: "CrmPerson", who: "dp_app", p: "INSERT,SELECT,UPDATE" },
+      { t: "CrmPersonLead", who: "dp_app", p: "DELETE,INSERT,SELECT,UPDATE" },
+    ]);
+    const policies = await su.$queryRawUnsafe<{ t: string; name: string; cmd: string }[]>(
+      `SELECT tablename::text AS t, policyname::text AS name, cmd::text AS cmd FROM pg_policies
+       WHERE tablename IN ('CrmPerson', 'CrmPersonLead', 'CrmActivity') ORDER BY 1, 2`,
+    );
+    expect(policies).toEqual([
+      { t: "CrmActivity", name: "crm_activity_staff_insert", cmd: "INSERT" },
+      { t: "CrmActivity", name: "crm_activity_staff_read", cmd: "SELECT" },
+      { t: "CrmPerson", name: "crm_person_staff_insert", cmd: "INSERT" },
+      { t: "CrmPerson", name: "crm_person_staff_read", cmd: "SELECT" },
+      { t: "CrmPerson", name: "crm_person_staff_update", cmd: "UPDATE" },
+      { t: "CrmPersonLead", name: "crm_person_lead_staff_delete", cmd: "DELETE" },
+      { t: "CrmPersonLead", name: "crm_person_lead_staff_insert", cmd: "INSERT" },
+      { t: "CrmPersonLead", name: "crm_person_lead_staff_read", cmd: "SELECT" },
+      { t: "CrmPersonLead", name: "crm_person_lead_staff_update", cmd: "UPDATE" },
+    ]);
+    for (const t of ["CrmPerson", "CrmPersonLead", "CrmActivity"]) {
+      await expect(app.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "${t}"`)).resolves.toEqual([
+        { n: 0 },
+      ]);
+    }
   });
 
   it("DP-288: keeps the AI tables behind row-level security, without DELETE, the key column unselectable", async () => {

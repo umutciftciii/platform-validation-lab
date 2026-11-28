@@ -4,6 +4,10 @@
  * database decide (crm:manage on the site, unique name per site, account owner with crm:manage,
  * optimistic concurrency). Shown only to callers the API lets manage the site.
  *
+ * CRM-2 (DP-339): a name another company of the site already has is answered with
+ * `possible_duplicate`; the form then offers "Save as a different company" (`confirmDistinct`), and
+ * the registration number, country or city tells the two apart.
+ *
  * The country names come from the server (`countries`): Node and the browser ship different ICU
  * data (names and sort order differ), so computing them here would break hydration.
  */
@@ -28,6 +32,7 @@ type CountryOption = { code: string; name: string };
 
 const EMPTY: Values = {
   name: "",
+  registrationId: "",
   country: "",
   city: "",
   address: "",
@@ -43,6 +48,7 @@ function valuesOf(c: CrmCompany | undefined): Values {
   if (!c) return EMPTY;
   return {
     name: c.name,
+    registrationId: c.registrationId ?? "",
     country: c.country ?? "",
     city: c.city ?? "",
     address: c.address ?? "",
@@ -94,6 +100,8 @@ export function CompanyForm(
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
+  // DP-339: the last save found another company of the site with this name.
+  const [confirmable, setConfirmable] = useState(false);
   const { countries } = props;
 
   const owners: readonly CrmOwnerCandidate[] =
@@ -108,18 +116,20 @@ export function CompanyForm(
   const set = (key: keyof Values) => (value: string) => {
     setValues((v) => ({ ...v, [key]: value }));
     setMessage(null);
+    setConfirmable(false);
   };
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function save(confirmDistinct: boolean) {
     setBusy(true);
     setMessage(null);
     setInvalid(null);
+    setConfirmable(false);
     const fields = {
       ...values,
       // A code from the country picker (or "" for none); the API validates it again.
       country: values.country as CrmCompanyCreateInput["country"],
       ownerUserId: values.ownerUserId || null,
+      ...(confirmDistinct ? { confirmDistinct: true } : {}),
     };
     const res =
       props.mode === "create"
@@ -129,6 +139,7 @@ export function CompanyForm(
     if (!res.ok) {
       setMessage({ kind: "error", text: res.message });
       setInvalid(res.field);
+      setConfirmable(res.rule === "possible_duplicate");
       return;
     }
     if (props.mode === "create") {
@@ -138,6 +149,11 @@ export function CompanyForm(
     setVersion(res.data.company.version);
     setMessage({ kind: "success", text: t("crm.form.saved") });
     router.refresh();
+  }
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    void save(false);
   }
 
   const text = (
@@ -200,6 +216,7 @@ export function CompanyForm(
           </Field>
         ) : null}
         {text("name", { hint: t("crm.form.nameHint"), autoComplete: "organization" })}
+        {text("registrationId", { hint: t("crm.form.registrationIdHint") })}
         <Field label={t("crm.form.owner")} htmlFor={id("owner")} hint={t("crm.form.ownerHint")}>
           <select
             id={id("owner")}
@@ -267,6 +284,17 @@ export function CompanyForm(
                 : t("crm.form.save")}
           </span>
         </button>
+        {confirmable ? (
+          <button
+            key="confirm-distinct"
+            type="button"
+            className={buttonStyles.secondary}
+            disabled={busy}
+            onClick={() => void save(true)}
+          >
+            <span>{t("crm.form.confirmDistinct")}</span>
+          </button>
+        ) : null}
         {props.mode === "edit" && dirty ? (
           <button
             key="discard"

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import {
+  ADMIN_CRM_LEADS_API,
+  CrmLeadResponseSchema,
   LEAD_PIPELINE_HELD,
   LeadConsentsResponseSchema,
   LeadDetailResponseSchema,
@@ -10,6 +12,7 @@ import {
 } from "@dream/contracts";
 import { PageHeader, SITE_SHORT } from "../../../../components/catalog/parts";
 import { Icon, type IconKey } from "../../../../components/icons";
+import { LeadPerson } from "../../../../components/crm/lead-person";
 import { LeadConsents } from "../../../../components/leads/lead-consents";
 import { LeadActivityForm, LeadWorkflowForm } from "../../../../components/leads/lead-workflow";
 import { cx, EmptyState, Panel, StatusPill } from "../../../../components/ui";
@@ -233,12 +236,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const DATE = dateTimeFormat(locale, DATE_OPTIONS);
   const { id } = await params;
   // DP-298 (ADR-031 D4): the consents are read with the lead (same permission, lead:read).
-  const [res, consents] = await Promise.all([
+  // CRM-2 (ADR-032 D6): the CRM side of the lead (crm:read and lead:read; nothing without it).
+  const [res, consents, crm] = await Promise.all([
     serverRead(`/api/v1/admin/leads/${encodeURIComponent(id)}`, LeadDetailResponseSchema),
     serverRead(
       `/api/v1/admin/leads/${encodeURIComponent(id)}/consents`,
       LeadConsentsResponseSchema,
     ),
+    serverRead(`${ADMIN_CRM_LEADS_API}/${encodeURIComponent(id)}`, CrmLeadResponseSchema),
   ]);
   if (!res.ok && res.status === 404) notFound();
   if (!res.ok) {
@@ -397,6 +402,22 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           <p role="alert" className="text-sm text-danger">
             {t("legal.consents.loadError")}
           </p>
+        </Panel>
+      ) : null}
+      {crm.ok ? (
+        <Panel
+          key="crm"
+          id="crm"
+          title={t("crm.leadPanel.title")}
+          description={t("crm.leadPanel.description")}
+        >
+          <LeadPerson
+            leadId={lead.id}
+            siteId={lead.siteId}
+            person={crm.data.person}
+            canManage={crm.data.canManage}
+            anonymised={crm.data.anonymised}
+          />
         </Panel>
       ) : null}
       <Panel
