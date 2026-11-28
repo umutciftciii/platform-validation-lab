@@ -95,6 +95,10 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // CRM-1 (ADR-032): a site's CRM companies (customer data, row-level security; reached through
   // the session's database context, like leads).
   CrmCompany: { nullable: false },
+  // CRM-2 (ADR-032 D6/D7): a site's people, their lead links and the CRM history.
+  CrmPerson: { nullable: false },
+  CrmPersonLead: { nullable: false },
+  CrmActivity: { nullable: false },
 };
 
 export interface RelationDef {
@@ -159,6 +163,13 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     crmCompaniesOwned: { model: "CrmCompany", list: true },
     crmCompaniesCreated: { model: "CrmCompany", list: true },
     crmCompaniesUpdated: { model: "CrmCompany", list: true },
+    // CRM-2: people created and changed, lead links made, history rows (actor, owner changes).
+    crmPeopleCreated: { model: "CrmPerson", list: true },
+    crmPeopleUpdated: { model: "CrmPerson", list: true },
+    crmPersonLeadsLinked: { model: "CrmPersonLead", list: true },
+    crmActivities: { model: "CrmActivity", list: true },
+    crmActivitiesFromOwner: { model: "CrmActivity", list: true },
+    crmActivitiesToOwner: { model: "CrmActivity", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -205,6 +216,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     locales: { model: "SiteLocale", list: true },
     consentRecords: { model: "ConsentRecord", list: true },
     crmCompanies: { model: "CrmCompany", list: true },
+    crmPeople: { model: "CrmPerson", list: true },
+    crmPersonLeads: { model: "CrmPersonLead", list: true },
+    crmActivities: { model: "CrmActivity", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -440,6 +454,9 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     activities: { model: "LeadActivity", list: true },
     notifications: { model: "LeadNotification", list: true },
     consents: { model: "ConsentRecord", list: true },
+    // CRM-2: the lead's person link and the CRM history rows about it.
+    crmPerson: { model: "CrmPersonLead", list: false },
+    crmActivities: { model: "CrmActivity", list: true },
   },
   // DP-298 (ADR-031): consent records (site-bound); legal texts and provider terms (no site).
   ConsentRecord: {
@@ -568,6 +585,39 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     owner: { model: "User", list: false },
     createdBy: { model: "User", list: false },
     updatedBy: { model: "User", list: false },
+    people: { model: "CrmPerson", list: true },
+    activities: { model: "CrmActivity", list: true },
+    activitiesFrom: { model: "CrmActivity", list: true },
+    activitiesTo: { model: "CrmActivity", list: true },
+  },
+  CrmPerson: {
+    site: { model: "Site", list: false },
+    company: { model: "CrmCompany", list: false },
+    createdBy: { model: "User", list: false },
+    updatedBy: { model: "User", list: false },
+    leads: { model: "CrmPersonLead", list: true },
+    activities: { model: "CrmActivity", list: true },
+    activitiesFrom: { model: "CrmActivity", list: true },
+    activitiesTo: { model: "CrmActivity", list: true },
+  },
+  CrmPersonLead: {
+    site: { model: "Site", list: false },
+    lead: { model: "Lead", list: false },
+    person: { model: "CrmPerson", list: false },
+    linkedBy: { model: "User", list: false },
+  },
+  CrmActivity: {
+    site: { model: "Site", list: false },
+    company: { model: "CrmCompany", list: false },
+    person: { model: "CrmPerson", list: false },
+    lead: { model: "Lead", list: false },
+    actor: { model: "User", list: false },
+    fromCompany: { model: "CrmCompany", list: false },
+    toCompany: { model: "CrmCompany", list: false },
+    fromPerson: { model: "CrmPerson", list: false },
+    toPerson: { model: "CrmPerson", list: false },
+    fromOwner: { model: "User", list: false },
+    toOwner: { model: "User", list: false },
   },
 };
 
