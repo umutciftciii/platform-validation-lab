@@ -5,10 +5,18 @@
  *
  * CRM-2 (ADR-032 D6/D7): people of a company, the CRM side of a lead (its person, the same
  * person's other leads), linking and the company history with staff notes.
+ *
+ * CRM-3 (ADR-032 D11): the 360° views — overview, people list, a person's profile, a company's
+ * leads with their requests and its contact history. Read-only.
  */
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query } from "@nestjs/common";
 import type {
   CrmActivityListResponse,
+  CrmCompanyLeadsResponse,
+  CrmContactHistoryResponse,
+  CrmOverviewResponse,
+  CrmPeopleListResponse,
+  CrmPersonProfileResponse,
   CrmCompanyPeopleResponse,
   CrmLeadCandidatesResponse,
   CrmLeadResponse,
@@ -19,6 +27,7 @@ import type {
   CrmOwnersResponse,
 } from "@dream/contracts";
 import { Ctx, type RequestContext } from "../iam/http/request-context.js";
+import { Crm360Service } from "./crm-360.service.js";
 import { CrmCompaniesService } from "./crm-companies.service.js";
 import { CrmPeopleService } from "./crm-people.service.js";
 
@@ -31,7 +40,53 @@ export class AdminCrmController {
   constructor(
     @Inject(CrmCompaniesService) private readonly companies: CrmCompaniesService,
     @Inject(CrmPeopleService) private readonly people: CrmPeopleService,
+    @Inject(Crm360Service) private readonly views: Crm360Service,
   ) {}
+
+  // --- CRM-3 -----------------------------------------------------------------------------------
+
+  @Get("overview")
+  overview(@Ctx() ctx: RequestContext): Promise<CrmOverviewResponse> {
+    return this.views.overview(ctx);
+  }
+
+  @Get("people")
+  listPeople(
+    @Ctx() ctx: RequestContext,
+    @Query() query: Record<string, unknown>,
+  ): Promise<CrmPeopleListResponse> {
+    return this.views.listPeople(ctx, {
+      siteId: single(query["siteId"]),
+      q: single(query["q"]),
+      company: single(query["company"]),
+      owner: single(query["owner"]),
+      status: single(query["status"]),
+      cursor: single(query["cursor"]),
+    });
+  }
+
+  @Get("people/:id")
+  person(@Ctx() ctx: RequestContext, @Param("id") id: string): Promise<CrmPersonProfileResponse> {
+    return this.views.personProfile(ctx, id);
+  }
+
+  @Get("companies/:id/leads")
+  companyLeads(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+  ): Promise<CrmCompanyLeadsResponse> {
+    return this.views.companyLeads(ctx, id);
+  }
+
+  @Get("companies/:id/contacts")
+  companyContacts(
+    @Ctx() ctx: RequestContext,
+    @Param("id") id: string,
+  ): Promise<CrmContactHistoryResponse> {
+    return this.views.companyContacts(ctx, id);
+  }
+
+  // --- CRM-1 -----------------------------------------------------------------------------------
 
   @Get("companies")
   list(
@@ -111,7 +166,8 @@ export class AdminCrmController {
     @Param("id") id: string,
     @Query() query: Record<string, unknown>,
   ): Promise<CrmActivityListResponse> {
-    return this.people.activities(ctx, id, single(query["cursor"]));
+    // CRM-3: `kind=NOTE` reads the company's notes only.
+    return this.people.activities(ctx, id, single(query["cursor"]), single(query["kind"]));
   }
 
   @Post("companies/:id/notes")

@@ -40,6 +40,7 @@ import { StaffAccessService, type AccessSite, type StaffAccess } from "../iam/st
 
 export const CRM_READ = "crm:read";
 export const CRM_MANAGE = "crm:manage";
+const LEAD_READ = "lead:read";
 
 const FORMER = "Former staff member";
 
@@ -252,6 +253,51 @@ export class CrmCompaniesService {
     return access.sites.find((s) => s.id === siteId)?.key ?? "BV";
   }
 
+  /**
+   * CRM-3: summaries (with the account owner) of companies of the given sites, by id. Reads in
+   * the session's database context; not audited here (the caller audits its view).
+   */
+  async summariesByIds(
+    access: StaffAccess,
+    siteIds: readonly string[],
+    ids: readonly string[],
+  ): Promise<Map<string, CrmCompanySummary>> {
+    if (ids.length === 0 || siteIds.length === 0) return new Map();
+    const rows: CompanyRow[] = await access.crmData(
+      { siteIds: [...siteIds], includePlatform: false },
+      (tx) =>
+        tx.crmCompany.findMany({
+          where: { siteId: { in: [...siteIds] }, id: { in: [...ids] } },
+          select: COMPANY_SELECT,
+        }),
+    );
+    const people = await this.people(access, rows);
+    return new Map(
+      rows.map((r) => [r.id, this.summary(r, this.siteKey(access, r.siteId), people)]),
+    );
+  }
+
+  /** CRM-3: the most recently changed companies of the given sites (overview; not audited here). */
+  async recent(
+    access: StaffAccess,
+    siteIds: readonly string[],
+    take: number,
+  ): Promise<CrmCompanySummary[]> {
+    if (siteIds.length === 0) return [];
+    const rows: CompanyRow[] = await access.crmData(
+      { siteIds: [...siteIds], includePlatform: false },
+      (tx) =>
+        tx.crmCompany.findMany({
+          where: { siteId: { in: [...siteIds] } },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take,
+          select: COMPANY_SELECT,
+        }),
+    );
+    const people = await this.people(access, rows);
+    return rows.map((r) => this.summary(r, this.siteKey(access, r.siteId), people));
+  }
+
   // --- read ------------------------------------------------------------------------------------
 
   async list(ctx: RequestContext, query: CrmCompanyListQuery): Promise<CrmCompanyListResponse> {
@@ -325,6 +371,48 @@ export class CrmCompaniesService {
     );
     const page = rows.slice(0, CRM_COMPANIES_PAGE_SIZE);
     const people = await this.people(access, page);
+    // CRM-3: people per company (sites with lead:read only) and the last CRM activity.
+    const leadSites = new Set(access.sitesWith(LEAD_READ));
+    const ids = page.map((r) => r.id);
+    const extra = ids.length
+      ? await access.crmData(scope, async (tx) => {
+          const countSites = siteIds.filter((s) => leadSites.has(s));
+          const [counts, own, joined] = await Promise.all([
+            countSites.length
+              ? tx.crmPerson.groupBy({
+                  by: ["companyId"],
+                  where: {
+                    siteId: { in: countSites },
+                    companyId: { in: ids },
+                    leads: { some: {} },
+                  },
+                  _count: { _all: true },
+                })
+              : Promise.resolve([]),
+            tx.crmActivity.groupBy({
+              by: ["companyId"],
+              where: { siteId: { in: siteIds }, companyId: { in: ids } },
+              _max: { createdAt: true },
+            }),
+            tx.crmActivity.groupBy({
+              by: ["toCompanyId"],
+              where: { siteId: { in: siteIds }, toCompanyId: { in: ids } },
+              _max: { createdAt: true },
+            }),
+          ]);
+          const last = new Map<string, Date>();
+          for (const [id, at] of [
+            ...own.map((r) => [r.companyId, r._max.createdAt] as const),
+            ...joined.map((r) => [r.toCompanyId, r._max.createdAt] as const),
+          ]) {
+            if (id && at && (!last.has(id) || (last.get(id) as Date) < at)) last.set(id, at);
+          }
+          return {
+            counts: new Map(counts.map((c) => [c.companyId as string, c._count._all])),
+            last,
+          };
+        })
+      : { counts: new Map<string, number>(), last: new Map<string, Date>() };
     const auditDb =
       siteIds.length === 1 ? access.db(scope) : access.db({ siteIds, includePlatform: true });
     await access.audit(auditDb, {
@@ -347,7 +435,11 @@ export class CrmCompaniesService {
     const last = page[page.length - 1];
     const manageable = new Set(access.sitesWith(CRM_MANAGE));
     return {
-      items: page.map((r) => this.summary(r, this.siteKey(access, r.siteId), people)),
+      items: page.map((r) => ({
+        ...this.summary(r, this.siteKey(access, r.siteId), people),
+        peopleCount: leadSites.has(r.siteId) ? (extra.counts.get(r.id) ?? 0) : null,
+        lastActivityAt: extra.last.get(r.id)?.toISOString() ?? null,
+      })),
       nextCursor: rows.length > CRM_COMPANIES_PAGE_SIZE && last ? encodeCursor(last) : null,
       sites: sites.map((s) => ({ id: s.id, key: s.key, name: s.name })),
       manageableSiteIds: sites.filter((s) => manageable.has(s.id)).map((s) => s.id),

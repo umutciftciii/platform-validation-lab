@@ -1,12 +1,13 @@
 /**
  * CRM-2 (ADR-032 D7): the history of a company — creation, account owner changes, people joining,
  * moving and leaving, lead links of its people and staff notes — newest first. Rendered on the
- * server; the rows are written by the database (notes by staff with crm:manage).
+ * server; the rows are written by the database (notes by staff with crm:manage). CRM-3 shows a
+ * person's history with it too (`companyId` null).
  */
 import type { CrmActivity } from "@dream/contracts";
 import type { Translate } from "../../lib/i18n/types";
 
-function sentence(a: CrmActivity, companyId: string, t: Translate): string {
+function sentence(a: CrmActivity, companyId: string | null, t: Translate): string {
   const name = a.actor.displayName;
   const person = a.person?.displayName ?? t("crm.history.unnamedPerson");
   switch (a.kind) {
@@ -20,8 +21,15 @@ function sentence(a: CrmActivity, companyId: string, t: Translate): string {
         : t("crm.history.ownerRemoved", { name });
     case "PERSON_COMPANY_CHANGED":
       if (a.toCompany?.id === companyId) return t("crm.history.personAdded", { name, person });
+      if (companyId === null && a.toCompany && !a.fromCompany) {
+        return t("crm.history.personAddedTo", { name, person, company: a.toCompany.name });
+      }
       if (a.toCompany) {
         return t("crm.history.personMoved", { name, person, company: a.toCompany.name });
+      }
+      // CRM-3: a person's own history names the company the person left.
+      if (companyId === null && a.fromCompany) {
+        return t("crm.history.personRemovedFrom", { name, person, company: a.fromCompany.name });
       }
       return t("crm.history.personRemoved", { name, person });
     case "LEAD_PERSON_CHANGED": {
@@ -40,7 +48,8 @@ export function CompanyHistory({
   date,
 }: {
   items: readonly CrmActivity[];
-  companyId: string;
+  /** The company whose history this is; null for a person's history (CRM-3). */
+  companyId: string | null;
   t: Translate;
   date: Intl.DateTimeFormat;
 }) {
