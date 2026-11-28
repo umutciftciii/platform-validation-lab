@@ -168,6 +168,10 @@ model User {
   consentRecords              ConsentRecord[]
   aiProviderTermsRecorded     AiProviderDataTerms[]         @relation("AiProviderTermsRecordedBy")
   aiProviderTermsRevoked      AiProviderDataTerms[]         @relation("AiProviderTermsRevokedBy")
+  /// CRM-1 (ADR-032): companies this staff user owns as account owner, created and last changed.
+  crmCompaniesOwned           CrmCompany[]                  @relation("CrmCompanyOwner")
+  crmCompaniesCreated         CrmCompany[]                  @relation("CrmCompanyCreatedBy")
+  crmCompaniesUpdated         CrmCompany[]                  @relation("CrmCompanyUpdatedBy")
 
   @@index([kind, status])
 }
@@ -231,6 +235,8 @@ model Site {
   locales                      SiteLocale[]
   // DP-298 (ADR-031 D4): consent records of the site's leads.
   consentRecords               ConsentRecord[]
+  // CRM-1 (ADR-032): the site's CRM companies.
+  crmCompanies                 CrmCompany[]
 }
 
 /// A user's relation to one site. Site-scoped role assignments only count while it is ACTIVE.
@@ -2584,4 +2590,53 @@ model AiProviderDataTerms {
 
   @@unique([provider], map: "AiProviderDataTerms_active_provider_key", where: raw("\"revokedAt\" IS NULL"))
   @@index([provider, recordedAt])
+}
+
+// =============================================================================================
+// CRM 360° (CRM-1, ADR-032)
+// =============================================================================================
+
+/// CRM-1 (ADR-032 D2): a company (organisation) of one site. Legal-entity data, customer data by
+/// access (crm:read on its site; row-level security). Personal data of people stays on Lead
+/// (CRM-2 links people to companies). Written only by staff with crm:manage on the site: the
+/// database stamps the actor, the version and the times, and checks the account owner
+/// (migration 20261224090000_crm_1_companies). Never deleted by the API.
+model CrmCompany {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  siteId         String    @db.Uuid
+  name           String    @db.VarChar(200)
+  /// Written by the database from `name` (trimmed, single spaces, lower case); unique per site.
+  normalizedName String    @default("") @db.VarChar(200)
+  /// ISO 3166-1 alpha-2.
+  country        String?   @db.Char(2)
+  city           String?   @db.VarChar(120)
+  address        String?   @db.VarChar(500)
+  /// An http(s) URL.
+  website        String?   @db.VarChar(300)
+  /// The company's general number (not a person's).
+  phone          String?   @db.VarChar(40)
+  /// The company's general address (lower case; not a person's).
+  email          String?   @db.VarChar(254)
+  description    String?   @db.VarChar(2000)
+  /// Staff-only notes.
+  internalNotes  String?   @db.VarChar(4000)
+  /// The account owner: a staff user with crm:manage on the site when set (checked by the database).
+  ownerUserId    String?   @db.Uuid
+  /// Optimistic concurrency: +1 on every change (database).
+  version        Int       @default(0)
+  createdById    String    @db.Uuid
+  updatedById    String    @db.Uuid
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @default(now()) @db.Timestamptz(3)
+
+  site      Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  owner     User? @relation("CrmCompanyOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  createdBy User  @relation("CrmCompanyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User  @relation("CrmCompanyUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([siteId, normalizedName])
+  @@index([siteId, updatedAt])
+  @@index([ownerUserId])
+  @@index([createdById])
+  @@index([updatedById])
 }
