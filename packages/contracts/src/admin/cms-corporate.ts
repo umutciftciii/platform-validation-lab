@@ -2,8 +2,9 @@
  * COM-2b (DP-028, DP-094): the field sets of the corporate site's designed pages — the home page
  * (`corporate.home`) and the product portfolio (`corporate.products`, one page at /products with
  * anchored groups, as on the live dreampetroleum.com). The layout stays in apps/web-corporate;
- * these descriptors list only what an editor may change. No image fields: the corporate site has
- * no media of its own until their usage rights are confirmed (DP-320).
+ * these descriptors list only what an editor may change. COM-7: images come from the corporate
+ * visual pack (registered CORPORATE assets, representative scenes); the fields added then are
+ * optional on read (`optional`, nullable assets), so content stored before COM-7 stays valid.
  *
  * Claims (owner decisions 2026-11-27, DP-003): there is no field for a distributorship claim, a
  * counter, a customer testimonial or a FAQ with commercial commitments, so none can be published
@@ -39,6 +40,25 @@ const link = (key: string, label: string, required = true): CmsField => ({
   required,
 });
 const PARAGRAPHS = "Plain text. A blank line starts a new paragraph.";
+/** COM-7: a registered corporate image and its alt text (both optional). */
+const image = (key = "image"): CmsField[] => [
+  {
+    type: "asset",
+    key,
+    label: "Image",
+    kinds: ["image"],
+    required: false,
+    hint: "A representative scene; never presented as the company's own site or fleet.",
+  },
+  {
+    type: "text",
+    key: `${key}Alt`,
+    label: "Alt text",
+    max: 300,
+    requiredWith: key,
+    multiline: true,
+  },
+];
 
 // --- corporate.home -----------------------------------------------------------------------------
 
@@ -56,6 +76,38 @@ export const CORPORATE_HOME_FIELDS: readonly CmsField[] = [
       long("intro", "Intro", 400),
       link("primary", "Button"),
       link("secondary", "Second button", false),
+      // COM-7: the activity areas the visitor switches between (picture, heading, text, button).
+      {
+        type: "list",
+        key: "slides",
+        label: "Activity areas",
+        itemLabel: "Activity area",
+        min: 0,
+        max: 4,
+        optional: true,
+        hint: "Shown as tabs over the picture. None: the heading above alone.",
+        fields: [
+          text("label", "Tab label", 40),
+          text("title", "Heading", 120),
+          long("intro", "Intro", 300),
+          {
+            type: "asset",
+            key: "image",
+            label: "Image",
+            kinds: ["image"],
+            hint: "A representative scene; never presented as the company's own site or fleet.",
+          },
+          {
+            type: "text",
+            key: "imageAlt",
+            label: "Alt text",
+            max: 300,
+            requiredWith: "image",
+            multiline: true,
+          },
+          link("cta", "Button", false),
+        ],
+      },
     ],
   },
   {
@@ -97,6 +149,7 @@ export const CORPORATE_HOME_FIELDS: readonly CmsField[] = [
           text("title", "Title", 120),
           optional("description", "Description", 400, true),
           href(),
+          ...image(),
         ],
       },
     ],
@@ -144,6 +197,19 @@ export const CORPORATE_HOME_FIELDS: readonly CmsField[] = [
       },
     ],
   },
+  // COM-7: the latest articles of the news model under this heading (none published: hidden).
+  {
+    type: "group",
+    key: "news",
+    label: "Latest news",
+    optional: true,
+    hint: "The three newest published articles are listed under this heading.",
+    fields: [
+      optional("eyebrow", "Eyebrow", 60),
+      optional("title", "Heading", 120),
+      link("link", "Link", false),
+    ],
+  },
   {
     type: "group",
     key: "cta",
@@ -161,6 +227,7 @@ export const CORPORATE_HOME_FIELDS: readonly CmsField[] = [
         fields: [text("text", "Text", 200)],
       },
       link("button", "Button"),
+      ...image(),
     ],
   },
 ];
@@ -168,6 +235,17 @@ export const CORPORATE_HOME_FIELDS: readonly CmsField[] = [
 type Link = { label: string; href: string };
 /** A card of the home page; `href` null: not a link. */
 type HomeCard = { title: string; description: string | null; href: string | null };
+/** COM-7: a service card may carry a registered corporate image. */
+type ServiceCard = HomeCard & { image?: string | null; imageAlt?: string | null };
+/** COM-7: one activity area of the home page's opening. */
+export interface CorporateHeroSlide {
+  label: string;
+  title: string;
+  intro: string;
+  image: string;
+  imageAlt: string | null;
+  cta: Link | null;
+}
 
 export interface CorporateHomeContent {
   hero: {
@@ -176,6 +254,8 @@ export interface CorporateHomeContent {
     intro: string;
     primary: Link;
     secondary: Link | null;
+    /** COM-7 (empty in content stored before it). */
+    slides?: CorporateHeroSlide[];
   };
   overview: {
     eyebrow: string;
@@ -184,7 +264,7 @@ export interface CorporateHomeContent {
     highlights: { title: string; description: string }[];
     link: Link | null;
   };
-  services: { eyebrow: string; title: string; intro: string | null; items: HomeCard[] };
+  services: { eyebrow: string; title: string; intro: string | null; items: ServiceCard[] };
   productGroups: {
     eyebrow: string;
     title: string;
@@ -193,7 +273,17 @@ export interface CorporateHomeContent {
     link: Link | null;
   };
   strengths: { eyebrow: string; title: string; items: { title: string; description: string }[] };
-  cta: { title: string; text: string | null; points: { text: string }[]; button: Link };
+  /** COM-7 (null in content stored before it). */
+  news?: { eyebrow: string | null; title: string | null; link: Link | null } | null;
+  cta: {
+    title: string;
+    text: string | null;
+    points: { text: string }[];
+    button: Link;
+    /** COM-7: a registered corporate image beside the call to action. */
+    image?: string | null;
+    imageAlt?: string | null;
+  };
 }
 
 // --- corporate.products -------------------------------------------------------------------------
@@ -210,6 +300,7 @@ export const CORPORATE_PRODUCTS_FIELDS: readonly CmsField[] = [
       optional("eyebrow", "Eyebrow", 60),
       text("title", "Heading", 120),
       long("intro", "Intro", 400),
+      ...image(),
     ],
   },
   {
@@ -308,7 +399,14 @@ export interface CorporateProductGroup {
 }
 
 export interface CorporateProductsContent {
-  intro: { eyebrow: string | null; title: string; intro: string };
+  intro: {
+    eyebrow: string | null;
+    title: string;
+    intro: string;
+    /** COM-7: a registered corporate image behind the heading. */
+    image?: string | null;
+    imageAlt?: string | null;
+  };
   groups: CorporateProductGroup[];
   typicalValues: {
     title: string | null;

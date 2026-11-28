@@ -168,6 +168,15 @@ export const contract = {
     corporateProductsTypicalValuesRowsValueALabel: "First value",
     corporateProductsTypicalValuesRowsValueBLabel: "Second value",
     corporateProductsCoaLabel: "Certificate of Analysis",
+    corporateHeroImageLabel: "Background image",
+    corporateImageHint:
+      "A representative scene; never presented as the company's own site or fleet.",
+    corporateHomeHeroSlidesLabel: "Activity areas",
+    corporateHomeHeroSlidesItemLabel: "Activity area",
+    corporateHomeHeroSlidesHint: "Shown as tabs over the picture. None: the heading above alone.",
+    corporateHomeHeroSlidesTabLabel: "Tab label",
+    corporateHomeNewsLabel: "Latest news",
+    corporateHomeNewsHint: "The three newest published articles are listed under this heading.",
     corporateProductsCoaHint: "Requests for a COA go to the contact page.",
   },
   /** Notes of the routes not (yet) in the CMS (CMS_SITE_REGISTRY). */

@@ -60,3 +60,33 @@ export function gradeLayout(
   if (!items.length) return "none";
   return items.every((i) => !i.type && !i.description) ? "chips" : "cards";
 }
+
+/**
+ * COM-7: a CMS text of the live site whose list lines start with "• " (COM-5), as paragraphs and
+ * list items, so a card shows a real list instead of bullet characters. Plain text only.
+ */
+export function textBlocks(text: string | null | undefined): TextBlock[] {
+  const out: TextBlock[] = [];
+  for (const para of paragraphsOf(text)) {
+    const lines = para.split("\n").map((l) => l.trim());
+    const bullets = lines.filter((l) => l.startsWith("•"));
+    if (bullets.length && bullets.length === lines.length) {
+      out.push({ kind: "list", items: bullets.map((l) => l.replace(/^•\s*/, "")) });
+    } else {
+      out.push({ kind: "p", text: para });
+    }
+  }
+  return out;
+}
+export type TextBlock = { kind: "p"; text: string } | { kind: "list"; items: string[] };
+
+/**
+ * COM-7: whether a content page opens with a full-width picture (its first section is a hero
+ * with a registered corporate image): the header then lies over it.
+ */
+export function opensWithPicture(
+  sections: readonly { type: string; image?: string | null }[],
+): boolean {
+  const first = sections[0];
+  return first?.type === "hero" && corporateImage(first.image) !== null;
+}

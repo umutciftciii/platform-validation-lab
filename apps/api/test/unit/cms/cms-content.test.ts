@@ -103,12 +103,16 @@ describe("BV import seeds", () => {
     for (const key of ["corporate.home", "corporate.products"]) {
       const t = CMS_DESIGN_TEMPLATES.find((x) => x.key === key)!;
       expect(t).toMatchObject({ site: "CORPORATE", kind: "DESIGN" });
-      // With the corporate site's own rules (no image fields at all).
+      // With the corporate site's own rules (COM-7: pictures only from its own registered files).
       expect(validateContent("DESIGN", key, ALL_SEEDS[key]!.content, "CORPORATE")).toEqual(
         ALL_SEEDS[key]!.content,
       );
     }
-    const text = JSON.stringify([CORPORATE_HOME_SEED, CORPORATE_PRODUCTS_SEED]);
+    // The texts (COM-7: a picture's file name is not a statement).
+    const text = JSON.stringify([CORPORATE_HOME_SEED, CORPORATE_PRODUCTS_SEED]).replace(
+      /"\/media\/[^"]+"/g,
+      '""',
+    );
     // Owner decisions 2026-11-27 (DP-003): no distributorship claim, counter, percentage,
     // testimonial or FAQ commitment; no certification, purity or guarantee statement (DP-002).
     for (const claim of [
@@ -122,14 +126,17 @@ describe("BV import seeds", () => {
     }
     // The typical values table stays hidden: no row until its source is approved.
     expect(CORPORATE_PRODUCTS_SEED.typicalValues.rows).toEqual([]);
-    // Links lead only to pages of this package (/products and its sections) or to the contact
-    // page; pages that do not exist yet (About Us, the services) are not linked.
+    // Links lead only to pages of the corporate import set (COM-7: the service pages and the news
+    // list exist since COM-5) and to sections of the portfolio that exist.
     const anchors = new Set(CORPORATE_PRODUCTS_SEED.groups.map((g) => g.anchor));
     const hrefs = [...text.matchAll(/"href":"([^"]+)"/g)].map((m) => m[1]!);
     expect(hrefs.length).toBeGreaterThan(0);
     for (const href of hrefs) {
       const [path, anchor] = href.split("#");
-      expect(["/contact", "/products"], href).toContain(path);
+      expect(
+        CMS_SITE_REGISTRY.some((e) => e.site === "CORPORATE" && e.path === path),
+        href,
+      ).toBe(true);
       if (anchor) expect(anchors.has(anchor), href).toBe(true);
     }
     expect(CORPORATE_PRODUCTS_SEED.coa.button.href).toBe("/contact");
@@ -441,8 +448,10 @@ describe("site-scoped media (COM-2a, DP-320)", () => {
       if (!t) continue;
       expect(contentIsValid(t.kind, key, seed.content, site), key).toBe(true);
     }
+    // COM-7: the corporate content pages (COM-5) are validated as the corporate site's.
     for (const [key, seed] of Object.entries(CMS_PAGE_SEEDS)) {
-      expect(contentIsValid("TEMPLATE", "standard", seed.content, "BV"), key).toBe(true);
+      const site = key.startsWith("corporate.") ? "CORPORATE" : "BV";
+      expect(contentIsValid("TEMPLATE", "standard", seed.content, site), key).toBe(true);
     }
   });
 });

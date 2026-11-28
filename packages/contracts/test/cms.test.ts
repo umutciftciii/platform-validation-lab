@@ -27,6 +27,7 @@ import {
   cmsArticleContentSchema,
   cmsAssetRequired,
   cmsDesignTemplate,
+  cmsFieldsOn,
   cmsFieldsSchema,
   cmsSiteAsset,
   cmsSiteAssets,
@@ -498,9 +499,13 @@ describe("corporate designed pages (COM-2b, DP-028, DP-094)", () => {
     }
   });
 
-  it("has no image field and no field for a counter, a testimonial or a FAQ", () => {
+  it("has image fields only for registered pictures (COM-7) and no field for a counter, a testimonial or a FAQ", () => {
     const all = [...fieldsOf(CORPORATE_HOME_FIELDS), ...fieldsOf(CORPORATE_PRODUCTS_FIELDS)];
-    expect(all.filter((f) => f.type === "asset")).toEqual([]);
+    // COM-7: the visual pack's pictures (activity areas, service cards, call to action, the
+    // portfolio heading); an asset field accepts registered files of the page's site only.
+    const assets = all.filter((f) => f.type === "asset");
+    expect(assets.map((f) => f.key)).toEqual(["image", "image", "image", "image"]);
+    expect(assets.every((f) => f.type === "asset" && f.kinds.join() === "image")).toBe(true);
     expect(all.map((f) => f.key).join(" ")).not.toMatch(
       /counter|stat|figure|testimonial|review|quote|faq|question|distributor/i,
     );
@@ -526,7 +531,11 @@ describe("corporate designed pages (COM-2b, DP-028, DP-094)", () => {
       typicalValues: { title: null, columnA: null, columnB: null, note: null, rows: [] },
       coa: { title: "Request a COA", text: null, button: { label: "Request", href: "/contact" } },
     };
-    expect(schema.parse(content)).toEqual(content);
+    // COM-7: the heading's picture is optional; content stored before it reads with none.
+    expect(schema.parse(content)).toEqual({
+      ...content,
+      intro: { ...content.intro, image: null, imageAlt: null },
+    });
     expect(schema.safeParse({ ...content, counters: [] }).success).toBe(false);
     const group = content.groups[0]!;
     // Anchors are addresses: one per group, in the anchor format.
@@ -638,5 +647,94 @@ describe("corporate content of the live site (COM-5)", () => {
     );
     expect(CmsDateSchema.safeParse("2026-08-13").success).toBe(true);
     expect(CmsDateSchema.safeParse("1989-12-31").success).toBe(false);
+  });
+});
+
+describe("COM-7: the corporate redesign's content fields", () => {
+  const heroFields = CMS_SECTION_TYPES.find((s) => s.type === "hero")!.fields;
+  const hero = {
+    id: "sec-00001",
+    type: "hero",
+    title: "Logistics",
+    eyebrow: null,
+    intro: null,
+    cta: null,
+  };
+  const picture = "/media/visual-pack-v1/hero-logistics-supply.webp";
+
+  it("registers the visual pack as the corporate site's own pictures, none for BV", () => {
+    const own = cmsSiteAssets("CORPORATE").map((a) => a.src);
+    expect(own).toEqual([
+      "/media/visual-pack-v1/hero-energy-trading.webp",
+      "/media/visual-pack-v1/hero-logistics-supply.webp",
+      "/media/visual-pack-v1/hero-storage-terminal.webp",
+      "/media/visual-pack-v1/hero-petrochemicals.webp",
+    ]);
+    expect(cmsSiteAsset(picture, "BV")).toBeUndefined();
+    expect(cmsSiteAsset(picture, "CORPORATE")).toMatchObject({ width: 1672, height: 941 });
+  });
+
+  it("a hero picture exists on the corporate site only (BV keeps its four hero fields)", () => {
+    expect(cmsFieldsOn(heroFields, "BV").map((f) => f.key)).toEqual([
+      "eyebrow",
+      "title",
+      "intro",
+      "cta",
+    ]);
+    expect(cmsFieldsOn(heroFields, "CORPORATE").map((f) => f.key)).toContain("image");
+    const withPicture = { ...hero, image: picture, imageAlt: "Representative scene" };
+    expect(
+      cmsTemplateContentSchema("CORPORATE").safeParse({ sections: [withPicture] }).success,
+    ).toBe(true);
+    expect(cmsTemplateContentSchema("BV").safeParse({ sections: [withPicture] }).success).toBe(
+      false,
+    );
+    // Without it the section stays as it was stored (no key added).
+    expect(cmsTemplateContentSchema("CORPORATE").parse({ sections: [hero] }).sections[0]).toEqual(
+      hero,
+    );
+    // A picture needs its alt text; another site's file is refused.
+    expect(
+      cmsTemplateContentSchema("CORPORATE").safeParse({ sections: [{ ...hero, image: picture }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it("reads home content stored before COM-7 (no areas, no news heading)", () => {
+    const schema = cmsFieldsSchema(CORPORATE_HOME_FIELDS, "CORPORATE");
+    const link = { label: "Contact Us", href: "/contact" };
+    const card = { title: "Logistics", description: null, href: null };
+    const before = {
+      hero: {
+        eyebrow: null,
+        title: "Global Energy Markets",
+        intro: "Intro.",
+        primary: link,
+        secondary: null,
+      },
+      overview: { eyebrow: "E", title: "T", body: "B", highlights: [], link: null },
+      services: { eyebrow: "E", title: "T", intro: null, items: [card] },
+      productGroups: { eyebrow: "E", title: "T", intro: null, items: [card], link: null },
+      strengths: { eyebrow: "E", title: "T", items: [{ title: "A", description: "B" }] },
+      cta: { title: "T", text: null, points: [], button: link },
+    };
+    const read = schema.parse(before) as Record<string, Record<string, unknown>>;
+    expect(read["hero"]!["slides"]).toEqual([]);
+    expect(read["news"]).toBeNull();
+    // Five areas are one too many; an area needs a registered picture.
+    const area = {
+      label: "Logistics",
+      title: "T",
+      intro: "I",
+      image: picture,
+      imageAlt: "Representative scene",
+      cta: null,
+    };
+    const withAreas = (slides: unknown[]) => ({ ...before, hero: { ...before.hero, slides } });
+    expect(schema.safeParse(withAreas([area, area, area, area])).success).toBe(true);
+    expect(schema.safeParse(withAreas([area, area, area, area, area])).success).toBe(false);
+    expect(
+      schema.safeParse(withAreas([{ ...area, image: "/media/company/team-1.jpg" }])).success,
+    ).toBe(false);
   });
 });

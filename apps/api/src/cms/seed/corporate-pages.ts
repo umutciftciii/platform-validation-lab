@@ -65,6 +65,8 @@ export const CORPORATE_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
           title: "We Make Transport Fast And Safe",
           intro: "We are on the road to carry your dreams.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-logistics-supply.webp",
+          imageAlt: "Representative scene: a road tanker and a tanker ship on a harbour quay",
         },
         {
           id: "logistics-s02",
@@ -150,6 +152,8 @@ export const CORPORATE_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
           intro:
             "Connecting global energy resources with strategic market demand through disciplined trading and reliable supply chain execution.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-energy-trading.webp",
+          imageAlt: "Representative scene: a tanker moored beside an industrial harbour at dusk",
         },
         {
           id: "energy-trading-s02",
@@ -286,6 +290,8 @@ export const CORPORATE_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
           title: "Storage & Distribution",
           intro: null,
           cta: null,
+          image: "/media/visual-pack-v1/hero-storage-terminal.webp",
+          imageAlt: "Representative scene: storage tanks and pipelines at dusk",
         },
         {
           id: "storage-distribution-s02",
@@ -479,6 +485,8 @@ export const CORPORATE_PAGE_SEEDS: Readonly<Record<string, CmsPageSeed>> = {
           title: "Strategic Partnership",
           intro: "Our vision for strong collaborations and global growth.",
           cta: null,
+          image: "/media/visual-pack-v1/hero-petrochemicals.webp",
+          imageAlt: "Representative scene: process columns and pipework of a petrochemical plant",
         },
         {
           id: "strategic-partnership-s02",
