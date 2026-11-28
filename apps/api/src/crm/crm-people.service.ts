@@ -109,7 +109,7 @@ interface LeadRow {
   freeMailDomain: boolean;
 }
 
-interface PersonRow {
+export interface PersonRow {
   id: string;
   siteId: string;
   companyId: string | null;
@@ -117,7 +117,7 @@ interface PersonRow {
   updatedAt: Date;
 }
 
-const PERSON_SELECT = {
+export const PERSON_SELECT = {
   id: true,
   siteId: true,
   companyId: true,
@@ -139,7 +139,7 @@ export class CrmPeopleService {
   // --- access ----------------------------------------------------------------------------------
 
   /** Sites where the caller reads people (crm:read and lead:read); none at all is a 403. */
-  private async readSites(access: StaffAccess): Promise<string[]> {
+  async readSites(access: StaffAccess): Promise<string[]> {
     const leads = new Set(access.sitesWith(LEAD_READ));
     const ids = access.sitesWith(CRM_READ).filter((s) => leads.has(s));
     if (ids.length === 0) {
@@ -160,19 +160,19 @@ export class CrmPeopleService {
     return ids;
   }
 
-  private canManage(access: StaffAccess, siteId: string): boolean {
+  canManage(access: StaffAccess, siteId: string): boolean {
     return (
       access.allows(CRM_MANAGE, { scope: "site", siteId }) &&
       access.allows(LEAD_READ, { scope: "site", siteId })
     );
   }
 
-  private id(raw: string): string {
+  id(raw: string): string {
     if (!UuidSchema.safeParse(raw).success) throw new ApiError("NOT_FOUND");
     return raw.toLowerCase();
   }
 
-  private async notFound(access: StaffAccess, type: string, id: string): Promise<never> {
+  async notFound(access: StaffAccess, type: string, id: string): Promise<never> {
     // Unknown, or a record of a site the caller may not reach (looks the same: IDOR).
     await access.denied(CRM_READ, { type, id }, "not_found_or_other_site");
     throw new ApiError("NOT_FOUND");
@@ -198,7 +198,7 @@ export class CrmPeopleService {
   // --- loading ---------------------------------------------------------------------------------
 
   /** People with their leads (most recent first) and companies; people without leads are left out. */
-  private async loadPeople(
+  async loadPeople(
     tx: SiteScopedClient,
     siteIds: readonly string[],
     persons: readonly PersonRow[],
@@ -285,7 +285,7 @@ export class CrmPeopleService {
 
   // --- company people --------------------------------------------------------------------------
 
-  private async companyIn(
+  async companyIn(
     access: StaffAccess,
     siteIds: readonly string[],
     rawId: string,
@@ -769,29 +769,66 @@ export class CrmPeopleService {
     ctx: RequestContext,
     rawId: string,
     rawCursor: string | undefined,
+    rawKind?: string,
   ): Promise<CrmActivityListResponse> {
     const access = await this.access.begin(ctx);
     const siteIds = await this.readSites(access);
     const company = await this.companyIn(access, siteIds, rawId);
     const siteId = company.siteId;
     const before = rawCursor ? decodeSeq(rawCursor) : null;
-    const scope = { siteIds: [siteId], includePlatform: false };
-    const result = await access.crmData(scope, async (tx) => {
+    // CRM-3: the notes tab reads the notes only.
+    if (rawKind !== undefined && rawKind !== "NOTE") throw invalid("kind");
+    const notesOnly = rawKind === "NOTE";
+    const page = await this.history(access, siteId, before, async (tx) => {
+      if (notesOnly) return { kind: "NOTE" as const, companyId: company.id };
       const here = await tx.crmPerson.findMany({
         where: { siteId, companyId: company.id },
         select: { id: true },
       });
+      return {
+        OR: [
+          { companyId: company.id },
+          { fromCompanyId: company.id },
+          { toCompanyId: company.id },
+          ...(here.length
+            ? [{ kind: "LEAD_PERSON_CHANGED" as const, personId: { in: here.map((p) => p.id) } }]
+            : []),
+        ],
+      };
+    });
+    await access.audit(access.db({ siteIds: [siteId], includePlatform: false }), {
+      action: "crm.company_history_viewed",
+      resourceType: "crm_company",
+      resourceId: company.id,
+      siteId,
+      permission: CRM_READ,
+      metadata: {
+        count: page.items.length,
+        paged: before !== null,
+        ...(notesOnly ? { kind: "NOTE" } : {}),
+        accessAssignmentIds: access.grantRefs(CRM_READ, [siteId]),
+      },
+    });
+    return page;
+  }
+
+  /**
+   * One page of the CRM history of a site, newest first: the rows `filter` selects (CRM-2
+   * company history; CRM-3 a person's history and a company's notes). Not audited here.
+   */
+  async history(
+    access: StaffAccess,
+    siteId: string,
+    before: bigint | null,
+    filter: (tx: SiteScopedClient) => Promise<Record<string, unknown>>,
+  ): Promise<CrmActivityListResponse> {
+    const scope = { siteIds: [siteId], includePlatform: false };
+    const result = await access.crmData(scope, async (tx) => {
+      const where = await filter(tx);
       const rows = await tx.crmActivity.findMany({
         where: {
           siteId,
-          OR: [
-            { companyId: company.id },
-            { fromCompanyId: company.id },
-            { toCompanyId: company.id },
-            ...(here.length
-              ? [{ kind: "LEAD_PERSON_CHANGED" as const, personId: { in: here.map((p) => p.id) } }]
-              : []),
-          ],
+          ...where,
           ...(before !== null ? { seq: { lt: before } } : {}),
         },
         orderBy: { seq: "desc" },
@@ -863,18 +900,6 @@ export class CrmPeopleService {
         fromOwner: staff(r.fromOwnerUserId),
         toOwner: staff(r.toOwnerUserId),
       };
-    });
-    await access.audit(access.db(scope), {
-      action: "crm.company_history_viewed",
-      resourceType: "crm_company",
-      resourceId: company.id,
-      siteId,
-      permission: CRM_READ,
-      metadata: {
-        count: items.length,
-        paged: before !== null,
-        accessAssignmentIds: access.grantRefs(CRM_READ, [siteId]),
-      },
     });
     const last = page[page.length - 1];
     return {

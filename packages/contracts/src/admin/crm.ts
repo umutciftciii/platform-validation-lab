@@ -224,8 +224,18 @@ export type CrmCompany = z.infer<typeof CrmCompanySchema>;
 /** List filter of the owner: me, none (no owner) or a staff user's id. */
 export const CrmOwnerFilterSchema = z.union([z.literal("me"), z.literal("none"), UuidSchema]);
 
+/**
+ * CRM-3: a row of the company list — the summary with its number of people (null without
+ * lead:read on the site: people are shown through their leads) and its last CRM activity.
+ */
+export const CrmCompanyListItemSchema = CrmCompanySummarySchema.extend({
+  peopleCount: z.number().int().min(0).nullable(),
+  lastActivityAt: IsoDate.nullable(),
+});
+export type CrmCompanyListItem = z.infer<typeof CrmCompanyListItemSchema>;
+
 export const CrmCompanyListResponseSchema = z.strictObject({
-  items: z.array(CrmCompanySummarySchema).max(CRM_COMPANIES_PAGE_SIZE),
+  items: z.array(CrmCompanyListItemSchema).max(CRM_COMPANIES_PAGE_SIZE),
   /** Opaque cursor of the next page, or null. */
   nextCursor: z.string().nullable(),
   /** Sites the caller reads companies of. */
@@ -400,3 +410,174 @@ export const CrmNoteInputSchema = z.strictObject({
   body: z.string().transform(clean).pipe(z.string().min(1).max(CRM_NOTE_MAX).regex(MULTI_LINE)),
 });
 export type CrmNoteInput = z.input<typeof CrmNoteInputSchema>;
+
+// --- CRM-3: 360° views (ADR-032 D11) -----------------------------------------------------------
+//
+// Read-only views over the CRM-1/CRM-2 records and the lead core: no table of their own. A
+// person's phone is the one typed into their most recent contact-form message; requests are the
+// document requests and contact-form messages of their leads; notes and logged contacts are the
+// lead history (DP-041). Every view needs `crm:read` and `lead:read` on the site and is audited
+// with counts only. CRM-4 adds e-mail to the contact history (`CrmContactEntry.kind`).
+
+/** CRM-3: the overview of the CRM (`/overview`). */
+export const ADMIN_CRM_OVERVIEW_API = `${ADMIN_CRM_API}/overview`;
+
+export const CRM_PEOPLE_PAGE_SIZE = 50;
+/** CRM-3: rows per section of a 360° view (leads, requests, contacts, notes). */
+export const CRM_360_LIMIT = 100;
+/** CRM-3: recently changed companies on the overview. */
+export const CRM_OVERVIEW_RECENT = 5;
+
+/** Filter `company` of the people list: with a company, without one, or one company's id. */
+export const CrmPeopleCompanyFilterSchema = z.union([
+  z.literal("any"),
+  z.literal("none"),
+  UuidSchema,
+]);
+
+const SiteKey = z.enum(["BV", "CORPORATE"]);
+
+/** A person in the people list. */
+export const CrmPersonSummarySchema = CrmPersonSchema.extend({
+  siteKey: SiteKey,
+  /** The account owner of the person's company (null: no company or no owner). */
+  companyOwner: CrmCompanyOwnerSchema.nullable(),
+});
+export type CrmPersonSummary = z.infer<typeof CrmPersonSummarySchema>;
+
+export const CrmPeopleListResponseSchema = z.strictObject({
+  items: z.array(CrmPersonSummarySchema).max(CRM_PEOPLE_PAGE_SIZE),
+  nextCursor: z.string().nullable(),
+  /** Sites the caller reads people of (crm:read and lead:read). */
+  sites: z.array(CrmSiteSchema),
+});
+export type CrmPeopleListResponse = z.infer<typeof CrmPeopleListResponseSchema>;
+
+/** A document request of a lead, as the CRM shows it. */
+export const CrmDocumentRequestSchema = z.strictObject({
+  id: UuidSchema,
+  createdAt: IsoDate,
+  product: z.strictObject({ id: UuidSchema, code: z.string(), name: z.string() }),
+  document: z.strictObject({ id: UuidSchema, title: z.string(), type: z.string() }),
+});
+export type CrmDocumentRequest = z.infer<typeof CrmDocumentRequestSchema>;
+
+/** A lead with its requests, as the 360° views show it (identity null once anonymised). */
+export const CrmLeadRecordSchema = z.strictObject({
+  id: UuidSchema,
+  person: PersonRef.nullable(),
+  fullName: z.string().nullable(),
+  email: z.string().nullable(),
+  company: z.string().nullable(),
+  country: z.string().nullable(),
+  source: z.enum(["DOCUMENT_REQUEST", "CONTACT_FORM"]),
+  status: LeadStatusSchema,
+  assignedTo: CrmCompanyOwnerSchema.nullable(),
+  requestCount: z.number().int().min(0),
+  firstRequestAt: IsoDate,
+  lastRequestAt: IsoDate,
+  anonymised: z.boolean(),
+  documentRequests: z.array(CrmDocumentRequestSchema).max(CRM_360_LIMIT),
+  /** Contact-form messages of the lead (the text is in the contact history). */
+  contactMessages: z
+    .array(z.strictObject({ id: UuidSchema, createdAt: IsoDate, subject: z.string().nullable() }))
+    .max(CRM_360_LIMIT),
+});
+export type CrmLeadRecord = z.infer<typeof CrmLeadRecordSchema>;
+
+/**
+ * One entry of a contact history: a contact-form message of the person (`FORM_MESSAGE`) or a
+ * contact staff logged on a lead (`LOGGED_CONTACT`, DP-041). CRM-4 adds more kinds.
+ */
+export const CRM_CONTACT_KINDS = ["FORM_MESSAGE", "LOGGED_CONTACT"] as const;
+export const CrmContactEntrySchema = z.strictObject({
+  id: UuidSchema,
+  kind: z.enum(CRM_CONTACT_KINDS),
+  /** When the contact took place (message received, or the logged contact's time). */
+  at: IsoDate,
+  lead: z.strictObject({ id: UuidSchema, label: z.string().nullable() }),
+  person: PersonRef.nullable(),
+  /** LOGGED_CONTACT: who logged it; FORM_MESSAGE: null. */
+  actor: CrmStaffSchema.nullable(),
+  channel: z.enum(["EMAIL", "PHONE", "MEETING", "OTHER", "CONTACT_FORM"]),
+  subject: z.string().nullable(),
+  /** Message or summary; null once redacted (anonymised lead). */
+  body: z.string().nullable(),
+  phone: z.string().nullable(),
+});
+export type CrmContactEntry = z.infer<typeof CrmContactEntrySchema>;
+
+/** A staff note written on a lead (DP-041), as the person's profile shows it. */
+export const CrmLeadNoteSchema = z.strictObject({
+  id: UuidSchema,
+  createdAt: IsoDate,
+  lead: z.strictObject({ id: UuidSchema, label: z.string().nullable() }),
+  actor: CrmStaffSchema,
+  /** Null once redacted (anonymised lead). */
+  body: z.string().nullable(),
+});
+export type CrmLeadNote = z.infer<typeof CrmLeadNoteSchema>;
+
+/** A sales step on a lead (DP-041: status or assignment), for a person's activities. */
+export const CrmLeadEventSchema = z.strictObject({
+  id: UuidSchema,
+  kind: z.enum(["STATUS_CHANGED", "ASSIGNMENT_CHANGED"]),
+  createdAt: IsoDate,
+  lead: z.strictObject({ id: UuidSchema, label: z.string().nullable() }),
+  actor: CrmStaffSchema,
+  fromStatus: LeadStatusSchema.nullable(),
+  toStatus: LeadStatusSchema.nullable(),
+  fromAssignee: CrmStaffSchema.nullable(),
+  toAssignee: CrmStaffSchema.nullable(),
+});
+export type CrmLeadEvent = z.infer<typeof CrmLeadEventSchema>;
+
+/** The leads (with requests) of a company's people. */
+export const CrmCompanyLeadsResponseSchema = z.strictObject({
+  leads: z.array(CrmLeadRecordSchema).max(CRM_360_LIMIT),
+  /** More leads exist than shown. */
+  truncated: z.boolean(),
+});
+export type CrmCompanyLeadsResponse = z.infer<typeof CrmCompanyLeadsResponseSchema>;
+
+/** The contact history of a company's people (newest first). */
+export const CrmContactHistoryResponseSchema = z.strictObject({
+  items: z.array(CrmContactEntrySchema).max(CRM_360_LIMIT),
+  truncated: z.boolean(),
+});
+export type CrmContactHistoryResponse = z.infer<typeof CrmContactHistoryResponseSchema>;
+
+/** A person's 360° profile. */
+export const CrmPersonProfileResponseSchema = z.strictObject({
+  person: CrmPersonSchema,
+  siteKey: SiteKey,
+  /** The person's company with its account owner, or null. */
+  company: CrmCompanySummarySchema.nullable(),
+  /** The newest e-mail address of a live lead, and the newest phone typed into the contact form. */
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  leads: z.array(CrmLeadRecordSchema).max(CRM_360_LIMIT),
+  contacts: z.array(CrmContactEntrySchema).max(CRM_360_LIMIT),
+  notes: z.array(CrmLeadNoteSchema).max(CRM_360_LIMIT),
+  leadEvents: z.array(CrmLeadEventSchema).max(CRM_360_LIMIT),
+  /** The CRM history of the person (company changes, lead links), newest first. */
+  activities: z.array(CrmActivitySchema).max(CRM_ACTIVITY_PAGE_SIZE),
+  /** crm:manage on the person's site. */
+  canManage: z.boolean(),
+});
+export type CrmPersonProfileResponse = z.infer<typeof CrmPersonProfileResponseSchema>;
+
+/** The CRM overview: real counts of the sites the caller reads, and recently changed companies. */
+export const CrmOverviewResponseSchema = z.strictObject({
+  sites: z.array(CrmSiteSchema),
+  counts: z.strictObject({
+    companies: z.number().int().min(0),
+    myCompanies: z.number().int().min(0),
+    companiesWithoutOwner: z.number().int().min(0),
+    /** Null without lead:read (people are shown through their leads). */
+    people: z.number().int().min(0).nullable(),
+    peopleWithoutCompany: z.number().int().min(0).nullable(),
+  }),
+  recentCompanies: z.array(CrmCompanySummarySchema).max(CRM_OVERVIEW_RECENT),
+});
+export type CrmOverviewResponse = z.infer<typeof CrmOverviewResponseSchema>;

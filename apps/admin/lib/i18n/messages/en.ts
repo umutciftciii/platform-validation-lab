@@ -114,7 +114,7 @@ export const en = {
       },
       crm: {
         label: "CRM",
-        summary: "Companies and their account owners (customer data, audited).",
+        summary: "Companies, people and their leads in one place (customer data, audited).",
       },
       sites: { label: "Sites", summary: "Domains, navigation and publishing for each site." },
       staff: {

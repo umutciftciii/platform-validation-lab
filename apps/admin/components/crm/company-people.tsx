@@ -79,7 +79,12 @@ export function CompanyPeople({
             <li key={p.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-start">
               <div className="min-w-0 flex-1">
                 <p className="break-words text-sm font-medium text-ink">
-                  {p.displayName ?? t("crm.people.anonymisedPerson")}
+                  <Link
+                    href={`/crm/people/${p.id}`}
+                    className="text-ink underline-offset-2 hover:text-petrol-strong hover:underline"
+                  >
+                    {p.displayName ?? t("crm.people.anonymisedPerson")}
+                  </Link>
                 </p>
                 <ul className="mt-1 space-y-1">
                   {p.leads.map((l) => (
