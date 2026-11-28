@@ -166,13 +166,16 @@ export const MODULES: readonly ModuleDef[] = [
     description: "Member accounts and member-only technical data",
     isCore: true,
   },
-  // Optional modules, enabled per site by God Mode.
+  // CRM-1 (ADR-032 D1): CRM 360° is standard scope of the signed contract (4.5: company and person
+  // profiles, relations, contact history, account owners), so the module is core: always on,
+  // God Mode cannot switch it off. A sales pipeline would be a separate optional module.
   {
     key: "crm",
-    name: "CRM",
-    description: "Sales pipeline on top of leads (optional)",
-    isCore: false,
+    name: "CRM 360°",
+    description: "Companies, contacts, account owners and contact history",
+    isCore: true,
   },
+  // Optional modules, enabled per site by God Mode.
   {
     key: "automation",
     name: "Automation",
@@ -363,9 +366,15 @@ export const PERMISSIONS: readonly PermissionDef[] = [
     sensitive: true,
     customerData: true,
   }),
+  // CRM 360° (CRM-1, ADR-032): companies and their account owners. Customer data like leads:
+  // read and changed only on the record's site.
+  perm("crm", "read", "crm", "Read CRM companies, contacts and their history", {
+    customerData: true,
+  }),
+  perm("crm", "manage", "crm", "Create and change CRM companies and their account owners", {
+    customerData: true,
+  }),
   // Optional modules.
-  perm("crm", "read", "crm", "Read the CRM pipeline", { customerData: true }),
-  perm("crm", "manage", "crm", "Change CRM records", { customerData: true }),
   perm("automation", "manage", "automation", "Configure automations", { sensitive: true }),
   perm("integration", "manage", "integrations", "Configure integrations and webhooks", {
     sensitive: true,

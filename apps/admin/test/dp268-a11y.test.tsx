@@ -93,13 +93,13 @@ describe("modal dialog (DP-268)", () => {
     expect(remove).toContain('aria-haspopup="dialog"');
     const sw = renderToStaticMarkup(
       <ModuleSwitch
-        module={{ key: "crm", name: "CRM", isCore: false }}
+        module={{ key: "automation", name: "Automation", isCore: false }}
         site={{ id: "s", key: "BV", name: "Dream Petroleum BV" } as never}
         enabled
       />,
     );
     expect(sw).toContain(
-      'aria-label="Switch off CRM on Dream Petroleum BV" aria-haspopup="dialog"',
+      'aria-label="Switch off Automation on Dream Petroleum BV" aria-haspopup="dialog"',
     );
   });
 

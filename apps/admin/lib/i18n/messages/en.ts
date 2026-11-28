@@ -27,6 +27,7 @@ import { editor as contentEditor } from "./content/en/editor";
 import { menus as contentMenus } from "./content/en/menus";
 import { seo } from "./seo/en";
 import { leads } from "./leads/en";
+import { crm } from "./crm/en";
 import { staff } from "./staff/en";
 import { owner } from "./owner/en";
 import { dashboard } from "./dashboard/en";
@@ -110,6 +111,10 @@ export const en = {
         label: "Leads",
         summary:
           "Contact-form messages and document requests from the public sites (customer data, audited).",
+      },
+      crm: {
+        label: "CRM",
+        summary: "Companies and their account owners (customer data, audited).",
       },
       sites: { label: "Sites", summary: "Domains, navigation and publishing for each site." },
       staff: {
@@ -399,6 +404,8 @@ export const en = {
   seo,
   /** ML-12e (DP-243): Leads, Staff and access, the owner console and the overview. */
   leads,
+  /** CRM-1 (ADR-032): CRM 360° — companies and account owners (./crm/). */
+  crm,
   staff,
   owner,
   dashboard,

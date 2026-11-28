@@ -116,6 +116,29 @@ describe("COM-2b: the corporate designed pages' contract texts", () => {
   });
 });
 
+/**
+ * CRM-1 (ADR-032 D1): CRM 360° is standard scope and a core module, no longer the optional sales
+ * pipeline: the Owner Console names it as such.
+ */
+const CRM1_CHANGED: Readonly<Record<string, readonly [before: string, now: string]>> = {
+  "owner.modules.crm.name": ["CRM", "CRM 360°"],
+  "owner.modules.crm.description": [
+    "Sales pipeline on top of leads (optional)",
+    "Companies, contacts, account owners and contact history",
+  ],
+};
+
+describe("CRM-1: the Owner Console names CRM 360°", () => {
+  it("changes exactly the CRM module's name and description", () => {
+    const before = load("dp275-en", "en-dictionary");
+    const now = leaves(en as unknown as Tree);
+    for (const [k, [was, is]] of Object.entries(CRM1_CHANGED)) {
+      expect(before[k], k).toBe(was);
+      expect(now[k], k).toBe(is);
+    }
+  });
+});
+
 describe("COM-1: the SEO descriptions name the chosen site", () => {
   it("changes exactly the two descriptions, the site name only", () => {
     const before = load("dp275-en", "en-dictionary");
@@ -134,7 +157,12 @@ describe("DP-275: the English dictionary changed only where approved", () => {
   it("changes only the tab names and the sentences naming them", () => {
     const changed = Object.keys(before)
       .filter(
-        (k) => k in now && now[k] !== before[k] && !(k in COM1_CHANGED) && !(k in COM2B_CHANGED),
+        (k) =>
+          k in now &&
+          now[k] !== before[k] &&
+          !(k in COM1_CHANGED) &&
+          !(k in COM2B_CHANGED) &&
+          !(k in CRM1_CHANGED),
       )
       .sort();
     expect(changed).toEqual([
@@ -178,10 +206,13 @@ describe("DP-275: the English dictionary changed only where approved", () => {
     // data-processing terms (one module, legal.*) and the navigation entry; no existing text changes.
     const dp298 = (k: string) => k.startsWith("legal.") || k.startsWith("nav.items.legalTexts.");
     expect(Object.keys(before).filter(dp298)).toEqual([]);
+    // CRM-1 (ADR-032) adds the CRM area (one module, crm.*) and its navigation entry.
+    const crm1 = (k: string) => k.startsWith("crm.") || k.startsWith("nav.items.crm.");
+    expect(Object.keys(before).filter(crm1)).toEqual([]);
     // DP-285 adds the message of the new API error code DATABASE_UNAVAILABLE.
     expect(
       Object.keys(now).filter(
-        (k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k) && !com2b(k),
+        (k) => !(k in before) && !ml13b(k) && !dp287(k) && !dp298(k) && !com2b(k) && !crm1(k),
       ),
     ).toEqual([
       "errors.DATABASE_UNAVAILABLE",

@@ -327,9 +327,9 @@ describe("database-enforced invariants", () => {
         prisma.featureModule.update({ where: { key }, data: { isCore: false } }),
       ).rejects.toThrow(/permission denied/i);
     }
-    const crm = await prisma.featureModule.findUniqueOrThrow({ where: { key: "crm" } });
+    const optional = await prisma.featureModule.findUniqueOrThrow({ where: { key: "automation" } });
     const cfg = await owner.moduleConfiguration.create({
-      data: { moduleId: crm.id, siteId: COM, enabled: false, reason: "optional module off" },
+      data: { moduleId: optional.id, siteId: COM, enabled: false, reason: "optional module off" },
     });
     expect(cfg.enabled).toBe(false);
     await expect(

@@ -105,6 +105,10 @@ const SAME_IN_TR = new Set([
   "staff.page.roleSite",
   "staff.page.membershipNotActive",
   "owner.modules.crm.name",
+  // CRM-1: the CRM navigation entry ("CRM", a technical term) and the word "Site" (as above).
+  "nav.items.crm.label",
+  "crm.form.site",
+  "crm.list.site",
   // ML-13b: the word "Site", the technical term CMS, and a format made only of parameters
   "translationPackages.export.site",
   "translationPackages.types.cms",

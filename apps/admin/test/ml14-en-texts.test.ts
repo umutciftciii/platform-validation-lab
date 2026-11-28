@@ -61,7 +61,8 @@ describe("ML-14: the EN wording changes only where approved", () => {
     it(file, () => {
       const before = load("ml14-en", file);
       const after = load(
-        ["dp275-en", "dp285-en"].find((d) =>
+        // CRM-1 keeps the owner-en render it replaced in crm1-en (crm1-en-texts.test.ts).
+        ["dp275-en", "dp285-en", "crm1-en"].find((d) =>
           existsSync(path.join(FIXTURES, d, `${file}.json.gz`)),
         ) ?? "catalog-en",
         file,

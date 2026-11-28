@@ -20,7 +20,8 @@ export type IconName =
   | "audit"
   | "settings"
   | "translate"
-  | "ai";
+  | "ai"
+  | "building";
 
 export type NavItemId = keyof typeof en.nav.items;
 export type NavGroupId = keyof typeof en.nav.groups;
@@ -140,6 +141,16 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: en.nav.items.leads.label,
         icon: "inbox",
         summary: en.nav.items.leads.summary,
+        ready: true,
+      },
+      {
+        // CRM-1 (ADR-032): CRM 360° — companies and their account owners (crm:read).
+        id: "crm",
+        slug: "crm",
+        href: "/crm",
+        label: en.nav.items.crm.label,
+        icon: "building",
+        summary: en.nav.items.crm.summary,
         ready: true,
       },
       {

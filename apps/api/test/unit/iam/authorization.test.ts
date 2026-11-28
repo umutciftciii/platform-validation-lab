@@ -141,17 +141,14 @@ describe("decide: customer and lead data (F1-001A)", () => {
   ];
 
   it("gives the platform super admin lead and CRM data on every site (DP-076 revision)", () => {
-    const withCrm = snapshot([grant("platform_super_admin", null)], {
-      enabled: { [BV]: ["crm"], [COM]: ["crm"] },
-    });
     for (const key of customerData) {
       for (const target of [bv, com]) {
         // membership:manage keeps its step-up (account-level action).
-        expect(decide(withCrm, key, target, NOW).allowed, `${key}`).toBe(true);
+        expect(decide(superAdmin, key, target, NOW).allowed, `${key}`).toBe(true);
       }
     }
-    // Optional modules still apply: CRM is off unless enabled for the site.
-    expect(decide(superAdmin, "crm:read", bv, NOW).allowed).toBe(false);
+    // CRM-1 (ADR-032 D1): CRM 360° is a core module, on without any module switch.
+    expect(decide(superAdmin, "crm:read", bv, NOW).allowed).toBe(true);
     expect(accessibleScope(superAdmin, "lead:read", SITES, NOW).siteIds.sort()).toEqual(
       [...SITES].sort(),
     );
@@ -265,31 +262,34 @@ describe("decide: MFA step-up and audiences", () => {
 
 describe("decide: feature modules", () => {
   const sales = snapshot([grant("sales_crm_user", BV)]);
+  const admin = [grant("platform_super_admin", null)];
 
   it("denies optional-module permissions until the module is enabled for that site", () => {
-    expect(decide(sales, "crm:read", bv, NOW)).toEqual({
+    expect(decide(snapshot(admin), "automation:manage", bv, NOW)).toEqual({
       allowed: false,
       reason: "module_disabled",
     });
-    const enabled = snapshot([grant("sales_crm_user", BV)], { enabled: { [BV]: ["crm"] } });
-    expect(decide(enabled, "crm:read", bv, NOW)).toEqual({ allowed: true });
-    const otherSite = snapshot([grant("sales_crm_user", BV)], { enabled: { [COM]: ["crm"] } });
-    expect(decide(otherSite, "crm:read", bv, NOW).allowed).toBe(false);
+    const enabled = snapshot(admin, { enabled: { [BV]: ["automation"] } });
+    expect(decide(enabled, "automation:manage", bv, NOW)).toEqual({ allowed: true });
+    const otherSite = snapshot(admin, { enabled: { [COM]: ["automation"] } });
+    expect(decide(otherSite, "automation:manage", bv, NOW).allowed).toBe(false);
   });
 
   it("needs a site for optional-module permissions, even for platform roles", () => {
-    const admin = snapshot([grant("platform_customer_data_officer", null)], {
-      enabled: { [BV]: ["crm"] },
-    });
-    expect(decide(admin, "crm:read", platform, NOW)).toEqual({
+    const enabled = snapshot(admin, { enabled: { [BV]: ["automation"] } });
+    expect(decide(enabled, "automation:manage", platform, NOW)).toEqual({
       allowed: false,
       reason: "site_required",
     });
-    expect(decide(admin, "crm:read", bv, NOW).allowed).toBe(true);
+    expect(decide(enabled, "automation:manage", bv, NOW).allowed).toBe(true);
   });
 
   it("treats core modules as always enabled", () => {
     expect(decide(sales, "lead:read", bv, NOW).allowed).toBe(true);
+    // CRM-1 (ADR-032 D1): CRM 360° is core; its permissions stay on the role's own site.
+    expect(decide(sales, "crm:read", bv, NOW)).toEqual({ allowed: true });
+    expect(decide(sales, "crm:manage", bv, NOW)).toEqual({ allowed: true });
+    expect(decide(sales, "crm:read", com, NOW).allowed).toBe(false);
   });
 });
 
@@ -373,7 +373,10 @@ describe("decide: the system owner's God Mode (DP-108, ADR-018)", () => {
 
   it("keeps a disabled module closed for the owner but always lets it switch modules (condition 4)", () => {
     const s = owner();
-    expect(decide(s, "crm:read", bv, NOW)).toEqual({ allowed: false, reason: "module_disabled" });
+    expect(decide(s, "automation:manage", bv, NOW)).toEqual({
+      allowed: false,
+      reason: "module_disabled",
+    });
     expect(decide(s, "integration:manage", bv, NOW)).toEqual({
       allowed: false,
       reason: "module_disabled",

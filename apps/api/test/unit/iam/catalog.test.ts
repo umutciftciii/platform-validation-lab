@@ -227,12 +227,18 @@ describe("God Mode module changes", () => {
   });
 
   it("toggles optional modules with a reason", () => {
-    expect(moduleChangeProblem({ moduleKey: "crm", enabled: true, reason: "pilot" })).toBeNull();
     expect(
-      moduleChangeProblem({ moduleKey: "crm", enabled: false, reason: "end of pilot" }),
+      moduleChangeProblem({ moduleKey: "automation", enabled: true, reason: "pilot" }),
     ).toBeNull();
-    expect(moduleChangeProblem({ moduleKey: "crm", enabled: false, reason: "  " })).toBe(
+    expect(
+      moduleChangeProblem({ moduleKey: "automation", enabled: false, reason: "end of pilot" }),
+    ).toBeNull();
+    expect(moduleChangeProblem({ moduleKey: "automation", enabled: false, reason: "  " })).toBe(
       "reason_required",
+    );
+    // CRM-1 (ADR-032 D1): CRM 360° is core and can never be switched off.
+    expect(moduleChangeProblem({ moduleKey: "crm", enabled: false, reason: "end of pilot" })).toBe(
+      "core_module",
     );
     expect(moduleChangeProblem({ moduleKey: "nope", enabled: true, reason: "x" })).toBe(
       "unknown_module",

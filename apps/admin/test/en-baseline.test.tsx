@@ -54,6 +54,8 @@ const RECORD = process.env["ML11_RECORD_EN"] === "1";
 const TRANSLATIONS_NAV = /<li><a [^>]*href="\/translations">[\s\S]*?<\/a><\/li>/g;
 /** DP-298 (ADR-031): the Legal texts entry (shown here because the mocked reads all succeed). */
 const LEGAL_TEXTS_NAV = /<li><a [^>]*href="\/legal-texts">[\s\S]*?<\/a><\/li>/g;
+/** CRM-1 (ADR-032): the CRM entry (companies) added since the recording. */
+const CRM_NAV = /<li><a [^>]*href="\/crm">[\s\S]*?<\/a><\/li>/g;
 
 /**
  * Removes the ML-11 language switch (and its phone-only row), the DP-273 theme-switch tabindex,
@@ -64,6 +66,7 @@ export function normalize(html: string): string {
     html
       .replace(TRANSLATIONS_NAV, "")
       .replace(LEGAL_TEXTS_NAV, "")
+      .replace(CRM_NAV, "")
       .replace(
         /<div class="mt-3 flex items-center justify-between text-xs text-ink-3 sm:hidden"><span>Language<\/span><div role="radiogroup" aria-label="Language"[\s\S]*?<\/div><\/div>/g,
         "",

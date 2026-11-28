@@ -92,6 +92,9 @@ export const SITE_BOUND_MODELS: Readonly<Record<string, { nullable: boolean }>> 
   // security (AI on + ai:* permission).
   AiBudget: { nullable: true },
   AiOperation: { nullable: true },
+  // CRM-1 (ADR-032): a site's CRM companies (customer data, row-level security; reached through
+  // the session's database context, like leads).
+  CrmCompany: { nullable: false },
 };
 
 export interface RelationDef {
@@ -152,6 +155,10 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     consentRecords: { model: "ConsentRecord", list: true },
     aiProviderTermsRecorded: { model: "AiProviderDataTerms", list: true },
     aiProviderTermsRevoked: { model: "AiProviderDataTerms", list: true },
+    // CRM-1: companies this staff user owns, created and last changed (site-bound).
+    crmCompaniesOwned: { model: "CrmCompany", list: true },
+    crmCompaniesCreated: { model: "CrmCompany", list: true },
+    crmCompaniesUpdated: { model: "CrmCompany", list: true },
   },
   SystemOwner: {
     user: { model: "User", list: false },
@@ -197,6 +204,7 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     pathLock: { model: "SitePathLock", list: false },
     locales: { model: "SiteLocale", list: true },
     consentRecords: { model: "ConsentRecord", list: true },
+    crmCompanies: { model: "CrmCompany", list: true },
   },
   Membership: {
     user: { model: "User", list: false },
@@ -554,6 +562,12 @@ export const RELATIONS: Readonly<Record<string, Readonly<Record<string, Relation
     productCategoryTexts: { model: "ProductCategoryText", list: true },
     leadDocumentRequests: { model: "LeadDocumentRequest", list: true },
     leadContactMessages: { model: "LeadContactMessage", list: true },
+  },
+  CrmCompany: {
+    site: { model: "Site", list: false },
+    owner: { model: "User", list: false },
+    createdBy: { model: "User", list: false },
+    updatedBy: { model: "User", list: false },
   },
 };
 
